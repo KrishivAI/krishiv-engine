@@ -143,6 +143,59 @@ pub trait Guard: Send + Sync + 'static {
     /// # Errors
     /// The [`Refusal`]; the guard has already logged it.
     fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>>;
+
+    /// [`Self::check`], and who the request acts for when the guard authenticates principals (`SessionGuard`):
+    /// the UI's SQL editor runs a statement as that caller, under the caller's own policy. A guard that only
+    /// knows a shared secret identifies nobody (`None`).
+    ///
+    /// # Errors
+    /// The [`Refusal`], as for [`Self::check`].
+    fn check_caller<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Option<Caller>, Refusal>> {
+        Box::pin(async move { self.check(request).await.map(|()| None) })
+    }
+}
+
+/// The authenticated principal a [`Guard`] identified: its name, and the guard's own record of it (for
+/// `SessionGuard`, `krishiv_session::auth::Authenticated`), which the source that builds the caller's session
+/// reads back with [`Caller::identity`].
+#[derive(Clone)]
+pub struct Caller {
+    name: Arc<str>,
+    identity: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl Caller {
+    /// A caller named `name` whose identity record is `identity`.
+    #[must_use]
+    pub fn new(name: &str, identity: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self {
+            name: Arc::from(name),
+            identity,
+        }
+    }
+
+    /// The principal's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The guard's record of the caller, when it is a `T`.
+    #[must_use]
+    pub fn identity<T: 'static>(&self) -> Option<&T> {
+        self.identity.downcast_ref()
+    }
+}
+
+impl fmt::Debug for Caller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Caller")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One shared secret: the start-up token of a server without authentication.

@@ -78,8 +78,8 @@ pub enum Mode {
     },
 }
 
-/// The static web UI assets may weigh at most 3 MiB brotli-compressed (ADR 0024's "< 2-3 MB", P3-T050).
-pub const UI_ASSET_BUDGET_BYTES: u64 = 3 * 1024 * 1024;
+/// The static web UI assets may weigh at most 3 MB brotli-compressed (ADR 0024's "< 2-3 MB", P3-T050).
+pub const UI_ASSET_BUDGET_BYTES: u64 = 3_000_000;
 
 /// The bytes of the files under `dir`, summed. Raw size: brotli never makes the text and font files of the
 /// build larger, so a raw total within the budget proves the compressed one is.

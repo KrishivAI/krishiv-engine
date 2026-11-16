@@ -12,6 +12,7 @@
 //! `HttpOnly; SameSite=Strict` so no script and no link can read or replay it (T-W5), the token leaves the address
 //! bar at once and is never sent in a URL by the page (T-D7).
 
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::Response;
@@ -20,6 +21,7 @@ use krishiv_common::secret::is_sensitive_key;
 use serde_json::{Value, json};
 use utoipa::{OpenApi, ToSchema};
 
+use crate::guard::Caller;
 use crate::internal::{UiState, error, json_response, source_error};
 
 /// What a sensitive configuration value shows as.
@@ -36,6 +38,8 @@ const MAX_SQL_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone)]
 pub struct UiPolicy {
     hosts: Vec<String>,
+    /// Whether the `Host` header is checked at all (see [`UiPolicy::for_listener`]).
+    enforce: bool,
     secure_cookie: bool,
 }
 
@@ -54,8 +58,26 @@ impl UiPolicy {
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            enforce: true,
             secure_cookie: false,
         }
+    }
+
+    /// The policy of a listener: on a loopback address the loopback names and `names` (DNS rebinding, T-W5: a
+    /// page on another name that resolves to the loopback address must not read the API); on another address
+    /// (which already requires authentication) the `Host` header is checked only when `names` is not empty,
+    /// so a client that reaches the machine by its address or any of its names is not refused.
+    #[must_use]
+    pub fn for_listener<'a>(loopback: bool, names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut policy = Self::loopback();
+        let mut any = false;
+        for n in names {
+            let before = policy.hosts.len();
+            policy = policy.allow_host(n);
+            any |= policy.hosts.len() > before;
+        }
+        policy.enforce = loopback || any;
+        policy
     }
 
     /// Also answers to `host` (a name or an address, with no port; an IPv6 address in brackets).
@@ -78,6 +100,9 @@ impl UiPolicy {
     /// Whether a `Host` header value names this server.
     #[must_use]
     pub fn allows(&self, host_header: &str) -> bool {
+        if !self.enforce {
+            return true;
+        }
         let h = host_header.trim().to_ascii_lowercase();
         self.hosts.contains(&strip_port(&h).to_owned())
     }
@@ -187,19 +212,19 @@ async fn catalog_at(s: &UiState, path: Vec<String>, key: &str) -> Response {
 }
 
 /// `GET /api/internal/catalog/catalogs`.
-#[utoipa::path(get, path = "/api/internal/catalog/catalogs", responses((status = 200, description = "The catalogs", body = CatalogList)))]
+#[utoipa::path(get, path = "/api/internal/catalog/catalogs", responses((status = 200, description = "The catalogs", body = Catalogs)))]
 pub(crate) async fn catalogs(State(s): State<UiState>) -> Response {
     catalog_at(&s, vec![], "catalogs").await
 }
 
 /// `GET /api/internal/catalog/{catalog}/schemas`.
-#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/schemas", params(("catalog" = String, Path)), responses((status = 200, description = "The schemas of a catalog", body = CatalogList)))]
+#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/schemas", params(("catalog" = String, Path)), responses((status = 200, description = "The schemas of a catalog", body = Schemas)))]
 pub(crate) async fn schemas(State(s): State<UiState>, Path(c): Path<String>) -> Response {
     catalog_at(&s, vec![c], "schemas").await
 }
 
 /// `GET /api/internal/catalog/{catalog}/{schema}/tables`.
-#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/{schema}/tables", params(("catalog" = String, Path), ("schema" = String, Path)), responses((status = 200, description = "The tables of a schema", body = CatalogList)))]
+#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/{schema}/tables", params(("catalog" = String, Path), ("schema" = String, Path)), responses((status = 200, description = "The tables of a schema", body = Tables)))]
 pub(crate) async fn tables(
     State(s): State<UiState>,
     Path((c, sc)): Path<(String, String)>,
@@ -208,7 +233,7 @@ pub(crate) async fn tables(
 }
 
 /// `GET /api/internal/catalog/{catalog}/{schema}/{table}/columns`.
-#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/{schema}/{table}/columns", params(("catalog" = String, Path), ("schema" = String, Path), ("table" = String, Path)), responses((status = 200, description = "The columns of a table", body = CatalogList)))]
+#[utoipa::path(get, path = "/api/internal/catalog/{catalog}/{schema}/{table}/columns", params(("catalog" = String, Path), ("schema" = String, Path), ("table" = String, Path)), responses((status = 200, description = "The columns of a table", body = Columns)))]
 pub(crate) async fn columns(
     State(s): State<UiState>,
     Path((c, sc, t)): Path<(String, String, String)>,
@@ -227,7 +252,11 @@ pub(crate) async fn environment(State(s): State<UiState>) -> Response {
 
 /// `POST /api/internal/sql`: starts a statement; the body is `{"sql": "..."}`.
 #[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, responses((status = 202, description = "Started", body = SqlStarted)))]
-pub(crate) async fn sql_start(State(s): State<UiState>, body: String) -> Response {
+pub(crate) async fn sql_start(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    body: String,
+) -> Response {
     let sql = serde_json::from_str::<Value>(&body)
         .ok()
         .and_then(|v| v.get("sql").and_then(Value::as_str).map(str::to_owned));
@@ -245,7 +274,11 @@ pub(crate) async fn sql_start(State(s): State<UiState>, body: String) -> Respons
             "the statement is too long",
         );
     }
-    match s.source.sql_start(&sql).await {
+    match s
+        .source
+        .sql_start(&sql, caller.as_ref().map(|c| &c.0))
+        .await
+    {
         Ok(id) => json_response(StatusCode::ACCEPTED, &json!({"run_id": id})),
         Err(e) => source_error(&e),
     }
@@ -253,8 +286,16 @@ pub(crate) async fn sql_start(State(s): State<UiState>, body: String) -> Respons
 
 /// `GET /api/internal/sql/{run}`: the run's state and, once it ended, its rows or its error.
 #[utoipa::path(get, path = "/api/internal/sql/{run}", params(("run" = String, Path)), responses((status = 200, description = "The run", body = SqlRun)))]
-pub(crate) async fn sql_status(State(s): State<UiState>, Path(id): Path<String>) -> Response {
-    match s.source.sql_status(&id).await {
+pub(crate) async fn sql_status(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    Path(id): Path<String>,
+) -> Response {
+    match s
+        .source
+        .sql_status(&id, caller.as_ref().map(|c| &c.0))
+        .await
+    {
         Ok(Some(v)) => json_response(StatusCode::OK, &v),
         Ok(None) => error(StatusCode::NOT_FOUND, "no_such_run", "no such run"),
         Err(e) => source_error(&e),
@@ -263,8 +304,16 @@ pub(crate) async fn sql_status(State(s): State<UiState>, Path(id): Path<String>)
 
 /// `POST /api/internal/sql/{run}/cancel`.
 #[utoipa::path(post, path = "/api/internal/sql/{run}/cancel", params(("run" = String, Path)), responses((status = 200, description = "Cancelled")))]
-pub(crate) async fn sql_cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {
-    match s.source.sql_cancel(&id).await {
+pub(crate) async fn sql_cancel(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    Path(id): Path<String>,
+) -> Response {
+    match s
+        .source
+        .sql_cancel(&id, caller.as_ref().map(|c| &c.0))
+        .await
+    {
         Ok(true) => json_response(StatusCode::OK, &json!({"cancelled": true})),
         Ok(false) => error(
             StatusCode::NOT_FOUND,
@@ -343,7 +392,11 @@ pub(crate) async fn openapi_json() -> Response {
         create_session
     ),
     components(schemas(
-        CatalogList,
+        CatalogItem,
+        Catalogs,
+        Schemas,
+        Tables,
+        Columns,
         Environment,
         EnvironmentSetting,
         SqlRequest,
@@ -359,12 +412,50 @@ pub fn openapi() -> Value {
     serde_json::to_value(ApiDoc::openapi()).unwrap_or(Value::Null)
 }
 
-/// A list of catalog objects (each a JSON object with at least `name`).
+/// One object of the catalog tree.
 #[derive(Debug, ToSchema)]
 #[expect(dead_code, reason = "documents a response body")]
-pub struct CatalogList {
-    /// The objects.
-    items: Vec<std::collections::BTreeMap<String, String>>,
+pub struct CatalogItem {
+    /// The name.
+    name: String,
+    /// A column's type.
+    data_type: Option<String>,
+    /// A column's comment.
+    comment: Option<String>,
+    /// Whether a table is a temporary view.
+    is_temporary: Option<bool>,
+}
+
+/// The reply of `catalogs`.
+#[derive(Debug, ToSchema)]
+#[expect(dead_code, reason = "documents a response body")]
+pub struct Catalogs {
+    /// The catalogs.
+    catalogs: Vec<CatalogItem>,
+}
+
+/// The reply of `schemas`.
+#[derive(Debug, ToSchema)]
+#[expect(dead_code, reason = "documents a response body")]
+pub struct Schemas {
+    /// The schemas of the catalog.
+    schemas: Vec<CatalogItem>,
+}
+
+/// The reply of `tables`.
+#[derive(Debug, ToSchema)]
+#[expect(dead_code, reason = "documents a response body")]
+pub struct Tables {
+    /// The tables of the schema.
+    tables: Vec<CatalogItem>,
+}
+
+/// The reply of `columns`.
+#[derive(Debug, ToSchema)]
+#[expect(dead_code, reason = "documents a response body")]
+pub struct Columns {
+    /// The columns of the table.
+    columns: Vec<CatalogItem>,
 }
 
 /// One setting of the environment page.
@@ -421,6 +512,8 @@ pub struct SqlRun {
     error: Option<String>,
     /// The error class.
     error_class: Option<String>,
+    /// The error class's SQLSTATE.
+    sql_state: Option<String>,
 }
 
 #[cfg(test)]
@@ -453,6 +546,19 @@ mod tests {
             assert!(!text.contains(canary), "{canary} leaked: {text}");
         }
         assert!(text.contains("200"));
+    }
+
+    #[test]
+    fn a_policy_for_a_listener_checks_loopback_binds_and_non_loopback_only_with_names() {
+        assert!(!UiPolicy::for_listener(true, []).allows("evil.example"));
+        assert!(UiPolicy::for_listener(true, ["ui.example.com"]).allows("ui.example.com:8080"));
+        // Bound to 0.0.0.0 with nothing configured: any name or address reaches it.
+        assert!(UiPolicy::for_listener(false, []).allows("10.1.2.3:8080"));
+        assert!(UiPolicy::for_listener(false, [" ", "*"]).allows("10.1.2.3"));
+        // With names configured, only those (and loopback).
+        let p = UiPolicy::for_listener(false, ["ui.example.com"]);
+        assert!(p.allows("ui.example.com"));
+        assert!(!p.allows("evil.example"));
     }
 
     #[test]

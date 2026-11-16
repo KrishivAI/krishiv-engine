@@ -17,27 +17,38 @@ use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_session::{CancelReason, EngineRuntime, QueryId, Session};
 use serde_json::{Number, Value};
 
+use krishiv_session::auth::Authenticated;
+
+use crate::guard::Caller;
 use crate::internal::{Row, SystemTable, UiError, UiFuture, UiSource};
 
 /// The principal of the UI's own session; its queries are hidden from the UI.
 pub const UI_PRINCIPAL: &str = "krishiv-ui";
 
+/// Builds the session a statement of an authenticated caller runs in: the caller's principal and policy, as a
+/// Spark Connect session of that caller gets (`krishiv_connect_server::role_sessions`).
+pub type CallerSessions = dyn Fn(&Authenticated) -> Result<Session, KrishivError> + Send + Sync;
+
 /// The UI's data source over one engine runtime.
 pub struct SessionSource {
     session: Session,
-    /// The editor's own session: its queries show in the lists under [`EDITOR_PRINCIPAL`].
-    editor: Session,
+    /// Where the editor's statements of a caller the guard did not identify run (a server with no
+    /// authentication, whose start-up token is all-powerful): an ordinary session of the runtime.
+    anonymous: Session,
     runtime: Arc<EngineRuntime>,
     runs: Arc<Mutex<Runs>>,
+    /// How an identified caller's session is built; without it such a caller's statement is refused.
+    caller_sessions: Option<Arc<CallerSessions>>,
+    /// One session per caller, so `SET` and `USE` of one user never reach another.
+    sessions: Mutex<std::collections::HashMap<String, Session>>,
 }
-
-/// The principal of the SQL editor's session.
-pub const EDITOR_PRINCIPAL: &str = "krishiv-ui-sql";
 
 /// Rows an editor result keeps.
 const MAX_RESULT_ROWS: usize = 1000;
-/// Editor runs remembered (the oldest is forgotten first).
+/// Editor runs remembered (the oldest finished one is forgotten first; a run still running is never).
 const MAX_RUNS: usize = 32;
+/// Statements one caller may have running in the editor at once.
+const MAX_RUNNING_PER_CALLER: usize = 4;
 
 /// The editor's runs, oldest first.
 #[derive(Default)]
@@ -48,6 +59,10 @@ struct Runs {
 
 struct Run {
     tag: String,
+    /// The caller the run belongs to (`None` for an unidentified one).
+    owner: Option<String>,
+    /// The principal name the statement's query is recorded under.
+    principal: Option<String>,
     cancel_requested: bool,
     state: &'static str,
     outcome: Option<Value>,
@@ -70,17 +85,48 @@ impl SessionSource {
             .principal(Principal::new(UI_PRINCIPAL, PrincipalKind::Service))
             .build()
             .map_err(ui_error)?;
-        let editor = Session::builder()
+        let anonymous = Session::builder()
             .runtime(Arc::clone(&runtime))
-            .principal(Principal::new(EDITOR_PRINCIPAL, PrincipalKind::Service))
             .build()
             .map_err(ui_error)?;
         Ok(Self {
             session,
-            editor,
+            anonymous,
             runtime,
             runs: Arc::new(Mutex::new(Runs::default())),
+            caller_sessions: None,
+            sessions: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// The same, running the editor's statements of an identified caller in the session `factory` builds for it
+    /// (its principal and its policy: what a Spark Connect session of the caller gets).
+    #[must_use]
+    pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
+        self.caller_sessions = Some(factory);
+        self
+    }
+
+    /// The session `caller` runs statements in, built on first use.
+    fn session_of(&self, caller: &Caller) -> Result<(String, Session), UiError> {
+        let Some(who) = caller.identity::<Authenticated>() else {
+            return Err(UiError::new(
+                "the caller's identity is not one this source knows",
+            ));
+        };
+        let Some(factory) = &self.caller_sessions else {
+            return Err(UiError::new(
+                "no session policy is configured for the editor",
+            ));
+        };
+        let key = self.owner_key(caller).unwrap_or_default();
+        let mut sessions = lock(&self.sessions);
+        if let Some(s) = sessions.get(&key) {
+            return Ok((key, s.clone()));
+        }
+        let session = factory(who).map_err(ui_error)?;
+        sessions.insert(key.clone(), session.clone());
+        Ok((key, session))
     }
 }
 
@@ -332,20 +378,60 @@ impl UiSource for SessionSource {
         Box::pin(async move { Ok(self.session.conf().entries()) })
     }
 
-    fn sql_start<'a>(&'a self, sql: &'a str) -> UiFuture<'a, String> {
+    fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         Box::pin(async move {
-            let id = crate::internal::random_token()?[..32].to_owned();
+            // The statement runs as the caller, under the caller's policy; an unidentified caller (a server with
+            // no authentication) runs in an ordinary session.
+            let (owner, session, principal) = match caller {
+                Some(c) => {
+                    let (key, session) = self.session_of(c)?;
+                    (Some(key), session, Some(c.name().to_owned()))
+                }
+                None => (None, self.anonymous.clone(), None),
+            };
+            let token = crate::internal::random_token()?;
+            let id = token
+                .get(..32)
+                .ok_or_else(|| UiError::new("no run id"))?
+                .to_owned();
             let tag = format!("krishiv-ui-run-{id}");
             let run = Arc::new(Mutex::new(Run {
                 tag: tag.clone(),
+                owner: owner.clone(),
+                principal,
                 cancel_requested: false,
                 state: "running",
                 outcome: None,
             }));
             {
                 let mut runs = lock(&self.runs);
+                let running_of_owner = runs
+                    .by_id
+                    .values()
+                    .filter(|r| {
+                        let r = lock(r);
+                        r.state == "running" && r.owner == owner
+                    })
+                    .count();
+                if running_of_owner >= MAX_RUNNING_PER_CALLER {
+                    return Err(UiError::busy(
+                        "too many statements are running; wait for one to finish or cancel it",
+                    ));
+                }
+                // Make room by forgetting the oldest finished run. A run still running is never forgotten (it
+                // could no longer be cancelled from the editor).
                 while runs.order.len() >= MAX_RUNS {
-                    if let Some(old) = runs.order.pop_front() {
+                    let finished = runs.order.iter().position(|old| {
+                        runs.by_id
+                            .get(old)
+                            .is_none_or(|r| lock(r).state != "running")
+                    });
+                    let Some(at) = finished else {
+                        return Err(UiError::busy(
+                            "the editor is busy with other statements; try again shortly",
+                        ));
+                    };
+                    if let Some(old) = runs.order.remove(at) {
                         runs.by_id.remove(&old);
                     }
                 }
@@ -353,7 +439,7 @@ impl UiSource for SessionSource {
                 runs.by_id.insert(id.clone(), Arc::clone(&run));
             }
             tokio::spawn(run_to_end(
-                self.editor.clone(),
+                session,
                 Arc::clone(&self.runtime),
                 run,
                 sql.to_owned(),
@@ -363,9 +449,13 @@ impl UiSource for SessionSource {
         })
     }
 
-    fn sql_status<'a>(&'a self, run_id: &'a str) -> UiFuture<'a, Option<Value>> {
+    fn sql_status<'a>(
+        &'a self,
+        run_id: &'a str,
+        caller: Option<&'a Caller>,
+    ) -> UiFuture<'a, Option<Value>> {
         Box::pin(async move {
-            let Some(run) = lock(&self.runs).by_id.get(run_id).cloned() else {
+            let Some(run) = self.run_of(run_id, caller) else {
                 return Ok(None);
             };
             let r = lock(&run);
@@ -377,23 +467,45 @@ impl UiSource for SessionSource {
         })
     }
 
-    fn sql_cancel<'a>(&'a self, run_id: &'a str) -> UiFuture<'a, bool> {
+    fn sql_cancel<'a>(&'a self, run_id: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, bool> {
         Box::pin(async move {
-            let Some(run) = lock(&self.runs).by_id.get(run_id).cloned() else {
+            let Some(run) = self.run_of(run_id, caller) else {
                 return Ok(false);
             };
-            let tag = {
+            let (tag, principal) = {
                 let mut r = lock(&run);
                 if r.state != "running" {
                     return Ok(false);
                 }
                 r.cancel_requested = true;
-                r.tag.clone()
+                (r.tag.clone(), r.principal.clone())
             };
-            // The editor's own queries end as a user's cancel (`OPERATION_CANCELED`).
-            self.runtime.cancel_by_tag(&tag, EDITOR_PRINCIPAL, false);
+            // The caller's own query ends as a user's cancel (`OPERATION_CANCELED`); an unidentified caller's
+            // (the all-powerful start-up token) as an operator's kill, which the run reports as cancelled too.
+            match principal {
+                Some(p) => self.runtime.cancel_by_tag(&tag, &p, false),
+                None => self.runtime.cancel_by_tag(&tag, "", true),
+            };
             Ok(true)
         })
+    }
+}
+
+impl SessionSource {
+    /// The run `run_id` when it belongs to `caller`: another caller's run does not exist for this one.
+    fn run_of(&self, run_id: &str, caller: Option<&Caller>) -> Option<Arc<Mutex<Run>>> {
+        let run = lock(&self.runs).by_id.get(run_id).cloned()?;
+        let owner = caller.and_then(|c| self.owner_key(c));
+        let mine = lock(&run).owner == owner;
+        mine.then_some(run)
+    }
+
+    fn owner_key(&self, caller: &Caller) -> Option<String> {
+        let who = caller.identity::<Authenticated>()?;
+        Some(format!(
+            "{:?}/{:?}/{}",
+            who.principal.kind, who.principal.tenant, who.principal.name
+        ))
     }
 }
 

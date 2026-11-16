@@ -13,8 +13,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
-use krishiv_server::guard::{Access, Guard, GuardRequest, Refusal};
-use krishiv_server::internal::{router_with_ui, router_with_ui_guard};
+use krishiv_server::guard::{Access, Guard, GuardRequest, Refusal, TokenGuard};
+use krishiv_server::internal::{router_with_ui, router_with_ui_guard, router_with_ui_policy};
+use krishiv_server::pages::UiPolicy;
 use krishiv_server::session_source::SessionSource;
 use krishiv_session::EngineRuntime;
 use serde_json::{Value, json};
@@ -404,4 +405,129 @@ async fn a_viewer_reads_but_can_neither_cancel_nor_run_sql() {
     assert_eq!(status, 403);
     let (status, ..) = raw(addr, "POST", "/api/internal/sql/r/cancel", &viewer, "").await;
     assert_eq!(status, 403);
+}
+
+async fn start_with(policy: UiPolicy) -> std::net::SocketAddr {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let source = SessionSource::new(rt).unwrap();
+    serve(router_with_ui_policy(
+        Arc::new(source),
+        Arc::new(TokenGuard::new(TOKEN)),
+        policy,
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn the_session_cookie_is_secure_when_the_listener_is_tls() {
+    let a = auth();
+    for (secure, want) in [(true, true), (false, false)] {
+        let addr = start_with(UiPolicy::for_listener(true, []).secure_cookie(secure)).await;
+        let (status, head, _) = raw(
+            addr,
+            "POST",
+            "/api/internal/session",
+            &["Host: localhost", &a, "X-Krishiv-Csrf: 1"],
+            "",
+        )
+        .await;
+        assert_eq!(status, 204);
+        let cookie = head.lines().find(|l| l.starts_with("set-cookie")).unwrap();
+        assert_eq!(cookie.contains("; secure"), want, "{cookie}");
+        assert!(
+            cookie.contains("httponly") && cookie.contains("samesite=strict"),
+            "{cookie}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_listener_on_another_address_does_not_refuse_remote_host_names() {
+    let a = auth();
+    // Bound to 0.0.0.0 with no names configured: a client reaching the machine by its address or any name works.
+    let open = start_with(UiPolicy::for_listener(false, [])).await;
+    for host in ["Host: 10.1.2.3:8080", "Host: ui.internal.example"] {
+        let (status, ..) = raw(open, "GET", "/api/internal/health", &[host, &a], "").await;
+        assert_eq!(status, 200, "{host}");
+    }
+    // With krishiv.ui.allowedHosts set, only those names (and loopback).
+    let named = start_with(UiPolicy::for_listener(false, ["ui.example.com"])).await;
+    let (status, ..) = raw(
+        named,
+        "GET",
+        "/api/internal/health",
+        &["Host: ui.example.com", &a],
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, ..) = raw(
+        named,
+        "GET",
+        "/api/internal/health",
+        &["Host: evil.example", &a],
+        "",
+    )
+    .await;
+    assert_eq!(status, 403);
+    // A loopback bind always checks.
+    let lo = start_with(UiPolicy::for_listener(true, [])).await;
+    let (status, ..) = raw(
+        lo,
+        "GET",
+        "/api/internal/health",
+        &["Host: evil.example", &a],
+        "",
+    )
+    .await;
+    assert_eq!(status, 403);
+}
+
+#[tokio::test]
+async fn the_documented_properties_are_the_ones_the_responses_carry() {
+    let addr = start().await;
+    let doc = get(addr, "/api/internal/openapi.json").await;
+    let props = |name: &str| -> Vec<String> {
+        doc["components"]["schemas"][name]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("no schema {name}"))
+            .keys()
+            .cloned()
+            .collect()
+    };
+    for (path, schema) in [
+        ("/api/internal/catalog/catalogs", "Catalogs"),
+        ("/api/internal/catalog/spark_catalog/schemas", "Schemas"),
+        (
+            "/api/internal/catalog/spark_catalog/default/tables",
+            "Tables",
+        ),
+        (
+            "/api/internal/catalog/spark_catalog/system/queries/columns",
+            "Columns",
+        ),
+        ("/api/internal/environment", "Environment"),
+    ] {
+        let body = get(addr, path).await;
+        let mut got: Vec<String> = body.as_object().unwrap().keys().cloned().collect();
+        let mut want = props(schema);
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{path}");
+    }
+    let (_, body) = post(addr, "/api/internal/sql", r#"{"sql": "SELEC nope"}"#).await;
+    let failed = wait_state(
+        addr,
+        body["run_id"].as_str().unwrap(),
+        "failed",
+        Duration::from_secs(20),
+    )
+    .await;
+    let documented = props("SqlRun");
+    for k in failed.as_object().unwrap().keys() {
+        assert!(
+            documented.contains(k),
+            "{k} is not documented: {documented:?}"
+        );
+    }
 }

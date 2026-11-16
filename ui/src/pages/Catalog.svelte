@@ -12,6 +12,8 @@
   let message = $state("");
 
   const enc = encodeURIComponent;
+  // A name as a quoted SQL identifier: a backtick inside is doubled, so a hostile name cannot end the quoting.
+  const quoteName = (n: string | null) => `\`${(n ?? "").replaceAll("`", "``")}\``;
 
   async function load<T>(path: string, key: string): Promise<T[]> {
     try {
@@ -95,5 +97,5 @@
       </tbody>
     </table>
   </div>
-  <p class="mt-3"><a class="underline underline-offset-4" href="#/sql" onclick={() => sessionStorage.setItem("krishiv_sql_draft", `SELECT * FROM ${catalog}.${schema}.${table} LIMIT 100`)}>Open in the SQL editor</a></p>
+  <p class="mt-3"><a class="underline underline-offset-4" href="#/sql" onclick={() => sessionStorage.setItem("krishiv_sql_draft", `SELECT * FROM ${[catalog, schema, table].map(quoteName).join(".")} LIMIT 100`)}>Open in the SQL editor</a></p>
 {/if}

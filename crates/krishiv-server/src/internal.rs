@@ -26,7 +26,7 @@ use axum::routing::{get, post};
 use serde_json::{Map, Value, json};
 
 use crate::guard::{
-    Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_leaf_of, peer_of,
+    Access, Caller, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_leaf_of, peer_of,
 };
 
 /// One system-table row as JSON (column name to value).
@@ -58,6 +58,8 @@ pub struct UiError {
     pub error_class: Option<String>,
     /// The SQLSTATE of that class, when Spark defines one.
     pub sql_state: Option<String>,
+    /// The source has too much running to take more (HTTP 429).
+    pub busy: bool,
 }
 
 impl UiError {
@@ -68,6 +70,16 @@ impl UiError {
             message: message.into(),
             error_class: None,
             sql_state: None,
+            busy: false,
+        }
+    }
+
+    /// A refusal because too much is running already.
+    #[must_use]
+    pub fn busy(message: impl Into<String>) -> Self {
+        Self {
+            busy: true,
+            ..Self::new(message)
         }
     }
 
@@ -78,6 +90,7 @@ impl UiError {
             message: message.into(),
             error_class: Some(class.to_owned()),
             sql_state: sql_state.map(str::to_owned),
+            busy: false,
         }
     }
 }
@@ -114,22 +127,28 @@ pub trait UiSource: Send + Sync + 'static {
         Box::pin(async { Err(UiError::new("this source has no environment")) })
     }
 
-    /// Starts `sql` for the editor and returns the run's id at once.
-    fn sql_start<'a>(&'a self, sql: &'a str) -> UiFuture<'a, String> {
-        let _ = sql;
+    /// Starts `sql` for the editor as `caller` (the authenticated principal, `None` when the guard knows only a
+    /// shared secret) and returns the run's id at once. A run belongs to its caller: another caller sees and
+    /// cancels nothing of it.
+    fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
+        let _ = (sql, caller);
         Box::pin(async { Err(UiError::new("this source runs no SQL")) })
     }
 
     /// The state of an editor run (`state` is `running`, `finished`, `failed` or `cancelled`; a finished run
     /// carries `columns` and `rows`, a failed one `error`); `None` for an id the source does not know.
-    fn sql_status<'a>(&'a self, run_id: &'a str) -> UiFuture<'a, Option<Value>> {
-        let _ = run_id;
+    fn sql_status<'a>(
+        &'a self,
+        run_id: &'a str,
+        caller: Option<&'a Caller>,
+    ) -> UiFuture<'a, Option<Value>> {
+        let _ = (run_id, caller);
         Box::pin(async { Ok(None) })
     }
 
     /// Cancels an editor run; `false` when it is not running.
-    fn sql_cancel<'a>(&'a self, run_id: &'a str) -> UiFuture<'a, bool> {
-        let _ = run_id;
+    fn sql_cancel<'a>(&'a self, run_id: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, bool> {
+        let _ = (run_id, caller);
         Box::pin(async { Ok(false) })
     }
 }
@@ -261,7 +280,11 @@ pub(crate) fn error(status: StatusCode, code: &str, message: &str) -> Response {
 
 pub(crate) fn source_error(e: &UiError) -> Response {
     json_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
+        if e.busy {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
         &json!({
             "error": "source_failed",
             "message": e.message,
@@ -350,8 +373,14 @@ async fn require_token(
         .with_malformed(malformed)
         .with_peer(peer_of(req.extensions()))
         .with_peer_leaf(peer_leaf_of(req.extensions()));
-    match s.guard.check(request).await {
-        Ok(()) => next.run(req).await,
+    match s.guard.check_caller(request).await {
+        Ok(caller) => {
+            let mut req = req;
+            if let Some(c) = caller {
+                req.extensions_mut().insert(c);
+            }
+            next.run(req).await
+        }
         Err(Refusal::Unauthenticated) => {
             let mut res = error(
                 StatusCode::UNAUTHORIZED,

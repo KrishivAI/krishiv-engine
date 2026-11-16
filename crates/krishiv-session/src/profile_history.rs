@@ -160,6 +160,7 @@ impl Drop for HoldGuard {
 
 /// A profile read back from the store.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StoredProfile {
     /// The query's id in `system.queries`.
     pub query_id: String,
