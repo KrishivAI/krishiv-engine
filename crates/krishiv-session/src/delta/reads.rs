@@ -62,9 +62,9 @@ pub(crate) struct DeltaReads {
     /// when the query's reads are dropped (a dropped planning future), so a call still waiting
     /// for a log-pool slot gives up and one already running ends at its next handler call.
     /// Scans do not use it: their engine is bound to the running query's cancellation
-    /// (`DeltaEngine::for_query`). An interrupt during analysis does not reach it yet: the
-    /// query is registered with the session's cancel registry only after planning (a recorded
-    /// follow-up).
+    /// (`DeltaEngine::for_query`). Reads built inside an action are also cancelled with it
+    /// (`action::cancelled`), so an interrupt during analysis ends their kernel calls even while
+    /// a frame still holds the reads.
     cancel: Arc<CancellationToken>,
     opened: Mutex<Vec<(String, Arc<DeltaTable>)>>,
 }
@@ -85,6 +85,18 @@ impl Drop for DeltaReads {
 
 impl DeltaReads {
     pub(crate) fn new(inputs: DeltaInputs) -> Self {
+        let cancel = Arc::new(CancellationToken::new());
+        if crate::action::in_action() {
+            // Subscribed here, in the action's scope; the task ends when either fires, so it
+            // never outlives the reads (their drop cancels the token).
+            let interrupted = crate::action::cancelled();
+            let token = Arc::clone(&cancel);
+            drop(inputs.runtime.spawn(async move {
+                let own = token.cancelled();
+                futures::future::select(std::pin::pin!(interrupted), std::pin::pin!(own)).await;
+                token.cancel();
+            }));
+        }
         Self {
             io: inputs.io,
             paths: inputs.paths,
@@ -92,7 +104,7 @@ impl DeltaReads {
             config: inputs.config,
             cache: inputs.cache,
             credential: inputs.credential,
-            cancel: Arc::new(CancellationToken::new()),
+            cancel,
             opened: Mutex::new(Vec::new()),
         }
     }

@@ -121,6 +121,56 @@ fn dropped_reads_cancel_their_kernel_calls() {
     );
 }
 
+/// An interrupt during analysis reaches the planning-time kernel calls of reads built inside the
+/// action, even while something (a frame) still holds the reads: their drop is not needed.
+#[test]
+fn an_interrupted_action_cancels_its_reads_kernel_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let s = Arc::new(Session::new().unwrap());
+    let actions = Arc::new(crate::action::Actions::default());
+    let guard = actions.begin(1, Some("op"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let running = {
+        let s = Arc::clone(&s);
+        std::thread::spawn(move || {
+            block_on(guard.run(async move {
+                let query = s.query_env();
+                let reads = Arc::clone(&query.catalog.delta);
+                let (store, root) = reads.root_of(&read(&path))?;
+                let engine = reads.engine(store, root)?;
+                tx.send((reads, engine)).ok();
+                std::future::pending::<Result<(), krishiv_common::error::KrishivError>>().await
+            }))
+        })
+    };
+    let (held, engine) = rx.recv().unwrap();
+    assert!(block_on(engine.delta_blocking(|_| ())).is_ok());
+    actions.cancel_where(crate::cancel::CancelReason::User, &|_, _| true);
+    assert!(
+        running.join().unwrap().is_err(),
+        "the action ends with the cancel"
+    );
+    // The watcher runs on the I/O runtime: give it a moment, never forever.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let e = loop {
+        match block_on(engine.delta_blocking(|_| ())) {
+            Err(e) => break e,
+            Ok(()) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(()) => panic!("the interrupt never reached the planning engine"),
+        }
+    };
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+    drop(held);
+}
+
 /// `krishiv.delta.snapshotCache.maxBytes` reaches the runtime's cache: under a bound that holds
 /// a snapshot but not its listing, the table is cached without its files (re-review N6).
 #[test]
