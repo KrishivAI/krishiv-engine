@@ -374,7 +374,7 @@ async fn the_admin_router_merges_with_a_router_that_has_a_fallback_and_unknown_p
         send(&merged, get_req("/api/admin/v1/version")).await.0,
         StatusCode::OK
     );
-    // Alone, an unknown path under the service is 404 too.
+    // Alone, a path under the service with no route-table row is a gRPC status (UNIMPLEMENTED).
     let alone = app(Arc::new(Open), true);
     let (status, _, _) = send(&alone, grpc("/krishiv.admin.v1.AdminService/Nope")).await;
     assert_eq!(
