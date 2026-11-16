@@ -178,7 +178,7 @@ def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
         "</testsuite></testsuites>"
     )
     cond = oracle_skips(tmp_path, "4.3.0")
-    assert cond == {"sub/test_g.py::GTests::test_jvm"}  # the pandas skip is an oracle-environment gap, not conditional
+    assert cond == {"sub/test_g.py::GTests::test_jvm"}  # the numpy skip is an oracle-environment gap, not conditional
     collected = {f"a.py::T::t{i}" for i in range(8)} | cond | {"sub/test_g.py::GTests::test_bad", "b.py::T::skipme"}
     den, remaining = compute("4.3.0", collected, {"b.py::T::skipme"}, set(), [], cond)
     assert (den.collected, den.spark_skips, den.conditional_skips, den.denominator) == (11, 1, 1, 9)

@@ -102,7 +102,8 @@ class KrishivConnectEngine(SparkConnectEngine):
             super().setup(dataset)
         except BaseException:
             # The runner's try/finally starts after setup(), so a failure here would leave the server running.
-            self.teardown()
+            with contextlib.suppress(Exception):  # the setup error is the one to report
+                self.teardown()
             raise
 
     def begin_measure(self) -> None:

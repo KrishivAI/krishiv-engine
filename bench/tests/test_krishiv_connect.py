@@ -120,6 +120,26 @@ def test_setup_failure_stops_the_server(tmp_path, monkeypatch):
     assert e._proc is None
 
 
+def test_teardown_stops_the_server_even_when_the_session_stop_raises(tmp_path, monkeypatch):
+    from krishiv_bench.adapters.spark_connect import SparkConnectEngine
+
+    def boom(self):
+        raise OSError("stop failed")
+
+    monkeypatch.setattr(SparkConnectEngine, "teardown", boom)
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    e._start_server()
+    proc = e._proc
+    assert proc is not None
+    e.begin_measure()
+    with pytest.raises(OSError, match="stop failed"):
+        e.teardown()
+    assert proc.wait(timeout=5) is not None
+    assert e._proc is None
+    assert e._tree is None
+
+
 def test_setup_success_leaves_the_server_running(tmp_path, monkeypatch):
     from krishiv_bench.adapters.spark_connect import SparkConnectEngine
 
