@@ -22,7 +22,8 @@ use krishiv_plan::{Expr, Literal};
 use serde_json::Value;
 
 use super::super::dml::{
-    ROW_LEVEL_AFFECTED_OPTION, ROW_LEVEL_CONDITION_OPTION, ROW_LEVEL_SCAN_MS_OPTION,
+    ROW_LEVEL_AFFECTED_OPTION, ROW_LEVEL_ALIAS_OPTION, ROW_LEVEL_CONDITION_OPTION,
+    ROW_LEVEL_SCAN_MS_OPTION,
 };
 use super::super::test_hooks::{self, Point};
 use super::streaming::{data_files, new_table};
@@ -111,6 +112,9 @@ fn rewrite(
     request
         .options
         .insert(ROW_LEVEL_SCAN_MS_OPTION.to_owned(), "3".to_owned());
+    request
+        .options
+        .insert(ROW_LEVEL_ALIAS_OPTION.to_owned(), "t".to_owned());
     if let Some((text, _)) = condition {
         request
             .options
@@ -503,6 +507,201 @@ fn a_change_data_feed_table_refuses_rewrites_but_commits_whole_file_deletes() {
         env.read(&env.open().unwrap())
             .iter()
             .all(|b| b.num_rows() == 0)
+    );
+    assert_eq!(env.query_pool.reserved(), 0);
+}
+
+fn ids_left(env: &Env) -> Vec<i64> {
+    typed_rows(&env.read(&env.open().unwrap()))
+        .iter()
+        .map(|r| r[0].as_i64().unwrap())
+        .collect()
+}
+
+fn and(a: Expr, b: Expr) -> Expr {
+    Expr::function("and", vec![a, b])
+}
+
+/// Review 1, B1: the files a whole-file `DELETE` removes are the ones the find query touched;
+/// an untouched file its partition predicate selects stays while it holds a live row, whatever
+/// the predicate's translation says.
+#[test]
+fn a_whole_file_delete_never_removes_an_untouched_file_with_live_rows() {
+    let env = Env::new();
+    two_file_table(&env, &["p"]);
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Delete);
+    // Partition `y` has two files (ids 3 and 4); the find query touched only id 3's.
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    rewrite(
+        &env,
+        &rl,
+        RowLevelOperation::Delete,
+        vec![the_file_of(&files, 3)],
+        Vec::new(),
+        Some(("p = 'y'", eq("p", Literal::String("y".to_owned())))),
+        1,
+        "dml-b1-untouched",
+    )
+    .unwrap();
+    assert_eq!(ids_left(&env), [1, 2, 4, 5, 6]);
+    let info = commit_info(&env.log(env.latest()));
+    assert_eq!(info["operationMetrics"]["numRemovedFiles"], "1");
+    assert_eq!(info["operationMetrics"]["numDeletedRows"], "1");
+}
+
+/// Review 1, B1: a whole-file plan that wrote rows was not whole-file: only the touched files
+/// go, as a rewrite.
+#[test]
+fn a_whole_file_plan_that_wrote_rows_commits_a_rewrite_of_the_touched_files() {
+    let env = Env::new();
+    two_file_table(&env, &["p"]);
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Delete);
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    rewrite(
+        &env,
+        &rl,
+        RowLevelOperation::Delete,
+        vec![the_file_of(&files, 2)],
+        rows(&[(1, "a", Some("x"))]),
+        Some(("p = 'y'", eq("p", Literal::String("y".to_owned())))),
+        1,
+        "dml-b1-wrote-rows",
+    )
+    .unwrap();
+    assert_eq!(ids_left(&env), [1, 3, 4, 5, 6]);
+    let m = metrics(&commit_info(&env.log(env.latest())));
+    assert_eq!(m["numRemovedFiles"], "1");
+    assert_eq!(m["numDeletedRows"], "1");
+    assert_eq!(m["numCopiedRows"], "1");
+}
+
+/// Review 1, B1: `s.p` is a struct field, never the partition column `p`; the statement
+/// rewrites the touched file and keeps the partition's other files.
+#[test]
+fn a_struct_field_condition_never_removes_the_partition_of_its_last_name() {
+    let env = Env::new();
+    two_file_table(&env, &["p"]);
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Delete);
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    let cond = Expr::function(
+        "=",
+        vec![
+            Expr::column(["s", "p"]),
+            Expr::literal(Literal::String("y".to_owned())),
+        ],
+    );
+    rewrite(
+        &env,
+        &rl,
+        RowLevelOperation::Delete,
+        vec![the_file_of(&files, 3)],
+        Vec::new(),
+        Some(("s.p = 'y'", cond)),
+        1,
+        "dml-b1-struct",
+    )
+    .unwrap();
+    assert_eq!(ids_left(&env), [1, 2, 4, 5, 6]);
+    // A rewrite's metrics: the find query's count.
+    let info = commit_info(&env.log(env.latest()));
+    assert_ne!(info["operationMetrics"]["rewriteTimeMs"], Value::Null);
+    assert_eq!(info["operationMetrics"]["numCopiedRows"], "0");
+}
+
+/// The conflict check of a row-level change reads by the condition's partition conjuncts
+/// (delta-spark's read predicates, review 1 M1): a concurrent append to another partition
+/// commits, one to a partition the statement read conflicts. Both for a rewrite (`p = 'y' AND
+/// id = 3`) and a whole-file delete (`p = 'y'`).
+#[test]
+fn a_concurrent_append_conflicts_only_inside_the_partitions_read() {
+    for (case, whole) in [("rewrite", false), ("whole-file", true)] {
+        for (target, conflicts) in [("z", false), ("y", true)] {
+            let env = Env::new();
+            two_file_table(&env, &["p"]);
+            let table = env.open().unwrap();
+            let files = row_files(&env, &table, RowLevelOperation::Delete);
+            env.write(
+                &env.open().unwrap(),
+                WriteMode::Append,
+                rows(&[(9, "w", Some(target))]),
+                &[],
+            )
+            .unwrap();
+            let after = env.latest();
+            let y = eq("p", Literal::String("y".to_owned()));
+            let (touched, cond) = if whole {
+                (
+                    vec![the_file_of(&files, 3), the_file_of(&files, 4)],
+                    ("p = 'y'", y),
+                )
+            } else {
+                (
+                    vec![the_file_of(&files, 3)],
+                    ("p = 'y' AND id = 3", and(y, eq("id", Literal::Long(3)))),
+                )
+            };
+            let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+            let out = rewrite(
+                &env,
+                &rl,
+                RowLevelOperation::Delete,
+                touched,
+                Vec::new(),
+                Some(cond),
+                if whole { 2 } else { 1 },
+                &format!("dml-m1-{case}-{target}"),
+            );
+            let name = format!("{case}, append to {target}");
+            if conflicts {
+                let err = out.unwrap_err();
+                assert_eq!(
+                    err.error_class().name(),
+                    "DELTA_CONCURRENT_APPEND.WITH_PARTITION_HINT",
+                    "{name}: {err}"
+                );
+                assert_eq!(env.latest(), after, "{name}");
+            } else {
+                out.unwrap();
+                assert_eq!(env.latest(), after + 1, "{name}");
+                let left = ids_left(&env);
+                assert!(left.contains(&9) && !left.contains(&3), "{name}: {left:?}");
+            }
+        }
+    }
+}
+
+/// A failure inside the commit's staging (after the rewrite's files are written) leaves the
+/// table's version and data files as they were (review 1, L3).
+#[test]
+fn a_failure_while_staging_the_commit_leaves_no_files() {
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Delete);
+    let (version, before) = (env.latest(), data_files(&env.dir));
+    let id = "dml-fail-in-stage";
+    test_hooks::fail(id);
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    let err = rewrite(
+        &env,
+        &rl,
+        RowLevelOperation::Delete,
+        vec![the_file_of(&files, 2)],
+        rows(&[(1, "a", Some("x")), (3, "c", Some("y"))]),
+        Some(("id = 2", eq("id", Literal::Long(2)))),
+        1,
+        id,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("injected"), "{err}");
+    assert_eq!(env.latest(), version);
+    assert_eq!(
+        data_files(&env.dir),
+        before,
+        "the rewrite's files were deleted"
     );
     assert_eq!(env.query_pool.reserved(), 0);
 }

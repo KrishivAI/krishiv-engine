@@ -9,6 +9,12 @@
 //! translated: `=`, `==`, `<=>`, `<`, `<=`, `>`, `>=`, `!=`, `<>`, `AND`, `OR`, `NOT`, `IS [NOT]
 //! NULL`, `IN` and literals; a literal is taken in its column's type when it is exactly
 //! representable there.
+//!
+//! A column is a one-part name, or a two-part name whose first part is one of the caller's
+//! qualifiers (a row-level statement's alias or table name) and no top-level column: `s.p` with a
+//! struct column `s` is the struct's field, never the partition column `p`. A string literal
+//! compared with a `TIMESTAMP` column is refused: Spark casts it in the session time zone, which
+//! the translation does not know.
 
 use delta_kernel::expressions::{Expression as KExpr, Predicate as Pred, Scalar};
 use delta_kernel::schema::{DataType, PrimitiveType, StructType};
@@ -23,7 +29,8 @@ pub enum FilterRefusal {
     Unsupported(String),
 }
 
-/// `filter` as a predicate over the partition columns `partitions` of the table `schema`.
+/// `filter` as a predicate over the partition columns `partitions` of the table `schema`; a
+/// two-part column name may start with one of `qualifiers` (see the module docs).
 ///
 /// # Errors
 /// [`FilterRefusal`] when it names a data column or uses an untranslated form.
@@ -31,13 +38,61 @@ pub fn partition_predicate(
     filter: &Expr,
     schema: &StructType,
     partitions: &[String],
+    qualifiers: &[&str],
 ) -> Result<Pred, FilterRefusal> {
-    Translate { schema, partitions }.pred(filter)
+    Translate {
+        schema,
+        partitions,
+        qualifiers,
+    }
+    .pred(filter)
+}
+
+/// The top-level `AND` conjuncts of `filter` that translate by [`partition_predicate`], as one
+/// predicate (`None`: none does). Rows the filter holds for satisfy it, so it bounds what a
+/// statement with that condition read.
+#[must_use]
+pub fn partition_conjuncts(
+    filter: &Expr,
+    schema: &StructType,
+    partitions: &[String],
+    qualifiers: &[&str],
+) -> Option<Pred> {
+    fn split<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match &e.node {
+            ExprNode::Function(f)
+                if f.qualifier.is_empty()
+                    && f.name.eq_ignore_ascii_case("and")
+                    && f.args.len() == 2 =>
+            {
+                for a in &f.args {
+                    split(a, out);
+                }
+            }
+            _ => out.push(e),
+        }
+    }
+    let mut conjuncts = Vec::new();
+    split(filter, &mut conjuncts);
+    let t = Translate {
+        schema,
+        partitions,
+        qualifiers,
+    };
+    let mut kept: Vec<Pred> = conjuncts
+        .into_iter()
+        .filter_map(|c| t.pred(c).ok())
+        .collect();
+    match kept.len() {
+        0 | 1 => kept.pop(),
+        _ => Some(Pred::and_from(kept)),
+    }
 }
 
 struct Translate<'a> {
     schema: &'a StructType,
     partitions: &'a [String],
+    qualifiers: &'a [&'a str],
 }
 
 impl Translate<'_> {
@@ -105,10 +160,23 @@ impl Translate<'_> {
                 "a non-column operand".to_owned(),
             ));
         };
-        let Some(name) = c.name.last() else {
-            return Err(FilterRefusal::Unsupported(
-                "an empty column name".to_owned(),
-            ));
+        let name = match c.name.as_slice() {
+            [name] => name,
+            [q, name]
+                if self.qualifiers.iter().any(|x| x.eq_ignore_ascii_case(q))
+                    && !self
+                        .schema
+                        .fields()
+                        .any(|f| f.name().eq_ignore_ascii_case(q)) =>
+            {
+                name
+            }
+            [] => {
+                return Err(FilterRefusal::Unsupported(
+                    "an empty column name".to_owned(),
+                ));
+            }
+            parts => return Err(FilterRefusal::DataColumn(parts.join("."))),
         };
         let Some(p) = self
             .partitions
@@ -155,9 +223,122 @@ impl Translate<'_> {
             Literal::TimestampNtz(v) if *p == PrimitiveType::TimestampNtz => {
                 Some(Scalar::TimestampNtz(*v))
             }
+            // Spark casts the string in the session time zone.
+            Literal::String(_) if *p == PrimitiveType::Timestamp => None,
             Literal::String(v) => p.parse_scalar(v).ok(),
             _ => None,
         };
         s.map(KExpr::literal).ok_or_else(refuse)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use delta_kernel::schema::{DataType, StructField, StructType};
+    use krishiv_plan::{Expr, Literal};
+
+    use super::{FilterRefusal, partition_conjuncts, partition_predicate};
+
+    /// `id BIGINT, s STRUCT<p INT>, p INT, ts TIMESTAMP, ntz TIMESTAMP_NTZ`, partitioned by
+    /// `p`, `ts` and `ntz`.
+    fn schema() -> (StructType, Vec<String>) {
+        let s = StructType::new_unchecked([StructField::nullable("p", DataType::INTEGER)]);
+        (
+            StructType::new_unchecked([
+                StructField::nullable("id", DataType::LONG),
+                StructField::nullable("s", s),
+                StructField::nullable("p", DataType::INTEGER),
+                StructField::nullable("ts", DataType::TIMESTAMP),
+                StructField::nullable("ntz", DataType::TIMESTAMP_NTZ),
+            ]),
+            vec!["p".to_owned(), "ts".to_owned(), "ntz".to_owned()],
+        )
+    }
+
+    fn eq(column: &[&str], value: Literal) -> Expr {
+        Expr::function(
+            "=",
+            vec![Expr::column(column.iter().copied()), Expr::literal(value)],
+        )
+    }
+
+    fn translate(e: &Expr, qualifiers: &[&str]) -> Result<(), FilterRefusal> {
+        let (schema, partitions) = schema();
+        partition_predicate(e, &schema, &partitions, qualifiers).map(drop)
+    }
+
+    #[test]
+    fn a_struct_field_is_never_the_partition_column_of_its_last_name() {
+        assert_eq!(
+            translate(&eq(&["s", "p"], Literal::Integer(1)), &["t"]),
+            Err(FilterRefusal::DataColumn("s.p".to_owned()))
+        );
+        // The statement's alias names the partition column.
+        assert_eq!(
+            translate(&eq(&["t", "p"], Literal::Integer(1)), &["t"]),
+            Ok(())
+        );
+        assert_eq!(
+            translate(&eq(&["T", "p"], Literal::Integer(1)), &["t"]),
+            Ok(())
+        );
+        // An alias that is also a column's name is ambiguous: refused.
+        assert!(translate(&eq(&["s", "p"], Literal::Integer(1)), &["s"]).is_err());
+        // No qualifier given: only one-part names.
+        assert!(translate(&eq(&["t", "p"], Literal::Integer(1)), &[]).is_err());
+        assert!(translate(&eq(&["db", "t", "p"], Literal::Integer(1)), &["t"]).is_err());
+        assert_eq!(translate(&eq(&["p"], Literal::Integer(1)), &[]), Ok(()));
+    }
+
+    #[test]
+    fn a_string_compared_with_a_timestamp_partition_is_refused() {
+        let text = || Literal::String("2024-01-01 00:00:00".to_owned());
+        assert!(matches!(
+            translate(&eq(&["ts"], text()), &[]),
+            Err(FilterRefusal::Unsupported(_))
+        ));
+        // A wall-clock `TIMESTAMP_NTZ` reads no zone.
+        assert_eq!(translate(&eq(&["ntz"], text()), &[]), Ok(()));
+    }
+
+    #[test]
+    fn the_partition_conjuncts_of_a_condition_are_kept() {
+        let (schema, partitions) = schema();
+        let both = Expr::function(
+            "and",
+            vec![
+                eq(&["p"], Literal::Integer(1)),
+                eq(&["id"], Literal::Long(3)),
+            ],
+        );
+        let p = partition_conjuncts(&both, &schema, &partitions, &[]).unwrap();
+        assert_eq!(
+            p.to_string(),
+            partition_predicate(&eq(&["p"], Literal::Integer(1)), &schema, &partitions, &[])
+                .unwrap()
+                .to_string()
+        );
+        assert!(
+            partition_conjuncts(&eq(&["id"], Literal::Long(3)), &schema, &partitions, &[])
+                .is_none()
+        );
+        // An `OR` with a data column bounds nothing.
+        let or = Expr::function(
+            "or",
+            vec![
+                eq(&["p"], Literal::Integer(1)),
+                eq(&["id"], Literal::Long(3)),
+            ],
+        );
+        assert!(partition_conjuncts(&or, &schema, &partitions, &[]).is_none());
+        assert!(
+            partition_conjuncts(
+                &eq(&["s", "p"], Literal::Integer(1)),
+                &schema,
+                &partitions,
+                &["t"]
+            )
+            .is_none()
+        );
     }
 }

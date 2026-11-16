@@ -219,7 +219,7 @@ pub(crate) fn writer(
         }
         WriteMode::OverwriteByFilter(filter) => {
             let partitions = table.partition_columns();
-            let pred = partition_predicate(filter, &snapshot.schema(), &partitions).map_err(
+            let pred = partition_predicate(filter, &snapshot.schema(), &partitions, &[]).map_err(
                 |refusal| {
                     let what = match refusal {
                         FilterRefusal::DataColumn(c) => {
@@ -1186,6 +1186,36 @@ pub(super) fn select_removes(
         }
     }
     Ok((out, files, bytes))
+}
+
+/// Every scan metadata batch of `snapshot`'s live files, with its selection, given to `f` as
+/// the listing goes (nothing is kept here).
+pub(super) fn for_each_scan_batch(
+    e: &DeltaEngine,
+    snapshot: &SnapshotRef,
+    name: &str,
+    mut f: impl FnMut(RecordBatch, Vec<bool>) -> Result<(), KrishivError>,
+) -> Result<(), KrishivError> {
+    let kernel = |err: &delta_kernel::KernelError| from_kernel(err, name);
+    let scan = Arc::clone(snapshot)
+        .scan_builder()
+        .with_cancellation_token(e.kernel_cancellation())
+        .build()
+        .map_err(|err| kernel(&err))?;
+    for metadata in scan.scan_metadata(e).map_err(|err| kernel(&err))? {
+        let (data, selection) = metadata
+            .map_err(|err| kernel(&err))?
+            .scan_files
+            .into_parts();
+        let batch = KrishivEngineData::from_engine_data(data)
+            .map_err(|err| kernel(&err))?
+            .into_batch();
+        let selection: Vec<bool> = (0..batch.num_rows())
+            .map(|i| selection.get(i).copied().unwrap_or(true))
+            .collect();
+        f(batch, selection)?;
+    }
+    Ok(())
 }
 
 /// An overwrite predicate evaluated exactly over scan rows' partition values.

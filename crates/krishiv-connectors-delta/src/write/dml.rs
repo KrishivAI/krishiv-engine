@@ -10,14 +10,18 @@
 //! (`DELETE`) or every row of them with the new values (`UPDATE`) go through the
 //! [`rewriter`](DeltaRowLevel), the write path's sink in a row-level mode. Its finalize:
 //! 1. ends the written files as any write does;
-//! 2. selects the files to remove from the snapshot's scan metadata, so each remove carries the
-//!    file's deletion vector as the log has it: the touched files, and for a whole-file
-//!    `DELETE` also every file whose partition values the condition holds for;
+//! 2. selects the files to remove from the snapshot's scan metadata (batch by batch, keeping
+//!    only the batches holding a removed file), so each remove carries the file's deletion
+//!    vector as the log has it: the touched files, and for a whole-file `DELETE` (one that wrote
+//!    no row) the untouched files of the matching partitions whose statistics prove no live row
+//!    (every live file without a condition). The find query decides what is deleted; the
+//!    partition predicate's translation never removes a file holding a live row (review 1, B1);
 //! 3. commits `DELETE` or `UPDATE` through the commit loop, with delta-spark's
-//!    `operationParameters` and `operationMetrics`, the touched files in the read set and the
-//!    statement read as a whole-table read (or by its partition predicate for a whole-file
-//!    `DELETE`), so a concurrent remove of a read file is `DELTA_CONCURRENT_DELETE_READ` and of a
-//!    removed file `DELTA_CONCURRENT_DELETE_DELETE`;
+//!    `operationParameters` and `operationMetrics`, the removed files in the read set and the
+//!    statement read by its condition's partition conjuncts (`filter::partition_conjuncts`;
+//!    delta-spark's read predicates), else as a whole-table read, so a concurrent append to a
+//!    partition read is `DELTA_CONCURRENT_APPEND`, a remove of a read file
+//!    `DELTA_CONCURRENT_DELETE_READ` and of a removed file `DELTA_CONCURRENT_DELETE_DELETE`;
 //! 4. records the outcome for the statement's result row (`num_affected_rows`).
 //!
 //! A statement that changes nothing commits nothing (delta-spark's `commitIfNeeded`).
@@ -51,9 +55,13 @@
 //!   expression ids and unquoted strings (`["(id#1345L = 0)"]`, `["(p#28895 = x)"]`).
 //! - A whole-file `DELETE` is recognised only when its condition translates as a partition
 //!   predicate (comparisons, `IN`, `IS [NOT] NULL`, `AND`/`OR`/`NOT` of a partition column and a
-//!   literal); delta-spark also takes functions of partition columns. Such a statement
-//!   rewrites instead (the same rows go; its metrics are a rewrite's, and a change-data-feed
-//!   table refuses it).
+//!   literal; a column one-part or qualified by the statement's alias, never a struct field; no
+//!   string compared with a `TIMESTAMP` column); delta-spark also takes functions of partition
+//!   columns. Such a statement rewrites instead (the same rows go; its metrics are a rewrite's,
+//!   and a change-data-feed table refuses it). A matching partition's file with no live row is
+//!   removed only when its statistics prove it.
+//! - The read predicates are the conjuncts that translate; delta-spark takes every
+//!   partition-only conjunct, so a conjunct of another form makes Krishiv's read wider (safe).
 //! - Deletion vectors are never written: on a table with `delta.enableDeletionVectors = true`
 //!   delta-spark marks the changed rows in deletion vectors (its default
 //!   `...deletionVectors.persistent = true`); Krishiv rewrites the files (merge-on-read is
@@ -77,8 +85,8 @@ use krishiv_exec::planner::{
 use krishiv_exec::{ScanPushdown, Sink};
 
 use super::files::Written;
-use super::filter::partition_predicate;
-use super::sink::{ExactCheck, Failure, append_only_refusal, row_level_sink, select_removes};
+use super::filter::{partition_conjuncts, partition_predicate};
+use super::sink::{ExactCheck, Failure, append_only_refusal, for_each_scan_batch, row_level_sink};
 use crate::commit::winner::FileAction;
 use crate::commit::{CommitOperation, ReadSet, StagedCommit, StagedRemoves};
 use crate::engine::DeltaEngine;
@@ -94,6 +102,11 @@ pub const ROW_LEVEL_CONDITION_OPTION: &str = "__krishiv_row_level_condition";
 
 /// The row-level option holding the milliseconds the find query took (`scanTimeMs`).
 pub const ROW_LEVEL_SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
+
+/// The row-level option holding the name the statement reads the table under (its alias, else
+/// the table's last name part): a two-part column name of the condition starting with it names
+/// a column of the table (absent: only one-part names do).
+pub const ROW_LEVEL_ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
 /// What a finished row-level change did, for its result row.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -138,7 +151,7 @@ impl DeltaRowLevel {
 
 /// The paths `files` (values of `_krishiv_row_file`) name, each checked to be a live file of
 /// the snapshot.
-fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<Vec<String>, KrishivError> {
+fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<HashSet<String>, KrishivError> {
     let live: HashSet<&str> = table.units().iter().map(|u| u.path.as_str()).collect();
     files
         .iter()
@@ -188,18 +201,30 @@ impl RowLevelTable for DeltaRowLevel {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
         let condition = option(ROW_LEVEL_CONDITION_OPTION).cloned();
+        let qualifiers: Vec<&str> = option(ROW_LEVEL_ALIAS_OPTION)
+            .map(String::as_str)
+            .into_iter()
+            .collect();
+        let (schema, partitions) = (
+            self.table.snapshot().schema(),
+            self.table.partition_columns(),
+        );
         // A `DELETE` without a condition or with a partition-only one removes whole files.
         let whole_files = match (request.op, &request.read_filter) {
             (RowLevelOperation::Delete, None) => Some(None),
-            (RowLevelOperation::Delete, Some(filter)) => partition_predicate(
-                filter,
-                &self.table.snapshot().schema(),
-                &self.table.partition_columns(),
-            )
-            .ok()
-            .map(|p| Some(Arc::new(p))),
+            (RowLevelOperation::Delete, Some(filter)) => {
+                partition_predicate(filter, &schema, &partitions, &qualifiers)
+                    .ok()
+                    .map(|p| Some(Arc::new(p)))
+            }
             _ => None,
         };
+        // What the statement read, for the conflict check: the condition's partition conjuncts
+        // (delta-spark's read predicates), else the whole table.
+        let read_predicate: Option<PredicateRef> = request
+            .read_filter
+            .as_ref()
+            .and_then(|f| partition_conjuncts(f, &schema, &partitions, &qualifiers).map(Arc::new));
         let cdf = self
             .table
             .snapshot()
@@ -217,6 +242,7 @@ impl RowLevelTable for DeltaRowLevel {
             op: request.op,
             touched,
             whole_files,
+            read_predicate,
             condition,
             affected,
             scan_ms,
@@ -271,10 +297,14 @@ fn cdf_refusal(table: &str, what: &str) -> UnsupportedFeatureTableOperation {
 pub(crate) struct RowLevelPlan {
     op: RowLevelOperation,
     /// The touched files' paths, as the log names them.
-    touched: Vec<String>,
+    touched: HashSet<String>,
     /// A whole-file `DELETE`: every file (`Some(None)`) or the files of the partitions the
-    /// predicate holds for, besides the touched ones.
+    /// predicate holds for. It is one only when no row was written (every touched file's live
+    /// rows all matched); then the untouched files it selects are removed too when they hold no
+    /// live row (with no condition: whatever they hold, the find query read every file).
     whole_files: Option<Option<PredicateRef>>,
+    /// The read predicate of the conflict check (`None`: the whole table).
+    read_predicate: Option<PredicateRef>,
     /// The condition as written.
     condition: Option<String>,
     /// The rows the condition holds for.
@@ -354,11 +384,29 @@ pub(super) async fn stage(
         table.name().to_owned(),
         table.partition_columns(),
     );
-    let touched: HashSet<String> = plan.touched.iter().cloned().collect();
-    let whole = plan.whole_files.clone();
+    // A whole-file plan that wrote rows was not one (the find query proved some touched row
+    // survives): it commits as a rewrite of the touched files only.
+    let whole_file = plan.whole_files.is_some() && written.rows == 0;
+    let whole = if whole_file {
+        plan.whole_files.clone()
+    } else {
+        None
+    };
+    // The untouched files a partition predicate may add: only those whose statistics prove no
+    // live row is left (the find query read no row of them; the predicate's translation is never
+    // trusted with a live row).
+    let empty: HashSet<String> = match &whole {
+        Some(Some(_)) => table
+            .units()
+            .iter()
+            .filter(|u| no_live_rows(u))
+            .map(|u| u.path.clone())
+            .collect(),
+        _ => HashSet::new(),
+    };
+    let touched = plan.touched.clone();
     let (removes, actions) = engine
         .delta_blocking(move |e| {
-            let (all, _, _) = select_removes(e, &snapshot, &name, &partitions, None, None)?;
             let exact = match &whole {
                 Some(Some(p)) => Some(ExactCheck::new(e, &snapshot, &partitions, p, &name)?),
                 _ => None,
@@ -366,41 +414,48 @@ pub(super) async fn stage(
             let mut out = Vec::new();
             let mut actions = Vec::new();
             let mut found = 0_usize;
-            for r in all {
-                let mut keep = match (&whole, &exact) {
-                    (Some(None), _) => r.selection.clone(),
+            // Batch by batch: only the batches holding a removed file are kept.
+            for_each_scan_batch(e, &snapshot, &name, |scan_rows, selection| {
+                let mut extra = match (&whole, &exact) {
+                    (Some(None), _) => selection.clone(),
                     (Some(Some(_)), Some(x)) => {
-                        let mut s = r.selection.clone();
-                        x.narrow(&r.scan_rows, &mut s)?;
+                        let mut s = selection.clone();
+                        x.narrow(&scan_rows, &mut s)?;
                         s
                     }
-                    _ => vec![false; r.selection.len()],
+                    _ => vec![false; selection.len()],
                 };
-                let paths = paths_of(&r.scan_rows)?;
+                let paths = paths_of(&scan_rows)?;
+                let mut keep = vec![false; selection.len()];
                 for (i, k) in keep.iter_mut().enumerate() {
-                    let live = r.selection.get(i).copied().unwrap_or(false);
-                    let hit = paths.get(i).and_then(Option::as_deref).is_some_and(|p| {
-                        let t = touched.contains(p);
-                        if t && live {
-                            found += 1;
-                        }
-                        t
+                    let live = selection.get(i).copied().unwrap_or(false);
+                    let Some(Some(p)) = paths.get(i) else {
+                        continue;
+                    };
+                    let hit = touched.contains(p.as_str());
+                    if hit && live {
+                        found += 1;
+                    }
+                    let added = extra.get_mut(i).is_some_and(|x| {
+                        *x && (matches!(whole, Some(None)) || empty.contains(p.as_str()))
                     });
-                    *k = live && (*k || hit);
-                    if *k && let Some(Some(p)) = paths.get(i) {
+                    *k = live && (hit || added);
+                    if *k {
                         actions.push(FileAction {
                             path: p.clone(),
-                            partition_values: partition_values_of(&r.scan_rows, i)?,
+                            partition_values: partition_values_of(&scan_rows, i)?,
                         });
                     }
                 }
+                extra.clear();
                 if keep.iter().any(|k| *k) {
                     out.push(StagedRemoves {
-                        scan_rows: r.scan_rows,
+                        scan_rows,
                         selection: keep,
                     });
                 }
-            }
+                Ok(())
+            })?;
             if found != touched.len() {
                 return Err(internal(
                     "a touched file of a Delta row-level change is not in the snapshot's scan",
@@ -411,6 +466,12 @@ pub(super) async fn stage(
         .await
         .and_then(|r| r)
         .map_err(Failure::NotCommitted)?;
+    #[cfg(test)]
+    if super::test_hooks::fails(write_id) {
+        return Err(Failure::NotCommitted(internal(
+            "a failure injected into the Delta row-level stage",
+        )));
+    }
     let removed = totals(table.units(), actions);
     if removed.files == 0 && written.files == 0 {
         // Nothing to commit.
@@ -418,7 +479,6 @@ pub(super) async fn stage(
         return Ok(None);
     }
     let rewrite_ms = millis(started.elapsed());
-    let whole_file = plan.whole_files.is_some() && written.rows == 0;
     let mut metrics: Vec<(String, u64)> = Vec::new();
     let mut put = |k: &str, v: u64| metrics.push((k.to_owned(), v));
     put("numRemovedFiles", removed.files);
@@ -467,9 +527,9 @@ pub(super) async fn stage(
         rows: outcome_rows,
     });
     let mut read_set = ReadSet::default();
-    match &plan.whole_files {
-        Some(Some(p)) if whole_file => read_set.predicates.push(Arc::clone(p)),
-        _ => read_set.whole_table = true,
+    match &plan.read_predicate {
+        Some(p) => read_set.predicates.push(Arc::clone(p)),
+        None => read_set.whole_table = true,
     }
     read_set.files = removed.actions;
     Ok(Some(StagedCommit {
@@ -485,6 +545,21 @@ pub(super) async fn stage(
         removes,
         read_set,
     }))
+}
+
+/// Whether `unit`'s statistics prove it holds no live row (`numRecords` less its deletion
+/// vector's cardinality is 0; unknown: no).
+fn no_live_rows(unit: &ScanUnit) -> bool {
+    let deleted = if unit.dv.has_vector() {
+        match unit.dv.cardinality() {
+            Ok(Some(n)) => n,
+            _ => return false,
+        }
+    } else {
+        0
+    };
+    unit.records
+        .is_some_and(|records| records.saturating_sub(deleted) == 0)
 }
 
 /// The removed files' sizes, deletion vectors and live rows, from the table's listing.

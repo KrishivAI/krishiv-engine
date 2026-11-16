@@ -383,7 +383,7 @@ impl DeltaTable {
     /// files at `paths` (as the log names them), in the listing's order.
     pub(crate) fn row_level_scan(
         &self,
-        paths: Option<&[String]>,
+        paths: Option<&std::collections::HashSet<String>>,
     ) -> Result<DeltaScan, KrishivError> {
         let Some(paths) = paths else {
             return Ok(DeltaScan::with_row_ids(Arc::clone(&self.inner)));
@@ -392,7 +392,7 @@ impl DeltaTable {
             .inner
             .units
             .iter()
-            .filter(|u| paths.contains(&u.path))
+            .filter(|u| paths.contains(u.path.as_str()))
             .cloned()
             .collect();
         let i = &self.inner;
