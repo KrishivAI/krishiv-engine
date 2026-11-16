@@ -60,7 +60,7 @@ use krishiv_io::split::{
 use krishiv_io::{
     ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
     IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
-    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest, TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
@@ -92,6 +92,33 @@ enum Partitions {
     Given(Arc<[FilePartition]>),
 }
 
+/// Per store, the root Spark prints its files under in `_metadata.file_path`: the scheme and
+/// authority the read's path was written with (`s3a://bucket` for a store whose id is
+/// `s3://bucket`). A store without a root prints under its id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathRoots(Arc<[(StoreId, Arc<str>)]>);
+
+impl PathRoots {
+    /// Roots by store; the first root of a store wins (a read naming one store twice, with two
+    /// spellings, lists each file once).
+    #[must_use]
+    pub fn new(roots: impl IntoIterator<Item = (StoreId, String)>) -> Self {
+        let mut kept: Vec<(StoreId, Arc<str>)> = Vec::new();
+        for (store, root) in roots {
+            if !kept.iter().any(|(s, _)| *s == store) {
+                kept.push((store, Arc::from(root)));
+            }
+        }
+        Self(kept.into())
+    }
+
+    /// The root of `store`, if the read gave one.
+    #[must_use]
+    pub fn root(&self, store: &StoreId) -> Option<&str> {
+        self.0.iter().find(|(s, _)| s == store).map(|(_, r)| &**r)
+    }
+}
+
 /// A scan of listed files of one format, before pushdown (see the module
 /// docs). [`ScanPushdown::build`] makes its [`FileScanSource`].
 #[derive(Clone)]
@@ -113,6 +140,8 @@ pub struct FileScan {
     constants: Option<Arc<FileConstants>>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
+    /// The roots `_metadata.file_path` prints files under.
+    roots: PathRoots,
 }
 
 impl std::fmt::Debug for FileScan {
@@ -148,7 +177,16 @@ impl FileScan {
             partition_columns: Arc::from([]),
             constants: None,
             min_morsel_bytes: splits.open_cost_in_bytes,
+            roots: PathRoots::default(),
         }
+    }
+
+    /// The same scan printing its files' `_metadata.file_path` under `roots` (the scheme and
+    /// authority the read's paths were written with).
+    #[must_use]
+    pub fn with_path_roots(mut self, roots: PathRoots) -> Self {
+        self.roots = roots;
+        self
     }
 
     /// The same scan with `columns` as its partition columns: the last
@@ -503,6 +541,8 @@ pub struct FileScanSource {
     /// One morsel per partition, its batches tagged with the partition's
     /// index ([`ScanPushdowns::partition_order`]).
     partition_order: bool,
+    /// The roots `_metadata.file_path` prints files under.
+    roots: PathRoots,
 }
 
 impl std::fmt::Debug for FileScanSource {
@@ -858,6 +898,7 @@ impl FileScanSource {
             opened_files: Arc::default(),
             row_id: p.row_id,
             partition_order: p.partition_order,
+            roots: scan.roots.clone(),
         })
     }
 
@@ -1361,8 +1402,8 @@ impl FileScanSource {
         let mut children = Vec::with_capacity(fields.len());
         for f in &fields {
             children.push(match f.name().as_str() {
-                "file_path" => constant_string(&spark_file_path(file), rows)?,
-                "file_name" => constant_string(file.path.filename().unwrap_or(""), rows)?,
+                "file_path" => constant_string(&spark_file_path(file, &self.roots), rows)?,
+                "file_name" => constant_string(&spark_file_name(file), rows)?,
                 "file_size" => long(file.size)?,
                 "file_block_start" => long(range.start)?,
                 "file_block_length" => long(range.len())?,
@@ -1485,11 +1526,14 @@ fn constant_string(value: &str, rows: usize) -> Result<ArrayRef> {
 }
 
 /// The file's URI as Spark prints `_metadata.file_path`: `file:/dir/f` for
-/// local files, `<scheme>://<authority>/key` otherwise, the path quoted as
+/// local files, `<scheme>://<authority>/key` otherwise (under the root the
+/// read's path was written with, else the store id), the path quoted as
 /// `java.net.URI` quotes it (Spark 4.2: `file:/tmp/données%20x/é%2541/...`
 /// for `/tmp/données x/é%41/...`).
-fn spark_file_path(file: &FileRef) -> String {
-    let store = file.store.to_string();
+fn spark_file_path(file: &FileRef, roots: &PathRoots) -> String {
+    let store = roots
+        .root(&file.store)
+        .map_or_else(|| file.store.to_string(), str::to_owned);
     let path = uri_path(&decode_store_path(file.path.as_ref()));
     // A local store names itself `file://` or, for a session's tables, `file`.
     match store
@@ -1499,6 +1543,13 @@ fn spark_file_path(file: &FileRef) -> String {
         Some(rest) => format!("file:{}/{path}", rest.trim_end_matches('/')),
         None => format!("{}/{path}", store.trim_end_matches('/')),
     }
+}
+
+/// `_metadata.file_name`: the last segment of the file's URI path, still quoted (Spark 4.2.0
+/// `FileFormat`: `filePath.toUri.getRawPath` split on `/`; a run prints `with%20space%25.parquet`
+/// for the key `with space%.parquet`).
+fn spark_file_name(file: &FileRef) -> String {
+    uri_path(&decode_store_path(file.path.filename().unwrap_or("")))
 }
 
 /// The text of an `object_store` path, whose segments percent-encode the
@@ -1776,21 +1827,68 @@ mod tests {
             version: krishiv_io::VersionToken::Immutable,
             modified_micros: Some(5),
         };
-        assert_eq!(spark_file_path(&file), "file:/tmp/pq/a%20b.parquet");
+        let none = PathRoots::default();
+        assert_eq!(spark_file_path(&file, &none), "file:/tmp/pq/a%20b.parquet");
+        assert_eq!(spark_file_name(&file), "a%20b.parquet");
         // Spark 4.2 keeps non-ASCII text and quotes spaces and `%`.
         let odd = FileRef {
             path: object_store::path::Path::from("tmp/données x/é%41/f.parquet"),
             ..file.clone()
         };
         assert_eq!(
-            spark_file_path(&odd),
+            spark_file_path(&odd, &none),
             "file:/tmp/données%20x/é%2541/f.parquet"
         );
         let s3 = FileRef {
             store: krishiv_io::StoreId::new("s3://bucket"),
             ..file
         };
-        assert_eq!(spark_file_path(&s3), "s3://bucket/tmp/pq/a%20b.parquet");
+        assert_eq!(
+            spark_file_path(&s3, &none),
+            "s3://bucket/tmp/pq/a%20b.parquet"
+        );
+        // Under the root the read was written with (Spark 4.2.0 run: an `s3a://` read prints
+        // `s3a://`); a store without a root keeps its id; the first root of a store wins.
+        let roots = PathRoots::new([
+            (
+                krishiv_io::StoreId::new("s3://other"),
+                "s3a://other".to_owned(),
+            ),
+            (
+                krishiv_io::StoreId::new("s3://bucket"),
+                "s3a://bucket".to_owned(),
+            ),
+            (
+                krishiv_io::StoreId::new("s3://bucket"),
+                "s3://bucket".to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            spark_file_path(&s3, &roots),
+            "s3a://bucket/tmp/pq/a%20b.parquet"
+        );
+        assert_eq!(
+            spark_file_path(&odd, &roots),
+            "file:/tmp/données%20x/é%2541/f.parquet"
+        );
+        // The name is the last segment of the quoted path (Spark 4.2.0 run:
+        // `with%20space%25.parquet`, `we+ird%23.parquet`).
+        let named = |name: &str| FileRef {
+            path: object_store::path::Path::from_iter(["dir", name]),
+            ..s3.clone()
+        };
+        assert_eq!(
+            spark_file_name(&named("with space%.parquet")),
+            "with%20space%25.parquet"
+        );
+        assert_eq!(
+            spark_file_name(&named("we+ird#.parquet")),
+            "we+ird%23.parquet"
+        );
+        assert_eq!(
+            spark_file_path(&named("we+ird#.parquet"), &roots),
+            "s3a://bucket/dir/we+ird%23.parquet"
+        );
         for s in ["short", "a value longer than twelve bytes"] {
             let a = constant_string(s, 3).unwrap_or_else(|e| unreachable!("{e}"));
             let a = a

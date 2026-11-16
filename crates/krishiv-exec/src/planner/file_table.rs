@@ -21,7 +21,7 @@ use krishiv_types::DecimalType;
 
 use super::table::TableProvider;
 use crate::error::Result;
-use crate::operators::{FileScan, ScanPushdown};
+use crate::operators::{FileScan, PathRoots, ScanPushdown};
 
 /// Pending footer reads of [`FileTable::open`], in multiples of the
 /// stores' request limit: enough to keep that many requests in flight
@@ -192,6 +192,14 @@ impl FileTable {
     pub fn with_partition_columns(mut self, columns: Vec<arrow_schema::FieldRef>) -> Self {
         self.partition_columns = columns.iter().map(|f| f.name().clone()).collect();
         self.scan = self.scan.with_partition_columns(columns);
+        self
+    }
+
+    /// The same table printing its files' `_metadata.file_path` under `roots` (see
+    /// [`FileScan::with_path_roots`]).
+    #[must_use]
+    pub fn with_path_roots(mut self, roots: PathRoots) -> Self {
+        self.scan = self.scan.with_path_roots(roots);
         self
     }
 

@@ -568,3 +568,54 @@ fn concurrent_reads_keep_one_listing() {
         "{shown}"
     );
 }
+
+/// Cloud paths (`s3a://bucket/a/b`) placed in the harness's in-memory store, displayed as the
+/// URL parser displays them (scheme and authority as written).
+#[derive(Debug, Default)]
+struct CloudPaths;
+
+impl PathLocator for CloudPaths {
+    fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
+        let url = krishiv_io::parse_object_url(path)?;
+        Ok(LocatedPath {
+            store: StoreId::new("memory://suite"),
+            path: url.key,
+            display: url.display,
+        })
+    }
+}
+
+#[test]
+fn a_listing_keeps_the_root_each_read_path_was_written_with() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let a = schema(&[("a", ArrowType::Int32)]);
+    env.write(&fx, "d/part-0", &a, &[ints(&a)], &[]).unwrap();
+    env.write(&fx, "e/part-0", &a, &[ints(&a)], &[]).unwrap();
+    let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(CloudPaths));
+    let none = BTreeMap::new();
+    let store = StoreId::new("memory://suite");
+    // Spark 4.2.0 run: `S3A://bucket/dir` prints `s3a://bucket/dir/...`; a glob's prefix gives
+    // the root as well; the first path of a store wins when two spell it differently.
+    for (read, root) in [
+        (&["S3A://bucket/d"][..], "s3a://bucket"),
+        (&["s3a://bucket/e*"][..], "s3a://bucket"),
+        (&["s3://bucket/d", "s3a://bucket/e"][..], "s3://bucket"),
+    ] {
+        let listing = env
+            .block_on(r.listing("mock", &paths(read), &none))
+            .unwrap();
+        assert!(!listing.files.is_empty(), "{read:?}");
+        assert_eq!(listing.path_roots.root(&store), Some(root), "{read:?}");
+    }
+    // A local read has no root: its files print under the store id (`file:`).
+    let local = reads(
+        &env,
+        vec![Arc::new(MockFormat)],
+        Arc::new(MemPaths::default()),
+    );
+    let listing = env
+        .block_on(local.listing("mock", &paths(&["/d"]), &none))
+        .unwrap();
+    assert_eq!(listing.path_roots.root(&store), None);
+}
