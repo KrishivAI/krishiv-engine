@@ -56,6 +56,16 @@ pub fn render_with_context(error: &KrishivError, sql: &str) -> String {
     out
 }
 
+/// Spark's summary of one SQL query context over `sql` (its
+/// `SQLQueryContext.summary`): the `== SQL (line, position) ==` block that
+/// [`render_with_context`] appends for it, without a trailing newline.
+/// `None` under the same conditions as there (a DataFrame context, a span
+/// not at its fragment in `sql`).
+#[must_use]
+pub fn sql_summary(context: &ErrorQueryContext, sql: &str) -> Option<String> {
+    summary(context, sql)
+}
+
 /// The summary of one SQL context, without a trailing newline; `None` when
 /// there is nothing valid to show.
 fn summary(context: &ErrorQueryContext, sql: &str) -> Option<String> {
