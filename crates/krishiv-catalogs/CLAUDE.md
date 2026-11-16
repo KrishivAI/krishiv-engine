@@ -1,10 +1,10 @@
 # krishiv-catalogs
 
 **Layer:** L5 (may depend only on crates in L5 or lower; `cargo xtask layering`).
-**Real code arrives:** P3 (PR-16, T020b).
+**Real code arrives:** P3 (PR-16, T020b, PB-07).
 
 ## Purpose
-External catalogs behind `krishiv_plan`'s `Catalog` trait: the Hive metastore, Iceberg REST and Unity Catalog (read-only). A catalog is
+External catalogs behind `krishiv_plan`'s `Catalog` trait: the embedded SQLite catalog (read-write), the Hive metastore, Iceberg REST and Unity Catalog (read-only). A catalog is
 input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it returns is checked before anything reads it.
 
 ## Layout
@@ -40,6 +40,16 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
   bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
   `load_credentials` only when advertised), `test_server.rs` a fake HTTP/1.1 server (tests only).
+- `src/sqlite/` (feature `sqlite`; PB-07, ADR 0014 item 6, ADR 0037 `per_query`; `rusqlite` with the bundled C amalgamation, default features off) the embedded catalog:
+  `mod.rs` `SqliteCatalog` (`Catalog` + `CatalogWrite`, `open` / `open_in_memory`, `table_details`, `list_namespaces`, `list_tables`; one connection behind a
+  mutex, WAL, `synchronous=FULL`, a 10 s busy timeout; one `BEGIN IMMEDIATE` transaction per change, which bumps the epoch only when it changes
+  something, so a killed process leaves the catalog as it was and two processes take turns; `epoch()` reads the file, so another process's change moves
+  it; one-part namespaces, `default` exists and is not droppable, names `[A-Za-z0-9_]+` stored folded; a table's version is the epoch of the change
+  that made it what it is, no history, so `time_travel` is off and a load at another version finds nothing; no staging, R1 is open), `store.rs` the
+  schema (`PRAGMA user_version` = format version 1, a newer file is refused), rows and their JSON columns (types as Spark catalog strings read back by
+  `parse_data_type`), `write.rs` the write half (the shared `apply_changes` for `alter_table`, same error classes as `StoreCatalog`), `tests.rs` the shared
+  contract suite (`krishiv_plan::analyzer::contract`, in memory and on a file) plus a restart, two connections, threads, two processes and a `kill -9`
+  mid-DDL (the test binary re-run as the child). It never touches a table's files: `drop_table` removes the row, `purge` has nothing to purge.
 - Not here yet: the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
   table `config` keys reach a store: `s3.endpoint`, signer and refresh endpoints, `remote-signing-config`, delegated-token keys,
   with the endpoint-override case of `catalog_location_confined`; a table's vended `token` for later requests is PR-58b), a fuzz
