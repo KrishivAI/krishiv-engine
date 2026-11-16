@@ -142,7 +142,12 @@ pub fn distinct_plan_with(
     let Some(dargs) = dargs.map(<[usize]>::to_vec) else {
         return Ok(AggregateNode::new(input, HashAggregate::new(spec)?));
     };
-    let at_merge = if count_at_merge && covers(&spec, distinct) {
+    // Only beside plain aggregates: there the pairs drop their payload. A
+    // `count(DISTINCT)` alone puts every pair through three tables (pairs,
+    // a merge task's partition counts, the key table) against two in series
+    // (ClickBench q14 shape 1.10x at the merge, q10 shape 0.68x; design
+    // `P3-cb-distinct-in-group`, addendum 2026-11-16).
+    let at_merge = if count_at_merge && spec.aggregates.len() > 1 && covers(&spec, distinct) {
         Some(DistinctCountNode::new(
             Arc::clone(&input),
             DistinctCount::new(&spec, distinct)?,

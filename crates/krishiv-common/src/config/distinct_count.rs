@@ -11,11 +11,12 @@ pub static EXEC_AGG_DISTINCT_COUNT_AT_MERGE: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.agg.distinctCountAtMerge",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Internal: a grouped aggregation whose only DISTINCT aggregate is a count runs one \
-          table of distinct (key, value) pairs with no payload and one table of the plain \
-          aggregates by key, and counts each pair where the pairs' tables merge, instead of a \
-          second hash aggregation over the pairs. Results are the same either way; false keeps \
-          the two aggregations in series.",
+    doc: "Internal: a grouped aggregation whose only DISTINCT aggregate is a count, beside at \
+          least one other aggregate, on more than one executor slot, runs one table of distinct \
+          (key, value) pairs with no payload and one table of the plain aggregates by key, and \
+          counts each pair where the pairs' tables merge, instead of a second hash aggregation \
+          over the pairs. Results are the same either way; false keeps the two aggregations in \
+          series.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",

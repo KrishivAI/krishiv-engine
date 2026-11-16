@@ -641,3 +641,25 @@ async fn plain_aggregates_over_the_keys_and_masks_count_the_same() {
         assert_eq!(got, want, "{slots} slots");
     }
 }
+
+/// `distinct_plan_with(.., true)` counts at the merge only beside plain
+/// aggregates: a `count(DISTINCT)` alone keeps the two aggregations on any
+/// number of slots (three tables per pair at the merge against two).
+#[tokio::test]
+async fn a_distinct_count_alone_keeps_the_two_aggregations() {
+    let (s, b) = gen_input(20_000, 2_000, 256);
+    for (plain, counted) in [(false, false), (true, true)] {
+        let (sp, flags) = shape(&s, plain, 0);
+        let o = Opts {
+            slots: 4,
+            ..Opts::default()
+        };
+        let plan = distinct_plan_with(scan(&s, b.clone()), sp.clone(), &flags, true).unwrap();
+        let (_, m) = exec_with(plan, o, true).await.unwrap();
+        assert_eq!(
+            m.operators.values().any(|e| e.name == "DistinctCount"),
+            counted,
+            "plain {plain}"
+        );
+    }
+}
