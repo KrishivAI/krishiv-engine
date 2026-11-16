@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "bitmap_count#42af9f497b1b/ansi_on",
+      "reason": "SELECT bitmap_count('abc') | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#42af9f497b1b/ansi_off",
+      "reason": "SELECT bitmap_count('abc') | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#7b4e6c6935b4/ansi_on",
+      "reason": "SELECT bitmap_count('1') | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#7b4e6c6935b4/ansi_off",
+      "reason": "SELECT bitmap_count('1') | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#eba3a7ea96c2/ansi_on",
+      "reason": "SELECT bitmap_count(NULL) | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#eba3a7ea96c2/ansi_off",
+      "reason": "SELECT bitmap_count(NULL) | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "bitmap_count"
+}

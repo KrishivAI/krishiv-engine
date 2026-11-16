@@ -2293,6 +2293,15 @@ pub enum AggregateFunction {
     /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
     /// feature: collated_min_max
     MinByKeyFirst = 48,
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+    /// feature: bitmap_aggregates
+    BitmapConstructAgg = 49,
+    /// `bitmap_or_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapOrAgg = 50,
+    /// `bitmap_and_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapAndAgg = 51,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2350,6 +2359,9 @@ impl AggregateFunction {
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
             Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
             Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
+            Self::BitmapConstructAgg => "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG",
+            Self::BitmapOrAgg => "AGGREGATE_FUNCTION_BITMAP_OR_AGG",
+            Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2404,6 +2416,9 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
             "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
             "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
+            "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG" => Some(Self::BitmapConstructAgg),
+            "AGGREGATE_FUNCTION_BITMAP_OR_AGG" => Some(Self::BitmapOrAgg),
+            "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
             _ => None,
         }
     }

@@ -39,6 +39,7 @@ use krishiv_kernels::compare::CompareKind;
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
+use super::bitmap::{BitmapAcc, BitmapOp};
 use super::collect::{CollectAcc, VectorAcc};
 use super::hll::{self, HllAcc};
 use super::listagg::ListAggAcc;
@@ -315,6 +316,8 @@ enum Kind {
     Approx(GkAcc),
     /// `approx_count_distinct`: HyperLogLog++ registers (see `hll`).
     Hll(HllAcc),
+    /// The bitmap aggregates: one 4,096-byte buffer per group (see `bitmap`).
+    Bitmap(BitmapAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -488,6 +491,9 @@ impl Accumulator {
             }
             (F::PercentileApprox { .. }, _) => Kind::Approx(GkAcc::default()),
             (F::ApproxCountDistinct { p }, _) => Kind::Hll(HllAcc::new(*p)),
+            (F::BitmapConstructAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Construct)),
+            (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
+            (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
             (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
             // `CollectAcc::new` refuses the element types the shared key
             // encoding does not order, as `result_type` does.
@@ -629,7 +635,9 @@ impl Accumulator {
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
             // plain vectors; `size` counts them exactly.
-            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Udf(_) => Vec::new(),
+            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Bitmap(_) | Kind::Udf(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -643,6 +651,7 @@ impl Accumulator {
             Kind::Exact(e) => e.size(),
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
+            Kind::Bitmap(b) => b.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -729,6 +738,7 @@ impl Accumulator {
             Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
+            Kind::Bitmap(b) => b.projected(new),
             _ => 0,
         };
         vecs + heap
@@ -800,6 +810,7 @@ impl Accumulator {
             Kind::Exact(e) => e.resize(n),
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
+            Kind::Bitmap(b) => b.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -882,6 +893,7 @@ impl Accumulator {
             Kind::Exact(e) => e.reserve(new),
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
+            Kind::Bitmap(b) => b.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1063,7 +1075,8 @@ impl Accumulator {
             | Kind::MinMaxStruct { .. }
             | Kind::Collect(_)
             | Kind::Approx(_)
-            | Kind::Hll(_) => 1,
+            | Kind::Hll(_)
+            | Kind::Bitmap(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }

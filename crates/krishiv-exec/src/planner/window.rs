@@ -304,6 +304,9 @@ impl Planner<'_> {
             lowered.function,
             AggregateFunction::PercentileApprox { .. }
                 | AggregateFunction::ApproxCountDistinct { .. }
+                | AggregateFunction::BitmapConstructAgg
+                | AggregateFunction::BitmapOrAgg
+                | AggregateFunction::BitmapAndAgg
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }

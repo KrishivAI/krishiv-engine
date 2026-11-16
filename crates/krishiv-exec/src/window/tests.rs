@@ -521,6 +521,9 @@ fn reference(
                         | AggregateFunction::PercentileApprox { .. }
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
+                        | AggregateFunction::BitmapConstructAgg
+                        | AggregateFunction::BitmapOrAgg
+                        | AggregateFunction::BitmapAndAgg
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

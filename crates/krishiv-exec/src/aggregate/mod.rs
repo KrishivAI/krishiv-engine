@@ -64,6 +64,7 @@
 //! once it received a row.
 
 mod accumulator;
+mod bitmap;
 mod collect;
 mod distinct;
 mod hll;
@@ -323,6 +324,17 @@ pub enum AggregateFunction {
         /// The addressing bits `p`.
         p: u32,
     },
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap with bit `p % 8` of byte `p / 8`
+    /// set for each non-NULL position `p` (`INVALID_BITMAP_POSITION` outside `0..32768`).
+    /// `binary`, 4,096 zero bytes for no value, never NULL. The argument is a `bigint`.
+    BitmapConstructAgg,
+    /// `bitmap_or_agg(bitmap)`: the OR of the non-NULL bitmaps over the shorter length; as
+    /// [`Self::BitmapConstructAgg`] otherwise. The argument is a `binary`.
+    BitmapOrAgg,
+    /// `bitmap_and_agg(bitmap)` (Spark 4.1): the AND of the non-NULL bitmaps, starting from
+    /// 4,096 `0xFF` bytes and zeroing the bytes past a shorter input; 4,096 `0xFF` bytes
+    /// for no value, never NULL. The argument is a `binary`.
+    BitmapAndAgg,
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
     /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
@@ -625,6 +637,11 @@ impl AggregateExpr {
             }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
+            // The bitmap aggregates are a `binary`, on the engine's view carrier (see `bitmap`).
+            (F::BitmapConstructAgg, DataType::Int64)
+            | (F::BitmapOrAgg | F::BitmapAndAgg, DataType::Binary | DataType::BinaryView) => {
+                DataType::BinaryView
+            }
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
             {
                 Some((v, k))
@@ -780,6 +797,9 @@ impl AggregateExpr {
             }
             (F::ApproxCountDistinct { .. }, _) => {
                 vec![Field::new(n("registers"), DataType::Binary, true)]
+            }
+            (F::BitmapConstructAgg | F::BitmapOrAgg | F::BitmapAndAgg, _) => {
+                vec![Field::new(n("bitmap"), DataType::Binary, false)]
             }
         })
     }

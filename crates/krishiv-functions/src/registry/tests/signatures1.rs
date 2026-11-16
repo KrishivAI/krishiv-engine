@@ -673,6 +673,9 @@ fn misc_aggregates() {
         ("string_agg", Aggregate::ListAgg),
         ("try_sum", Aggregate::TrySum),
         ("try_avg", Aggregate::TryAvg),
+        ("bitmap_construct_agg", Aggregate::BitmapConstructAgg),
+        ("bitmap_or_agg", Aggregate::BitmapOrAgg),
+        ("bitmap_and_agg", Aggregate::BitmapAndAgg),
     ] {
         let d = def(name);
         assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
@@ -791,6 +794,18 @@ fn misc_aggregates() {
         result("try_avg", &[ty(DataType::Integer)], &[]).unwrap(),
         ArgType::new(DataType::Double, true)
     );
+    // The bitmap aggregates are a never-NULL `binary`.
+    for (name, input) in [
+        ("bitmap_construct_agg", DataType::Long),
+        ("bitmap_or_agg", DataType::Binary),
+        ("bitmap_and_agg", DataType::Binary),
+    ] {
+        assert_eq!(
+            result(name, &[ty(input)], &[]).unwrap(),
+            ArgType::new(DataType::Binary, false),
+            "{name}"
+        );
+    }
 }
 
 #[test]

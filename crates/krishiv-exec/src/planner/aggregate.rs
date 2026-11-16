@@ -549,6 +549,11 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "bit_and" if f.args.len() == 1 => (AggregateFunction::BitAnd, f.args.clone()),
         "bit_or" if f.args.len() == 1 => (AggregateFunction::BitOr, f.args.clone()),
         "bit_xor" if f.args.len() == 1 => (AggregateFunction::BitXor, f.args.clone()),
+        "bitmap_construct_agg" if f.args.len() == 1 => {
+            (AggregateFunction::BitmapConstructAgg, f.args.clone())
+        }
+        "bitmap_or_agg" if f.args.len() == 1 => (AggregateFunction::BitmapOrAgg, f.args.clone()),
+        "bitmap_and_agg" if f.args.len() == 1 => (AggregateFunction::BitmapAndAgg, f.args.clone()),
         "mode" => mode_lower(f)?,
         "listagg" => listagg_lower(f)?,
         "percentile" if f.args.len() == 3 => {
