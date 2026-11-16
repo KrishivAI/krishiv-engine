@@ -267,6 +267,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
     (
+        "krishiv.iceberg.manifestCache.bytes",
+        &ICEBERG_MANIFEST_CACHE_BYTES,
+    ),
+    (
         "krishiv.python.worker.maxPerSession",
         &PYTHON_WORKER_MAX_PER_SESSION,
     ),

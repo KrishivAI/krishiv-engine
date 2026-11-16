@@ -5,7 +5,7 @@
 //! property test `delete_application_matches_model`; DV corruption, a missing
 //! delete file, Java's assignment errors and equality deletes refused.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, StringArray};
@@ -19,6 +19,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use proptest::prelude::*;
 use roaring::RoaringTreemap;
 
+use super::provider::IcebergTableProvider;
 use super::provider_tests::{Env, batch, env, id_field, provider_session, write_parquet};
 use super::table::IcebergTable;
 use crate::plan::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, VersionSpec, encode_dv};
@@ -59,22 +60,33 @@ enum Content {
 /// One file: its name, partition value (for a partitioned table), data
 /// sequence number and content.
 #[derive(Debug, Clone)]
-struct File {
-    name: String,
+pub(super) struct File {
+    pub(super) name: String,
     p: i32,
     seq: i64,
     content: Content,
 }
 
+impl File {
+    /// A data file (not a delete file).
+    pub(super) fn is_data(&self) -> bool {
+        matches!(self.content, Content::Data { .. })
+    }
+}
+
 /// A table with one snapshot listing `files` (data in a v2 data manifest,
 /// deletes in a v3 delete manifest so DVs carry their fields).
-struct Table {
-    env: Env,
-    table: IcebergTable,
+pub(super) struct Table {
+    pub(super) env: Env,
+    pub(super) table: IcebergTable,
 }
 
 fn build(files: &[File], partitioned: bool) -> Table {
-    let env = env();
+    build_in(env(), files, partitioned)
+}
+
+/// [`build`] in `env`.
+pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
     let schema = schema();
     let spec = if partitioned {
         PartitionSpec::builder(schema.clone())
@@ -129,12 +141,9 @@ fn build(files: &[File], partitioned: bool) -> Table {
                 );
                 let size = write_parquet(&path, &b);
                 let rows = u64::try_from(*rows).unwrap();
-                data_files.push((
-                    builder(DataContentType::Data, DataFileFormat::Parquet, size, rows)
-                        .build()
-                        .unwrap(),
-                    f.seq,
-                ));
+                let mut d = builder(DataContentType::Data, DataFileFormat::Parquet, size, rows);
+                id_metrics(&mut d, &ids);
+                data_files.push((d.build().unwrap(), f.seq));
             }
             Content::Positions { rows, scoped } => {
                 let mut rows = rows.clone();
@@ -194,6 +203,7 @@ fn build(files: &[File], partitioned: bool) -> Table {
                     u64::try_from(ids.len()).unwrap(),
                 );
                 d.equality_ids(Some(vec![1]));
+                id_metrics(&mut d, ids);
                 delete_files.push((d.build().unwrap(), f.seq));
             }
         }
@@ -274,7 +284,7 @@ fn build(files: &[File], partitioned: bool) -> Table {
 impl Table {
     /// The ids `SELECT id FROM t` returns, sorted, or the error of opening
     /// the provider or running the query.
-    fn ids(&self, sql: &str) -> Result<Vec<i64>, KrishivError> {
+    pub(super) fn ids(&self, sql: &str) -> Result<Vec<i64>, KrishivError> {
         let p = self.env.provider(&self.table, &VersionSpec::Current)?;
         let batches = provider_session(p).run(sql)?;
         let mut out: Vec<i64> = super::provider_tests::render(&batches)
@@ -285,14 +295,30 @@ impl Table {
         Ok(out)
     }
 
-    fn open_err(&self) -> KrishivError {
-        self.env
-            .provider(&self.table, &VersionSpec::Current)
-            .unwrap_err()
+    /// The error of `SELECT id FROM t`: deletes are read, and refused, when
+    /// a scan that reads their data files runs (PR-25d), not at open.
+    fn query_err(&self) -> KrishivError {
+        self.ids("SELECT id FROM t").unwrap_err()
     }
 }
 
-fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
+/// Column metrics of `id` (field 1) as a writer records them: value and null
+/// counts and the bounds of the non-null values, so equality deletes are
+/// narrowed by them (Java's `canContainEqDeletesForFile`).
+fn id_metrics(b: &mut iceberg::spec::DataFileBuilder, ids: &[Option<i64>]) {
+    use iceberg::spec::Datum;
+    let present = ids.iter().flatten().copied();
+    let count = u64::try_from(ids.len()).unwrap();
+    let nulls = u64::try_from(ids.iter().filter(|v| v.is_none()).count()).unwrap();
+    b.value_counts(HashMap::from([(1, count)]))
+        .null_value_counts(HashMap::from([(1, nulls)]));
+    if let (Some(lo), Some(hi)) = (present.clone().min(), present.max()) {
+        b.lower_bounds(HashMap::from([(1, Datum::long(lo))]))
+            .upper_bounds(HashMap::from([(1, Datum::long(hi))]));
+    }
+}
+
+pub(super) fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
     File {
         name: name.to_owned(),
         p,
@@ -305,7 +331,13 @@ fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
     }
 }
 
-fn positions(name: &str, p: i32, seq: i64, rows: &[(&str, i64)], scoped: Option<&str>) -> File {
+pub(super) fn positions(
+    name: &str,
+    p: i32,
+    seq: i64,
+    rows: &[(&str, i64)],
+    scoped: Option<&str>,
+) -> File {
     File {
         name: name.to_owned(),
         p,
@@ -428,7 +460,7 @@ fn a_missing_delete_file_fails_the_query() {
         false,
     );
     std::fs::remove_file(t.env.dir.path().join("d.parquet")).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert!(e.message().contains("d.parquet"), "{e}");
     assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
 }
@@ -448,7 +480,7 @@ fn a_corrupt_dv_fails_with_javas_text() {
     let last = bytes.len() - 1;
     bytes[last] ^= 0xFF;
     std::fs::write(&path, bytes).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivIcebergInvalidDeletes,
@@ -470,7 +502,7 @@ fn two_dvs_for_one_file_fail() {
         ],
         false,
     );
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivIcebergInvalidDeletes,
@@ -491,14 +523,14 @@ fn a_dv_older_than_its_data_file_fails() {
         ],
         false,
     );
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.message(),
         "DV data sequence number (2) must be greater than or equal to data file sequence number (3)"
     );
 }
 
-fn equality(name: &str, p: i32, seq: i64, ids: &[Option<i64>]) -> File {
+pub(super) fn equality(name: &str, p: i32, seq: i64, ids: &[Option<i64>]) -> File {
     File {
         name: name.to_owned(),
         p,
@@ -642,13 +674,366 @@ fn a_missing_equality_delete_file_fails() {
         false,
     );
     std::fs::remove_file(t.env.at("e.parquet").strip_prefix("file://").unwrap()).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert!(e.message().contains("e.parquet"), "{e}");
+}
+
+/// Deletes are read for the data files a scan reads, after filter pruning
+/// (PR-25d; review 25b S1): with every delete file of partition 0 gone, a
+/// query whose filter prunes partition 0 reads none of them and succeeds,
+/// and one that reads partition 0 fails naming a missing delete file.
+#[test]
+fn pruned_files_read_no_delete_files() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("c.parquet", 0, 1, 10, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            positions("pc.parquet", 0, 2, &[("c.parquet", 1)], None),
+            equality("e.parquet", 0, 2, &[Some(12)]),
+        ],
+        true,
+    );
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [1, 2, 10, 20, 21, 22]);
+    for name in ["a.puffin", "pc.parquet", "e.parquet"] {
+        std::fs::remove_file(t.env.dir.path().join(name)).unwrap();
+    }
+    assert_eq!(t.ids("SELECT id FROM t WHERE p = 1").unwrap(), [20, 21, 22]);
+    let e = t.ids("SELECT id FROM t WHERE p = 0").unwrap_err();
+    assert!(
+        ["a.puffin", "pc.parquet", "e.parquet"]
+            .iter()
+            .any(|n| e.message().contains(n)),
+        "{e}"
+    );
+}
+
+/// The delete state is charged to the query's pool (PR-25d; reviews 25b
+/// N2, 25c N7): it holds bytes for its keys while loaded and none once
+/// dropped; a pool too small fails with the memory class; a load dropped
+/// mid-read leaves the pool at zero with no consumer registered.
+#[test]
+fn delete_state_is_charged_to_the_query_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let keys: Vec<Option<i64>> = (0..20_000).map(Some).collect();
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            equality("e.parquet", 0, 2, &keys),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let consumers = |pool: &Arc<dyn MemoryPool>| {
+        pool.snapshot()
+            .entries
+            .iter()
+            .filter(|e| e.is_consumer)
+            .count()
+    };
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let state = p.delete_state(&pool).unwrap();
+    t.env.rt.block_on(state.ensure()).unwrap();
+    assert!(pool.reserved() >= 20_000 * 8, "{}", pool.reserved());
+    drop(state);
+    assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+
+    let tiny: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(64 << 10),
+        ..MemoryConfig::default()
+    });
+    let state = p.delete_state(&tiny).unwrap();
+    let Err(e) = t.env.rt.block_on(state.ensure()) else {
+        panic!("a 64 KiB pool holds 20,000 keys")
+    };
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+    assert_eq!((tiny.reserved(), consumers(&tiny)), (0, 0));
+
+    // Cancelled: polled until it holds memory, then dropped mid-load.
+    let state = p.delete_state(&pool).unwrap();
+    let held = t.env.rt.block_on(async {
+        let mut load = std::pin::pin!(state.ensure());
+        loop {
+            assert!(futures::poll!(load.as_mut()).is_pending());
+            if pool.reserved() > 0 {
+                break pool.reserved();
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+    assert!(held > 0 && state.loaded().is_none());
+    assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+}
+
+/// A distributed task's scan of a reordered subset of the files
+/// (`with_file_splits`) applies each file's equality deletes, not those of
+/// the file at the same position in the full list (review 25c N8): the file
+/// ordinal is global, through `FileConstants` keyed by path.
+#[test]
+fn equality_deletes_follow_files_through_given_splits() {
+    use krishiv_exec::ScanPushdown;
+    use krishiv_exec::planner::TableProvider;
+    use krishiv_io::split::{FilePartition, FileSplit};
+
+    #[derive(Debug)]
+    struct Splits(super::provider::IcebergTableProvider, Vec<usize>);
+    impl TableProvider for Splits {
+        fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+            let files: Vec<_> = self.1.iter().map(|&i| self.0.files()[i].clone()).collect();
+            let partitions = files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| FilePartition {
+                    index: i,
+                    splits: vec![FileSplit {
+                        file: i,
+                        range: krishiv_io::ByteRange::whole(f.size),
+                    }],
+                })
+                .collect();
+            self.0.scan()?.with_file_splits(files, partitions)
+        }
+    }
+
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("b.parquet", 0, 3, 10, 3),
+            data("c.parquet", 0, 1, 20, 3),
+            // Newer than a and c, not than b.
+            equality("e.parquet", 0, 2, &[Some(1), Some(11), Some(21)]),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let names: Vec<String> = p.files().iter().map(|f| f.path.to_string()).collect();
+    let at = |n: &str| names.iter().position(|p| p.ends_with(n)).unwrap();
+    let (b, c) = (at("b.parquet"), at("c.parquet"));
+    assert_eq!((at("a.parquet"), b, c), (0, 1, 2));
+    let schema = p.snapshot().schema.clone();
+    let session =
+        super::provider_tests::session(vec![("t", schema, Arc::new(Splits(p, vec![b, c])))]);
+    let mut ids: Vec<i64> =
+        super::provider_tests::render(&session.run("SELECT id FROM t").unwrap())
+            .iter()
+            .map(|r| r.parse().unwrap())
+            .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, [10, 11, 12, 20, 22]);
+}
+
+/// The row estimate comes from the manifests (PR-25d; design note §2.4):
+/// the data files' record counts less the position deletes and DVs that
+/// apply (each delete file once), equality deletes not subtracted; scan
+/// units are the files' split offsets.
+#[test]
+fn row_estimate_from_iceberg_metadata() {
+    use krishiv_exec::planner::TableProvider;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 5),
+            data("b.parquet", 0, 1, 10, 5),
+            data("c.parquet", 0, 1, 20, 5),
+            // Two rows, applying to a and b: subtracted once.
+            positions(
+                "d.parquet",
+                0,
+                2,
+                &[("a.parquet", 0), ("b.parquet", 1)],
+                None,
+            ),
+            dv("c.puffin", 0, 2, "c.parquet", &[3]),
+            equality("e.parquet", 0, 2, &[Some(1), Some(2)]),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    assert_eq!(p.statistics().unwrap().rows, 15 - 2 - 1);
+    assert_eq!(p.scan_units(), Some(3));
+    let plain = build(&[data("a.parquet", 0, 1, 0, 5)], false);
+    let p = plain
+        .env
+        .provider(&plain.table, &VersionSpec::Current)
+        .unwrap();
+    assert_eq!(p.statistics().unwrap().rows, 5);
+}
+
+/// `EXPLAIN` shows the Iceberg scan's snapshot, the data files read after
+/// pruning out of all, and the delete files that apply to them by kind
+/// (PR-25d).
+#[test]
+fn explain_shows_snapshot_files_and_deletes() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("c.parquet", 0, 1, 10, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            positions("pc.parquet", 0, 2, &[("c.parquet", 1)], None),
+            equality("e.parquet", 0, 2, &[Some(12)]),
+        ],
+        true,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let s = provider_session(p);
+    let all = s.explain("SELECT id FROM t");
+    assert!(
+        all.contains("Snapshot: 1000, DataFiles: 3/3, DeleteFiles: [position=1, dv=1, equality=1]"),
+        "{all}"
+    );
+    let one = s.explain("SELECT id FROM t WHERE p = 1");
+    assert!(
+        one.contains("Snapshot: 1000, DataFiles: 1/3, DeleteFiles: [position=0, dv=0, equality=0]"),
+        "{one}"
+    );
+}
+
+/// Planning a snapshot again reads its manifests from the registration's
+/// cache (PR-25d; design note §2.3): with the manifests gone from the store,
+/// a second plan through the same registration still succeeds, while a
+/// table loaded with `krishiv.iceberg.manifestCache.bytes = 0` fetches them
+/// and fails.
+#[test]
+fn a_second_plan_reads_manifests_from_the_cache() {
+    use krishiv_common::config::Config;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            positions("d.parquet", 0, 2, &[("a.parquet", 1)], None),
+        ],
+        false,
+    );
+    let location = t.table.table.metadata_location().unwrap().to_owned();
+    let mut off = Config::new();
+    off.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    let uncached = t
+        .env
+        .rt
+        .block_on(IcebergTable::load_with_config(
+            &t.env.reg, &location, "db", "t", &off,
+        ))
+        .unwrap();
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 2]);
+    for m in ["data-m.avro", "delete-m.avro"] {
+        std::fs::remove_file(t.env.dir.path().join(m)).unwrap();
+    }
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 2]);
+    let e = t
+        .env
+        .provider(&uncached, &VersionSpec::Current)
+        .unwrap_err();
+    assert!(e.message().contains("-m.avro"), "{e}");
+    // A hit is held to the reading table's parse limit (review 25d N2).
+    let mut capped = t
+        .env
+        .rt
+        .block_on(IcebergTable::load(&t.env.reg, &location, "db", "t"))
+        .unwrap();
+    // At the manifest list's size: the list reads, the cached manifests
+    // (larger: they carry the schema) are refused.
+    let list = capped
+        .snapshot(&VersionSpec::Current)
+        .unwrap()
+        .manifest_list
+        .unwrap();
+    let list = list.strip_prefix("file://").unwrap_or(&list);
+    capped.max_metadata_bytes = std::fs::metadata(list).unwrap().len();
+    let e = t.env.provider(&capped, &VersionSpec::Current).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogLimitExceeded,
+        "{e}"
+    );
+}
+
+/// Position-delete selections are charged at their size (review 25d S1):
+/// a range per position, 16 bytes, while the selections live.
+#[test]
+fn position_selections_are_charged_at_their_size() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let rows: Vec<(&str, i64)> = (0..10_000).map(|i| ("a.parquet", i * 2)).collect();
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            positions("d.parquet", 0, 2, &rows, None),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let state = p.delete_state(&pool).unwrap();
+    t.env.rt.block_on(state.ensure()).unwrap();
+    let ranges = 10_000 * std::mem::size_of::<std::ops::Range<u64>>();
+    assert!(pool.reserved() >= ranges, "{} < {ranges}", pool.reserved());
+    drop(state);
+    assert_eq!(pool.reserved(), 0);
+}
+
+/// A data file whose partition tuple cannot be read fails the query only
+/// when a scan reads it (review 25d S3a): pruned by its metrics, the other
+/// files read and keep their equality deletes. iceberg-rust's writers cannot
+/// write such a tuple, so the planned entry is edited (a bucket spec, so the
+/// value is not a constant column).
+#[test]
+fn a_pruned_file_with_an_unreadable_tuple_does_not_fail() {
+    use crate::plan::{PartitionValue, Transform, encode};
+    use krishiv_io::ScalarValue;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            equality("e.parquet", 1, 2, &[Some(21)]),
+        ],
+        true,
+    );
+    let open = || {
+        t.env
+            .rt
+            .block_on(IcebergTableProvider::open_edited(
+                &t.table,
+                |snapshot, plan| {
+                    for spec in snapshot.partition_specs.values_mut() {
+                        for f in &mut spec.fields {
+                            f.transform = Transform::Bucket(16);
+                        }
+                    }
+                    for task in &mut plan.tasks {
+                        let file = &mut Arc::make_mut(&mut task.file).file;
+                        let (lo, hi) = if file.path.ends_with("a.parquet") {
+                            file.partition = vec![PartitionValue::Unreadable];
+                            (0, 2)
+                        } else {
+                            (20, 22)
+                        };
+                        let long = |v| {
+                            encode(&ScalarValue::Int64(v), &crate::plan::IcebergType::Long).unwrap()
+                        };
+                        file.lower_bounds.insert(1, long(lo));
+                        file.upper_bounds.insert(1, long(hi));
+                    }
+                },
+            ))
+            .unwrap()
+    };
+    let s = provider_session(open());
+    let rows = s.rows("SELECT id FROM t WHERE id >= 20 ORDER BY id");
+    assert_eq!(rows, ["20", "22"]);
+    let e = provider_session(open())
+        .run("SELECT id FROM t")
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.message().contains("cannot be read"), "{e}");
 }
 
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
-enum Op {
+pub(super) enum Op {
     /// Append a data file of `rows` rows in partition `p`, with a data
     /// sequence number `back` below the commit's (a rewrite keeping its
     /// sequence number), and optionally a position delete of `same` in the
@@ -679,7 +1064,7 @@ enum Op {
     Equality { p: i32, keys: Vec<i64>, back: i64 },
 }
 
-fn ops() -> impl Strategy<Value = Vec<Op>> {
+pub(super) fn ops() -> impl Strategy<Value = Vec<Op>> {
     let op = prop_oneof![
         (0..2i32, 1..6i64, 0..3i64, prop::option::of(0..6u64)).prop_map(|(p, rows, back, same)| {
             Op::Append {
@@ -724,7 +1109,8 @@ enum ModelDelete {
 /// a data file with a DV loses exactly the DV's positions; otherwise it loses
 /// the rows naming it in every position delete file with `seq >= data seq`
 /// that is scoped to it or to its partition.
-fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
+/// The survivors are by id, with their partition.
+pub(super) fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeMap<i64, i32>) {
     struct Live {
         name: String,
         p: i32,
@@ -911,8 +1297,8 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
                 .collect();
             (0..l.rows)
                 .filter(move |r| !deleted.contains(&u64::try_from(*r).unwrap()))
-                .map(move |r| l.first + r)
-                .filter(move |id| !by_key.contains(id))
+                .map(move |r| (l.first + r, l.p))
+                .filter(move |(id, _)| !by_key.contains(id))
         })
         .collect();
     (files, survivors)
@@ -927,12 +1313,30 @@ proptest! {
     /// files of other partitions) and DVs (absorbing or replacing older
     /// deletes) over random partitioned tables read the rows a model of the
     /// spec's rules keeps. Equality deletes (some not strictly newer, some
-    /// partition-scoped) remove the rows of their keys besides.
+    /// partition-scoped) remove the rows of their keys besides. Read with
+    /// no filter, a partition filter (files pruned before their deletes are
+    /// assigned, PR-25d) or an id filter.
     #[test]
-    fn delete_application_matches_model(ops in ops(), partitioned in any::<bool>()) {
+    fn delete_application_matches_model(
+        ops in ops(),
+        partitioned in any::<bool>(),
+        filter in (0..3u8, 0..2i32, 0..40i64),
+    ) {
         let (files, survivors) = history(&ops, partitioned);
         let t = build(&files, partitioned);
-        let got = t.ids("SELECT id FROM t").unwrap();
-        prop_assert_eq!(got, survivors.into_iter().collect::<Vec<_>>());
+        let (kind, p, n) = filter;
+        let (sql, want): (String, Vec<i64>) = match kind {
+            0 => ("SELECT id FROM t".to_owned(), survivors.keys().copied().collect()),
+            1 => (
+                format!("SELECT id FROM t WHERE p = {p}"),
+                survivors.iter().filter(|(_, q)| **q == p).map(|(id, _)| *id).collect(),
+            ),
+            _ => (
+                format!("SELECT id FROM t WHERE id < {n}"),
+                survivors.keys().copied().filter(|id| *id < n).collect(),
+            ),
+        };
+        let got = t.ids(&sql).unwrap();
+        prop_assert_eq!(got, want, "{}", sql);
     }
 }

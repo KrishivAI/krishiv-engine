@@ -4,8 +4,11 @@
 
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
+pub(crate) mod lazy;
+pub(crate) mod manifest_cache;
 pub(crate) mod provider;
 pub(crate) mod scan;
+pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
 pub(crate) mod types;
@@ -14,6 +17,8 @@ pub(crate) mod types;
 mod baseline_tests;
 #[cfg(test)]
 mod delete_tests;
+#[cfg(test)]
+mod dst_tests;
 #[cfg(test)]
 mod evolution_tests;
 #[cfg(test)]

@@ -390,7 +390,10 @@ fn a_mixed_spec_identity_column_a_file_lacks_is_refused() {
             .unwrap();
         let opened = env.provider(&table, &VersionSpec::Current);
         if lacks {
-            let e = opened.unwrap_err();
+            // Refused when a scan reads the file (PR-25d), not at open.
+            let e = provider_session(opened.unwrap())
+                .run("SELECT name, x FROM t")
+                .unwrap_err();
             assert_eq!(
                 e.error_class(),
                 ErrorClass::KrishivUnsupportedFeature,
@@ -398,6 +401,13 @@ fn a_mixed_spec_identity_column_a_file_lacks_is_refused() {
             );
             assert!(e.message().contains("column x"), "{e}");
             assert!(e.message().contains("p0.parquet"), "{e}");
+            // A filter that prunes the file lacking the column reads the
+            // rest (the refusal is for files a scan reads).
+            let p = env.provider(&table, &VersionSpec::Current).unwrap();
+            assert_eq!(
+                provider_session(p).rows("SELECT name FROM t WHERE x = 9"),
+                ["p1"]
+            );
         } else {
             let p = opened.unwrap();
             assert!(p.constant_columns().is_empty());
