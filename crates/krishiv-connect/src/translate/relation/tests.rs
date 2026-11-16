@@ -915,3 +915,44 @@ fn secrets_in_read_options_reach_no_printer_key_or_error() {
     );
     let _ = conf();
 }
+
+#[test]
+fn collect_metrics_is_the_observe_node() {
+    let r = with_id(
+        relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: input(),
+            name: "obs".into(),
+            metrics: vec![func("count", vec![lit(LiteralType::Integer(1))])],
+        }))),
+        9,
+    );
+    let plan = root(&r);
+    let PlanNode::CollectMetrics { name, metrics, .. } = &plan.node else {
+        panic!("a CollectMetrics node, got {:?}", plan.node);
+    };
+    assert_eq!((name.as_str(), metrics.len()), ("obs", 1));
+    assert_eq!(plan.origin.plan_id.map(|p| p.0), Some(9));
+}
+
+#[test]
+fn collect_metrics_without_an_input_is_refused() {
+    let r = relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+        input: None,
+        name: "obs".into(),
+        metrics: vec![],
+    })));
+    // The required-input check's own error, not the unsupported-variant fallback's.
+    let e = fails(translate(&r));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message_parameters(),
+        [(
+            "message",
+            "CollectMetrics needs an input relation".to_owned()
+        )]
+    );
+}
