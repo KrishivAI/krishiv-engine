@@ -71,6 +71,8 @@ server = [
     "dep:krishiv-session",
     "krishiv-session/tls",
     "dep:krishiv-connect-server",
+    # The Connect server hosts the Python UDF worker pool; the binary runs its sandbox trampoline.
+    "dep:krishiv-udf-pool",
     "dep:axum",
     "dep:tokio",
     "tokio/net",

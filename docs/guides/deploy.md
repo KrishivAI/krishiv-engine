@@ -22,11 +22,22 @@ disk when the limit is reached.
 
 ## Single-node
 
-In 0.2, `krishiv server` serves the web UI and the admin API only. The Spark Connect part is in development and is not
-part of 0.2: when it ships, one process started with `krishiv server` will also serve Spark Connect, and PySpark will
-connect to it on `127.0.0.1` port `15002` by default (`krishiv.connect.port`, see
-[configuration](../reference/config/index.md)). The behaviour it will have is described in
+The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,
+`krishiv server` (a binary built with the `server` feature) starts one process that serves Spark Connect, by default on
+`127.0.0.1` port `15002` (`--connect-port`, `krishiv.connect.port`), and the admin API on port `8080` (`--port`).
+Settings are given as `--conf KEY=VALUE`. See [configuration](../reference/config/index.md) and
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
+
+```bash
+krishiv server --port 8080 --connect-port 15002
+curl -s http://127.0.0.1:8080/healthz     # 200
+curl -s http://127.0.0.1:8080/readyz      # 200
+```
+
+`/metrics` answers `401` without the admin token. For local use on a loopback address,
+`--conf krishiv.server.metrics.public=true` lets it answer without one (aggregate counters only), and
+`krishiv.metrics.enabled=true` folds each query's metrics into it. The web console needs a binary built with the `ui`
+feature and `krishiv.ui.enabled` (default `true`); a `server`-only build has no console page.
 
 ### Authentication, roles and TLS
 
