@@ -9,7 +9,7 @@ description: "Generates session window given a timestamp specifying column and g
 Generates session window given a timestamp specifying column and gap duration.
 See <a href="https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#types-of-time-windows">'Types of time windows'</a> in Structured Streaming guide doc for detailed explanation and examples.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ session_window(time_column, gap_duration)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `datetime_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.2.0 |
@@ -51,6 +51,7 @@ A2 | 2021-01-01 00:04:30 | 2021-01-01 00:05:30 | 1
 ## Version history
 
 - Added in Spark 3.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

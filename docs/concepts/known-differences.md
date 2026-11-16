@@ -133,6 +133,12 @@ expands the star first, so it leaves the added column out of a bare `*`. Three c
 - A `*` next to a window call in a `WHERE` or `ORDER BY`, and `struct(*)` next to one, are not pinned against a
   Spark run; the star may include a trailing `window` column.
 
+## `session_window` over a string time column
+
+`session_window(s, '5 minutes')` over a string column returns `start` and `end` as strings, with the
+right values. Spark casts the column to `TIMESTAMP` first, so its fields are timestamps. Pinned (ignored) by
+`crates/krishiv-session/tests/time_window_oracle.rs`.
+
 ## Filters move below only their deterministic prefix
 
 Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass

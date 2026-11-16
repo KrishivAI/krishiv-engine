@@ -113,6 +113,14 @@ fn windows(
 ) -> Result<ArrayRef, KrishivError> {
     let ts: PrimitiveArray<TimestampMicrosecondType> = x.timestamps(0)?;
     let overlapping = window / slide + i64::from(window % slide != 0);
+    // The windows of a batch are counted by an `i32` offset: refuse a batch that would pass it before
+    // allocating (one row of a day-long window over a one microsecond slide is 86.4 billion).
+    let valid_rows = i64::try_from(ts.len() - ts.null_count()).unwrap_or(i64::MAX);
+    if overlapping.saturating_mul(valid_rows) > i64::from(i32::MAX) {
+        return Err(internal(format!(
+            "more than 2^31 windows in one batch: {valid_rows} rows of {overlapping} overlapping windows"
+        )));
+    }
     let mut starts = Vec::new();
     let mut ends = Vec::new();
     let mut offsets: Vec<i32> = Vec::with_capacity(ts.len() + 1);

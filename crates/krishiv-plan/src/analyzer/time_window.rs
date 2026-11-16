@@ -236,8 +236,15 @@ fn qualify_over_project(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<Expr
     }
 }
 
-/// Whether `e` calls `window_time` (renamed) anywhere (outside subqueries).
+/// Whether `e` calls `window_time` (renamed) outside any aggregate function (outside subqueries): inside
+/// `max(window_time(window))` the call reads the group's window, so it is no error.
 fn calls_window_time(e: &Arc<Expr>) -> bool {
+    if let ExprNode::Function(f) = &e.node
+        && f.qualifier.is_empty()
+        && super::BuiltinFunctions::is_aggregate(&f.name)
+    {
+        return false;
+    }
     call_of(e, WINDOW_TIME_SCALAR).is_some_and(|f| f.args.len() == 1) || {
         let mut any = false;
         e.for_each_child(&mut |c| any = any || calls_window_time(c));

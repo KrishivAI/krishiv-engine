@@ -11,7 +11,7 @@ The extracted time is (window.end - 1) which reflects the fact that the aggregat
 windows have exclusive upper bound - [start, end)
 See <a href="https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time">'Window Operations on Event Time'</a> in Structured Streaming guide doc for detailed explanation and examples.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -23,7 +23,7 @@ window_time(window_column)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `datetime_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.4.0 |
@@ -44,6 +44,7 @@ A2 | 2021-01-01 00:00:00 | 2021-01-01 00:05:00 | 2021-01-01 00:04:59.999999 | 1
 ## Version history
 
 - Added in Spark 3.4.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
