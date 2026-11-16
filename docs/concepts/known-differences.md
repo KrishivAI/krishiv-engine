@@ -322,7 +322,10 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   never raised.
 - **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
   on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
-  name.
+  name. A `replaceWhere` or `INSERT OVERWRITE` filter must name partition columns by one-part names:
+  a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
+  so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
+  `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
 
 `DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
 command's `num_affected_rows` and the files removed that delta-spark leaves
@@ -351,9 +354,18 @@ They differ in:
   the files that hold a matching row; delta-spark rewrites every file of the matching partitions,
   which differs only for files with no live row.
 - **Read predicates.** The conflict check reads by the condition's top-level `AND` conjuncts that
-  translate as partition predicates (as delta-spark does); a conjunct of another form is not one,
-  so such a statement is checked as a read of the whole table, which conflicts with a concurrent
-  append to any partition.
+  translate as partition predicates, and every live file they select is a read file (as
+  delta-spark's `filterFiles`); delta-spark also takes partition-only conjuncts of other forms,
+  which Krishiv reads as the whole table (a concurrent append to any partition conflicts).
+- **Subqueries.** A condition with a subquery is refused with `DELTA_UNSUPPORTED_SUBQUERY` before
+  anything runs, as delta-spark does; its `cond` parameter is the condition as written, where
+  delta-spark prints Catalyst's SQL of the resolved condition. `delete.allowExistsSubquery`
+  (delta-spark's internal flag admitting `EXISTS` in a `DELETE`) is not read.
+- **Write errors.** An error raised while the rewrite writes its rows is `TASK_WRITE_FAILED` (the
+  table's root) caused by the error, as Spark's writer raises it; an overflow of the stored value's
+  cast is `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`, naming the first assigned column whose new value's
+  type casts to the overflowing type. Krishiv's own refusals, conflicts, internal errors and
+  cancellations stay unwrapped.
 - **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
   change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
