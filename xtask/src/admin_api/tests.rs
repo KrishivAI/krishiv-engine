@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::{descriptor_problems, generate, openapi_problems, preview_of, revision_problem};
+use super::{descriptor_problems, generate, openapi_problems, preview_of, revision_problem, run};
 
 /// One non-additive change: what it is and how to make it.
 type Change = (&'static str, Box<dyn Fn(&mut Value)>);
@@ -237,4 +237,141 @@ fn the_committed_snapshots_are_what_the_sources_generate() {
             "{name} is stale; run `cargo xtask admin-api --write`"
         );
     }
+}
+
+/// A scratch repository with the sources the generator reads, a committed copy of the snapshots,
+/// and a `base` branch pointing at that commit.
+fn scratch() -> tempfile::TempDir {
+    use std::process::Command;
+    let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| panic!("no root"));
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for rel in [
+        "crates/krishiv-server/src/admin_v1/descriptor.bin",
+        "crates/krishiv-server/src/admin_v1/mod.rs",
+        "crates/krishiv-server/admin-v1/routes.json",
+        "crates/krishiv-server/admin-v1/descriptor.json",
+        "crates/krishiv-server/admin-v1/openapi.json",
+    ] {
+        let to = dir.path().join(rel);
+        std::fs::create_dir_all(to.parent().unwrap_or_else(|| panic!("no parent")))
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::fs::copy(real.join(rel), &to).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    }
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(dir.path())
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["branch", "base"]);
+    dir
+}
+
+#[test]
+fn the_command_checks_writes_and_compares() {
+    let dir = scratch();
+    let root = dir.path();
+    // Fresh snapshots pass, an unknown flag and a missing ref value fail.
+    assert_eq!(run(root, &[]), Ok(()));
+    assert!(run(root, &["--nope"]).is_err());
+    assert!(run(root, &["--base"]).is_err());
+    // Identical to the base: additive, nothing to raise.
+    assert_eq!(run(root, &["--base", "base"]), Ok(()));
+    // A base that does not resolve fails closed.
+    assert!(run(root, &["--base", "no-such-ref"]).is_err());
+    // A stale committed snapshot is reported, and --write repairs it.
+    let snapshot = root.join("crates/krishiv-server/admin-v1/descriptor.json");
+    std::fs::write(&snapshot, "{}\n").unwrap_or_else(|e| panic!("{e}"));
+    assert!(run(root, &[]).is_err_and(|e| e.contains("descriptor.json")));
+    assert_eq!(run(root, &["--write"]), Ok(()));
+    assert_eq!(run(root, &[]), Ok(()));
+}
+
+#[test]
+fn a_removed_field_against_the_base_fails_unless_allowed_while_preview() {
+    let dir = scratch();
+    let root = dir.path();
+    // The base has a field the sources no longer generate: make the committed base say so.
+    let snapshot = root.join("crates/krishiv-server/admin-v1/descriptor.json");
+    let mut base: Value =
+        serde_json::from_str(&std::fs::read_to_string(&snapshot).unwrap_or_else(|e| panic!("{e}")))
+            .unwrap_or_default();
+    base["messages"]["GetVersionResponse"]["fields"]["gone"] = json!({"number": 9, "type": "string", "label": "singular", "jsonName": "gone", "optional": false, "oneof": null});
+    // Same revision as the head: the change (a removal) is breaking and the revision did not grow.
+    std::fs::write(
+        &snapshot,
+        serde_json::to_string_pretty(&base).unwrap_or_default(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for args in [
+        ["add", "-A"].as_slice(),
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "old",
+        ],
+        &["branch", "-f", "base"],
+    ] {
+        let out = std::process::Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(out.status.success());
+    }
+    assert_eq!(run(root, &["--write"]), Ok(()));
+    // The revision did not grow, so even the breaking flag cannot let it through.
+    let err = run(root, &["--base", "base", "--allow-breaking-before-release"])
+        .err()
+        .unwrap_or_default();
+    assert!(err.contains("ADMIN_V1_REVISION"), "{err}");
+    // Raise the revision: now only the flag lets the removal through.
+    let source = root.join("crates/krishiv-server/src/admin_v1/mod.rs");
+    let text = std::fs::read_to_string(&source)
+        .unwrap_or_default()
+        .replace("ADMIN_V1_REVISION: i64 = 1;", "ADMIN_V1_REVISION: i64 = 2;");
+    std::fs::write(&source, &text).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run(root, &["--write"]), Ok(()));
+    let err = run(root, &["--base", "base"]).err().unwrap_or_default();
+    assert!(err.contains("not additive"), "{err}");
+    assert_eq!(
+        run(root, &["--base", "base", "--allow-breaking-before-release"]),
+        Ok(())
+    );
+    // Once the surface is released the flag is refused.
+    std::fs::write(
+        &source,
+        text.replace("PREVIEW: bool = true;", "PREVIEW: bool = false;"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let err = run(root, &["--base", "base", "--allow-breaking-before-release"])
+        .err()
+        .unwrap_or_default();
+    assert!(err.contains("no longer `preview`"), "{err}");
 }

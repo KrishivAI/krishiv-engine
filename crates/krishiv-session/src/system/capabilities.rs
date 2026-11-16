@@ -98,4 +98,19 @@ mod tests {
         assert_eq!(ours.len(), 1, "a later call replaces the row");
         assert_eq!(ours[0][2], "8");
     }
+
+    #[test]
+    fn registered_build_features_are_feature_rows() {
+        // The first registration of the process wins, so the rows are checked by shape: a
+        // feature row has a name and "enabled" or "disabled".
+        register_build_features(&[("zz_feature_on", true), ("zz_feature_off", false)]);
+        let rows = capabilities();
+        let features: Vec<&[String; 4]> = rows.iter().filter(|r| r[0] == "feature").collect();
+        assert!(features.len() >= 2, "{features:?}");
+        assert!(
+            features
+                .iter()
+                .all(|r| r[2] == "enabled" || r[2] == "disabled")
+        );
+    }
 }
