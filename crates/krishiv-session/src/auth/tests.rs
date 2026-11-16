@@ -947,7 +947,17 @@ fn a_hand_built_service_token_without_expiry_refuses_startup() {
     ])
     .expect("valid");
     ServerAuth::new(&c).expect("with expiry");
+    // The principal's own `expires` still applies (#785 review N2).
     c.tokens[0].expires = None;
+    ServerAuth::new(&c).expect("the principal's expiry");
+    // No date on the token and none for its principal.
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+    ])
+    .expect("a user token");
+    c.tokens[0].kind = PrincipalKind::Service;
     let err = ServerAuth::new(&c).expect_err("no expiry");
     assert!(invalid_config(&err), "{err}");
     assert!(err.to_string().contains("prometheus.expires"), "{err}");
@@ -983,4 +993,39 @@ fn a_token_principal_follows_the_principal_name_rule() {
     .expect_err("spark token principal");
     assert!(invalid_config(&err), "{err}");
     assert!(err.to_string().contains("sparkTokenPrincipal"), "{err}");
+}
+
+/// #785 review N2: a token's own expiry and its principal's `expires` are one rule, the
+/// earlier applies, whichever the config was built by.
+#[test]
+fn the_earlier_of_token_and_principal_expiry_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let service = |expires: &str| {
+        config(&[
+            ("krishiv.auth.tokens.prom.secret", b.as_str()),
+            ("krishiv.auth.tokens.prom.principal", "prometheus"),
+            ("krishiv.auth.tokens.prom.kind", "service"),
+            ("krishiv.auth.tokens.prom.role", "viewer"),
+            ("krishiv.auth.principals.prometheus.expires", expires),
+        ])
+        .expect("valid")
+    };
+    let far = std::time::UNIX_EPOCH + Duration::from_secs(200 * 365 * 86_400);
+    // The table's date passed: a later date on the token itself does not extend it.
+    let mut c = service("2001-01-01");
+    c.tokens[0].expires = Some(far);
+    let err = ServerAuth::new(&c).expect_err("the principal's rights ended");
+    assert!(err.to_string().contains("has expired"), "{err}");
+    // The token's own date passed: the table's later date does not extend it.
+    let mut c = service("2999-01-01");
+    c.tokens[0].expires = Some(std::time::UNIX_EPOCH + Duration::from_secs(1));
+    let err = ServerAuth::new(&c).expect_err("the token ended");
+    assert!(err.to_string().contains("has expired"), "{err}");
+    // A token without its own date takes the table's.
+    let mut c = service("2999-01-01");
+    c.tokens[0].expires = None;
+    let auth = ServerAuth::new(&c).expect("the table's date applies");
+    let cr = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    auth.authenticate_at(&cr, Instant::now()).expect("logs in");
 }

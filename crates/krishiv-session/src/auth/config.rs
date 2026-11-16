@@ -73,7 +73,9 @@ pub struct TokenSpec {
     /// The role.
     pub role: Role,
     /// When the token stops working: `krishiv.auth.principals.<principal>.expires`. Required
-    /// for a service principal (P3-T061 Q5).
+    /// for a service principal (P3-T061 Q5). [`ServerAuth`](super::ServerAuth) applies the
+    /// earlier of this and the principal's own `expires`, so a hand-set later date never
+    /// extends it.
     pub expires: Option<SystemTime>,
 }
 

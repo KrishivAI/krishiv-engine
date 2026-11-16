@@ -167,7 +167,11 @@ impl ServerAuth {
         #[cfg(feature = "oidc")] oidc: Option<Oidc>,
         #[cfg(feature = "oidc")] assertions: Option<Oidc>,
     ) -> Result<Self, KrishivError> {
-        let tokens = StaticTokens::build(&config.tokens)?;
+        // A token's own expiry and its principal's are one rule: the earlier applies.
+        let tokens = StaticTokens::build(&super::tokens::with_principal_expiry(
+            &config.tokens,
+            &config.principals,
+        ))?;
         if config.tokens.iter().any(|t| t.name == SPARK_TOKEN_NAME) {
             tracing::warn!(
                 target: "krishiv::auth",

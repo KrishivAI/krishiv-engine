@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use super::Role;
 use super::config::{SPARK_TOKEN_KEY, SPARK_TOKEN_NAME, TokenSpec};
+use super::principals::PrincipalTable;
 use super::secret_ref::invalid;
 
 /// The shortest secret accepted, in bytes (design §3.2; threat model T-A4).
@@ -196,6 +197,30 @@ impl StaticTokens {
     pub(crate) fn comparisons_for(&self, presented: &str) -> usize {
         self.find(presented).1
     }
+}
+
+/// `specs` with each token's expiry the earlier of its own and its principal's
+/// `krishiv.auth.principals.<p>.expires` in `principals` (#785 review N2). One rule however the
+/// config was built: [`AuthConfig::from_settings`](super::AuthConfig::from_settings) copies the
+/// principal's date into the token, and a hand-built [`TokenSpec`] can neither outlive the date
+/// impersonation reads from the table nor skip it. Two tokens of one principal (rotation) keep
+/// their own dates, each capped by the principal's.
+pub(crate) fn with_principal_expiry(
+    specs: &[TokenSpec],
+    principals: &PrincipalTable,
+) -> Vec<TokenSpec> {
+    specs
+        .iter()
+        .map(|spec| {
+            let table = principals.get(&spec.principal).and_then(|r| r.expires);
+            let mut spec = spec.clone();
+            spec.expires = match (spec.expires, table) {
+                (Some(own), Some(table)) => Some(own.min(table)),
+                (own, table) => own.or(table),
+            };
+            spec
+        })
+        .collect()
 }
 
 /// The settings key naming the secret of token `name`.
