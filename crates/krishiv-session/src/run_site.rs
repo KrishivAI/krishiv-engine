@@ -52,7 +52,8 @@ pub(crate) fn resolve_sites(stream: RecordBatchStream, env: &QueryEnv) -> Record
 }
 
 /// [`sql_context`] for a run-time error, with the context's `summary` set
-/// to the `== SQL ==` block, as Spark's `SQLQueryContext.summary` is: the
+/// to the `== SQL ==` block, as Spark's `SQLQueryContext.summary` is (with
+/// its newline after the caret line, `QueryContexts.scala` v4.2.0): the
 /// surfaces that render an error without the statement's text (a Python
 /// DataFrame action) show it from there.
 fn runtime_context(
@@ -64,7 +65,7 @@ fn runtime_context(
     let mut context =
         ErrorQueryContext::sql(text.fragment(start..end), start, end.saturating_sub(1));
     if let Some(summary) = krishiv_common::error::sql_summary(&context, text.as_str()) {
-        context.summary = summary;
+        context.summary = format!("{summary}\n");
     }
     error.with_query_context(context)
 }

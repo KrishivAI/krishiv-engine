@@ -26,6 +26,9 @@ fn rendered_from_summaries(error: &KrishivError) -> Option<String> {
         .iter()
         .map(|c| c.summary.as_str())
         .filter(|s| !s.is_empty())
+        // Spark's summary ends with a newline; the rendered text, as
+        // `render_with_context`'s, does not.
+        .map(|s| s.strip_suffix('\n').unwrap_or(s))
         .collect();
     (!summaries.is_empty()).then(|| format!("{error}\n{}", summaries.join("\n")))
 }

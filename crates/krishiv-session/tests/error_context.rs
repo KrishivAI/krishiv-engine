@@ -363,7 +363,9 @@ fn runtime_error_context_carries_its_summary() {
         ),
     ] {
         let e = fails(sql);
-        assert_eq!(e.query_contexts()[0].summary, want, "{sql}");
+        // Spark's summary ends with a newline after the caret line; the
+        // rendered text does not.
+        assert_eq!(e.query_contexts()[0].summary, format!("{want}\n"), "{sql}");
         assert_eq!(
             render_with_context(&e, sql),
             format!("{e}\n{want}"),

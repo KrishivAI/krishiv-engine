@@ -588,7 +588,7 @@ def test_runtime_error_text_marks_the_span(spark: SparkSession) -> None:
             assert "== SQL" not in e.getMessage(), sql
             assert str(e) == e.getMessage() + "\n" + summary, sql
             (qc,) = e.getQueryContext()
-            assert qc.summary() == summary, sql
+            assert qc.summary() == summary + "\n", sql  # Spark's summary ends with a newline
     finally:
         spark.sql("DROP VIEW IF EXISTS rs14")
         spark.conf.set("spark.sql.ansi.enabled", ansi)
