@@ -101,6 +101,9 @@ const ROW_MARGIN: f64 = 8.0;
 /// 2^63: a `bigint` sum overflows at it.
 const LONG_LIMIT: f64 = 9_223_372_036_854_775_808.0;
 
+/// The largest magnitude below which every integer is a double (2^53).
+const EXACT_DOUBLE: f64 = 9_007_199_254_740_992.0;
+
 /// Moves dimension payloads above the aggregates that group by them,
 /// entering subquery plans. Also returns one line per move, and per aggregate
 /// left alone the gate that refused each candidate (`EXPLAIN VERBOSE`).
@@ -769,14 +772,17 @@ fn accumulates_safely(f: &ResolvedFunction, rel: &RelStats) -> Result<(), String
     let arg = f.args.first();
     let arg_type = arg.and_then(|a| crate::expr::data_type(a));
     let limit = match (name, &arg_type) {
-        // No buffer that raises: `count`, `min`, `max`, floating-point sums,
-        // and `avg` of integers, which Spark sums in a double.
-        ("count" | "min" | "max", _)
-        | ("sum" | "avg" | "mean", Some(DataType::Float | DataType::Double))
-        | (
+        // No buffer that raises and no order-dependent rounding: `count`,
+        // `min`, `max`. Floating-point `sum` and `avg` never move: removing
+        // the join changes the summation order, and so the rounding (as
+        // `eager.rs` rule 2).
+        ("count" | "min" | "max", _) => return Ok(()),
+        // `avg` of integers sums in a double: exact, so order-free, while
+        // every partial sum stays below 2^53.
+        (
             "avg" | "mean",
             Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long),
-        ) => return Ok(()),
+        ) => EXACT_DOUBLE,
         ("sum", Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)) => {
             LONG_LIMIT
         }

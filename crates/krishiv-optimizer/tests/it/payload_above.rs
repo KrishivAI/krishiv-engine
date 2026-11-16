@@ -467,6 +467,19 @@ fn a_floating_point_key_refuses() {
     );
 }
 
+/// A floating-point `sum` or `avg` would round differently once the join below
+/// it is gone (summation order), so it never moves.
+#[test]
+fn a_floating_point_sum_refuses() {
+    for call in ["sum(fd)", "avg(fd)"] {
+        refused(
+            &format!("SELECT dk, dname, {call} FROM f, d WHERE fk = dk GROUP BY dk, dname"),
+            &facts(),
+            "not known to accumulate",
+        );
+    }
+}
+
 #[test]
 fn a_collated_key_never_moves() {
     let sql = "SELECT dk, dname, sum(fv) FROM f, d \
