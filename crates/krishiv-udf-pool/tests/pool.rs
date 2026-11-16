@@ -829,9 +829,10 @@ fn call_threads() -> usize {
         .count()
 }
 
-/// The call threads added since `before`, once any thread that is ending has gone: a call thread that ends after
-/// its idle time leaves the pool's count before the OS thread exits, so for a moment `/proc` can show it next to
-/// the thread that replaced it (merge-queue flake 2026-11-16, run 43858094536). Waits up to 2 s for at most `limit`.
+/// The call threads added since `before`, once every thread has its own name: a worker starts on a call thread,
+/// which spawns the worker's `krishiv-udf-stderr` reader, and on Linux a new thread carries its parent's name until
+/// it sets its own, so for a moment `/proc` counts the reader as a call thread (merge-queue flake 2026-11-16, run
+/// 43858094536). Waits up to 2 s for at most `limit`; N calls on N threads would still fail.
 fn added_call_threads(before: usize, limit: usize) -> usize {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
