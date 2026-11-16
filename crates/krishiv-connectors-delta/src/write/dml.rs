@@ -865,6 +865,7 @@ pub(super) async fn stage(
             dv_updates,
             dv_descriptors,
             read_set,
+            user_metadata: None,
         }));
     }
     let mut metrics: Vec<(String, u64)> = Vec::new();
@@ -980,6 +981,7 @@ pub(super) async fn stage(
         dv_updates,
         dv_descriptors,
         read_set,
+        user_metadata: None,
     }))
 }
 

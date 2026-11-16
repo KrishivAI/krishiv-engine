@@ -851,5 +851,6 @@ mod dml;
 mod dvs;
 mod lifecycle;
 mod merge;
+mod options;
 mod readback;
 mod streaming;

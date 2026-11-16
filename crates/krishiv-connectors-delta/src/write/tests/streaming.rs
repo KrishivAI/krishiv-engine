@@ -281,7 +281,7 @@ fn a_create_finds_its_own_version_zero() {
             .rt
             .block_on(env.engine.delta_blocking({
                 let table = table.clone();
-                move |e| plan_create(e, table.new_table(), "w", FileLimits::default())
+                move |e| plan_create(e, table.new_table(), "w", None, FileLimits::default())
             }))
             .unwrap()
             .unwrap();
