@@ -6,8 +6,10 @@
 //! conditions, `USING`/`NATURAL` keys, grouping, sort and window keys, generators, subqueries
 //! and their correlated references), when it reaches the root's output, or when a node consumes
 //! it by position (a union's later inputs, a CTE reference's definition, a recursive CTE's
-//! terms). This over-approximates (a projected-away expression still counts), never under: a
-//! plan node this walk does not prove (an unresolved form) makes every table read whole rows.
+//! terms). Projections and expansions (`ROLLUP`, `CUBE`, `GROUPING SETS`) pass a bare column
+//! through, read only if something above reads it. This over-approximates (a projected-away
+//! expression still counts), never under: a plan node this walk does not prove (an unresolved
+//! form) makes every table read whole rows.
 //! Each scan is its own appearance: one that reads no column (as `count(*)` does) reads whole
 //! rows and asks the table, whatever other appearances of the same table read. A subtree shared
 //! through `Shift` instances is one appearance (the union of what its instances read), so the
@@ -181,6 +183,13 @@ impl Walk {
                 for e in exprs {
                     self.projected(e, off, &mut subplans);
                 }
+            } else if let PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } = &p.node
+            {
+                self.expanded(projections, output, off, &mut subplans);
             } else {
                 p.for_each_expr(&mut |e| self.expr(e, off, &mut subplans));
             }
@@ -329,6 +338,38 @@ impl Walk {
                 _ => self.expr(e, off, subplans),
             },
             _ => self.expr(e, off, subplans),
+        }
+    }
+
+    /// An expansion (`ROLLUP`, `CUBE`, `GROUPING SETS`, and the other rewrites that build one),
+    /// column by column: output `j` is `projections[i][j]` for each `i`, so a bare column there
+    /// passes its attribute through (read only if something above reads output `j`), a literal
+    /// (the null fill of an absent key, the grouping id, the set number) reads nothing, and
+    /// anything else counts as read. A projection whose width differs from the output proves
+    /// nothing: every expression counts as read and the walk fails closed.
+    fn expanded<'a>(
+        &mut self,
+        projections: &'a [Vec<std::sync::Arc<crate::Expr>>],
+        output: &[crate::BoundColumn],
+        off: u64,
+        subplans: &mut Vec<&'a LogicalPlan>,
+    ) {
+        for row in projections {
+            if row.len() != output.len() {
+                self.unproven = true;
+                for e in row {
+                    self.expr(e, off, subplans);
+                }
+                continue;
+            }
+            for (e, out) in row.iter().zip(output) {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                        self.edge(out.id.0, c.id.0, off, off);
+                    }
+                    _ => self.expr(e, off, subplans),
+                }
+            }
         }
     }
 

@@ -872,6 +872,7 @@ fn single_reads(plan: &Arc<LogicalPlan>) -> Vec<String> {
     reads
 }
 
+mod grouping_reads;
 mod part1;
 mod part2;
 mod part3;

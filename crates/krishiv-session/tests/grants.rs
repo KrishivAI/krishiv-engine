@@ -154,6 +154,47 @@ fn column_grants_allow_only_their_columns() {
     assert_eq!(ok(&ana, "SELECT count(*), max(b) FROM t"), 1);
 }
 
+/// `ROLLUP`, `CUBE` and `GROUPING SETS` read the columns they name and no other: a column grant
+/// on exactly those runs them, and one referenced column without a grant refuses them.
+#[test]
+fn column_grants_cover_grouping_sets_over_their_columns() {
+    let w = World::new();
+    let root = w.admin();
+    ok(
+        &root,
+        "CREATE TABLE g (a INT, b INT, c INT, d INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO g VALUES (1, 2, 3, 4)");
+    let ana = w.user("ana");
+    ok(&root, "GRANT SELECT (a, b, c) ON g TO user:ana");
+    let shapes = [
+        "SELECT a, b, sum(c), grouping(a), grouping_id() FROM g GROUP BY ROLLUP(a, b)",
+        "SELECT a, sum(c) FROM g GROUP BY CUBE(a, b)",
+        "SELECT a, grouping_id(a, b), max(c) FROM g GROUP BY GROUPING SETS ((a), (a, b), ())",
+        "SELECT a + b, count(c) FROM g GROUP BY ROLLUP(a + b)",
+    ];
+    for sql in shapes {
+        assert!(ok(&ana, sql) > 0, "{sql}");
+    }
+    // The same shapes with `d` referenced (a key, an aggregate input, a computed key).
+    for sql in [
+        "SELECT a, b, sum(c), grouping(a) FROM g GROUP BY ROLLUP(a, b, d)",
+        "SELECT a, sum(d) FROM g GROUP BY CUBE(a, b)",
+        "SELECT a, grouping_id(a, d) FROM g GROUP BY GROUPING SETS ((a), (a, d))",
+        "SELECT a + d, count(c) FROM g GROUP BY ROLLUP(a + d)",
+    ] {
+        let e = denied(&ana, sql);
+        assert!(e.contains("`d`"), "{sql}: {e}");
+    }
+    // Without `c`, the shapes reading `c` are refused.
+    let bob = w.user("bob");
+    ok(&root, "GRANT SELECT (a, b) ON g TO user:bob");
+    for sql in shapes {
+        let e = denied(&bob, sql);
+        assert!(e.contains("`c`"), "{sql}: {e}");
+    }
+}
+
 #[test]
 fn roles_are_transitive_and_cycles_are_refused() {
     let w = World::new();
