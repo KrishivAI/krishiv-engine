@@ -1585,11 +1585,34 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
             name: t.name.clone(),
             options: options(&t.options)?,
         },
-        Kind::Files(f) => ReadSource::Files {
-            format: f.format.clone(),
-            paths: f.paths.iter().map(option).collect::<Result<_>>()?,
-            options: options(&f.options)?,
-        },
+        Kind::Files(f) => {
+            let files = ReadSource::files(
+                f.format.clone(),
+                f.paths.iter().map(option).collect::<Result<_>>()?,
+                options(&f.options)?,
+            );
+            match f.schema.as_ref().map(spark_type).transpose()? {
+                None => files,
+                Some(DataType::Struct(schema)) => files.with_schema(schema),
+                Some(_) => return Err(corrupt("a declared file schema that is not a struct")),
+            }
+        }
+        Kind::Local(l) => {
+            let hash: [u8; 32] = l
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| corrupt("a local relation hash that is not 32 bytes"))?;
+            let batches = usize::try_from(l.batches)
+                .map_err(|_| corrupt("a local relation batch count that does not fit"))?;
+            ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+                schema_from(&l.schema)?,
+                hash,
+                batches,
+                l.rows,
+                l.bytes,
+            ))
+        }
     })
 }
 
@@ -1744,7 +1767,24 @@ fn narrow<T: TryFrom<i32>>(v: i32) -> Result<T> {
 }
 
 fn literal(l: &pb::Literal) -> Result<Literal> {
+    literal_at(l, 0)
+}
+
+/// `l`, `depth` literals inside a nested literal: the type bounds the depth of
+/// a valid one, and the bound keeps a hostile chain from recursing further.
+fn literal_at(l: &pb::Literal, depth: usize) -> Result<Literal> {
     use pb::literal::Kind;
+    if depth > DataType::MAX_NESTING_DEPTH {
+        return Err(corrupt("a nested literal deeper than a type may be"));
+    }
+    let member = |m: &pb::Literal| {
+        // The options map is its own feature and never a member (the encoder
+        // refuses it).
+        if matches!(m.kind, Some(Kind::Map(_))) {
+            return Err(corrupt("an options map inside a nested literal"));
+        }
+        literal_at(m, depth + 1)
+    };
     Ok(match required(&l.kind, "a literal kind")? {
         Kind::Null(n) => Literal::Null(n.data_type.as_ref().map(spark_type).transpose()?),
         Kind::Boolean(v) => Literal::Boolean(*v),
@@ -1808,6 +1848,43 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
                 .map(|e| (e.key.clone(), e.value.clone()))
                 .collect(),
         ),
+        Kind::Array(v) => {
+            let DataType::Array(t) = spark_type(required(&v.data_type, "an array literal type")?)?
+            else {
+                return Err(corrupt("an array literal whose type is not an array"));
+            };
+            Literal::array(
+                (*t).clone(),
+                v.elements.iter().map(member).collect::<Result<_>>()?,
+            )
+            .map_err(|_| corrupt("an array literal that does not fit its type"))?
+        }
+        Kind::KeyValueMap(v) => {
+            let DataType::Map(t) = spark_type(required(&v.data_type, "a map literal type")?)?
+            else {
+                return Err(corrupt("a map literal whose type is not a map"));
+            };
+            let entries = v
+                .entries
+                .iter()
+                .map(|e| {
+                    Ok((
+                        member(required(&e.key, "a map literal key")?)?,
+                        member(required(&e.value, "a map literal value")?)?,
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            Literal::key_value_map((*t).clone(), entries)
+                .map_err(|_| corrupt("a map literal that does not fit its type"))?
+        }
+        Kind::Struct(v) => {
+            let DataType::Struct(t) = spark_type(required(&v.data_type, "a struct literal type")?)?
+            else {
+                return Err(corrupt("a struct literal whose type is not a struct"));
+            };
+            Literal::struct_value(t, v.fields.iter().map(member).collect::<Result<_>>()?)
+                .map_err(|_| corrupt("a struct literal that does not fit its type"))?
+        }
     })
 }
 

@@ -232,6 +232,7 @@ pub(crate) fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),
+        krishiv_plan::ReadSource::Local(_) => "LocalRelation".to_owned(),
         _ => "source".to_owned(),
     }
 }

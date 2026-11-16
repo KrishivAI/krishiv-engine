@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The statement classifier (`krishiv_sql::classify`) over every statement
+//! The statement classifier (`krishiv_sql::classify_with`, the corpus's parser options) over every statement
 //! of the vendored Spark `SQLQueryTestSuite` inputs: one golden per input
 //! file (`tests/fixtures/statement-classes/<input>.txt`), one line per
 //! statement with its class, or `PARSE_ERROR` when it does not parse,
@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use krishiv_sql::{classify, parse_statement};
+use krishiv_sql::{classify_with, parse_statement};
 use krishiv_testkit::golden::run::{Engine as _, load_statements};
 use krishiv_testkit::golden::setup::FileSetup;
 use krishiv_testkit::golden::sql_parse::ParseOnlyEngine;
@@ -58,7 +58,7 @@ fn every_corpus_statement_has_its_golden_class() -> R {
             let class = match parse_statement(&s.query, &engine.options()) {
                 Ok(statement) => {
                     classified += 1;
-                    classify(&statement).name()
+                    classify_with(&statement, &engine.options()).name()
                 }
                 Err(_) => "PARSE_ERROR",
             };

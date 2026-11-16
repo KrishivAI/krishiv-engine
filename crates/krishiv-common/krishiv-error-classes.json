@@ -6,6 +6,12 @@
     "sqlState" : "55000",
     "audience" : "operator"
   },
+  "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
+    "message" : [
+      "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
@@ -48,6 +54,13 @@
   "KRISHIV_FILE_CHANGED_DURING_READ" : {
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
+    ],
+    "sqlState" : "KD001",
+    "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_INVALID_DELETES" : {
+    "message" : [
+      "<message>"
     ],
     "sqlState" : "KD001",
     "audience" : "operator"

@@ -654,7 +654,10 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "write_files_column_types"
             | "aggregate_percentiles"
             | "aggregate_histogram_numeric"
-            | "options_map_literal" => 6,
+            | "options_map_literal"
+            | "nested_literals"
+            | "file_source_schema"
+            | "local_relation_source" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_")
@@ -662,7 +665,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
                 || n.starts_with("variant_")
-                || n.starts_with("calendar_") =>
+                || n.starts_with("calendar_")
+                || n.starts_with("vector_carrier") =>
             {
                 6
             }

@@ -215,6 +215,9 @@ fn visit<'a>(
                 PlanNode::Read(source @ ReadSource::Files { .. }) => {
                     found.push(Found::Files(source, p.origin));
                 }
+                // `Read(Local)` falls to the wildcard below on purpose:
+                // content-addressed data in the session's store has nothing
+                // to load and no securable to check.
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
                     ReadSource::Table { name, options } => {
@@ -230,6 +233,7 @@ fn visit<'a>(
                     source @ ReadSource::Files { .. } => {
                         found.push(Found::FileScan(source, &s.output, p.origin));
                     }
+                    ReadSource::Local(_) => {}
                 },
                 PlanNode::WithCte { input, ctes } => {
                     p.for_each_expr(&mut |e| next.push((Node::Expr(e), Arc::clone(env))));
@@ -1019,11 +1023,11 @@ async fn path_read(
         }
         SourceKind::Unknown => return Ok(BoundTable::Missing),
     }
-    let source = ReadSource::Files {
-        format: format.clone(),
-        paths: vec![OptionValue::from_user("path", path)],
-        options: BTreeMap::new(),
-    };
+    let source = ReadSource::files(
+        format.clone(),
+        vec![OptionValue::from_user("path", path)],
+        BTreeMap::new(),
+    );
     Ok(BoundTable::Files(
         bind_files(ctx, b, checked, &source, origin).await?,
     ))
@@ -1089,6 +1093,7 @@ async fn bind_files(
             format,
             paths,
             options,
+            schema,
         },
         Some(files),
     ) = (source, &ctx.files)
@@ -1120,26 +1125,39 @@ async fn bind_files(
     if server_scoped(options) {
         authorize_store_options(ctx, b, checked, origin).await?;
     }
-    let columns = files
-        .infer(format, &qualified, options)
-        .await
-        .map_err(fail)?
-        .into_iter()
-        // Spark reads every file column as nullable, nested elements,
-        // values and fields too (`HadoopFsRelation` over
-        // `dataSchema.asNullable`), as the scan's rows are typed.
-        .map(|c| TableColumn {
-            nullable: true,
-            data_type: c.data_type.as_nullable(),
-            ..c
-        })
-        .collect();
+    let columns = if let Some(schema) = schema {
+        // A declared schema replaces inference. The nullability rule is the
+        // inferred one: every file column nullable, nested elements, values
+        // and fields too (Spark builds the relation over
+        // `dataSchema.asNullable`, declared or inferred).
+        schema
+            .fields()
+            .iter()
+            .map(|f| TableColumn::new(f.name(), f.data_type().as_nullable(), true))
+            .collect()
+    } else {
+        files
+            .infer(format, &qualified, options)
+            .await
+            .map_err(fail)?
+            .into_iter()
+            // Spark reads every file column as nullable, nested elements,
+            // values and fields too (`HadoopFsRelation` over
+            // `dataSchema.asNullable`), as the scan's rows are typed.
+            .map(|c| TableColumn {
+                nullable: true,
+                data_type: c.data_type.as_nullable(),
+                ..c
+            })
+            .collect()
+    };
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {
             format: format.to_lowercase(),
             paths: qualified,
             options: options.clone(),
+            schema: schema.clone(),
         },
         columns,
     });

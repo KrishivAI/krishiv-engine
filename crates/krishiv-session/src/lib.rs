@@ -67,6 +67,8 @@ mod identifier_clause;
 mod introspection;
 #[cfg(test)]
 mod lineage_tests;
+#[cfg(feature = "unstable-ir")]
+mod local_relation;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
@@ -106,7 +108,7 @@ mod variables;
 mod view_schema;
 mod window;
 
-pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
