@@ -93,7 +93,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/minio/krishiv-test"
           docker run -d --rm --name krishiv-wheel-minio -p 127.0.0.1:9000:9000 --user "$(id -u):$(id -g)" \
             -v "$RUNNER_TEMP/minio:/data" cgr.dev/chainguard/minio server /data
-          for _ in $(seq 1 60); do curl -s -o /dev/null --max-time 2 http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          up=0
+          for _ in $(seq 1 60); do
+            if curl -s -o /dev/null --max-time 2 -f http://127.0.0.1:9000/minio/health/live; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != 1 ]; then docker logs krishiv-wheel-minio || true; echo "MinIO did not start" >&2; exit 1; fi
           echo "KRISHIV_TEST_S3_ENDPOINT=http://127.0.0.1:9000" >> "$GITHUB_ENV"
       - name: Test (manylinux, on the runner)
         if: matrix.libc == 'manylinux'
