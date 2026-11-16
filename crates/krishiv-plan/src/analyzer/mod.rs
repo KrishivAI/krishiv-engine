@@ -82,6 +82,12 @@ pub mod contract;
 mod exprs;
 mod table_change;
 
+/// Spark's `toPrettySQL` name of a resolved expression (timestamp literals
+/// in UTC): for errors raised outside the analyzer.
+pub(crate) fn pretty_sql(e: &crate::Expr) -> String {
+    exprs::pretty(e, None)
+}
+
 /// Whether `name` is an AES function, in any letter case: the key is the
 /// second argument and must not reach a name, a plan or an error (ADR 0042).
 pub(crate) fn is_aes_function(name: &str) -> bool {
