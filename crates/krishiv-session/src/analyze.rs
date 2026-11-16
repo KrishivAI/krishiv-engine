@@ -18,19 +18,21 @@
 //! by ordinal, sources, filters, columns and warnings sorted, and no process-local value (attribute ids)
 //! in it. Securables print through `Securable`'s `Display`, the 42501 text (ADR 0038 redaction, reused).
 //!
-//! Known gaps, owned by N3: a statement whose reads are not whole queries (a multi-table `INSERT` with a
-//! shared `FROM`, `UPDATE`, `DELETE` with a subquery predicate, `EXECUTE IMMEDIATE`, scripts, variable
-//! expressions) is `partial` with only its targets and the warning `UNSUPPORTED_READ_SHAPE`; `MERGE`
-//! reports what `statement_queries` gives today (its source query), not the subqueries of its `ON`,
-//! clause conditions or `SET` values; `EXECUTE IMMEDIATE` is always `SESSION`.
+//! Reads (N3, design §3.2): a statement's reads are the queries `krishiv_sql::statement_reads` gives,
+//! whole `SELECT`s or built from its own expressions (`UPDATE`, `DELETE`, a multi-table `INSERT` with a
+//! shared `FROM`). A statement whose reads are not known from its text is `partial`, with only its targets
+//! and the warning `UNSUPPORTED_READ_SHAPE`: a `MERGE` or `INSERT ... REPLACE` with a subquery in an
+//! expression (fail closed), `EXECUTE IMMEDIATE` with `USING` arguments (the targets of its text are
+//! listed) or of non-literal text (`ADMIN`, with no `MANAGE`: dynamic SQL), scripts and variable
+//! expressions. `EXECUTE IMMEDIATE` of literal text is analyzed as the statement it holds.
 //!
 //! Output schema and lineage are a query's (`Statement::Query`). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or
 //! `RESET` command has the result columns the session returns for it ([`command_schema`]; `RESET` and
 //! `SET PATH` have none) and no lineage. Any other statement (writes, DDL) has neither, but its reads are
 //! listed.
 //!
-//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]). The frames the commands return
-//! are built from literal rows and do not carry it yet (a follow-up).
+//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]); the frames the commands return
+//! are built from the same column tables, so they carry the same nullability.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -50,7 +52,7 @@ use krishiv_types::DataType;
 use crate::access::StatementInfo;
 use crate::session::{Session, internal};
 
-mod command_schema;
+pub(crate) mod command_schema;
 #[cfg(test)]
 mod tests;
 
@@ -203,9 +205,25 @@ impl Session {
     }
 
     async fn analyze_here(&self, sql: &str) -> Result<Analysis, KrishivError> {
-        let parts = self.statement_parts(sql).await?;
+        Analysis::of_parts(self.statement_parts(sql).await?)
+    }
+
+    /// The analysis of the parsed `statement`, whose spans index `redacted`'s text: what
+    /// `EXPLAIN FORMAT JSON <statement>` returns. Nothing runs.
+    pub(crate) async fn analyze_statement(
+        &self,
+        statement: Statement,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<Analysis, KrishivError> {
+        Analysis::of_parts(self.parts_of_statement(statement, redacted).await?)
+    }
+}
+
+impl Analysis {
+    /// The analysis of a statement from its parts.
+    fn of_parts(parts: crate::access::StatementParts) -> Result<Self, KrishivError> {
         if parts.partial {
-            return Ok(Analysis {
+            return Ok(Self {
                 info: parts.info,
                 partial: true,
                 output_schema: Vec::new(),
@@ -215,8 +233,8 @@ impl Session {
             });
         }
         match (&parts.statement, &parts.analyzed[..]) {
-            (Statement::Query(_), [analyzed]) => Analysis::of_query(parts.info, analyzed),
-            (statement, _) => Ok(Analysis {
+            (Statement::Query(_), [analyzed]) => Self::of_query(parts.info, analyzed),
+            (statement, _) => Ok(Self {
                 info: parts.info,
                 partial: false,
                 output_schema: command_schema(statement).unwrap_or_default(),
@@ -226,9 +244,7 @@ impl Session {
             }),
         }
     }
-}
 
-impl Analysis {
     /// The analysis of a query: its output schema and lineage.
     fn of_query(info: StatementInfo, analyzed: &AnalyzedPlan) -> Result<Self, KrishivError> {
         let l = lineage(analyzed)?;
