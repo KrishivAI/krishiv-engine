@@ -963,6 +963,28 @@ fn a_hand_built_service_token_without_expiry_refuses_startup() {
     assert!(err.to_string().contains("prometheus.expires"), "{err}");
 }
 
+/// #827 review nit 1: a hand-built token's principal meets the principal-name rule too.
+#[test]
+fn a_hand_built_token_with_a_malformed_principal_refuses_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+    ])
+    .expect("valid");
+    for bad in ["svc..a", ".svc", "svc.", " svc"] {
+        c.tokens[0].principal = bad.to_owned();
+        let err = ServerAuth::new(&c).expect_err(bad);
+        assert!(invalid_config(&err), "{bad}: {err}");
+        assert!(
+            err.to_string().contains("tokens.prom.principal"),
+            "{bad}: {err}"
+        );
+    }
+}
+
 /// #785 review R1: a token's principal follows the principal-name rule, refused at the token's
 /// own key, so the operator is never sent to a `principals.<p>.expires` key that cannot be set.
 #[test]

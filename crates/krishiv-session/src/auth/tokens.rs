@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 use super::Role;
 use super::config::{SPARK_TOKEN_KEY, SPARK_TOKEN_NAME, TokenSpec};
-use super::principals::PrincipalTable;
+use super::principals::{PrincipalTable, check_name};
 use super::secret_ref::invalid;
 
 /// The shortest secret accepted, in bytes (design §3.2; threat model T-A4).
@@ -58,6 +58,12 @@ impl StaticTokens {
         let mut entries: Vec<(Entry, &str)> = Vec::with_capacity(specs.len());
         for spec in specs {
             let key = secret_key(&spec.name);
+            // The rule `AuthConfig::from_settings` applies to a token's principal, for a
+            // hand-built config too (#827 review nit 1).
+            check_name(
+                &format!("krishiv.auth.tokens.{}.principal", spec.name),
+                &spec.principal,
+            )?;
             if spec.expires.is_some_and(|e| now >= e) {
                 return Err(invalid(
                     &format!("krishiv.auth.principals.{}.expires", spec.principal),
