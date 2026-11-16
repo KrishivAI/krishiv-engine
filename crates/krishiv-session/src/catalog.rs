@@ -475,6 +475,32 @@ pub(crate) struct FileScans {
     pub(crate) slots: u64,
     /// The executor's I/O runtime, which opens the file tables.
     pub(crate) runtime: tokio::runtime::Handle,
+    /// The session's relation store, which holds the data of local relations.
+    pub(crate) relations: Arc<krishiv_memory::RelationStore>,
+}
+
+impl FileScans {
+    /// A lease on the entry of the local relation `l`: its own lease, else one
+    /// found by hash in the session's store.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` naming the hash when the store does not hold it (a
+    /// decoded plan run where its data is not): never an empty result.
+    pub(crate) fn local_lease(
+        &self,
+        l: &krishiv_plan::LocalRelation,
+    ) -> Result<krishiv_memory::RelationLease, KrishivError> {
+        if let Some(lease) = l.lease() {
+            return Ok(lease.clone());
+        }
+        let hash = l.relation().hash;
+        self.relations.lease(&hash).ok_or_else(|| {
+            InternalError {
+                message: format!("the local relation {hash} is not in this session's store"),
+            }
+            .into()
+        })
+    }
 }
 
 /// A snapshot pinned by hidden name, and how many actions pinned it.
@@ -814,6 +840,19 @@ impl QueryCatalog {
                     })?;
                     assigned.push((scan.id, self.file_splits(&table, total_slots)?));
                 }
+                ReadSource::Local(l) => {
+                    // The batches live in the session's store; the splits name
+                    // them by hash. A relation the store lost is an engine
+                    // bug, never an empty scan.
+                    let lease = self.scans.local_lease(l)?;
+                    assigned.push((
+                        scan.id,
+                        ScanSplitsKind::Batches {
+                            relation: lease.reference(),
+                            batches: lease.batches(),
+                        },
+                    ));
+                }
                 _ => {
                     return Err(unsupported("this scan"));
                 }
@@ -1100,13 +1139,13 @@ pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
 
 /// The read of a table's files.
 pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
-    ReadSource::Files {
-        format: table.provider.clone(),
-        paths: vec![krishiv_common::secret::OptionValue::from_user(
+    ReadSource::files(
+        table.provider.clone(),
+        vec![krishiv_common::secret::OptionValue::from_user(
             "path",
             table.location.display().to_string(),
         )],
-        options: table
+        table
             .options
             .iter()
             .map(|(k, v)| {
@@ -1116,7 +1155,7 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
                 )
             })
             .collect(),
-    }
+    )
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -1295,6 +1334,14 @@ impl TableProviderResolver for QueryCatalog {
             }
             source @ ReadSource::Files { .. } => {
                 self.files_provider(&FilesKey::Read(source.clone()))
+            }
+            ReadSource::Local(l) => {
+                let lease = self.scans.local_lease(l)?;
+                Ok(Arc::new(krishiv_exec::planner::MemoryTable::from_lease(
+                    Arc::clone(l.schema()),
+                    l.rows(),
+                    lease,
+                )))
             }
             _ => Err(unsupported("this scan")),
         }

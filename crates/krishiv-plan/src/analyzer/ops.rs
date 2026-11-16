@@ -246,6 +246,37 @@ impl Resolver<'_> {
         rel
     }
 
+    /// A read of a local relation: a scan without a qualifier over the
+    /// columns of its Arrow schema, with fresh attributes.
+    pub(super) fn local(
+        &mut self,
+        p: &LogicalPlan,
+        l: &crate::LocalRelation,
+    ) -> Result<Rel, AnalysisError> {
+        let mut out = Vec::with_capacity(l.schema().fields().len());
+        for f in l.schema().fields() {
+            let data_type = krishiv_types::DataType::from_arrow_field(f)
+                .map_err(|e| AnalysisError::new(e, p.origin))?;
+            out.push(Attr {
+                col: BoundColumn {
+                    id: self.fresh(),
+                    name: f.name().clone(),
+                    data_type,
+                    nullable: f.is_nullable(),
+                },
+                qual: no_qual(),
+                source: None,
+                duplicate: false,
+            });
+        }
+        let node = PlanNode::Scan(Scan {
+            source: ReadSource::Local(l.clone()),
+            output: out.iter().map(|a| a.col.clone()).collect(),
+            version: None,
+        });
+        Ok(self.make(p.origin, node, out, &[]))
+    }
+
     /// `c` as an instance: every id inside shifted by `offset`; `plan` is
     /// the `Shift` node when it exists already. Ids past `MAX_ID` are an
     /// error, never an overflow.

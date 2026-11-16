@@ -1133,6 +1133,8 @@ message ReadSource {
   oneof kind {
     TableSource table = 1;
     FilesSource files = 2;
+    // feature: local_relation_source
+    LocalSource local = 3;
   }
 }
 
@@ -1145,6 +1147,23 @@ message FilesSource {
   string format = 1;
   repeated OptionValue paths = 2;
   map<string, OptionValue> options = 3;
+  // feature: file_source_schema
+  // The schema the user declared (a struct type); absent: inferred.
+  DataType schema = 4;
+}
+
+// Arrow data a plan reads (Spark's LocalRelation), named by content hash. The
+// data is never in the plan: it lives in the session's relation store of the
+// process that runs the plan, found by `hash`; a process without it fails.
+// feature: local_relation_source
+message LocalSource {
+  // SHA-256 content hash (32 bytes).
+  bytes hash = 1;
+  // Arrow IPC `Schema` flatbuffer of the stored batches.
+  bytes schema = 2;
+  uint64 rows = 3;
+  uint64 batches = 4;
+  uint64 bytes = 5;
 }
 
 // A data source option: plain text or a reference to a secret. An inline
@@ -1405,7 +1424,42 @@ message Literal {
     CalendarLiteral calendar = 17;
     // feature: options_map_literals
     MapLiteral map = 18;
+    // feature: nested_literals
+    ArrayLiteral array = 19;
+    // feature: nested_literals
+    KeyValueMapLiteral key_value_map = 20;
+    // feature: nested_literals
+    StructLiteral struct = 21;
   }
+}
+
+// feature: nested_literals
+// An array value of any element type: `data_type` is the array type (a
+// nested type, so `nested_types` too), each element a literal of the element
+// type, a null one a typed `NullLiteral`.
+message ArrayLiteral {
+  DataType data_type = 1;
+  repeated Literal elements = 2;
+}
+
+// feature: nested_literals
+// A map value of any key and value type (not the options-only `MapLiteral`).
+message KeyValueMapLiteral {
+  DataType data_type = 1;
+  repeated KeyValueEntry entries = 2;
+}
+
+// feature: nested_literals
+message KeyValueEntry {
+  Literal key = 1;
+  Literal value = 2;
+}
+
+// feature: nested_literals
+// A struct value: one literal per field of `data_type`, in field order.
+message StructLiteral {
+  DataType data_type = 1;
+  repeated Literal fields = 2;
 }
 
 // feature: options_map_literals

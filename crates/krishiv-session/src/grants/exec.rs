@@ -454,15 +454,7 @@ impl Session {
                     key.as_ref().is_none_or(|k| policy.exact_for(k)),
                 );
                 self.ordered_frame(
-                    &[
-                        "principal",
-                        "privilege",
-                        "object_type",
-                        "object_key",
-                        "grant_option",
-                        "granted_by",
-                        "granted_at",
-                    ],
+                    crate::analyze::command_schema::SHOW_GRANTS,
                     &["grant_option"],
                     rows,
                 )
