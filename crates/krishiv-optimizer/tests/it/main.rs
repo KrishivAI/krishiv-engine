@@ -19,6 +19,7 @@ mod plan_stats;
 mod props;
 mod python_relations;
 mod qerror;
+mod rule_differential;
 mod rules;
 mod share_subtree;
 mod sum_rewrite;
