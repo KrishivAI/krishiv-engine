@@ -95,7 +95,11 @@ fn policy_client_honours_every_client_config_key() {
         // object_store's own verdict on the same options: the copy accepts and refuses alike.
         let original = ReqwestConnector::default().connect(&options).is_ok();
         let result = plain.reqwest_client(&options);
-        if key == ClientConfigKey::ProxyUrl {
+        if key == ClientConfigKey::AllowInvalidCertificates {
+            // The one deliberate difference: verification is never turned off in server mode.
+            assert!(result.is_err(), "{key:?}");
+            assert!(proxied.reqwest_client(&options).is_err(), "{key:?}");
+        } else if key == ClientConfigKey::ProxyUrl {
             // A store proxy without the admin's egress proxy is refused, never silently used
             // or dropped; with it, the store's proxy settings apply.
             assert!(result.is_err(), "{key:?}");
@@ -113,6 +117,10 @@ fn policy_client_honours_every_client_config_key() {
             );
         }
     }
+    // Asking for verification (the default) is accepted.
+    let verified =
+        ClientOptions::new().with_config(ClientConfigKey::AllowInvalidCertificates, "false");
+    assert!(plain.reqwest_client(&verified).is_ok());
     // The proxy CA is parsed as object_store parses it, once a proxy is in use.
     let with_ca =
         changed(ClientConfigKey::ProxyUrl).with_config(ClientConfigKey::ProxyCaCertificate, "PEM");

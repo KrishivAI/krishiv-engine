@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-session/tests/analyze.rs
+assertion_line: 48
 expression: out
 ---
 -- Query: SELECT a FROM t
@@ -1455,6 +1456,94 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[{"kind":"path","name":["file:/tmp/o"],"display":"path 'file:/tmp/o'","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: GRANT SELECT ON TABLE t TO user:ana
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: REVOKE GRANT OPTION FOR SELECT ON t FROM role:r
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: CREATE ROLE r
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: DROP ROLE r
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: GRANT ROLE r TO group:g
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: REVOKE ROLE r FROM group:g
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: SHOW GRANTS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AccessControl: SHOW GRANTS ON SCHEMA s TO user:ana
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
 "output_schema":[],
 "lineage":[],
 "filters":[],
