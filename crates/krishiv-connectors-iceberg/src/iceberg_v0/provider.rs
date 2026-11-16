@@ -230,6 +230,15 @@ impl IcebergTableProvider {
         let eq = self.scan.equality.as_ref()?;
         Some(self.scan.with_equality_columns(self.scan.mapped(p), eq).0)
     }
+
+    /// The `Debug` text of the delete selections and equality deletes.
+    pub(super) fn deletes_debug(&self) -> String {
+        format!(
+            "{:?} {:?}",
+            self.scan.selections.as_deref(),
+            self.scan.equality
+        )
+    }
 }
 
 impl TableProvider for IcebergTableProvider {

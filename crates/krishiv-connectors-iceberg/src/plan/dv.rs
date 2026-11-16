@@ -271,4 +271,114 @@ mod tests {
             krishiv_common::error::ErrorClass::KrishivIcebergInvalidDeletes
         );
     }
+    /// A blob around `bitmap` (the bytes after the magic) with a correct
+    /// length prefix and CRC.
+    fn frame(bitmap: &[u8]) -> Vec<u8> {
+        let mut body = MAGIC.to_vec();
+        body.extend_from_slice(bitmap);
+        let mut out = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+        out
+    }
+
+    fn frame_err(bitmap: &[u8]) -> String {
+        let b = frame(bitmap);
+        decode_dv(&b, len(&b), 0, "k.puffin")
+            .unwrap_err()
+            .message()
+            .to_owned()
+    }
+
+    #[test]
+    fn short_and_mismatched_blobs() {
+        let m = decode_dv(&[1, 2, 3], 3, 0, "s.puffin").unwrap_err();
+        assert_eq!(
+            m.message(),
+            "Invalid deletion vector s.puffin: 3 bytes is too short"
+        );
+        // Length prefix agrees with the entry but the blob is longer than the entry says.
+        let blob = encode_dv(&[1u64].into_iter().collect()).unwrap();
+        let m = decode_dv(&blob, len(&blob), 1, "x").unwrap();
+        assert_eq!(m.len(), 1);
+        let mut longer = blob.clone();
+        longer.push(0);
+        let e = decode_dv(&longer, len(&blob), 1, "l.puffin").unwrap_err();
+        assert!(
+            e.message().ends_with("bytes is too short"),
+            "{}",
+            e.message()
+        );
+        // A body shorter than the magic reports "?".
+        let mut tiny = vec![0, 0, 0, 2, 9, 9];
+        tiny.extend_from_slice(&[0; 4]);
+        let e = decode_dv(&tiny, 10, 0, "t").unwrap_err();
+        assert_eq!(e.message(), "Invalid magic number: ?, expected 1681511377");
+    }
+
+    #[test]
+    fn bitmap_header_errors_use_javas_texts() {
+        assert_eq!(
+            frame_err(&[1, 2, 3]),
+            "Invalid deletion vector k.puffin: truncated bitmap"
+        );
+        assert_eq!(
+            frame_err(&(-1i64).to_le_bytes()),
+            "Invalid bitmap count: -1"
+        );
+        let with_key = |count: i64, keys: &[i32]| {
+            let mut b = count.to_le_bytes().to_vec();
+            for k in keys {
+                b.extend_from_slice(&k.to_le_bytes());
+            }
+            b
+        };
+        // Count says one bitmap but the key is cut off.
+        assert_eq!(
+            frame_err(
+                &with_key(1, &[])
+                    .iter()
+                    .chain(&[0u8, 0])
+                    .copied()
+                    .collect::<Vec<_>>()
+            ),
+            "Invalid deletion vector k.puffin: truncated bitmap"
+        );
+        assert_eq!(frame_err(&with_key(1, &[-5])), "Invalid unsigned key: -5");
+        assert_eq!(
+            frame_err(&with_key(1, &[i32::MAX])),
+            format!("Key is too large: {}", i32::MAX)
+        );
+        // A valid empty 32-bit bitmap then a repeated key.
+        let mut empty = Vec::new();
+        RoaringBitmap::new().serialize_into(&mut empty).unwrap();
+        let mut b = with_key(2, &[3]);
+        b.extend_from_slice(&empty);
+        b.extend_from_slice(&3i32.to_le_bytes());
+        b.extend_from_slice(&empty);
+        assert_eq!(frame_err(&b), "Keys must be sorted in ascending order");
+        // Key present, roaring payload garbage.
+        let mut b = with_key(1, &[0]);
+        b.extend_from_slice(&[0xFF; 3]);
+        assert!(
+            frame_err(&b).starts_with("Invalid deletion vector k.puffin: "),
+            "{}",
+            frame_err(&b)
+        );
+    }
+
+    #[test]
+    fn encode_refuses_a_position_with_too_large_a_key() {
+        let positions: RoaringTreemap = [u64::from(i32::MAX.unsigned_abs()) << 32]
+            .into_iter()
+            .collect();
+        let e = encode_dv(&positions).unwrap_err();
+        assert_eq!(
+            e.message(),
+            format!(
+                "Invalid position: {}",
+                u64::from(i32::MAX.unsigned_abs()) << 32
+            )
+        );
+    }
 }

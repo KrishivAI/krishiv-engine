@@ -54,6 +54,24 @@ enum Content {
     Dv { data: String, positions: Vec<u64> },
     /// An equality delete file on `id` (field 1) holding these keys.
     Equality { ids: Vec<Option<i64>> },
+    /// A position delete file with nullable `(data file name, position)` rows.
+    PositionsRaw {
+        rows: Vec<(Option<String>, Option<i64>)>,
+    },
+    /// A delete file in ORC (never written), of positions or equality.
+    Orc { equality: bool },
+    /// An equality delete file on `id` with chosen `equality_ids`.
+    EqualityRaw {
+        ids: Vec<Option<i64>>,
+        equality_ids: Option<Vec<i32>>,
+    },
+    /// A DV entry with a chosen range over a file of `bytes`.
+    DvRaw {
+        data: String,
+        offset: Option<i64>,
+        size: Option<i64>,
+        bytes: Vec<u8>,
+    },
 }
 
 /// One file: its name, partition value (for a partitioned table), data
@@ -179,6 +197,81 @@ fn build(files: &[File], partitioned: bool) -> Table {
                 d.referenced_data_file(Some(env.at(data)))
                     .content_offset(Some(4))
                     .content_size_in_bytes(Some(i64::try_from(blob.len()).unwrap()));
+                delete_files.push((d.build().unwrap(), f.seq));
+            }
+            Content::PositionsRaw { rows } => {
+                let b = batch(
+                    vec![
+                        id_field("file_path", A::Utf8, DELETE_FILE_PATH_ID),
+                        id_field("pos", A::Int64, DELETE_FILE_POS_ID),
+                    ],
+                    vec![
+                        Arc::new(StringArray::from(
+                            rows.iter()
+                                .map(|(n, _)| n.as_ref().map(|n| env.at(n)))
+                                .collect::<Vec<_>>(),
+                        )),
+                        Arc::new(Int64Array::from(
+                            rows.iter().map(|(_, p)| *p).collect::<Vec<_>>(),
+                        )),
+                    ],
+                );
+                let size = write_parquet(&path, &b);
+                let d = builder(
+                    DataContentType::PositionDeletes,
+                    DataFileFormat::Parquet,
+                    size,
+                    u64::try_from(rows.len()).unwrap(),
+                );
+                delete_files.push((d.build().unwrap(), f.seq));
+            }
+            Content::Orc { equality } => {
+                let mut d = builder(
+                    if *equality {
+                        DataContentType::EqualityDeletes
+                    } else {
+                        DataContentType::PositionDeletes
+                    },
+                    DataFileFormat::Orc,
+                    10,
+                    1,
+                );
+                if *equality {
+                    d.equality_ids(Some(vec![1]));
+                }
+                delete_files.push((d.build().unwrap(), f.seq));
+            }
+            Content::EqualityRaw { ids, equality_ids } => {
+                let b = batch(
+                    vec![id_field("id", A::Int64, 1)],
+                    vec![Arc::new(Int64Array::from(ids.clone()))],
+                );
+                let size = write_parquet(&path, &b);
+                let mut d = builder(
+                    DataContentType::EqualityDeletes,
+                    DataFileFormat::Parquet,
+                    size,
+                    u64::try_from(ids.len()).unwrap(),
+                );
+                d.equality_ids(equality_ids.clone());
+                delete_files.push((d.build().unwrap(), f.seq));
+            }
+            Content::DvRaw {
+                data,
+                offset,
+                size,
+                bytes,
+            } => {
+                std::fs::write(path.strip_prefix("file://").unwrap(), bytes).unwrap();
+                let mut d = builder(
+                    DataContentType::PositionDeletes,
+                    DataFileFormat::Puffin,
+                    u64::try_from(bytes.len()).unwrap(),
+                    1,
+                );
+                d.referenced_data_file(Some(env.at(data)))
+                    .content_offset(*offset)
+                    .content_size_in_bytes(*size);
                 delete_files.push((d.build().unwrap(), f.seq));
             }
             Content::Equality { ids } => {
@@ -644,6 +737,176 @@ fn a_missing_equality_delete_file_fails() {
     std::fs::remove_file(t.env.at("e.parquet").strip_prefix("file://").unwrap()).unwrap();
     let e = t.open_err();
     assert!(e.message().contains("e.parquet"), "{e}");
+}
+
+fn raw(name: &str, seq: i64, content: Content) -> File {
+    File {
+        name: name.to_owned(),
+        p: 0,
+        seq,
+        content,
+    }
+}
+
+fn table_with(delete: File) -> Table {
+    build(&[data("a.parquet", 0, 1, 0, 3), delete], false)
+}
+
+#[test]
+fn position_delete_rows_of_other_files_are_ignored() {
+    // A delete file also naming files the table does not have, and a null
+    // file path: only a's row 1 is removed.
+    let t = table_with(raw(
+        "d.parquet",
+        2,
+        Content::PositionsRaw {
+            rows: vec![
+                (None, Some(0)),
+                (Some("a.parquet".to_owned()), Some(1)),
+                (Some("zzz.parquet".to_owned()), Some(0)),
+            ],
+        },
+    ));
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 2]);
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    assert_eq!(
+        p.deletes_debug(),
+        "Some(DeleteSelections { files: 1 }) None"
+    );
+}
+
+#[test]
+fn bad_position_delete_rows_fail() {
+    let a = || Some("a.parquet".to_owned());
+    let t = table_with(raw(
+        "d.parquet",
+        2,
+        Content::PositionsRaw {
+            rows: vec![(a(), None)],
+        },
+    ));
+    let e = t.open_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivIcebergInvalidDeletes);
+    assert!(e.message().ends_with("d.parquet: a null position"), "{e}");
+    assert!(
+        e.message().starts_with("Cannot read position delete file "),
+        "{e}"
+    );
+    let t = table_with(raw(
+        "d.parquet",
+        2,
+        Content::PositionsRaw {
+            rows: vec![(a(), Some(-3))],
+        },
+    ));
+    assert_eq!(t.open_err().message(), "Invalid position: -3");
+}
+
+#[test]
+fn orc_delete_files_are_unsupported() {
+    for (equality, what) in [(false, "position"), (true, "equality")] {
+        let t = table_with(raw("d.orc", 2, Content::Orc { equality }));
+        let e = t.open_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        assert!(
+            e.message().contains(&format!("Orc {what} delete files (")),
+            "{e}"
+        );
+    }
+}
+
+#[test]
+fn dv_entries_with_a_bad_range_fail() {
+    let dv_raw = |offset, size, bytes: Vec<u8>| {
+        table_with(raw(
+            "v.puffin",
+            2,
+            Content::DvRaw {
+                data: "a.parquet".to_owned(),
+                offset,
+                size,
+                bytes,
+            },
+        ))
+    };
+    let msg = |t: Table| {
+        let e = t.open_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivIcebergInvalidDeletes,
+            "{e}"
+        );
+        e.message().to_owned()
+    };
+    let m = msg(dv_raw(None, None, vec![0; 16]));
+    assert!(
+        m.starts_with("Deletion vector ") && m.ends_with("v.puffin has no content offset or size"),
+        "{m}"
+    );
+    let m = msg(dv_raw(Some(-1), Some(8), vec![0; 16]));
+    assert!(m.ends_with("v.puffin has the invalid range -1 + 8"), "{m}");
+    // A range past the end of the file is the store's error, not a panic.
+    let t = dv_raw(Some(1000), Some(8), vec![0; 16]);
+    let e = t.open_err();
+    assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
+    // A range inside the file whose bytes are not a DV: Java's length check.
+    let m = msg(dv_raw(Some(0), Some(16), vec![0; 16]));
+    assert_eq!(m, "Invalid bitmap data length: 0, expected 8");
+}
+
+#[test]
+fn equality_delete_files_with_bad_metadata_fail() {
+    let eq = |equality_ids| {
+        table_with(raw(
+            "e.parquet",
+            2,
+            Content::EqualityRaw {
+                ids: vec![Some(1)],
+                equality_ids,
+            },
+        ))
+    };
+    let e = eq(None).open_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.message().contains("without equality field ids"), "{e}");
+    let e = eq(Some(vec![99])).open_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(
+        e.message()
+            .contains("the equality field id 99 is not a primitive column"),
+        "{e}"
+    );
+}
+
+/// An equality delete file with no rows deletes nothing.
+#[test]
+fn an_empty_equality_delete_file_deletes_nothing() {
+    let t = table_with(raw(
+        "e.parquet",
+        2,
+        Content::EqualityRaw {
+            ids: vec![],
+            equality_ids: Some(vec![1]),
+        },
+    ));
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1, 2]);
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    assert_eq!(
+        p.deletes_debug(),
+        "None Some(EqualityDeletes { files: 1, columns: [ColumnPath([\"id\"])] })"
+    );
 }
 
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
