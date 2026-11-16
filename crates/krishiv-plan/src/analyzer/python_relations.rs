@@ -7,8 +7,9 @@
 //!
 //! The inputs resolve as any relation does; a grouped map's keys bind over
 //! its input, a cogroup's over each side (Spark's `groupBy(cols)` on each
-//! `Dataset`). A key may be anything a projection allows except an
-//! aggregate, a window or a generator. The output is the UDF's declared
+//! `Dataset`). A key may be anything a projection allows; an aggregate,
+//! a window or a generator key is `KRISHIV_UNSUPPORTED_FEATURE` (Spark's
+//! answer for each is not verified against a Spark run). The output is the UDF's declared
 //! schema, the columns a front end gives the node: their ids are kept the
 //! first time this analysis meets them and replaced by fresh ones after
 //! (as a `Range` leaf's), so two translated nodes that carry the same ids
@@ -23,10 +24,10 @@
 
 use std::sync::Arc;
 
-use krishiv_common::error::UnsupportedGeneratorOutsideSelect;
+use krishiv_common::error::KrishivUnsupportedFeature;
 
 use super::AnalysisError;
-use super::exprs::{Bound, pretty};
+use super::exprs::Bound;
 use super::ops::has_generator;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::subquery::correlated_reference;
@@ -133,21 +134,25 @@ impl Resolver<'_> {
             let shown: Vec<Arc<Expr>> = bounds.iter().map(Bound::shown).collect();
             return Err(correlated_reference(&shown, o));
         }
-        if let Some(b) = bounds.iter().find(|b| has_generator(&b.expr)) {
+        // Spark puts the keys in a projection below the node (`groupBy(cols)` then
+        // `flatMapGroupsIn*`), where a window or a generator key is extracted and an aggregate key fails
+        // later with a class not verified against a Spark run: refused, naming the case, until goldens exist.
+        let case = bounds.iter().find_map(|b| {
+            if b.agg.is_some() {
+                Some("an aggregate")
+            } else if b.win.is_some() {
+                Some("a window function")
+            } else if has_generator(&b.expr) {
+                Some("a generator")
+            } else {
+                None
+            }
+        });
+        if let Some(case) = case {
             return Err(AnalysisError::new(
-                UnsupportedGeneratorOutsideSelect {
-                    plan: format!("{op} [{}]", pretty(&b.shown(), None)),
+                KrishivUnsupportedFeature {
+                    feature: format!("{case} in a grouping key of {op}"),
                 },
-                o,
-            ));
-        }
-        if let Some(e) = self.misplaced_aggregates(&bounds, o) {
-            return Err(e);
-        }
-        if let Some(b) = bounds.iter().find(|b| b.win.is_some()) {
-            return Err(super::windows::misplaced(
-                super::exprs::WindowUse::Other,
-                b,
                 o,
             ));
         }

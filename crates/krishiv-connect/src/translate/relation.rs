@@ -4,9 +4,10 @@
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
 //! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
-//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`). The `plan_id` of a relation's `RelationCommon` becomes the
-//! `Origin` of the node it translates to, as Spark tags the plan it builds
-//! for the relation; `df["a"]` references name that id.
+//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`).
+//! The `plan_id` of a relation's `RelationCommon` becomes the `Origin` of
+//! the node it translates to, as Spark tags the plan it builds for the
+//! relation; `df["a"]` references name that id.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

@@ -69,6 +69,7 @@ impl fmt::Debug for RelationUdf {
             .field("name", &self.name)
             .field("deterministic", &self.deterministic)
             .field("eval_type", &self.eval_type)
+            .field("plan_eval_type", &self.plan_eval_type)
             .field("return_type", &self.return_type)
             .field("command_len", &self.command.len())
             .field("python_ver", &self.python_ver)
@@ -121,7 +122,7 @@ impl Translator<'_> {
             ));
         }
         let fun = required_udf("MapPartitions", m.func.as_ref())?;
-        let t = self.relation_udf(fun, true, |code| {
+        let t = self.relation_udf(fun, true, false, |code| {
             matches!(code, 205 | 207)
                 .then(|| PythonEvalType::from_code(code))
                 .flatten()
@@ -185,10 +186,7 @@ impl Translator<'_> {
         let fun = required_udf("GroupMap", g.func.as_ref())?;
         let input = self.udf_input("GroupMap", g.input.as_deref())?;
         let keys = self.udf_keys(&g.grouping_expressions)?;
-        let t = self.relation_udf(fun, true, |code| {
-            if TRANSFORM_WITH_STATE.contains(&code) {
-                return None;
-            }
+        let t = self.relation_udf(fun, true, true, |code| {
             matches!(code, 201 | 209 | 215 | 216)
                 .then(|| PythonEvalType::from_code(code))
                 .flatten()
@@ -233,7 +231,7 @@ impl Translator<'_> {
         let left = self.udf_input("CoGroupMap", g.input.as_deref())?;
         let right = self.udf_input("CoGroupMap", g.other.as_deref())?;
         // Spark builds the cogroup's UDF over both sides' columns, not its `arguments`.
-        let t = self.relation_udf(fun, false, |code| {
+        let t = self.relation_udf(fun, false, false, |code| {
             matches!(code, 206 | 210)
                 .then(|| PythonEvalType::from_code(code))
                 .flatten()
@@ -264,14 +262,16 @@ impl Translator<'_> {
     }
 
     /// The Python UDF `fun` holds, with an eval type `accept` maps to the plan's, sent to the host; its
-    /// `arguments` are translated (and dropped) when `read_args`.
+    /// `arguments` are translated (and dropped) when `read_args`; `stateful` (a `GroupMap`) refuses the
+    /// `transformWithState` eval types as unsupported, not as invalid.
     fn relation_udf(
         &mut self,
         fun: &pb::CommonInlineUserDefinedFunction,
         read_args: bool,
+        stateful: bool,
         accept: impl Fn(i32) -> Option<PythonEvalType>,
     ) -> Result<Translated> {
-        let udf = relation_udf(fun, accept)?;
+        let udf = relation_udf(fun, stateful, accept)?;
         if read_args {
             for a in &fun.arguments {
                 self.expression(a)?;
@@ -323,6 +323,7 @@ fn required_udf<'a>(
 /// the return type's translation.
 fn relation_udf(
     fun: &pb::CommonInlineUserDefinedFunction,
+    stateful: bool,
     accept: impl Fn(i32) -> Option<PythonEvalType>,
 ) -> Result<RelationUdf> {
     const PARENT: &str = "spark.connect.CommonInlineUserDefinedFunction";
@@ -342,7 +343,7 @@ fn relation_udf(
     }
     let code = udf.eval_type;
     let Some(plan_eval_type) = accept(code) else {
-        if TRANSFORM_WITH_STATE.contains(&code) {
+        if stateful && TRANSFORM_WITH_STATE.contains(&code) {
             return Err(unsupported(format!(
                 "transformWithState (Python eval type {code}, spark.connect.PythonUDF.eval_type)"
             )));

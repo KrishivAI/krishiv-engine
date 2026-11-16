@@ -186,7 +186,7 @@ fn a_barrier_map_or_a_resource_profile_is_refused() {
 
 #[test]
 fn an_eval_type_of_another_kind_is_sparks_function_eval_type_not_supported() {
-    for code in [100, 101, 201, 206, 300, 999] {
+    for code in [100, 101, 201, 206, 211, 300, 999] {
         let e = refused(&relation(RelType::MapPartitions(Box::new(map(code)))));
         assert_eq!(
             e.error_class(),
@@ -203,7 +203,7 @@ fn an_eval_type_of_another_kind_is_sparks_function_eval_type_not_supported() {
             "{code}"
         );
     }
-    for code in [201, 205, 209] {
+    for code in [201, 205, 209, 212] {
         let e = refused(&relation(RelType::CoGroupMap(Box::new(cogroup(code)))));
         assert_eq!(
             e.error_class(),

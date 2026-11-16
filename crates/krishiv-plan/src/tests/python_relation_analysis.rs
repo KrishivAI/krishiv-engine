@@ -13,8 +13,8 @@ use krishiv_types::DataType;
 use super::dsl::{c, f};
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
-    AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, MemoryCatalog,
-    ResolutionConf, TableColumn,
+    AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, CachingAnalyzer, DefaultAnalyzer,
+    MemoryCatalog, ResolutionConf, TableColumn,
 };
 use crate::{
     AttrId, BoundColumn, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, Origin, Plan,
@@ -231,7 +231,21 @@ fn a_grouped_map_key_must_name_an_input_column() {
 #[test]
 fn a_grouped_map_key_cannot_aggregate() {
     let e = analyze(group_map(vec![f("max", vec![c("k")])], true)).unwrap_err();
-    assert_eq!(class(&e), "UNSUPPORTED_EXPR_FOR_OPERATOR", "{}", e.error);
+    assert_eq!(class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{}", e.error);
+    assert!(
+        e.error
+            .message()
+            .contains("an aggregate in a grouping key of FlatMapGroupsInPandas"),
+        "{}",
+        e.error
+    );
+    let e = analyze(group_map(
+        vec![f("explode", vec![f("array", vec![c("k")])])],
+        true,
+    ))
+    .unwrap_err();
+    assert_eq!(class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{}", e.error);
+    assert!(e.error.message().contains("a generator"), "{}", e.error);
 }
 
 #[test]
@@ -285,4 +299,54 @@ fn a_cogroup_key_binds_over_its_own_side_only() {
     }));
     let e = analyze(root).unwrap_err();
     assert!(class(&e).starts_with("UNRESOLVED_COLUMN"), "{}", e.error);
+}
+
+fn distinct_ids(a: &AnalyzedPlan) -> usize {
+    let mut out: Vec<AttrId> = a.output.iter().map(|c| c.id).collect();
+    out.sort_unstable();
+    out.dedup();
+    out.len()
+}
+
+fn cross(left: Arc<LogicalPlan>, right: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    Arc::new(LogicalPlan::new(PlanNode::Join {
+        left,
+        right,
+        kind: JoinKind::Cross,
+        condition: JoinCondition::None,
+    }))
+}
+
+#[test]
+fn a_warm_analysis_gives_the_python_relations_the_cold_ids() {
+    // A client grows `m1` into `m1.crossJoin(m2)`: the prefix cache starts from `m1`, which kept the
+    // translator's ids 0 and 1; `m2` carries the same ids and must get fresh ones, warm as cold.
+    let cx = ctx();
+    let cache = CachingAnalyzer::new();
+    let first = Plan::try_new(map(true)).unwrap();
+    block_on(cache.analyze(&first, &cx)).unwrap();
+    // `m2` reads another table: a relation equal to one inside the prefix (`Read t`) would be a miss.
+    let m2 = Arc::new(LogicalPlan::new(PlanNode::MapPartitions {
+        input: read("u"),
+        udf: udf(PythonEvalType::MapArrowIter, true),
+        output: declared(),
+        barrier: false,
+    }));
+    let grown = Plan::try_new(cross(map(true), m2)).unwrap();
+    let before = cache.warm_starts();
+    let warm = block_on(cache.analyze(&grown, &cx)).unwrap();
+    assert!(cache.warm_starts() > before, "the grown plan starts warm");
+    let cold = block_on(DefaultAnalyzer.analyze(&grown, &cx)).unwrap();
+    assert_eq!(warm, cold);
+    assert_eq!(distinct_ids(&warm), 4, "{:?}", warm.output);
+}
+
+#[test]
+fn an_analysed_python_relation_reached_twice_stays_apart() {
+    // A stored analysed plan (a temporary view's) read on both sides of a self-join.
+    let stored = analyze(map(true)).unwrap();
+    let view = Arc::clone(stored.plan.root());
+    let a = analyze(cross(Arc::clone(&view), view)).unwrap();
+    assert_eq!(a.output.len(), 4);
+    assert_eq!(distinct_ids(&a), 4, "{:?}", a.output);
 }
