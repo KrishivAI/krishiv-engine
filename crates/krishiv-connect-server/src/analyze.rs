@@ -7,7 +7,7 @@
 //! - `schema`: the analyzed schema, the same `DataType` `ExecutePlan` sends;
 //! - `explain`: `DataFrame::explain` in the requested mode;
 //! - `tree_string`: Spark's `StructType.treeString` (`analyze::types`);
-//! - `is_local`: whether the translated root is an inline table (Spark's
+//! - `is_local`: whether the translated root is a local relation (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
 //! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
@@ -128,16 +128,18 @@ async fn analyze(
             })
         }
         Some(Analyze::IsLocal(l)) => {
-            // Spark: the analyzed plan is a `LocalRelation`. Krishiv's
-            // analyzer lowers inline rows to `OneRowRelation` (as for
-            // `SELECT 1`), so the question is asked of the translated plan
-            // (an inline table, as `LocalRelation` will translate in T012);
-            // SQL `VALUES` is SQL text until analysis and answers false.
-            // The plan is still analyzed so that an invalid one fails as in
-            // Spark.
+            // Spark: the analyzed plan is a `LocalRelation`. A `local_relation` translates to
+            // a `Read` of a local relation (its user schema already applied eagerly, so the
+            // analyzed plan is that bare relation either way); Krishiv's analyzer lowers inline
+            // rows to `OneRowRelation` (as for `SELECT 1`), so the question is asked of the
+            // translated plan; SQL `VALUES` is SQL text until analysis and answers false. The
+            // plan is still analyzed so that an invalid one fails as in Spark.
             let empty = pb::Plan::default();
             let logical = request_plan(entry, l.plan.as_ref().unwrap_or(&empty), limits).await?;
-            let is_local = matches!(logical.root().node, PlanNode::InlineTable { .. });
+            let is_local = matches!(
+                logical.root().node,
+                PlanNode::InlineTable { .. } | PlanNode::Read(ReadSource::Local(_))
+            );
             session.from_plan(&logical).analyzed_for_metadata().await?;
             res::Result::IsLocal(res::IsLocal { is_local })
         }
