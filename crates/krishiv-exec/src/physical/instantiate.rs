@@ -333,11 +333,8 @@ impl WorkerContext {
         self
     }
 
-    /// `krishiv.exec.agg.distinctCountAtMerge` from this worker's
-    /// configuration, or the entry's default without one: whether a single
-    /// `count(DISTINCT)` in a `GROUP BY` may count at the merge
-    /// (`aggregate/distinct.rs`). Every path that builds a distinct plan
-    /// reads it here.
+    /// `krishiv.exec.agg.distinctCountAtMerge` from this worker's configuration
+    /// (`aggregate/distinct.rs`); every path building a distinct plan reads it.
     pub(crate) fn distinct_count_at_merge(&self) -> bool {
         crate::aggregate::distinct_count_at_merge(self.config.as_deref())
     }
