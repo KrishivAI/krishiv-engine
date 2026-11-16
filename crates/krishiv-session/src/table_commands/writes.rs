@@ -16,10 +16,14 @@ impl Session {
         {
             if table.view.is_none() {
                 // Reading a Delta table to analyze it is no write; INSERT writes through the Delta
-                // writer (`delta_writes.rs`); the other commands are refused by name.
+                // writer (`delta_writes.rs`), DELETE and UPDATE through its row-level table
+                // (`row_level.rs`); the other commands are refused by name.
                 #[cfg(feature = "delta")]
                 if is_delta_table(&table)
-                    && !matches!(operation, "ANALYZE TABLE" | "INSERT" | "INSERT OVERWRITE")
+                    && !matches!(
+                        operation,
+                        "ANALYZE TABLE" | "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                    )
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }

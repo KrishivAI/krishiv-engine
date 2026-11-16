@@ -323,3 +323,27 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
 - **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
   on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
   name.
+
+`DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
+command's `num_affected_rows` and the files removed that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dml/DML.json`; Spark reads the tables back, `dml/krishiv-written/`).
+They differ in:
+
+- **Predicate text.** `operationParameters.predicate` holds the condition as written, in
+  parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
+  (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
+  (`UPDATE`).
+- **Deletion vectors.** Krishiv never writes them: on a table with
+  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
+  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
+  partition per task.
+- **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
+  condition is a comparison, `IN` or `IS [NOT] NULL` of partition columns with literals (combined
+  by `AND`, `OR`, `NOT`); delta-spark also takes other expressions of partition columns. Other
+  conditions rewrite (the same rows go, with a rewrite's metrics).
+- **Overflow.** An `UPDATE` whose new value overflows the column raises Spark's `CAST_OVERFLOW`;
+  delta-spark raises `TASK_WRITE_FAILED` around `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`.
+- **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
+  are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
+  change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.

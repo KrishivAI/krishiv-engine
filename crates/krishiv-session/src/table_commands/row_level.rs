@@ -50,6 +50,17 @@ use krishiv_types::DataType;
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 
+/// The rewrite's option holding the rows the condition holds for (the find query's count): a
+/// table's metrics and result rows read it (Delta's `numDeletedRows` / `numUpdatedRows`).
+pub(crate) const AFFECTED_OPTION: &str = "__krishiv_row_level_affected";
+
+/// The rewrite's option holding the statement's condition as written (absent: none), for the
+/// table's commit record (Delta's `operationParameters.predicate`).
+pub(crate) const CONDITION_OPTION: &str = "__krishiv_row_level_condition";
+
+/// The rewrite's option holding the find query's milliseconds (Delta's `scanTimeMs`).
+pub(crate) const SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
+
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
 pub(crate) struct Assignment {
@@ -223,7 +234,9 @@ impl Session {
             .filter(crate::functions::expr(&hit)?)
             .group_by([crate::functions::col(ROW_FILE_COLUMN)])
             .agg([crate::functions::expr("count(*)")?]);
+        let find_started = std::time::Instant::now();
         let batches = found.collect().await?;
+        let scan_ms = find_started.elapsed().as_millis();
         let (touched, affected) = touched_files(&batches)?;
 
         // 2. The rewrite of the touched files, into the table's rewriter.
@@ -269,9 +282,31 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        let mut request =
-            RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), touched, None);
+        // The condition as the table's conflict check and commit record take it (the parsed,
+        // unresolved expression: column names as written).
+        let read_filter = match condition {
+            Some(c) => Some(Arc::new(crate::functions::expr(c)?.expr)),
+            None => None,
+        };
+        let mut request = RowLevelWrite::new(
+            op,
+            quoted,
+            Arc::clone(physical.schema()),
+            touched,
+            read_filter,
+        );
         request.write_id = Some(crate::session::job_uuid());
+        request
+            .options
+            .insert(AFFECTED_OPTION.to_owned(), affected.to_string());
+        request
+            .options
+            .insert(SCAN_MS_OPTION.to_owned(), scan_ms.to_string());
+        if let Some(c) = condition {
+            request
+                .options
+                .insert(CONDITION_OPTION.to_owned(), c.to_owned());
+        }
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
         while let Some(batch) = stream.next().await {
@@ -430,6 +465,15 @@ fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), Krishiv
         }
     }
     Ok((files, hits))
+}
+
+#[cfg(all(test, feature = "delta"))]
+#[test]
+fn the_delta_connector_reads_the_same_option_keys() {
+    use krishiv_connectors_delta::write::dml as d;
+    assert_eq!(AFFECTED_OPTION, d::ROW_LEVEL_AFFECTED_OPTION);
+    assert_eq!(CONDITION_OPTION, d::ROW_LEVEL_CONDITION_OPTION);
+    assert_eq!(SCAN_MS_OPTION, d::ROW_LEVEL_SCAN_MS_OPTION);
 }
 
 #[cfg(test)]
