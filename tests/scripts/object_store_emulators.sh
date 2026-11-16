@@ -146,6 +146,7 @@ export KRISHIV_TEST_AZURE_ENDPOINT="http://127.0.0.1:${az_port}/devstoreaccount1
 # Every step runs even when an earlier one fails; the exit status is non-zero if any did.
 status=0
 SSL_CERT_FILE="$work/certs/bundle.pem" cargo nextest run -p krishiv-io --features cloud --test object_stores --locked --no-tests=pass --no-fail-fast || status=1
+SSL_CERT_FILE="$work/certs/bundle.pem" cargo nextest run -p krishiv-connectors-iceberg --features cloud --locked --no-tests=pass --no-fail-fast -E 'test(iceberg_scan_over_abfss)' || status=1
 if [ -n "${KRISHIV_TPCH_DIR:-}" ]; then
   cargo nextest run -p krishiv-session --features cloud --test s3_tpch --locked --no-tests=pass --no-fail-fast || status=1
 fi

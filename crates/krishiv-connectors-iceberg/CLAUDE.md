@@ -34,7 +34,9 @@ an in-memory-catalog table planned and time-travelled), `provider_tests.rs` (SQL
 partitions from the manifest, files without ids, delete files refused, time travel, the 22 TPC-H queries over
 Iceberg equal to the same Parquet files), `table_tests.rs` (`catalog_parse_limits`, v1 refs and lists across an
 upgrade, the table's metrics modes in a scan, the mixed-spec refusal), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
-manifests × 100 entries, timed as fetch/parse/map/prune).
+manifests × 100 entries, timed as fetch/parse/map/prune), `azure_tests.rs` (feature `cloud`: a table written to Azurite
+over `abfss://` with the account key, loaded and scanned with only a bearer token; a token for another audience
+refused; run by `tests/scripts/object_store_emulators.sh`).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
@@ -69,4 +71,5 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 0014, 0028 (iceberg `skip-tree`, `anyhow` wrapper), 0029 (the bridge crate)
 
 ## Test
-`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` (`--features cloud` adds the Azurite test, offline
+without its endpoint) · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
