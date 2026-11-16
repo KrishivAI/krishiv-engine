@@ -341,9 +341,19 @@ They differ in:
 - **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
   condition is a comparison, `IN` or `IS [NOT] NULL` of partition columns with literals (combined
   by `AND`, `OR`, `NOT`); delta-spark also takes other expressions of partition columns. Other
-  conditions rewrite (the same rows go, with a rewrite's metrics).
-- **Overflow.** An `UPDATE` whose new value overflows the column raises Spark's `CAST_OVERFLOW`;
-  delta-spark raises `TASK_WRITE_FAILED` around `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`.
+  conditions rewrite (the same rows go, with a rewrite's metrics). A column qualified by the
+  statement's alias counts (`x.p`); a struct field (`s.p`) and a string compared with a
+  `TIMESTAMP` partition column (Spark casts it in the session time zone) make the statement a
+  rewrite. A partition file with no live row is removed only when its statistics prove it
+  (`numRecords` less its deletion vector's cardinality); delta-spark removes every file of the
+  matching partitions.
+- **Partition-only `UPDATE`.** An `UPDATE` whose condition names only partition columns rewrites
+  the files that hold a matching row; delta-spark rewrites every file of the matching partitions,
+  which differs only for files with no live row.
+- **Read predicates.** The conflict check reads by the condition's top-level `AND` conjuncts that
+  translate as partition predicates (as delta-spark does); a conjunct of another form is not one,
+  so such a statement is checked as a read of the whole table, which conflicts with a concurrent
+  append to any partition.
 - **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
   change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.

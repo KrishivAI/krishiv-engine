@@ -35,8 +35,8 @@ use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use futures::StreamExt;
 use krishiv_common::error::{
-    DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast, KrishivError,
-    KrishivUnsupportedFeature,
+    DeltaCastOverflowInTableWrite, DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast,
+    KrishivError, KrishivUnsupportedFeature, TaskWriteFailed,
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
@@ -60,6 +60,10 @@ pub(crate) const CONDITION_OPTION: &str = "__krishiv_row_level_condition";
 
 /// The rewrite's option holding the find query's milliseconds (Delta's `scanTimeMs`).
 pub(crate) const SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
+
+/// The rewrite's option holding the name the statement reads the target under (its alias,
+/// else the table's last name part): the qualifier the condition's column names may carry.
+pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
@@ -135,6 +139,15 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // A Delta table's root as delta-spark's errors name it (`file:/..`).
+        #[cfg(feature = "delta")]
+        let delta_root = if crate::delta::is_delta(&scan.source) {
+            Some(probe.env.catalog.delta.hadoop_root(&scan.source)?)
+        } else {
+            None
+        };
+        #[cfg(not(feature = "delta"))]
+        let delta_root: Option<String> = None;
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
@@ -302,17 +315,31 @@ impl Session {
         request
             .options
             .insert(SCAN_MS_OPTION.to_owned(), scan_ms.to_string());
+        request
+            .options
+            .insert(ALIAS_OPTION.to_owned(), alias.to_owned());
         if let Some(c) = condition {
             request
                 .options
                 .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
-        let mut stream = self.run(&plan, &analysis.env).await?;
-        while let Some(batch) = stream.next().await {
-            batch?;
+        let written = async {
+            let mut stream = self.run(&plan, &analysis.env).await?;
+            while let Some(batch) = stream.next().await {
+                batch?;
+            }
+            Ok::<(), KrishivError>(())
         }
-        drop(stream);
+        .await;
+        if let Err(e) = written {
+            return Err(match (&delta_root, op) {
+                (Some(root), RowLevelOperation::Update) => {
+                    delta_overflow_in_table_write(e, root, &columns, assignments)
+                }
+                _ => e,
+            });
+        }
         self.refresh_files();
 
         // 3. The statement's result.
@@ -432,6 +459,59 @@ impl Session {
     }
 }
 
+/// A `CAST_OVERFLOW` raised while an `UPDATE` of a Delta table stores a new value is what
+/// delta-spark raises: `TASK_WRITE_FAILED` (the table's root) caused by
+/// `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` naming the column (`DeltaErrors.scala:1032-1046`,
+/// raised by its `UpdateCommand` store-assignment cast, wrapped by Spark's `FileFormatWriter`);
+/// any other error is returned as it came.
+fn delta_overflow_in_table_write(
+    e: KrishivError,
+    root: &str,
+    columns: &[TableColumn],
+    assignments: &[Assignment],
+) -> KrishivError {
+    if e.error_class() != krishiv_common::error::ErrorClass::CastOverflow {
+        return e;
+    }
+    let params = e.message_parameters();
+    let param = |key: &str| {
+        params
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, v)| v.clone())
+    };
+    let (Some(source_type), Some(target_type)) = (param("sourceType"), param("targetType")) else {
+        return e;
+    };
+    let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
+    // The assigned column of the overflowing type (the first, as Spark's projection evaluates
+    // the columns in order).
+    let column = columns
+        .iter()
+        .filter(|c| {
+            assignments
+                .iter()
+                .any(|a| a.column.eq_ignore_ascii_case(&c.name))
+        })
+        .find(|c| sql(&c.data_type) == target_type);
+    let Some(column) = column else {
+        return e;
+    };
+    let cause = DeltaCastOverflowInTableWrite {
+        source_type,
+        target_type,
+        column_name: format!("`{}`", column.name.replace('`', "``")),
+        store_assignment_policy_flag: "spark.sql.storeAssignmentPolicy".to_owned(),
+        update_and_merge_casting_follows_ansi_enabled_flag:
+            "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag".to_owned(),
+        ansi_enabled_flag: "spark.sql.ansi.enabled".to_owned(),
+    };
+    KrishivError::from(TaskWriteFailed {
+        path: root.to_owned(),
+    })
+    .with_cause(cause.into())
+}
+
 /// The touched files (each once) and the total hit count of the find query's rows.
 fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), KrishivError> {
     let mut files = Vec::new();
@@ -474,6 +554,7 @@ fn the_delta_connector_reads_the_same_option_keys() {
     assert_eq!(AFFECTED_OPTION, d::ROW_LEVEL_AFFECTED_OPTION);
     assert_eq!(CONDITION_OPTION, d::ROW_LEVEL_CONDITION_OPTION);
     assert_eq!(SCAN_MS_OPTION, d::ROW_LEVEL_SCAN_MS_OPTION);
+    assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
 }
 
 #[cfg(test)]

@@ -49,6 +49,43 @@ fn cell(column: &dyn Array, row: usize) -> Value {
         ArrowType::Int32 => Value::from(column.as_primitive::<Int32Type>().value(row)),
         ArrowType::Utf8 => Value::from(column.as_string::<i32>().value(row)),
         ArrowType::Utf8View => Value::from(column.as_string_view().value(row)),
+        // The oracle's form (`gen_delta_fixtures.py` `typed`): Python's `isoformat` of the
+        // UTC wall clock.
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
+            let micros = column
+                .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+                .value(row);
+            let (secs, frac) = (micros.div_euclid(1_000_000), micros.rem_euclid(1_000_000));
+            let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+            // Civil date from days since 1970-01-01 (H. Hinnant's `civil_from_days`).
+            let z = days + 719_468;
+            let era = z.div_euclid(146_097);
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let day = doy - (153 * mp + 2) / 5 + 1;
+            let month = if mp < 10 { mp + 3 } else { mp - 9 };
+            let year = yoe + era * 400 + i64::from(month <= 2);
+            let mut text = format!(
+                "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
+                rest / 3600,
+                rest % 3600 / 60,
+                rest % 60
+            );
+            if frac != 0 {
+                text.push_str(&format!(".{frac:06}"));
+            }
+            serde_json::json!({ "timestamp": text })
+        }
+        ArrowType::Struct(fields) => {
+            let s = column.as_struct();
+            let mut out = serde_json::Map::new();
+            for (f, c) in fields.iter().zip(s.columns()) {
+                out.insert(f.name().clone(), cell(c.as_ref(), row));
+            }
+            serde_json::json!({ "struct": out })
+        }
         other => panic!("no oracle form for {other}"),
     }
 }
@@ -120,10 +157,18 @@ const CDF_REFUSED: &[(&str, &str)] = &[
 ];
 
 /// Steps whose error differs from delta-spark's (a recorded difference): the class Krishiv
-/// raises. delta-spark wraps its `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` in Spark's
-/// `TASK_WRITE_FAILED`; Krishiv's ANSI store assignment raises Spark's `CAST_OVERFLOW`.
-const KNOWN_ERRORS: &[(&str, &str, &str)] =
-    &[("unpartitioned", "update_overflow", "CAST_OVERFLOW")];
+/// raises. None now: an `UPDATE` overflow is delta-spark's `TASK_WRITE_FAILED` caused by
+/// `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` (review 1, M2).
+const KNOWN_ERRORS: &[(&str, &str, &str)] = &[];
+
+/// `e`'s message as the oracle records it: the first line, the table's path elided.
+fn oracle_message(e: &KrishivError, dir: &Path) -> String {
+    e.to_string()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .replace(&dir.display().to_string(), "<path>")
+}
 
 /// Steps whose commits differ from delta-spark's by a recorded difference (the connector's
 /// `write::dml` module): delta-spark writes deletion vectors there, Krishiv rewrites files.
@@ -258,6 +303,25 @@ fn delta_dml_matches_spark() {
                     "{name}: {e}"
                 );
                 assert_eq!(e.sql_state(), theirs["sqlstate"].as_str(), "{name}");
+                // A wrapped error: the message and every classified cause, exactly.
+                if let Some(causes) = theirs.get("causes").and_then(Value::as_array) {
+                    assert_eq!(
+                        oracle_message(e, &run.dir),
+                        theirs["message"].as_str().unwrap(),
+                        "{name}: the message"
+                    );
+                    let ours: Vec<_> = e.causes().collect();
+                    assert_eq!(ours.len(), causes.len(), "{name}: the causes of {e}");
+                    for (c, want) in ours.iter().zip(causes) {
+                        assert_eq!(c.error_class().name(), want["condition"], "{name}");
+                        assert_eq!(c.sql_state(), want["sqlstate"].as_str(), "{name}");
+                        assert_eq!(
+                            oracle_message(c, &run.dir),
+                            want["message"].as_str().unwrap(),
+                            "{name}: the cause's message"
+                        );
+                    }
+                }
             }
             (Ok((fields, rows)), _) => {
                 assert_eq!(
@@ -327,12 +391,18 @@ fn delta_dml_metrics_match() {
         for k in COUNTED {
             assert_eq!(ours_m.get(*k), theirs_m.get(*k), "{name}: {k}");
         }
+        // The files removed, each with its deletion vector as the log had it.
         let removed = |c: &[&Value]| {
-            let mut p: Vec<String> = c
+            let mut p: Vec<(String, Value)> = c
                 .iter()
-                .map(|r| r["path"].as_str().unwrap().to_owned())
+                .map(|r| {
+                    (
+                        r["path"].as_str().unwrap().to_owned(),
+                        r.get("deletionVector").cloned().unwrap_or(Value::Null),
+                    )
+                })
                 .collect();
-            p.sort();
+            p.sort_by(|a, b| a.0.cmp(&b.0));
             p
         };
         assert_eq!(
