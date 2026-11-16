@@ -22,7 +22,7 @@
 //! analyzed, ADR 0046 §3b).
 //!
 //! **Relation UDFs** (`mapInPandas`, `applyInPandas`, cogroups and their Arrow forms) take a version the same
-//! way and the same privilege check ([`InlineUdfs::seen`]); the pool runs no relation yet (no
+//! way and the same privilege check (`InlineUdfs::seen`); the pool runs no relation yet (no
 //! `prepare_relation`, PR-26c-2), so such a plan is typed and explained but fails when it runs
 //! (`KRISHIV_UDF_NOT_AVAILABLE`).
 //!
