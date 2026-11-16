@@ -260,6 +260,14 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
+    /// Removes the hidden entries nothing but the catalog holds now, at once (a statement's
+    /// hidden tables, such as a `MERGE` source's spill file, go when the statement ends).
+    pub(crate) fn sweep_hidden(&self) {
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
     fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
         let mut live = BTreeSet::new();

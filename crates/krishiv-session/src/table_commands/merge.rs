@@ -4,10 +4,10 @@
 //! §3 item 5). The plan is ordinary operators over the one pinned snapshot of the target that
 //! [`RowLevelTable::scan`] reads (hash join, aggregate, project, `PhysNode::TableWrite`):
 //!
-//! 1. **Source.** The source is read twice (find, then rewrite), so it is materialised first: a
-//!    local checkpoint of its rows (delta-spark's `MergeIntoMaterializeSource`, which skips only
-//!    reads of the target's own log; Krishiv materialises every source, which gives the same
-//!    rows).
+//! 1. **Source.** The source is read twice (find, then rewrite), so both reads must see the same
+//!    rows: an insert-only `MERGE` reads it once as it is, a source that is one scan of a pinned
+//!    table reads that snapshot, anything else is first streamed into a spill file
+//!    (`merge_source.rs`, delta-spark's `MergeIntoMaterializeSource` `auto` rule).
 //! 2. **Find** (not for an insert-only `MERGE`): the target with its row id joined to the source
 //!    on the `ON` condition, inner without `NOT MATCHED [BY TARGET]` and `NOT MATCHED BY SOURCE`
 //!    clauses, keeping the source rows with the former and the target rows with the latter
@@ -40,12 +40,15 @@
 //! every target column the source column of its name; an `INSERT` without a column gives it
 //! `NULL`; conditions must be deterministic and hold no subquery.
 //!
-//! Not here yet: schema evolution (`WITH SCHEMA EVOLUTION` does not parse;
-//! `spark.databricks.delta.schema.autoMerge.enabled` is refused), Spark's own
-//! `MERGE_CARDINALITY_VIOLATION` rule (a table with [`CardinalityRule::SparkMergeCardinality`] is
-//! refused until its oracle exists), nested assignment keys, column defaults for an omitted
-//! `INSERT` column (`NULL` is written) and a spilling materialisation (the source's rows are held
-//! in memory by the checkpoint).
+//! The table raises its own error classes through [`RowLevelTable::error`]: the planner holds no
+//! table format's code beyond the [`CardinalityRule`] it reads.
+//!
+//! Not here yet: schema evolution (`WITH SCHEMA EVOLUTION` does not parse; under
+//! `spark.databricks.delta.schema.autoMerge.enabled` a `MERGE` that would add a column is
+//! refused), Spark's own `MERGE_CARDINALITY_VIOLATION` rule (a table with
+//! [`CardinalityRule::SparkMergeCardinality`] is refused until its oracle exists),
+//! `spark.sql.caseSensitive = true` (refused), nested assignment keys and column defaults for an
+//! omitted `INSERT` column (`NULL` is written).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -65,8 +68,7 @@ use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 
 use super::row_level::{
-    ALIAS_OPTION, Assignment, CONDITION_OPTION, SCAN_MS_OPTION, Target, delta_task_write_failed,
-    first_scan, ident,
+    ALIAS_OPTION, Assignment, CONDITION_OPTION, SCAN_MS_OPTION, Target, first_scan, ident,
 };
 use crate::Column;
 use crate::dataframe::{DataFrame, JoinType};
@@ -237,14 +239,6 @@ impl Session {
         let Some(table) = provider.row_level(RowLevelOperation::Merge) else {
             return Ok(None);
         };
-        #[cfg(feature = "delta")]
-        let delta_root = if crate::delta::is_delta(&scan.source) {
-            Some(probe.env.catalog.delta.hadoop_root(&scan.source)?)
-        } else {
-            None
-        };
-        #[cfg(not(feature = "delta"))]
-        let delta_root: Option<String> = None;
         let rule = table.capabilities().cardinality;
         if rule != CardinalityRule::DeltaWithUnconditionalDeleteExemption {
             return Err(KrishivUnsupportedFeature {
@@ -257,12 +251,14 @@ impl Session {
         let flag =
             |key: &str| crate::conf::get(&conf, key).map(|v| v.trim().eq_ignore_ascii_case("true"));
         super::merge_checks::clause_order(&m.clauses)?;
-        if flag(AUTO_MERGE_CONF) == Some(true) {
+        // Names resolve case-insensitively here: Spark's case-sensitive resolution is refused.
+        if flag("spark.sql.caseSensitive") == Some(true) {
             return Err(KrishivUnsupportedFeature {
-                feature: format!("MERGE INTO with schema evolution ({AUTO_MERGE_CONF} = true)"),
+                feature: "MERGE INTO with spark.sql.caseSensitive = true".to_owned(),
             }
             .into());
         }
+        let evolve = flag(AUTO_MERGE_CONF) == Some(true);
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
@@ -324,19 +320,13 @@ impl Session {
             source_alias: &m.source_alias,
             columns: &columns,
             source_columns: &source_columns,
-            delta: delta_root.is_some(),
+            table: &table,
+            evolve,
         };
         let probe_join = checks.on(&empty_target, &probe_source, &m.on).await?;
         let (resolved, value_types) = checks
             .clauses(&m.clauses, &empty_target, &probe_source, &probe_join)
             .await?;
-
-        // 1. The source, materialised.
-        let materialize_started = std::time::Instant::now();
-        let materialised = source.local_checkpoint(true, None).await?;
-        let source_rows = materialised.count().await?;
-        let materialize_ms = materialize_started.elapsed().as_millis();
-        let s = source_frame(&materialised);
 
         let has = |k: ClauseKind| resolved.iter().any(|c| c.kind == k);
         let (matched, inserts, by_source) = (
@@ -345,6 +335,22 @@ impl Session {
             has(ClauseKind::NotMatchedBySource),
         );
         let insert_only = !matched && !by_source && flag(INSERT_ONLY_CONF) != Some(false);
+
+        // 1. The source: as it is (insert-only), a pinned snapshot, or a spilled copy
+        // (`merge_source.rs`).
+        let materialize_started = std::time::Instant::now();
+        let held = self.merge_source(&source, insert_only).await?;
+        let source_rows = match held.rows {
+            Some(n) => n,
+            // Only the metric needs it: an insert-only MERGE reads its rows once below.
+            None => held.frame.count().await?,
+        };
+        let materialize_ms = if held.kind == super::merge_source::SourceKind::Spilled {
+            materialize_started.elapsed().as_millis()
+        } else {
+            0
+        };
+        let s = source_frame(&held.frame);
         let on = expr(&m.on)?;
         let tp = qualified(&m.target_alias, TARGET_PRESENT);
         let sp = qualified(&m.source_alias, SOURCE_PRESENT);
@@ -580,10 +586,13 @@ impl Session {
         }
         .await;
         if let Err(e) = written {
-            return Err(match &delta_root {
-                Some(root) => delta_task_write_failed(e, root, &columns, &value_types),
-                None => e,
-            });
+            return Err(super::row_level::write_failed(
+                &table,
+                RowLevelOperation::Merge,
+                e,
+                &columns,
+                &value_types,
+            ));
         }
         self.refresh_files();
 
@@ -849,7 +858,10 @@ impl Session {
             on: slice(m.on.span),
             clauses,
         };
-        if let Some(done) = self.run_merge(&statement).await? {
+        let ran = self.run_merge(&statement).await;
+        // The statement's hidden tables (the target's scans, the source's copy) go now.
+        self.state.catalog.sweep_hidden();
+        if let Some(done) = ran? {
             // The table's data changed: what read it is stale (as after an `INSERT`).
             self.state.catalog.store.bump();
             self.forget_column_stats(&name);

@@ -7,8 +7,8 @@
 //! `delta_merge_metrics_match`), the multiple-match check and its exemptions
 //! (`delta_merge_cardinality`), the change-data-feed steps Krishiv refuses
 //! (`delta_cdf_merge_refused`) and Spark's read of tables Krishiv merged
-//! (`spark_reads_tables_after_krishiv_merge`). The session's memory is back to what reading the
-//! table holds after each statement.
+//! (`spark_reads_tables_after_krishiv_merge`). The session's own memory pool is back to zero after
+//! each statement, and a source larger than it spills (`a_merge_source_larger_than_memory_spills`).
 #![cfg(test)]
 
 use std::path::{Path, PathBuf};
@@ -196,23 +196,21 @@ fn run_all() -> Vec<(Value, Run)> {
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().join("t");
             copy_dir(&fixtures().join(scenario).join("before"), &dir);
-            let session = Session::new().unwrap();
+            // A session pool of its own: the runtime's caches (the Parquet footer cache) are not
+            // in it, so the statement's memory is exactly what it reserves.
+            let session = Session::builder()
+                .config("krishiv.session.memoryLimit", "1g")
+                .build()
+                .unwrap();
             for (k, v) in step["confs"].as_object().unwrap() {
                 sql(&session, &format!("SET {k} = {}", v.as_str().unwrap())).unwrap();
             }
-            // What reading the table holds (the runtime's snapshot cache), before the statement.
-            sql(
-                &session,
-                &format!("SELECT count(*) FROM delta.`{}`", dir.display()),
-            )
-            .unwrap();
-            let baseline = session.memory_reserved();
             let outcome = sql(&session, &statement(step["sql"].as_str().unwrap(), &dir));
             let name = format!("{scenario}/{}", step["step"].as_str().unwrap());
-            assert!(
-                session.memory_reserved() <= baseline,
-                "{name}: memory held after MERGE: {} > {baseline}",
-                session.memory_reserved()
+            assert_eq!(
+                session.memory_reserved(),
+                0,
+                "{name}: memory held after MERGE"
             );
             out.push((
                 step.clone(),
@@ -520,6 +518,7 @@ const READBACK_STEPS: &[(&str, &str)] = &[
     ("unpartitioned", "insert_star"),
     ("partitioned", "upsert_new_partition"),
     ("partitioned", "update_moves_partition"),
+    ("partitioned", "upsert_and_conditional_nmbs"),
     ("column-mapping", "upsert"),
     ("deletion-vectors", "update_copy_on_write"),
     ("change-data-feed", "insert_only"),
@@ -604,4 +603,50 @@ fn spark_reads_tables_after_krishiv_merge() {
             t["spark_append"]
         );
     }
+}
+
+/// A source of ~60 MiB under a 16 MiB session pool: the copy of the source spills and is read
+/// back a batch at a time; the MERGE commits and the pool returns to zero.
+#[test]
+fn a_merge_source_larger_than_memory_spills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let spill = tmp.path().join("spill");
+    let runtime = krishiv_session::EngineRuntime::builder()
+        .config("krishiv.spill.dir", spill.to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder()
+        .runtime(runtime)
+        .config("krishiv.session.memoryLimit", "16m")
+        .build()
+        .unwrap();
+    let text = format!(
+        "MERGE INTO delta.`{}` t USING (SELECT id, repeat('x', 200) AS v, CAST(id AS INT) AS n \
+         FROM range(300000)) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = substr(s.v, 1, 3)",
+        dir.display()
+    );
+    let (_, out) = sql(&session, &text).unwrap();
+    assert_eq!(out, serde_json::json!([[6, 6, 0, 0]]));
+    assert_eq!(session.memory_reserved(), 0);
+    // The copy went to the spill directory and went with the statement.
+    let mut left = Vec::new();
+    let mut stack = vec![spill];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "spill" || x == "tmp") {
+                left.push(p);
+            }
+        }
+    }
+    assert!(left.is_empty(), "{left:?}");
+    let rows = table_rows(&dir);
+    assert!(
+        rows.as_array().unwrap().iter().all(|r| r[1] == "xxx"),
+        "{rows}"
+    );
 }

@@ -731,4 +731,111 @@ mod merge {
         );
         assert_eq!(files.commits.load(Ordering::Relaxed), 0);
     }
+
+    /// Without a table hook (`RowLevelTable::error`), a subquery or a non-deterministic
+    /// condition is refused by Krishiv's own class; no table format's class appears.
+    #[test]
+    fn a_table_without_an_error_hook_gets_the_planners_own_refusals() {
+        use krishiv_common::error::ErrorClass;
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let class = |condition: &str| {
+            try_merge(
+                &session,
+                statement(
+                    SOURCE,
+                    vec![clause(
+                        ClauseKind::Matched,
+                        Some(condition),
+                        ClauseAction::Delete,
+                    )],
+                ),
+            )
+            .unwrap_err()
+            .error_class()
+        };
+        assert_eq!(
+            class("src.id IN (SELECT 2)"),
+            ErrorClass::KrishivUnsupportedFeature
+        );
+        assert_eq!(class("rand() < 2"), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    }
+
+    /// Under `spark.databricks.delta.schema.autoMerge.enabled` only a MERGE that would add a
+    /// column is refused; `*` takes the target columns the source has.
+    #[test]
+    fn schema_evolution_refuses_only_a_merge_that_adds_a_column() {
+        use krishiv_common::error::ErrorClass;
+        let files = Files::new();
+        let (session, _) = session(&files);
+        block_on(session.sql("SET spark.databricks.delta.schema.autoMerge.enabled = true"))
+            .unwrap();
+        let wide = "SELECT CAST(2 AS BIGINT) AS id, 'w' AS s, 1 AS extra";
+        let e = try_merge(
+            &session,
+            statement(
+                wide,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::UpdateStar)],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        // A narrow source: `INSERT *` gives the missing column NULL.
+        merge(
+            &session,
+            statement(
+                "SELECT CAST(20 AS BIGINT) AS id",
+                vec![clause(
+                    ClauseKind::NotMatched,
+                    None,
+                    ClauseAction::InsertStar,
+                )],
+            ),
+        );
+        assert!(files.ids().contains(&20));
+        // Without the conf the narrow source is an unresolved name.
+        block_on(session.sql("SET spark.databricks.delta.schema.autoMerge.enabled = false"))
+            .unwrap();
+        let e = try_merge(
+            &session,
+            statement(
+                "SELECT CAST(21 AS BIGINT) AS id",
+                vec![clause(
+                    ClauseKind::NotMatched,
+                    None,
+                    ClauseAction::InsertStar,
+                )],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnresolvedColumnWithSuggestion,
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_case_sensitive_session_is_refused() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        block_on(session.sql("SET spark.sql.caseSensitive = true")).unwrap();
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::Delete)],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        );
+    }
 }

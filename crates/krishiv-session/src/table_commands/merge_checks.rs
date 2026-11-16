@@ -9,9 +9,9 @@
 //! - The `ON` condition and `MATCHED` clauses resolve over the target and the source, `NOT
 //!   MATCHED` clauses over the source only, `NOT MATCHED BY SOURCE` clauses over the target only
 //!   (`ResolveDeltaMergeInto.scala:417-440`); an assignment key over the target. A name that does
-//!   not resolve is delta-spark's `DELTA_MERGE_UNRESOLVED_EXPRESSION`, which delta-spark 4.4.1
-//!   raises as `INTERNAL_ERROR` ("Cannot find main error class ..."): its class file lacks the
-//!   class. Krishiv raises what delta-spark does, the analyzer's error as its cause.
+//!   not resolve is the analyzer's error, which the table may raise as its own
+//!   ([`RowLevelProblem::Unresolved`]: a Delta table raises delta-spark 4.4.1's `INTERNAL_ERROR`
+//!   "Cannot find main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'").
 //! - `UPDATE SET *` and `INSERT *` assign every target column the source column of its name
 //!   (`ResolveDeltaMergeInto.scala:285-305`); an extra source column is ignored.
 //! - Conditions are deterministic (`DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED`) and hold no
@@ -22,17 +22,22 @@
 //! - Each new value's type may be stored in its column (Spark's ANSI store assignment, as an
 //!   `UPDATE` checks it).
 //!
-//! A table that is not Delta gets Spark's own errors for the delta-spark checks (the
-//! analyzer's, unmapped). The conditions' text in the messages is as written, where delta-spark
+//! - Under `spark.databricks.delta.schema.autoMerge.enabled` a `MERGE` that would add a column
+//!   is refused (schema evolution is not built); `*` takes the target columns the source has.
+//!
+//! The table raises its own classes for these ([`RowLevelTable::error`]); without one the
+//! planner raises Spark's (the analyzer's) or refuses. The conditions' text in the messages is as written, where delta-spark
 //! prints the resolved expression.
+
+use std::sync::Arc;
 
 use krishiv_common::error::{
     DeltaConflictSetColumn, DeltaDuplicateColumnsOnInsert,
-    DeltaNonDeterministicFunctionNotSupported, DeltaUnsupportedSubquery,
-    IncompatibleDataForTableCannotSafelyCast, InternalError, KrishivError,
-    KrishivUnsupportedFeature, NonLastMatchedClauseOmitCondition,
-    NonLastNotMatchedBySourceClauseOmitCondition, NonLastNotMatchedByTargetClauseOmitCondition,
+    IncompatibleDataForTableCannotSafelyCast, KrishivError, KrishivUnsupportedFeature,
+    NonLastMatchedClauseOmitCondition, NonLastNotMatchedBySourceClauseOmitCondition,
+    NonLastNotMatchedByTargetClauseOmitCondition,
 };
+use krishiv_exec::planner::{RowLevelOperation, RowLevelProblem, RowLevelTable};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 
@@ -76,24 +81,35 @@ pub(super) struct Checks<'a> {
     pub(super) source_alias: &'a str,
     pub(super) columns: &'a [TableColumn],
     pub(super) source_columns: &'a [String],
-    /// The target is a Delta table: delta-spark's classes.
-    pub(super) delta: bool,
+    /// The target, which raises its own classes ([`RowLevelTable::error`]).
+    pub(super) table: &'a Arc<dyn RowLevelTable>,
+    /// Schema evolution is on (`spark.databricks.delta.schema.autoMerge.enabled`).
+    pub(super) evolve: bool,
 }
 
 /// The new values' types per assigned column, for the store-assignment overflow error.
 pub(super) type ValueTypes = Vec<(String, DataType)>;
 
 impl Checks<'_> {
-    /// An analysis error of a clause's names as delta-spark raises it.
+    /// An analysis error of a clause's names as the table raises it.
     fn unresolved(&self, e: KrishivError) -> KrishivError {
-        if self.delta && e.error_class().name().starts_with("UNRESOLVED_COLUMN") {
-            return KrishivError::from(InternalError {
-                message: "Cannot find main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"
-                    .to_owned(),
-            })
-            .with_cause(e);
+        if !e.error_class().name().starts_with("UNRESOLVED_COLUMN") {
+            return e;
         }
-        e
+        self.table
+            .error(RowLevelOperation::Merge, &RowLevelProblem::Unresolved(&e))
+            .unwrap_or(e)
+    }
+
+    /// The refusal of a schema change, which needs schema evolution.
+    fn evolution(&self, column: &str) -> KrishivError {
+        KrishivUnsupportedFeature {
+            feature: format!(
+                "MERGE INTO with schema evolution (adding the column {})",
+                ident(column)
+            ),
+        }
+        .into()
     }
 
     /// A name that is no target column.
@@ -118,33 +134,33 @@ impl Checks<'_> {
         analysed: &krishiv_plan::Expr,
         what: &str,
     ) -> Result<(), KrishivError> {
+        let refuse = |problem: RowLevelProblem<'_>, feature: &str| -> KrishivError {
+            self.table
+                .error(RowLevelOperation::Merge, &problem)
+                .unwrap_or_else(|| {
+                    KrishivUnsupportedFeature {
+                        feature: feature.to_owned(),
+                    }
+                    .into()
+                })
+        };
         if !krishiv_plan::is_deterministic(analysed) {
-            return Err(if self.delta {
-                DeltaNonDeterministicFunctionNotSupported {
-                    operation: format!("{what} of MERGE operation"),
-                    expression: format!("(condition = {text})"),
-                }
-                .into()
-            } else {
-                KrishivUnsupportedFeature {
-                    feature: "MERGE INTO with a non-deterministic condition".to_owned(),
-                }
-                .into()
-            });
+            return Err(refuse(
+                RowLevelProblem::NonDeterministic {
+                    what,
+                    condition: text,
+                },
+                "MERGE INTO with a non-deterministic condition",
+            ));
         }
         if has_subquery(&expr(text)?.expr) {
-            return Err(if self.delta {
-                DeltaUnsupportedSubquery {
-                    operation: format!("{what} of MERGE operation"),
-                    cond: text.to_owned(),
-                }
-                .into()
-            } else {
-                KrishivUnsupportedFeature {
-                    feature: "MERGE INTO with a subquery in a condition".to_owned(),
-                }
-                .into()
-            });
+            return Err(refuse(
+                RowLevelProblem::Subquery {
+                    what,
+                    condition: text,
+                },
+                "MERGE INTO with a subquery in a condition",
+            ));
         }
         Ok(())
     }
@@ -210,20 +226,35 @@ impl Checks<'_> {
                 ClauseKind::NotMatchedBySource => target,
             };
             let mut values: Vec<Option<String>> = vec![None; self.columns.len()];
+            // `*`: each target column from the source column of its name. Under schema evolution
+            // a target column the source lacks keeps its value (`UPDATE`) or is `NULL`
+            // (`INSERT`), and a source column the target lacks would be added: refused
+            // (`ResolveDeltaMergeInto.scala:285-345`).
             let star = || -> Result<Vec<Option<String>>, KrishivError> {
+                if self.evolve
+                    && let Some(extra) = self
+                        .source_columns
+                        .iter()
+                        .find(|s| !self.columns.iter().any(|c| c.name.eq_ignore_ascii_case(s)))
+                {
+                    return Err(self.evolution(extra));
+                }
                 self.columns
                     .iter()
                     .map(|c| {
-                        let name = self
+                        match self
                             .source_columns
                             .iter()
                             .find(|s| s.eq_ignore_ascii_case(&c.name))
-                            .ok_or_else(|| self.no_column(&c.name))?;
-                        Ok(Some(format!(
-                            "{}.{}",
-                            ident(self.source_alias),
-                            ident(name)
-                        )))
+                        {
+                            Some(name) => Ok(Some(format!(
+                                "{}.{}",
+                                ident(self.source_alias),
+                                ident(name)
+                            ))),
+                            None if self.evolve => Ok(None),
+                            None => Err(self.no_column(&c.name)),
+                        }
                     })
                     .collect()
             };
@@ -251,6 +282,15 @@ impl Checks<'_> {
                             .iter()
                             .position(|c| c.name.eq_ignore_ascii_case(&a.column))
                         else {
+                            // Under schema evolution a key naming a source column adds it.
+                            if self.evolve
+                                && self
+                                    .source_columns
+                                    .iter()
+                                    .any(|s| s.eq_ignore_ascii_case(&a.column))
+                            {
+                                return Err(self.evolution(&a.column));
+                            }
                             return Err(self.no_column(&a.column));
                         };
                         let Some(value) = &a.value else {
