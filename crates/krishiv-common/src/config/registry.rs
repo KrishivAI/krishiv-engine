@@ -29,7 +29,8 @@ pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
@@ -86,6 +87,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &HISTORY_PATH,
+    &HISTORY_LITERALS,
+    &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
@@ -99,6 +103,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &LATE_PAYLOAD_JOIN,
     &GROUP_KEY_CODE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
@@ -640,6 +645,54 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Startup,
 };
 
+/// Where finished queries' profiles are kept (P3-T051).
+pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A directory where the engine keeps one compact profile for every finished query, as \
+          Parquet files, so `system.queries` history survives a restart and a stored profile can \
+          be opened later. A profile has the plan, the operators' counters and the query's \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
+          ends and never fails the query; a failed write is counted in \
+          `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Most bytes the profile history keeps (P3-T051).
+pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
+          takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Whether `krishiv server` serves the web UI backend (design T133).
 pub static UI_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.ui.enabled",
@@ -801,7 +854,8 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           seed, so an operator that spills splits its rows the same way on every run. Costs \
           parallelism where it falls back to one driver: meant for reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns. The \
+          can still change when an operator spills, or whether a hash join build copies its \
+          rows into blocks as they arrive, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
           probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",

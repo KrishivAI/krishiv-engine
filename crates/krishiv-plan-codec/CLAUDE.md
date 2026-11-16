@@ -39,3 +39,6 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
 `cargo nextest run -p krishiv-plan-codec --no-tests=pass` · tests: `roundtrip` (inventory, secrets, corrupt input),
 `features` (header, reader checks), `golden` (compatibility bytes, simulated older readers, header honesty),
 `ratchet` (TPC-H 22 and TPC-DS 99 planned plans).
+
+## Vector carrier (P3-T075)
+Feature `fixed_size_list_carrier` (Semantic, legacy level `POST_MIGRATION_READER_VERSION`): a plan with a vector carrier column lists it, so a reader without the vector guard refuses the plan. `arrow_type_is_nested` excludes it from `nested_types`. Goldens: `tests/golden/fixed_size_list_carrier/`.

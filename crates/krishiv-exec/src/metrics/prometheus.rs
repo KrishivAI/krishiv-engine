@@ -250,6 +250,7 @@ mod tests {
                 || Some(0),
             )?;
         }
+        registry.add_gauge("krishiv.history.write_failures", Vec::new(), || Some(2))?;
         registry.add_gauge("krishiv.memory.reserved", Vec::new(), || Some(8))?;
         registry.add_gauge("krishiv.memory.limit", Vec::new(), || Some(16))?;
         registry.add_gauge("krishiv.spill.disk.used", Vec::new(), || Some(0))?;
