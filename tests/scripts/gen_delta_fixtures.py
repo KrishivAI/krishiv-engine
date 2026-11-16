@@ -1055,6 +1055,15 @@ DML_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
             ("update_store_assignment", "UPDATE {t} SET n = id * 10, v = 7 WHERE id = 1", {}),
             ("update_overflow", "UPDATE {t} SET n = id * 10000000000 WHERE id = 1", {}),
             ("update_nothing", "UPDATE {t} SET n = 0 WHERE id = 999", {}),
+            # Errors raised while the new values are written (`TASK_WRITE_FAILED` around them).
+            ("update_divide_by_zero", "UPDATE {t} SET n = n div 0 WHERE id = 1", {}),
+            ("update_arithmetic_overflow", "UPDATE {t} SET n = n + 2147483647 WHERE id = 3", {}),
+            ("update_explicit_cast_overflow", "UPDATE {t} SET n = CAST(id * 10000000000 AS INT) WHERE id = 1", {}),
+            # Subqueries in the condition (delta-spark refuses them).
+            ("delete_in_subquery", "DELETE FROM {t} WHERE id IN (SELECT id FROM {t} WHERE n = 3)", {}),
+            ("delete_exists_subquery", "DELETE FROM {t} WHERE EXISTS (SELECT 1)", {}),
+            ("delete_scalar_subquery", "DELETE FROM {t} WHERE id = (SELECT max(id) FROM {t})", {}),
+            ("update_in_subquery", "UPDATE {t} SET n = 0 WHERE id IN (SELECT 2)", {}),
         ],
     ),
     (
@@ -1072,6 +1081,7 @@ DML_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
             ("update_moves_partition", "UPDATE {t} SET p = 'w' WHERE id = 4", {}),
             ("update_partition_to_null", "UPDATE {t} SET p = NULL WHERE p = 'z'", {}),
             ("update_rows", "UPDATE {t} SET n = n * 2 WHERE id > 1", {}),
+            ("delete_partition_and_subquery", "DELETE FROM {t} WHERE p = 'y' AND id IN (SELECT 3)", {}),
         ],
     ),
     (

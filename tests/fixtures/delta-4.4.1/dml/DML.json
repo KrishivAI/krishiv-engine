@@ -229,7 +229,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5576",
+         "executionTimeMs": "5201",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -241,10 +241,10 @@
          "numRemovedBytes": "1156",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5576"
+         "scanTimeMs": "5201"
         },
         "operationParameters": {
-         "predicate": "[\"(p#78290 = x)\"]"
+         "predicate": "[\"(p#88148 = x)\"]"
         },
         "readVersion": 2
        },
@@ -253,7 +253,7 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-2218bf71-c26e-4992-80e1-720448ad4828.c000.snappy.parquet"
+         "path": "p=x/part-00000-dd770a3c-5e36-45ac-b5e3-2a4ce4c94e98.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -264,7 +264,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5576",
+       "executionTimeMs": "5201",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -276,10 +276,10 @@
        "numRemovedBytes": "1156",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5576"
+       "scanTimeMs": "5201"
       },
       "operationParameters": {
-       "predicate": "[\"(p#78290 = x)\"]"
+       "predicate": "[\"(p#88148 = x)\"]"
       },
       "version": 3
      },
@@ -329,7 +329,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5433",
+         "executionTimeMs": "5194",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -341,7 +341,7 @@
          "numRemovedBytes": "5546",
          "numRemovedFiles": "5",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5433"
+         "scanTimeMs": "5193"
         },
         "operationParameters": {
          "predicate": "[\"true\"]"
@@ -351,31 +351,31 @@
        "removes": [
         {
          "partitionValues": {
+          "p": "z"
+         },
+         "path": "p=z/part-00000-17a299ac-5862-4815-92b2-d3948830b0d0.c000.snappy.parquet"
+        },
+        {
+         "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-9ea51f52-6a76-4a10-afad-da8e58d42937.c000.snappy.parquet"
+         "path": "p=y/part-00000-67382f0b-fdb3-4478-b72e-e4d4569973a7.c000.snappy.parquet"
+        },
+        {
+         "partitionValues": {},
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-4b1139f0-075b-4fbc-bb54-79624cc9dcdf.c000.snappy.parquet"
+        },
+        {
+         "partitionValues": {
+          "p": "y"
+         },
+         "path": "p=y/part-00000-7fbacb3a-2fe1-4464-b20f-2c570c97be84.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-2218bf71-c26e-4992-80e1-720448ad4828.c000.snappy.parquet"
-        },
-        {
-         "partitionValues": {},
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-f6b6f68a-8c0d-45fa-93a0-886bf4967c1c.c000.snappy.parquet"
-        },
-        {
-         "partitionValues": {
-          "p": "z"
-         },
-         "path": "p=z/part-00000-29316768-0b71-41c5-a1b1-452f39dd8616.c000.snappy.parquet"
-        },
-        {
-         "partitionValues": {
-          "p": "y"
-         },
-         "path": "p=y/part-00000-42da197d-8014-4d7d-8341-332b0cd8d54d.c000.snappy.parquet"
+         "path": "p=x/part-00000-dd770a3c-5e36-45ac-b5e3-2a4ce4c94e98.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -386,7 +386,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5433",
+       "executionTimeMs": "5194",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -398,7 +398,7 @@
        "numRemovedBytes": "5546",
        "numRemovedFiles": "5",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5433"
+       "scanTimeMs": "5193"
       },
       "operationParameters": {
        "predicate": "[\"true\"]"
@@ -426,7 +426,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5731",
+         "executionTimeMs": "5489",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "1",
          "numAddedFiles": "0",
@@ -437,11 +437,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "1116",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "189",
-         "scanTimeMs": "5542"
+         "rewriteTimeMs": "166",
+         "scanTimeMs": "5323"
         },
         "operationParameters": {
-         "predicate": "[\"(id#82413L = 3)\"]"
+         "predicate": "[\"(id#92271L = 3)\"]"
         },
         "readVersion": 2
        },
@@ -450,7 +450,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-9ea51f52-6a76-4a10-afad-da8e58d42937.c000.snappy.parquet"
+         "path": "p=y/part-00000-7fbacb3a-2fe1-4464-b20f-2c570c97be84.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -461,7 +461,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5731",
+       "executionTimeMs": "5489",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "1",
        "numAddedFiles": "0",
@@ -472,11 +472,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "1116",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "189",
-       "scanTimeMs": "5542"
+       "rewriteTimeMs": "166",
+       "scanTimeMs": "5323"
       },
       "operationParameters": {
-       "predicate": "[\"(id#82413L = 3)\"]"
+       "predicate": "[\"(id#92271L = 3)\"]"
       },
       "version": 3
      },
@@ -531,7 +531,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-dba1c3da-300d-49f7-b026-b4c81341e755.c000.snappy.parquet",
+         "path": "p=y/part-00000-ff4a2464-77df-4927-9b51-31450c6139c8.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 3,
@@ -557,7 +557,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "5586",
+         "executionTimeMs": "5493",
          "numAddedBytes": "1555",
          "numAddedChangeFiles": "1",
          "numAddedFiles": "1",
@@ -568,11 +568,11 @@
          "numRemovedBytes": "2867",
          "numRemovedFiles": "1",
          "numUpdatedRows": "1",
-         "rewriteTimeMs": "226",
-         "scanTimeMs": "5359"
+         "rewriteTimeMs": "184",
+         "scanTimeMs": "5309"
         },
         "operationParameters": {
-         "predicate": "[\"(id#84708L = 3)\"]"
+         "predicate": "[\"(id#94566L = 3)\"]"
         },
         "readVersion": 2
        },
@@ -581,7 +581,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-9ea51f52-6a76-4a10-afad-da8e58d42937.c000.snappy.parquet"
+         "path": "p=y/part-00000-7fbacb3a-2fe1-4464-b20f-2c570c97be84.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -592,7 +592,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "5586",
+       "executionTimeMs": "5493",
        "numAddedBytes": "1555",
        "numAddedChangeFiles": "1",
        "numAddedFiles": "1",
@@ -603,11 +603,11 @@
        "numRemovedBytes": "2867",
        "numRemovedFiles": "1",
        "numUpdatedRows": "1",
-       "rewriteTimeMs": "226",
-       "scanTimeMs": "5359"
+       "rewriteTimeMs": "184",
+       "scanTimeMs": "5309"
       },
       "operationParameters": {
-       "predicate": "[\"(id#84708L = 3)\"]"
+       "predicate": "[\"(id#94566L = 3)\"]"
       },
       "version": 3
      },
@@ -668,7 +668,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-4c802217-7af8-4b74-a189-f55d6ff2f813.c000.snappy.parquet",
+         "path": "p=y/part-00000-83f2e0de-91a8-4de8-b654-1bf47850a704.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 4,
@@ -694,7 +694,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "5513",
+         "executionTimeMs": "5322",
          "numAddedBytes": "1634",
          "numAddedChangeFiles": "1",
          "numAddedFiles": "1",
@@ -705,11 +705,11 @@
          "numRemovedBytes": "4077",
          "numRemovedFiles": "2",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "173",
-         "scanTimeMs": "5339"
+         "rewriteTimeMs": "151",
+         "scanTimeMs": "5171"
         },
         "operationParameters": {
-         "predicate": "[\"(p#87030 = y)\"]"
+         "predicate": "[\"(p#96888 = y)\"]"
         },
         "readVersion": 2
        },
@@ -718,13 +718,13 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-9ea51f52-6a76-4a10-afad-da8e58d42937.c000.snappy.parquet"
+         "path": "p=y/part-00000-67382f0b-fdb3-4478-b72e-e4d4569973a7.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-42da197d-8014-4d7d-8341-332b0cd8d54d.c000.snappy.parquet"
+         "path": "p=y/part-00000-7fbacb3a-2fe1-4464-b20f-2c570c97be84.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -735,7 +735,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "5513",
+       "executionTimeMs": "5322",
        "numAddedBytes": "1634",
        "numAddedChangeFiles": "1",
        "numAddedFiles": "1",
@@ -746,11 +746,11 @@
        "numRemovedBytes": "4077",
        "numRemovedFiles": "2",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "173",
-       "scanTimeMs": "5339"
+       "rewriteTimeMs": "151",
+       "scanTimeMs": "5171"
       },
       "operationParameters": {
-       "predicate": "[\"(p#87030 = y)\"]"
+       "predicate": "[\"(p#96888 = y)\"]"
       },
       "version": 3
      },
@@ -867,7 +867,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "10235",
+         "executionTimeMs": "5527",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -878,20 +878,20 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "2089",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "306",
-         "scanTimeMs": "9929"
+         "rewriteTimeMs": "101",
+         "scanTimeMs": "5426"
         },
         "operationParameters": {
-         "predicate": "[\"(v2#51900 = c)\"]"
+         "predicate": "[\"(v2#61758 = c)\"]"
         },
         "readVersion": 3
        },
        "removes": [
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "y"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "y"
          },
-         "path": "zC/part-00000-6d596ac4-2936-40d9-8d70-dc56b2f9f06f.c000.snappy.parquet"
+         "path": "3K/part-00000-0a669d31-6df5-422c-87de-95f72ec9e84c.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -902,7 +902,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "10235",
+       "executionTimeMs": "5527",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -913,11 +913,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "2089",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "306",
-       "scanTimeMs": "9929"
+       "rewriteTimeMs": "101",
+       "scanTimeMs": "5426"
       },
       "operationParameters": {
-       "predicate": "[\"(v2#51900 = c)\"]"
+       "predicate": "[\"(v2#61758 = c)\"]"
       },
       "version": 4
      },
@@ -973,7 +973,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "9840",
+         "executionTimeMs": "5353",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -985,19 +985,19 @@
          "numRemovedBytes": "2129",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "9839"
+         "scanTimeMs": "5353"
         },
         "operationParameters": {
-         "predicate": "[\"(p#54271 = x)\"]"
+         "predicate": "[\"(p#64129 = x)\"]"
         },
         "readVersion": 3
        },
        "removes": [
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "x"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "x"
          },
-         "path": "ws/part-00000-e1c8a0a3-d525-43b9-a5a5-52c8fcb3c517.c000.snappy.parquet"
+         "path": "qt/part-00000-667c29b1-ce50-44b0-86a5-0362239b7a9e.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -1008,7 +1008,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "9840",
+       "executionTimeMs": "5353",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -1020,10 +1020,10 @@
        "numRemovedBytes": "2129",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "9839"
+       "scanTimeMs": "5353"
       },
       "operationParameters": {
-       "predicate": "[\"(p#54271 = x)\"]"
+       "predicate": "[\"(p#64129 = x)\"]"
       },
       "version": 4
      },
@@ -1070,72 +1070,72 @@
        "adds": [
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": null
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": null
          },
-         "path": "A1/part-00000-d1ee4f52-fd66-45d9-bd97-baf7a97f3b8f.c000.snappy.parquet",
+         "path": "56/part-00000-3290178e-fb4f-412f-8cdf-596732ca4c87.c000.snappy.parquet",
          "stats": {
           "maxValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "u",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 50,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 5
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 50,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "u",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 5
           },
           "minValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "u",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 50,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 5
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 50,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "u",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 5
           },
           "nullCount": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": 0,
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 0,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 0
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 0,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": 0,
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 0
           },
           "numRecords": 1
          }
         },
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "x"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "x"
          },
-         "path": "j9/part-00000-a8c5361a-75e6-4077-a6f7-63abbb9b5135.c000.snappy.parquet",
+         "path": "r6/part-00000-dffb6947-1b9e-49f7-836c-79015f0380f3.c000.snappy.parquet",
          "stats": {
           "maxValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "u",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 1,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 2
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 1,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "u",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 2
           },
           "minValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "b",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 1,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 1
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 1,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "b",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 1
           },
           "nullCount": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": 0,
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 1,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 0
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 1,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": 0,
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 0
           },
           "numRecords": 2
          }
         },
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "y"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "y"
          },
-         "path": "Aq/part-00000-49c22dbf-b23c-4a5a-abfe-a4f5762b8404.c000.snappy.parquet",
+         "path": "6w/part-00000-f6c36215-67bd-4f89-ba33-1a66135058f7.c000.snappy.parquet",
          "stats": {
           "maxValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "u",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 4,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 4
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 4,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "u",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 4
           },
           "minValues": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": "u",
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 3,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 3
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 3,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": "u",
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 3
           },
           "nullCount": {
-           "col-46afe973-4bec-4365-8a4d-dc92af12cba1": 0,
-           "col-aef7ed22-f1ad-45c1-ab28-892b130b1327": 0,
-           "col-bb2311f9-8275-4b7f-bf76-df0c24542396": 0
+           "col-0f51a657-8623-454e-83db-1d5cf42fbf24": 0,
+           "col-7463e515-efdf-43d3-bf27-33807e121db3": 0,
+           "col-7b5dcbc8-cf2b-42c0-a660-c467244ab194": 0
           },
           "numRecords": 2
          }
@@ -1146,7 +1146,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "10586",
+         "executionTimeMs": "5542",
          "numAddedBytes": "6367",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "3",
@@ -1157,36 +1157,36 @@
          "numRemovedBytes": "8358",
          "numRemovedFiles": "4",
          "numUpdatedRows": "4",
-         "rewriteTimeMs": "302",
-         "scanTimeMs": "10283"
+         "rewriteTimeMs": "159",
+         "scanTimeMs": "5382"
         },
         "operationParameters": {
-         "predicate": "[\"isnotnull(n#56411)\"]"
+         "predicate": "[\"isnotnull(n#66269)\"]"
         },
         "readVersion": 3
        },
        "removes": [
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "x"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "x"
          },
-         "path": "ws/part-00000-e1c8a0a3-d525-43b9-a5a5-52c8fcb3c517.c000.snappy.parquet"
+         "path": "qt/part-00000-667c29b1-ce50-44b0-86a5-0362239b7a9e.c000.snappy.parquet"
         },
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "y"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "y"
          },
-         "path": "4K/part-00000-19e7efdc-84fe-43f5-8c8e-4855fe929528.c000.snappy.parquet"
+         "path": "3K/part-00000-0a669d31-6df5-422c-87de-95f72ec9e84c.c000.snappy.parquet"
         },
         {
          "partitionValues": {
-          "col-5cbe53fa-d50f-4399-a753-1ce5b5e7da96": "y"
+          "col-72b52a07-83aa-4121-abbc-c8fbb7ea68fc": "y"
          },
-         "path": "zC/part-00000-6d596ac4-2936-40d9-8d70-dc56b2f9f06f.c000.snappy.parquet"
+         "path": "QI/part-00000-537e719a-d280-4223-8c4f-63fcd6dc5825.c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "tj/part-00000-ab194511-fc22-49d6-a9e0-b1a60f999016.c000.snappy.parquet"
+         "path": "JX/part-00000-8c50f2bc-96ea-4a28-bf84-7b96e4f2f2f4.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -1197,7 +1197,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "10586",
+       "executionTimeMs": "5542",
        "numAddedBytes": "6367",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "3",
@@ -1208,11 +1208,11 @@
        "numRemovedBytes": "8358",
        "numRemovedFiles": "4",
        "numUpdatedRows": "4",
-       "rewriteTimeMs": "302",
-       "scanTimeMs": "10283"
+       "rewriteTimeMs": "159",
+       "scanTimeMs": "5382"
       },
       "operationParameters": {
-       "predicate": "[\"isnotnull(n#56411)\"]"
+       "predicate": "[\"isnotnull(n#66269)\"]"
       },
       "version": 4
      },
@@ -1738,7 +1738,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-d5e9efb3-93ac-490b-a87f-a96cab77933e-c000.snappy.parquet",
+         "path": "part-00000-de957b16-ecef-4bfc-bd7d-280ee1e8145f-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 99,
@@ -1765,7 +1765,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "10215",
+         "executionTimeMs": "5629",
          "numAddedBytes": "1730",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -1776,11 +1776,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "1875",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "289",
-         "scanTimeMs": "9926"
+         "rewriteTimeMs": "149",
+         "scanTimeMs": "5480"
         },
         "operationParameters": {
-         "predicate": "[\"(id#61999L < 5)\"]"
+         "predicate": "[\"(id#71857L < 5)\"]"
         },
         "readVersion": 2
        },
@@ -1789,12 +1789,12 @@
          "deletionVector": {
           "cardinality": 10,
           "offset": 1,
-          "pathOrInlineDv": "+8s=)x2WL)JG{R]*5&TO",
+          "pathOrInlineDv": "JOl4F6x.:CW#^QtCpYzs",
           "sizeInBytes": 52,
           "storageType": "u"
          },
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet"
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -1808,7 +1808,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "10215",
+       "executionTimeMs": "5629",
        "numAddedBytes": "1730",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -1819,11 +1819,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "1875",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "289",
-       "scanTimeMs": "9926"
+       "rewriteTimeMs": "149",
+       "scanTimeMs": "5480"
       },
       "operationParameters": {
-       "predicate": "[\"(id#61999L < 5)\"]"
+       "predicate": "[\"(id#71857L < 5)\"]"
       },
       "version": 3
      },
@@ -2276,7 +2276,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-e5138bcd-bf31-49c0-b098-7d79346f6c52-c000.snappy.parquet",
+         "path": "part-00000-a1d98333-0502-4cc8-a277-6f6c0e1850b2-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 99,
@@ -2303,7 +2303,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "10111",
+         "executionTimeMs": "5653",
          "numAddedBytes": "1768",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -2314,11 +2314,11 @@
          "numRemovedBytes": "1875",
          "numRemovedFiles": "1",
          "numUpdatedRows": "12",
-         "rewriteTimeMs": "293",
-         "scanTimeMs": "9817"
+         "rewriteTimeMs": "152",
+         "scanTimeMs": "5500"
         },
         "operationParameters": {
-         "predicate": "[\"(n#64963 = 3)\"]"
+         "predicate": "[\"(n#74821 = 3)\"]"
         },
         "readVersion": 2
        },
@@ -2327,12 +2327,12 @@
          "deletionVector": {
           "cardinality": 10,
           "offset": 1,
-          "pathOrInlineDv": "+8s=)x2WL)JG{R]*5&TO",
+          "pathOrInlineDv": "JOl4F6x.:CW#^QtCpYzs",
           "sizeInBytes": 52,
           "storageType": "u"
          },
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet"
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -2346,7 +2346,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "10111",
+       "executionTimeMs": "5653",
        "numAddedBytes": "1768",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -2357,11 +2357,11 @@
        "numRemovedBytes": "1875",
        "numRemovedFiles": "1",
        "numUpdatedRows": "12",
-       "rewriteTimeMs": "293",
-       "scanTimeMs": "9817"
+       "rewriteTimeMs": "152",
+       "scanTimeMs": "5500"
       },
       "operationParameters": {
-       "predicate": "[\"(n#64963 = 3)\"]"
+       "predicate": "[\"(n#74821 = 3)\"]"
       },
       "version": 3
      },
@@ -2837,7 +2837,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "9343",
+         "executionTimeMs": "5322",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -2849,7 +2849,7 @@
          "numRemovedBytes": "1875",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "9342"
+         "scanTimeMs": "5322"
         },
         "operationParameters": {
          "predicate": "[\"true\"]"
@@ -2861,12 +2861,12 @@
          "deletionVector": {
           "cardinality": 10,
           "offset": 1,
-          "pathOrInlineDv": "+8s=)x2WL)JG{R]*5&TO",
+          "pathOrInlineDv": "JOl4F6x.:CW#^QtCpYzs",
           "sizeInBytes": 52,
           "storageType": "u"
          },
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet"
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -2880,7 +2880,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "9343",
+       "executionTimeMs": "5322",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -2892,7 +2892,7 @@
        "numRemovedBytes": "1875",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "9342"
+       "scanTimeMs": "5322"
       },
       "operationParameters": {
        "predicate": "[\"true\"]"
@@ -2917,7 +2917,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet",
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 100,
@@ -2944,7 +2944,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "12393",
+         "executionTimeMs": "6019",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -2959,7 +2959,7 @@
          "scanTimeMs": "0"
         },
         "operationParameters": {
-         "predicate": "[\"(id#70507L < 5)\"]"
+         "predicate": "[\"(id#80365L < 5)\"]"
         },
         "readVersion": 2
        },
@@ -2968,12 +2968,12 @@
          "deletionVector": {
           "cardinality": 10,
           "offset": 1,
-          "pathOrInlineDv": "+8s=)x2WL)JG{R]*5&TO",
+          "pathOrInlineDv": "JOl4F6x.:CW#^QtCpYzs",
           "sizeInBytes": 52,
           "storageType": "u"
          },
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet"
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -2984,7 +2984,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "12393",
+       "executionTimeMs": "6019",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -2999,7 +2999,7 @@
        "scanTimeMs": "0"
       },
       "operationParameters": {
-       "predicate": "[\"(id#70507L < 5)\"]"
+       "predicate": "[\"(id#80365L < 5)\"]"
       },
       "version": 3
      },
@@ -3452,7 +3452,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet",
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 100,
@@ -3475,7 +3475,7 @@
         },
         {
          "partitionValues": {},
-         "path": "part-00000-40dfc82f-25f3-4ce8-837c-fb5a4370493c-c000.snappy.parquet",
+         "path": "part-00000-e8673121-224c-4a4c-8ac7-151b00f6e2a0-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 94,
@@ -3502,7 +3502,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "11181",
+         "executionTimeMs": "6002",
          "numAddedBytes": "1029",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -3513,11 +3513,11 @@
          "numRemovedBytes": "0",
          "numRemovedFiles": "1",
          "numUpdatedRows": "12",
-         "rewriteTimeMs": "349",
-         "scanTimeMs": "9944"
+         "rewriteTimeMs": "140",
+         "scanTimeMs": "5472"
         },
         "operationParameters": {
-         "predicate": "[\"(n#73703 = 3)\"]"
+         "predicate": "[\"(n#83561 = 3)\"]"
         },
         "readVersion": 2
        },
@@ -3526,12 +3526,12 @@
          "deletionVector": {
           "cardinality": 10,
           "offset": 1,
-          "pathOrInlineDv": "+8s=)x2WL)JG{R]*5&TO",
+          "pathOrInlineDv": "JOl4F6x.:CW#^QtCpYzs",
           "sizeInBytes": 52,
           "storageType": "u"
          },
          "partitionValues": {},
-         "path": "part-00000-1c094ffb-8eb8-4cde-aed6-2d23b78b7645-c000.snappy.parquet"
+         "path": "part-00000-0124b227-22a8-466f-b2b3-a4ca62ebbebf-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -3542,7 +3542,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "11181",
+       "executionTimeMs": "6002",
        "numAddedBytes": "1029",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -3553,11 +3553,11 @@
        "numRemovedBytes": "0",
        "numRemovedFiles": "1",
        "numUpdatedRows": "12",
-       "rewriteTimeMs": "349",
-       "scanTimeMs": "9944"
+       "rewriteTimeMs": "140",
+       "scanTimeMs": "5472"
       },
       "operationParameters": {
-       "predicate": "[\"(n#73703 = 3)\"]"
+       "predicate": "[\"(n#83561 = 3)\"]"
       },
       "version": 3
      },
@@ -4087,7 +4087,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "8685",
+         "executionTimeMs": "5313",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -4099,10 +4099,10 @@
          "numRemovedBytes": "1156",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "8684"
+         "scanTimeMs": "5313"
         },
         "operationParameters": {
-         "predicate": "[\"(p#28895 = x)\"]"
+         "predicate": "[\"(p#37636 = x)\"]"
         },
         "readVersion": 2
        },
@@ -4111,7 +4111,7 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-cdac6b33-8381-47df-b1a9-819cf63d657e.c000.snappy.parquet"
+         "path": "p=x/part-00000-8c8b3322-6b31-4bc9-8a41-5e980e40a363.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4122,7 +4122,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "8685",
+       "executionTimeMs": "5313",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -4134,10 +4134,10 @@
        "numRemovedBytes": "1156",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "8684"
+       "scanTimeMs": "5313"
       },
       "operationParameters": {
-       "predicate": "[\"(p#28895 = x)\"]"
+       "predicate": "[\"(p#37636 = x)\"]"
       },
       "version": 3
      },
@@ -4187,7 +4187,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "8842",
+         "executionTimeMs": "5323",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -4199,17 +4199,17 @@
          "numRemovedBytes": "1078",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "8841"
+         "scanTimeMs": "5322"
         },
         "operationParameters": {
-         "predicate": "[\"isnull(p#30959)\"]"
+         "predicate": "[\"isnull(p#39700)\"]"
         },
         "readVersion": 2
        },
        "removes": [
         {
          "partitionValues": {},
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-4e3617bf-bd28-487c-90a2-4b65624e0d80.c000.snappy.parquet"
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-37c841b7-0cea-4cf8-8d2a-26cc6d94d449.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4220,7 +4220,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "8842",
+       "executionTimeMs": "5323",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -4232,10 +4232,10 @@
        "numRemovedBytes": "1078",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "8841"
+       "scanTimeMs": "5322"
       },
       "operationParameters": {
-       "predicate": "[\"isnull(p#30959)\"]"
+       "predicate": "[\"isnull(p#39700)\"]"
       },
       "version": 3
      },
@@ -4291,7 +4291,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "9589",
+         "executionTimeMs": "5484",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -4303,10 +4303,10 @@
          "numRemovedBytes": "3312",
          "numRemovedFiles": "3",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "9588"
+         "scanTimeMs": "5484"
         },
         "operationParameters": {
-         "predicate": "[\"p#33023 IN (y,z)\"]"
+         "predicate": "[\"p#41764 IN (y,z)\"]"
         },
         "readVersion": 2
        },
@@ -4315,19 +4315,19 @@
          "partitionValues": {
           "p": "z"
          },
-         "path": "p=z/part-00000-a57f39bc-bf32-45da-aa0f-4181a9d7c47c.c000.snappy.parquet"
+         "path": "p=z/part-00000-f7f86f97-1e45-4b0d-af14-aea2640982d6.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-48a4895e-f396-4f84-8cb6-b5cba3f95b8c.c000.snappy.parquet"
+         "path": "p=y/part-00000-b29b6115-d46c-4b3c-bde4-b59891632107.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-bdc49370-67fd-4734-8258-a51b6df00b17.c000.snappy.parquet"
+         "path": "p=y/part-00000-b4c2fe11-9cd9-49c4-852b-ae1e71c7a3de.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4338,7 +4338,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "9589",
+       "executionTimeMs": "5484",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -4350,10 +4350,10 @@
        "numRemovedBytes": "3312",
        "numRemovedFiles": "3",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "9588"
+       "scanTimeMs": "5484"
       },
       "operationParameters": {
-       "predicate": "[\"p#33023 IN (y,z)\"]"
+       "predicate": "[\"p#41764 IN (y,z)\"]"
       },
       "version": 3
      },
@@ -4397,7 +4397,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "9729",
+         "executionTimeMs": "5710",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -4408,11 +4408,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "1116",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "260",
-         "scanTimeMs": "9469"
+         "rewriteTimeMs": "146",
+         "scanTimeMs": "5564"
         },
         "operationParameters": {
-         "predicate": "[\"((p#35087 = y) AND (id#35084L = 3))\"]"
+         "predicate": "[\"((p#43828 = y) AND (id#43825L = 3))\"]"
         },
         "readVersion": 2
        },
@@ -4421,7 +4421,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-bdc49370-67fd-4734-8258-a51b6df00b17.c000.snappy.parquet"
+         "path": "p=y/part-00000-b29b6115-d46c-4b3c-bde4-b59891632107.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4432,7 +4432,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "9729",
+       "executionTimeMs": "5710",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -4443,11 +4443,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "1116",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "260",
-       "scanTimeMs": "9469"
+       "rewriteTimeMs": "146",
+       "scanTimeMs": "5564"
       },
       "operationParameters": {
-       "predicate": "[\"((p#35087 = y) AND (id#35084L = 3))\"]"
+       "predicate": "[\"((p#43828 = y) AND (id#43825L = 3))\"]"
       },
       "version": 3
      },
@@ -4502,7 +4502,7 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-55420770-9a70-4fc7-93ec-562cf1123780.c000.snappy.parquet",
+         "path": "p=x/part-00000-cb0bb7df-f473-4b5c-93e5-abce1c9da9e7.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 1,
@@ -4528,7 +4528,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "10555",
+         "executionTimeMs": "5673",
          "numAddedBytes": "1116",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -4539,11 +4539,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "2236",
          "numRemovedFiles": "2",
-         "rewriteTimeMs": "468",
-         "scanTimeMs": "10087"
+         "rewriteTimeMs": "138",
+         "scanTimeMs": "5535"
         },
         "operationParameters": {
-         "predicate": "[\"isnull(n#37382)\"]"
+         "predicate": "[\"isnull(n#46123)\"]"
         },
         "readVersion": 2
        },
@@ -4552,13 +4552,13 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-cdac6b33-8381-47df-b1a9-819cf63d657e.c000.snappy.parquet"
+         "path": "p=x/part-00000-8c8b3322-6b31-4bc9-8a41-5e980e40a363.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "z"
          },
-         "path": "p=z/part-00000-a57f39bc-bf32-45da-aa0f-4181a9d7c47c.c000.snappy.parquet"
+         "path": "p=z/part-00000-f7f86f97-1e45-4b0d-af14-aea2640982d6.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4569,7 +4569,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "10555",
+       "executionTimeMs": "5673",
        "numAddedBytes": "1116",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -4580,11 +4580,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "2236",
        "numRemovedFiles": "2",
-       "rewriteTimeMs": "468",
-       "scanTimeMs": "10087"
+       "rewriteTimeMs": "138",
+       "scanTimeMs": "5535"
       },
       "operationParameters": {
-       "predicate": "[\"isnull(n#37382)\"]"
+       "predicate": "[\"isnull(n#46123)\"]"
       },
       "version": 3
      },
@@ -4634,7 +4634,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "10011",
+         "executionTimeMs": "5512",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -4646,7 +4646,7 @@
          "numRemovedBytes": "5546",
          "numRemovedFiles": "5",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "10010"
+         "scanTimeMs": "5512"
         },
         "operationParameters": {
          "predicate": "[\"true\"]"
@@ -4656,31 +4656,31 @@
        "removes": [
         {
          "partitionValues": {
-          "p": "z"
+          "p": "x"
          },
-         "path": "p=z/part-00000-a57f39bc-bf32-45da-aa0f-4181a9d7c47c.c000.snappy.parquet"
+         "path": "p=x/part-00000-8c8b3322-6b31-4bc9-8a41-5e980e40a363.c000.snappy.parquet"
         },
         {
          "partitionValues": {
-          "p": "x"
+          "p": "z"
          },
-         "path": "p=x/part-00000-cdac6b33-8381-47df-b1a9-819cf63d657e.c000.snappy.parquet"
+         "path": "p=z/part-00000-f7f86f97-1e45-4b0d-af14-aea2640982d6.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-48a4895e-f396-4f84-8cb6-b5cba3f95b8c.c000.snappy.parquet"
+         "path": "p=y/part-00000-b29b6115-d46c-4b3c-bde4-b59891632107.c000.snappy.parquet"
+        },
+        {
+         "partitionValues": {
+          "p": "y"
+         },
+         "path": "p=y/part-00000-b4c2fe11-9cd9-49c4-852b-ae1e71c7a3de.c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-4e3617bf-bd28-487c-90a2-4b65624e0d80.c000.snappy.parquet"
-        },
-        {
-         "partitionValues": {
-          "p": "y"
-         },
-         "path": "p=y/part-00000-bdc49370-67fd-4734-8258-a51b6df00b17.c000.snappy.parquet"
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-37c841b7-0cea-4cf8-8d2a-26cc6d94d449.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4691,7 +4691,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "10011",
+       "executionTimeMs": "5512",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -4703,7 +4703,7 @@
        "numRemovedBytes": "5546",
        "numRemovedFiles": "5",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "10010"
+       "scanTimeMs": "5512"
       },
       "operationParameters": {
        "predicate": "[\"true\"]"
@@ -4730,7 +4730,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-1f1449b4-793d-4482-aeab-4e544dcb7ada.c000.snappy.parquet",
+         "path": "p=y/part-00000-20ad6865-eed3-4336-beeb-2ca77408a156.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 4,
@@ -4756,7 +4756,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "8636",
+         "executionTimeMs": "5515",
          "numAddedBytes": "1209",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -4767,11 +4767,11 @@
          "numRemovedBytes": "2232",
          "numRemovedFiles": "2",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "269",
-         "scanTimeMs": "8366"
+         "rewriteTimeMs": "138",
+         "scanTimeMs": "5377"
         },
         "operationParameters": {
-         "predicate": "[\"(p#41737 = y)\"]"
+         "predicate": "[\"(p#50478 = y)\"]"
         },
         "readVersion": 2
        },
@@ -4780,13 +4780,13 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-48a4895e-f396-4f84-8cb6-b5cba3f95b8c.c000.snappy.parquet"
+         "path": "p=y/part-00000-b29b6115-d46c-4b3c-bde4-b59891632107.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-bdc49370-67fd-4734-8258-a51b6df00b17.c000.snappy.parquet"
+         "path": "p=y/part-00000-b4c2fe11-9cd9-49c4-852b-ae1e71c7a3de.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4797,7 +4797,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "8636",
+       "executionTimeMs": "5515",
        "numAddedBytes": "1209",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -4808,11 +4808,11 @@
        "numRemovedBytes": "2232",
        "numRemovedFiles": "2",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "269",
-       "scanTimeMs": "8366"
+       "rewriteTimeMs": "138",
+       "scanTimeMs": "5377"
       },
       "operationParameters": {
-       "predicate": "[\"(p#41737 = y)\"]"
+       "predicate": "[\"(p#50478 = y)\"]"
       },
       "version": 3
      },
@@ -4873,7 +4873,7 @@
          "partitionValues": {
           "p": "w"
          },
-         "path": "p=w/part-00000-14180543-4534-4d03-97d5-dcbcfb5c841d.c000.snappy.parquet",
+         "path": "p=w/part-00000-982baafb-5e90-46af-ba8e-5ea013cbe7a9.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 4,
@@ -4899,7 +4899,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "9515",
+         "executionTimeMs": "5756",
          "numAddedBytes": "1116",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -4910,11 +4910,11 @@
          "numRemovedBytes": "1116",
          "numRemovedFiles": "1",
          "numUpdatedRows": "1",
-         "rewriteTimeMs": "377",
-         "scanTimeMs": "9137"
+         "rewriteTimeMs": "121",
+         "scanTimeMs": "5634"
         },
         "operationParameters": {
-         "predicate": "[\"(id#43916L = 4)\"]"
+         "predicate": "[\"(id#52657L = 4)\"]"
         },
         "readVersion": 2
        },
@@ -4923,7 +4923,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-48a4895e-f396-4f84-8cb6-b5cba3f95b8c.c000.snappy.parquet"
+         "path": "p=y/part-00000-b4c2fe11-9cd9-49c4-852b-ae1e71c7a3de.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -4934,7 +4934,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "9515",
+       "executionTimeMs": "5756",
        "numAddedBytes": "1116",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -4945,11 +4945,11 @@
        "numRemovedBytes": "1116",
        "numRemovedFiles": "1",
        "numUpdatedRows": "1",
-       "rewriteTimeMs": "377",
-       "scanTimeMs": "9137"
+       "rewriteTimeMs": "121",
+       "scanTimeMs": "5634"
       },
       "operationParameters": {
-       "predicate": "[\"(id#43916L = 4)\"]"
+       "predicate": "[\"(id#52657L = 4)\"]"
       },
       "version": 3
      },
@@ -5010,7 +5010,7 @@
          "partitionValues": {
           "p": null
          },
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-8d8c0457-9a48-4c68-a4a5-e391380b5e9f.c000.snappy.parquet",
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-2356c14e-b63d-407e-a144-4d21c7f377d1.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -5034,7 +5034,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "9552",
+         "executionTimeMs": "5334",
          "numAddedBytes": "1061",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -5045,11 +5045,11 @@
          "numRemovedBytes": "1080",
          "numRemovedFiles": "1",
          "numUpdatedRows": "1",
-         "rewriteTimeMs": "256",
-         "scanTimeMs": "9296"
+         "rewriteTimeMs": "124",
+         "scanTimeMs": "5210"
         },
         "operationParameters": {
-         "predicate": "[\"(p#46217 = z)\"]"
+         "predicate": "[\"(p#54958 = z)\"]"
         },
         "readVersion": 2
        },
@@ -5058,7 +5058,7 @@
          "partitionValues": {
           "p": "z"
          },
-         "path": "p=z/part-00000-a57f39bc-bf32-45da-aa0f-4181a9d7c47c.c000.snappy.parquet"
+         "path": "p=z/part-00000-f7f86f97-1e45-4b0d-af14-aea2640982d6.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -5069,7 +5069,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "9552",
+       "executionTimeMs": "5334",
        "numAddedBytes": "1061",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -5080,11 +5080,11 @@
        "numRemovedBytes": "1080",
        "numRemovedFiles": "1",
        "numUpdatedRows": "1",
-       "rewriteTimeMs": "256",
-       "scanTimeMs": "9296"
+       "rewriteTimeMs": "124",
+       "scanTimeMs": "5210"
       },
       "operationParameters": {
-       "predicate": "[\"(p#46217 = z)\"]"
+       "predicate": "[\"(p#54958 = z)\"]"
       },
       "version": 3
      },
@@ -5145,7 +5145,7 @@
          "partitionValues": {
           "p": null
          },
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-8fe41b86-fdca-4b0a-afdd-caa478b13080.c000.snappy.parquet",
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-75422ae9-5c06-4795-9b22-2a6edf95d20e.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 5,
@@ -5167,7 +5167,7 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-b8502572-3708-47ff-921c-bc5b731c2ae0.c000.snappy.parquet",
+         "path": "p=x/part-00000-271a6ce0-00fe-43e9-af51-a5d2dede85a3.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 2,
@@ -5191,7 +5191,7 @@
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-a160c619-c2e8-4ae0-a38a-3947f307b68c.c000.snappy.parquet",
+         "path": "p=y/part-00000-b37efe13-8a9b-4a51-a34a-2f90706c5883.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 4,
@@ -5215,7 +5215,7 @@
          "partitionValues": {
           "p": "z"
          },
-         "path": "p=z/part-00000-0626def6-fb03-4b9d-b8da-7bb4e5972733.c000.snappy.parquet",
+         "path": "p=z/part-00000-a8841ebe-e573-44d2-b44f-82832308a13c.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -5239,7 +5239,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "10859",
+         "executionTimeMs": "5684",
          "numAddedBytes": "4474",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "4",
@@ -5250,11 +5250,11 @@
          "numRemovedBytes": "5546",
          "numRemovedFiles": "5",
          "numUpdatedRows": "5",
-         "rewriteTimeMs": "385",
-         "scanTimeMs": "10473"
+         "rewriteTimeMs": "185",
+         "scanTimeMs": "5499"
         },
         "operationParameters": {
-         "predicate": "[\"(id#48397L > 1)\"]"
+         "predicate": "[\"(id#57138L > 1)\"]"
         },
         "readVersion": 2
        },
@@ -5263,29 +5263,29 @@
          "partitionValues": {
           "p": "x"
          },
-         "path": "p=x/part-00000-cdac6b33-8381-47df-b1a9-819cf63d657e.c000.snappy.parquet"
+         "path": "p=x/part-00000-8c8b3322-6b31-4bc9-8a41-5e980e40a363.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-48a4895e-f396-4f84-8cb6-b5cba3f95b8c.c000.snappy.parquet"
+         "path": "p=y/part-00000-b29b6115-d46c-4b3c-bde4-b59891632107.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "y"
          },
-         "path": "p=y/part-00000-bdc49370-67fd-4734-8258-a51b6df00b17.c000.snappy.parquet"
+         "path": "p=y/part-00000-b4c2fe11-9cd9-49c4-852b-ae1e71c7a3de.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "z"
          },
-         "path": "p=z/part-00000-a57f39bc-bf32-45da-aa0f-4181a9d7c47c.c000.snappy.parquet"
+         "path": "p=z/part-00000-f7f86f97-1e45-4b0d-af14-aea2640982d6.c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-4e3617bf-bd28-487c-90a2-4b65624e0d80.c000.snappy.parquet"
+         "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-37c841b7-0cea-4cf8-8d2a-26cc6d94d449.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -5296,7 +5296,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "10859",
+       "executionTimeMs": "5684",
        "numAddedBytes": "4474",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "4",
@@ -5307,11 +5307,11 @@
        "numRemovedBytes": "5546",
        "numRemovedFiles": "5",
        "numUpdatedRows": "5",
-       "rewriteTimeMs": "385",
-       "scanTimeMs": "10473"
+       "rewriteTimeMs": "185",
+       "scanTimeMs": "5499"
       },
       "operationParameters": {
-       "predicate": "[\"(id#48397L > 1)\"]"
+       "predicate": "[\"(id#57138L > 1)\"]"
       },
       "version": 3
      },
@@ -5363,6 +5363,72 @@
      ],
      "sql": "UPDATE <t> SET n = n * 2 WHERE id > 1",
      "step": "update_rows"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "condition": "DELTA_UNSUPPORTED_SUBQUERY",
+      "message": "[DELTA_UNSUPPORTED_SUBQUERY] Subqueries are not supported in the DELETE (condition = ((spark_catalog.delta.`<path>`.p = 'y') AND (spark_catalog.delta.`<path>`.id IN (listquery())))).",
+      "parameters": {
+       "cond": "((spark_catalog.delta.`<path>`.p = 'y') AND (spark_catalog.delta.`<path>`.id IN (listquery())))",
+       "operation": "DELETE"
+      },
+      "sqlstate": "0AKDC"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "3",
+       "numOutputBytes": "3274",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1,
+       "x"
+      ],
+      [
+       2,
+       "b",
+       null,
+       "x"
+      ],
+      [
+       3,
+       "c",
+       3,
+       "y"
+      ],
+      [
+       4,
+       "d",
+       4,
+       "y"
+      ],
+      [
+       5,
+       null,
+       50,
+       null
+      ],
+      [
+       6,
+       "f",
+       null,
+       "z"
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE p = 'y' AND id IN (SELECT 3)",
+     "step": "delete_partition_and_subquery"
     }
    ],
    "versions": 3
@@ -5450,7 +5516,7 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-1a2ca683-db83-4ac4-a1f0-4a526f32473d.c000.snappy.parquet",
+         "path": "p=1/part-00000-9c14461b-8e74-4fa7-9e76-4994229fe5c3.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 2,
@@ -5482,7 +5548,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5845",
+         "executionTimeMs": "5668",
          "numAddedBytes": "1243",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -5493,11 +5559,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "2535",
          "numRemovedFiles": "2",
-         "rewriteTimeMs": "160",
-         "scanTimeMs": "5685"
+         "rewriteTimeMs": "112",
+         "scanTimeMs": "5556"
         },
         "operationParameters": {
-         "predicate": "[\"(s#90474.p = 1)\"]"
+         "predicate": "[\"(s#100332.p = 1)\"]"
         },
         "readVersion": 3
        },
@@ -5506,13 +5572,13 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-ac7728dc-61f6-4573-aaa6-3e8a58148d97.c000.snappy.parquet"
+         "path": "p=1/part-00000-ba4cd799-a31c-40cb-af34-7249fe773cb3.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "2"
          },
-         "path": "p=2/part-00000-611ff84d-8e3a-4c3d-9d5d-a7f2d7f285bf.c000.snappy.parquet"
+         "path": "p=2/part-00000-39299646-bb54-4e33-8c07-a1d049c587ef.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -5523,7 +5589,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5845",
+       "executionTimeMs": "5668",
        "numAddedBytes": "1243",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -5534,11 +5600,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "2535",
        "numRemovedFiles": "2",
-       "rewriteTimeMs": "160",
-       "scanTimeMs": "5685"
+       "rewriteTimeMs": "112",
+       "scanTimeMs": "5556"
       },
       "operationParameters": {
-       "predicate": "[\"(s#90474.p = 1)\"]"
+       "predicate": "[\"(s#100332.p = 1)\"]"
       },
       "version": 4
      },
@@ -5694,7 +5760,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5323",
+         "executionTimeMs": "5489",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -5706,10 +5772,10 @@
          "numRemovedBytes": "2485",
          "numRemovedFiles": "2",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5323"
+         "scanTimeMs": "5488"
         },
         "operationParameters": {
-         "predicate": "[\"(p#94000 = 2)\"]"
+         "predicate": "[\"(p#103858 = 2)\"]"
         },
         "readVersion": 3
        },
@@ -5718,13 +5784,13 @@
          "partitionValues": {
           "p": "2"
          },
-         "path": "p=2/part-00000-c1ad85f7-987c-4512-8218-ebbc0009f49b.c000.snappy.parquet"
+         "path": "p=2/part-00000-39299646-bb54-4e33-8c07-a1d049c587ef.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "2"
          },
-         "path": "p=2/part-00000-611ff84d-8e3a-4c3d-9d5d-a7f2d7f285bf.c000.snappy.parquet"
+         "path": "p=2/part-00000-6f08b776-b818-4021-91b4-cc874d35cf7d.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -5735,7 +5801,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5323",
+       "executionTimeMs": "5489",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -5747,10 +5813,10 @@
        "numRemovedBytes": "2485",
        "numRemovedFiles": "2",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5323"
+       "scanTimeMs": "5488"
       },
       "operationParameters": {
-       "predicate": "[\"(p#94000 = 2)\"]"
+       "predicate": "[\"(p#103858 = 2)\"]"
       },
       "version": 4
      },
@@ -5815,7 +5881,7 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-4ed049eb-46ef-4849-8694-0068750eaeb6.c000.snappy.parquet",
+         "path": "p=1/part-00000-a5365d2e-299c-463f-923f-5caf18d07f7e.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 1,
@@ -5847,7 +5913,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5580",
+         "executionTimeMs": "6498",
          "numAddedBytes": "1243",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -5858,11 +5924,11 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "2534",
          "numRemovedFiles": "2",
-         "rewriteTimeMs": "111",
-         "scanTimeMs": "5469"
+         "rewriteTimeMs": "170",
+         "scanTimeMs": "6328"
         },
         "operationParameters": {
-         "predicate": "[\"((p#96061 = 1) AND (s#96060.p = 2))\"]"
+         "predicate": "[\"((p#105919 = 1) AND (s#105918.p = 2))\"]"
         },
         "readVersion": 3
        },
@@ -5871,13 +5937,13 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-ac7728dc-61f6-4573-aaa6-3e8a58148d97.c000.snappy.parquet"
+         "path": "p=1/part-00000-ba4cd799-a31c-40cb-af34-7249fe773cb3.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-206d056f-1eeb-4c23-a9be-d41028917cd2.c000.snappy.parquet"
+         "path": "p=1/part-00000-89fd47f7-7b29-471b-ad44-e7772f0a4cb3.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -5888,7 +5954,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5580",
+       "executionTimeMs": "6498",
        "numAddedBytes": "1243",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -5899,11 +5965,11 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "2534",
        "numRemovedFiles": "2",
-       "rewriteTimeMs": "111",
-       "scanTimeMs": "5469"
+       "rewriteTimeMs": "170",
+       "scanTimeMs": "6328"
       },
       "operationParameters": {
-       "predicate": "[\"((p#96061 = 1) AND (s#96060.p = 2))\"]"
+       "predicate": "[\"((p#105919 = 1) AND (s#105918.p = 2))\"]"
       },
       "version": 4
      },
@@ -5968,7 +6034,7 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-19ed00b8-d774-4f38-bf32-b83963814cb2.c000.snappy.parquet",
+         "path": "p=1/part-00000-d81059b1-b783-4bbd-958a-837a460922ce.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 103,
@@ -6000,7 +6066,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "5600",
+         "executionTimeMs": "5602",
          "numAddedBytes": "1337",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -6011,11 +6077,11 @@
          "numRemovedBytes": "2534",
          "numRemovedFiles": "2",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "120",
-         "scanTimeMs": "5479"
+         "rewriteTimeMs": "117",
+         "scanTimeMs": "5484"
         },
         "operationParameters": {
-         "predicate": "[\"(s#98351.p = 2)\"]"
+         "predicate": "[\"(s#108209.p = 2)\"]"
         },
         "readVersion": 3
        },
@@ -6024,13 +6090,13 @@
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-ac7728dc-61f6-4573-aaa6-3e8a58148d97.c000.snappy.parquet"
+         "path": "p=1/part-00000-ba4cd799-a31c-40cb-af34-7249fe773cb3.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "p": "1"
          },
-         "path": "p=1/part-00000-206d056f-1eeb-4c23-a9be-d41028917cd2.c000.snappy.parquet"
+         "path": "p=1/part-00000-89fd47f7-7b29-471b-ad44-e7772f0a4cb3.c000.snappy.parquet"
         }
        ],
        "version": 4
@@ -6041,7 +6107,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "5600",
+       "executionTimeMs": "5602",
        "numAddedBytes": "1337",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -6052,11 +6118,11 @@
        "numRemovedBytes": "2534",
        "numRemovedFiles": "2",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "120",
-       "scanTimeMs": "5479"
+       "rewriteTimeMs": "117",
+       "scanTimeMs": "5484"
       },
       "operationParameters": {
-       "predicate": "[\"(s#98351.p = 2)\"]"
+       "predicate": "[\"(s#108209.p = 2)\"]"
       },
       "version": 4
      },
@@ -6182,7 +6248,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5244",
+         "executionTimeMs": "5372",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -6194,10 +6260,10 @@
          "numRemovedBytes": "1500",
          "numRemovedFiles": "2",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5244"
+         "scanTimeMs": "5372"
         },
         "operationParameters": {
-         "predicate": "[\"(ts#101763 = 2024-01-01 08:00:00)\"]"
+         "predicate": "[\"(ts#111621 = 2024-01-01 08:00:00)\"]"
         },
         "readVersion": 2
        },
@@ -6206,13 +6272,13 @@
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-7fdf9c87-c8b1-41aa-bd31-698736270446.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-25265c88-37c5-427f-861e-df5478d4317e.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-4108b841-92e8-4a4f-87fd-954c4fe1b294.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-76af9ad8-e9ea-4535-9e21-705cb51ac3b5.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6223,7 +6289,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5244",
+       "executionTimeMs": "5372",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -6235,10 +6301,10 @@
        "numRemovedBytes": "1500",
        "numRemovedFiles": "2",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5244"
+       "scanTimeMs": "5372"
       },
       "operationParameters": {
-       "predicate": "[\"(ts#101763 = 2024-01-01 08:00:00)\"]"
+       "predicate": "[\"(ts#111621 = 2024-01-01 08:00:00)\"]"
       },
       "version": 3
      },
@@ -6276,7 +6342,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5238",
+         "executionTimeMs": "5502",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -6288,10 +6354,10 @@
          "numRemovedBytes": "1500",
          "numRemovedFiles": "2",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5238"
+         "scanTimeMs": "5502"
         },
         "operationParameters": {
-         "predicate": "[\"(ts#103822 = 2024-01-01 00:00:00)\"]"
+         "predicate": "[\"(ts#113680 = 2024-01-01 00:00:00)\"]"
         },
         "readVersion": 2
        },
@@ -6300,13 +6366,13 @@
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-7fdf9c87-c8b1-41aa-bd31-698736270446.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-25265c88-37c5-427f-861e-df5478d4317e.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-4108b841-92e8-4a4f-87fd-954c4fe1b294.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-76af9ad8-e9ea-4535-9e21-705cb51ac3b5.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6319,7 +6385,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5238",
+       "executionTimeMs": "5502",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -6331,10 +6397,10 @@
        "numRemovedBytes": "1500",
        "numRemovedFiles": "2",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5238"
+       "scanTimeMs": "5502"
       },
       "operationParameters": {
-       "predicate": "[\"(ts#103822 = 2024-01-01 00:00:00)\"]"
+       "predicate": "[\"(ts#113680 = 2024-01-01 00:00:00)\"]"
       },
       "version": 3
      },
@@ -6372,7 +6438,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5417",
+         "executionTimeMs": "5380",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -6384,10 +6450,10 @@
          "numRemovedBytes": "1500",
          "numRemovedFiles": "2",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5417"
+         "scanTimeMs": "5379"
         },
         "operationParameters": {
-         "predicate": "[\"(ts#106822 = 2024-01-01 00:00:00)\"]"
+         "predicate": "[\"(ts#116680 = 2024-01-01 00:00:00)\"]"
         },
         "readVersion": 2
        },
@@ -6396,13 +6462,13 @@
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-7fdf9c87-c8b1-41aa-bd31-698736270446.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-25265c88-37c5-427f-861e-df5478d4317e.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-4108b841-92e8-4a4f-87fd-954c4fe1b294.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-76af9ad8-e9ea-4535-9e21-705cb51ac3b5.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6415,7 +6481,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5417",
+       "executionTimeMs": "5380",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -6427,10 +6493,10 @@
        "numRemovedBytes": "1500",
        "numRemovedFiles": "2",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5417"
+       "scanTimeMs": "5379"
       },
       "operationParameters": {
-       "predicate": "[\"(ts#106822 = 2024-01-01 00:00:00)\"]"
+       "predicate": "[\"(ts#116680 = 2024-01-01 00:00:00)\"]"
       },
       "version": 3
      },
@@ -6468,7 +6534,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "5310",
+         "executionTimeMs": "5317",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -6480,10 +6546,10 @@
          "numRemovedBytes": "750",
          "numRemovedFiles": "1",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "5310"
+         "scanTimeMs": "5316"
         },
         "operationParameters": {
-         "predicate": "[\"(ts#109821 < 2024-01-01 00:00:00)\"]"
+         "predicate": "[\"(ts#119679 < 2024-01-01 00:00:00)\"]"
         },
         "readVersion": 2
        },
@@ -6492,7 +6558,7 @@
          "partitionValues": {
           "ts": "2024-01-01T00:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2000%253A00%253A00/part-00000-cc6817c3-ca74-449b-b7bb-4d960c010dfd.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2000%253A00%253A00/part-00000-dbc021b7-5054-4a41-bee9-eb6913f47b89.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6505,7 +6571,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "5310",
+       "executionTimeMs": "5317",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -6517,10 +6583,10 @@
        "numRemovedBytes": "750",
        "numRemovedFiles": "1",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "5310"
+       "scanTimeMs": "5316"
       },
       "operationParameters": {
-       "predicate": "[\"(ts#109821 < 2024-01-01 00:00:00)\"]"
+       "predicate": "[\"(ts#119679 < 2024-01-01 00:00:00)\"]"
       },
       "version": 3
      },
@@ -6563,7 +6629,7 @@
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2000%253A00%253A00/part-00000-be0bfe1b-aa15-48dd-a2ae-9c379b0eb6d4.c000.snappy.parquet",
+         "path": "ts=2024-01-01%2000%253A00%253A00/part-00000-ec98c6ad-66e9-4908-9801-5e0d8f308d5e.c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 103
@@ -6583,7 +6649,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "5367",
+         "executionTimeMs": "5339",
          "numAddedBytes": "758",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -6594,11 +6660,11 @@
          "numRemovedBytes": "1500",
          "numRemovedFiles": "2",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "123",
-         "scanTimeMs": "5244"
+         "rewriteTimeMs": "120",
+         "scanTimeMs": "5219"
         },
         "operationParameters": {
-         "predicate": "[\"(ts#112821 = 2024-01-01 00:00:00)\"]"
+         "predicate": "[\"(ts#122679 = 2024-01-01 00:00:00)\"]"
         },
         "readVersion": 2
        },
@@ -6607,13 +6673,13 @@
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-7fdf9c87-c8b1-41aa-bd31-698736270446.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-25265c88-37c5-427f-861e-df5478d4317e.c000.snappy.parquet"
         },
         {
          "partitionValues": {
           "ts": "2024-01-01T08:00:00.000000Z"
          },
-         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-4108b841-92e8-4a4f-87fd-954c4fe1b294.c000.snappy.parquet"
+         "path": "ts=2024-01-01%2008%253A00%253A00/part-00000-76af9ad8-e9ea-4535-9e21-705cb51ac3b5.c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6626,7 +6692,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "5367",
+       "executionTimeMs": "5339",
        "numAddedBytes": "758",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -6637,11 +6703,11 @@
        "numRemovedBytes": "1500",
        "numRemovedFiles": "2",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "123",
-       "scanTimeMs": "5244"
+       "rewriteTimeMs": "120",
+       "scanTimeMs": "5219"
       },
       "operationParameters": {
-       "predicate": "[\"(ts#112821 = 2024-01-01 00:00:00)\"]"
+       "predicate": "[\"(ts#122679 = 2024-01-01 00:00:00)\"]"
       },
       "version": 3
      },
@@ -6735,7 +6801,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-af62d1ab-b4aa-4da7-a585-741861e1440a-c000.snappy.parquet",
+         "path": "part-00000-1557707c-23b2-4f85-b6b6-5f716cf2da2d-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 3,
@@ -6761,7 +6827,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "13252",
+         "executionTimeMs": "12624",
          "numAddedBytes": "918",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -6772,8 +6838,8 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "926",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "391",
-         "scanTimeMs": "12860"
+         "rewriteTimeMs": "374",
+         "scanTimeMs": "12249"
         },
         "operationParameters": {
          "predicate": "[\"(id#1231L = 2)\"]"
@@ -6783,7 +6849,7 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6794,7 +6860,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "13252",
+       "executionTimeMs": "12624",
        "numAddedBytes": "918",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -6805,8 +6871,8 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "926",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "391",
-       "scanTimeMs": "12860"
+       "rewriteTimeMs": "374",
+       "scanTimeMs": "12249"
       },
       "operationParameters": {
        "predicate": "[\"(id#1231L = 2)\"]"
@@ -6857,7 +6923,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-f03ca595-36fb-4959-a7f5-faa313ff2968-c000.snappy.parquet",
+         "path": "part-00000-34c9b897-5a63-4d49-8287-d277a9ccbb2c-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -6881,7 +6947,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "9589",
+         "executionTimeMs": "10883",
          "numAddedBytes": "871",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -6892,8 +6958,8 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "923",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "256",
-         "scanTimeMs": "9333"
+         "rewriteTimeMs": "257",
+         "scanTimeMs": "10626"
         },
         "operationParameters": {
          "predicate": "[\"(n#3540 > 3)\"]"
@@ -6903,7 +6969,7 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -6914,7 +6980,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "9589",
+       "executionTimeMs": "10883",
        "numAddedBytes": "871",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -6925,8 +6991,8 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "923",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "256",
-       "scanTimeMs": "9333"
+       "rewriteTimeMs": "257",
+       "scanTimeMs": "10626"
       },
       "operationParameters": {
        "predicate": "[\"(n#3540 > 3)\"]"
@@ -6975,7 +7041,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "8980",
+         "executionTimeMs": "10239",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -6986,8 +7052,8 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "926",
          "numRemovedFiles": "1",
-         "rewriteTimeMs": "133",
-         "scanTimeMs": "8847"
+         "rewriteTimeMs": "270",
+         "scanTimeMs": "9969"
         },
         "operationParameters": {
          "predicate": "[\"(id#5824L <= 3)\"]"
@@ -6997,7 +7063,7 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7008,7 +7074,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "8980",
+       "executionTimeMs": "10239",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -7019,8 +7085,8 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "926",
        "numRemovedFiles": "1",
-       "rewriteTimeMs": "133",
-       "scanTimeMs": "8847"
+       "rewriteTimeMs": "270",
+       "scanTimeMs": "9969"
       },
       "operationParameters": {
        "predicate": "[\"(id#5824L <= 3)\"]"
@@ -7124,7 +7190,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "8729",
+         "executionTimeMs": "9452",
          "numAddedBytes": "0",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "0",
@@ -7136,7 +7202,7 @@
          "numRemovedBytes": "1849",
          "numRemovedFiles": "2",
          "rewriteTimeMs": "0",
-         "scanTimeMs": "8727"
+         "scanTimeMs": "9444"
         },
         "operationParameters": {
          "predicate": "[\"true\"]"
@@ -7146,11 +7212,11 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7161,7 +7227,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "8729",
+       "executionTimeMs": "9452",
        "numAddedBytes": "0",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "0",
@@ -7173,7 +7239,7 @@
        "numRemovedBytes": "1849",
        "numRemovedFiles": "2",
        "rewriteTimeMs": "0",
-       "scanTimeMs": "8727"
+       "scanTimeMs": "9444"
       },
       "operationParameters": {
        "predicate": "[\"true\"]"
@@ -7198,7 +7264,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-12f883f0-0db0-4710-999b-b7ea5ec9ccb3-c000.snappy.parquet",
+         "path": "part-00000-270915a7-0c21-4925-9a83-3b554717138f-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -7224,7 +7290,7 @@
         "isolationLevel": "Serializable",
         "operation": "DELETE",
         "operationMetrics": {
-         "executionTimeMs": "8898",
+         "executionTimeMs": "10231",
          "numAddedBytes": "937",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7235,8 +7301,8 @@
          "numDeletionVectorsUpdated": "0",
          "numRemovedBytes": "1849",
          "numRemovedFiles": "2",
-         "rewriteTimeMs": "237",
-         "scanTimeMs": "8661"
+         "rewriteTimeMs": "272",
+         "scanTimeMs": "9959"
         },
         "operationParameters": {
          "predicate": "[\"((v#11408 = c) OR isnull(v#11408))\"]"
@@ -7246,11 +7312,11 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7261,7 +7327,7 @@
      "history": {
       "operation": "DELETE",
       "operationMetrics": {
-       "executionTimeMs": "8898",
+       "executionTimeMs": "10231",
        "numAddedBytes": "937",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7272,8 +7338,8 @@
        "numDeletionVectorsUpdated": "0",
        "numRemovedBytes": "1849",
        "numRemovedFiles": "2",
-       "rewriteTimeMs": "237",
-       "scanTimeMs": "8661"
+       "rewriteTimeMs": "272",
+       "scanTimeMs": "9959"
       },
       "operationParameters": {
        "predicate": "[\"((v#11408 = c) OR isnull(v#11408))\"]"
@@ -7319,7 +7385,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-cc6d1bb9-baf8-4725-a045-f2207152ddaf-c000.snappy.parquet",
+         "path": "part-00000-8e08173d-ce9f-4fce-a066-724401a7e5c9-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -7345,7 +7411,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "8985",
+         "executionTimeMs": "10195",
          "numAddedBytes": "994",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7356,8 +7422,8 @@
          "numRemovedBytes": "1849",
          "numRemovedFiles": "2",
          "numUpdatedRows": "4",
-         "rewriteTimeMs": "248",
-         "scanTimeMs": "8736"
+         "rewriteTimeMs": "321",
+         "scanTimeMs": "9870"
         },
         "operationParameters": {
          "predicate": "[\"(id#13693L >= 3)\"]"
@@ -7367,11 +7433,11 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7382,7 +7448,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "8985",
+       "executionTimeMs": "10195",
        "numAddedBytes": "994",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7393,8 +7459,8 @@
        "numRemovedBytes": "1849",
        "numRemovedFiles": "2",
        "numUpdatedRows": "4",
-       "rewriteTimeMs": "248",
-       "scanTimeMs": "8736"
+       "rewriteTimeMs": "321",
+       "scanTimeMs": "9870"
       },
       "operationParameters": {
        "predicate": "[\"(id#13693L >= 3)\"]"
@@ -7450,7 +7516,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-69006d33-927e-4e09-a561-ed6f1d0d2f2d-c000.snappy.parquet",
+         "path": "part-00000-82b53750-d95c-43c1-9c3e-72956e6662a3-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 3,
@@ -7476,7 +7542,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "8664",
+         "executionTimeMs": "10554",
          "numAddedBytes": "955",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7487,8 +7553,8 @@
          "numRemovedBytes": "926",
          "numRemovedFiles": "1",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "220",
-         "scanTimeMs": "8444"
+         "rewriteTimeMs": "290",
+         "scanTimeMs": "10263"
         },
         "operationParameters": {
          "predicate": "[\"(n#15986 < 4)\"]"
@@ -7498,7 +7564,7 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7509,7 +7575,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "8664",
+       "executionTimeMs": "10554",
        "numAddedBytes": "955",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7520,8 +7586,8 @@
        "numRemovedBytes": "926",
        "numRemovedFiles": "1",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "220",
-       "scanTimeMs": "8444"
+       "rewriteTimeMs": "290",
+       "scanTimeMs": "10263"
       },
       "operationParameters": {
        "predicate": "[\"(n#15986 < 4)\"]"
@@ -7577,7 +7643,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-2261462c-f9c3-4bc0-a5ab-0553da173363-c000.snappy.parquet",
+         "path": "part-00000-57928cbe-4ac9-4b32-88ef-3ab515d74a2e-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -7603,7 +7669,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "8853",
+         "executionTimeMs": "10421",
          "numAddedBytes": "974",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7614,8 +7680,8 @@
          "numRemovedBytes": "1849",
          "numRemovedFiles": "2",
          "numUpdatedRows": "2",
-         "rewriteTimeMs": "250",
-         "scanTimeMs": "8602"
+         "rewriteTimeMs": "126",
+         "scanTimeMs": "10295"
         },
         "operationParameters": {
          "predicate": "[\"isnull(n#18276)\"]"
@@ -7625,11 +7691,11 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7640,7 +7706,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "8853",
+       "executionTimeMs": "10421",
        "numAddedBytes": "974",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7651,8 +7717,8 @@
        "numRemovedBytes": "1849",
        "numRemovedFiles": "2",
        "numUpdatedRows": "2",
-       "rewriteTimeMs": "250",
-       "scanTimeMs": "8602"
+       "rewriteTimeMs": "126",
+       "scanTimeMs": "10295"
       },
       "operationParameters": {
        "predicate": "[\"isnull(n#18276)\"]"
@@ -7708,7 +7774,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-33d17264-2765-4e3c-a3d3-39f1467de868-c000.snappy.parquet",
+         "path": "part-00000-ebf8e8a0-123b-4977-8f88-f25c7be813b8-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 6,
@@ -7734,7 +7800,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "8573",
+         "executionTimeMs": "9735",
          "numAddedBytes": "972",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7745,8 +7811,8 @@
          "numRemovedBytes": "1849",
          "numRemovedFiles": "2",
          "numUpdatedRows": "6",
-         "rewriteTimeMs": "202",
-         "scanTimeMs": "8370"
+         "rewriteTimeMs": "302",
+         "scanTimeMs": "9431"
         },
         "operationParameters": {
          "predicate": "[]"
@@ -7756,11 +7822,11 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-cfde0e4b-fcd3-43fd-bb81-47d90bd4eecb-c000.snappy.parquet"
+         "path": "part-00000-b57c4e26-6c1a-4a2f-bfc2-de790630fd63-c000.snappy.parquet"
         },
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7771,7 +7837,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "8573",
+       "executionTimeMs": "9735",
        "numAddedBytes": "972",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7782,8 +7848,8 @@
        "numRemovedBytes": "1849",
        "numRemovedFiles": "2",
        "numUpdatedRows": "6",
-       "rewriteTimeMs": "202",
-       "scanTimeMs": "8370"
+       "rewriteTimeMs": "302",
+       "scanTimeMs": "9431"
       },
       "operationParameters": {
        "predicate": "[]"
@@ -7839,7 +7905,7 @@
        "adds": [
         {
          "partitionValues": {},
-         "path": "part-00000-18fb03ad-04cc-4480-8b00-1f0bbe99b7a7-c000.snappy.parquet",
+         "path": "part-00000-9398e0c3-3768-4f3c-abc5-67ec84c7488c-c000.snappy.parquet",
          "stats": {
           "maxValues": {
            "id": 3,
@@ -7865,7 +7931,7 @@
         "isolationLevel": "Serializable",
         "operation": "UPDATE",
         "operationMetrics": {
-         "executionTimeMs": "9159",
+         "executionTimeMs": "10844",
          "numAddedBytes": "926",
          "numAddedChangeFiles": "0",
          "numAddedFiles": "1",
@@ -7876,8 +7942,8 @@
          "numRemovedBytes": "926",
          "numRemovedFiles": "1",
          "numUpdatedRows": "1",
-         "rewriteTimeMs": "241",
-         "scanTimeMs": "8917"
+         "rewriteTimeMs": "349",
+         "scanTimeMs": "10495"
         },
         "operationParameters": {
          "predicate": "[\"(id#22739L = 1)\"]"
@@ -7887,7 +7953,7 @@
        "removes": [
         {
          "partitionValues": {},
-         "path": "part-00000-104e1797-5263-4990-9c71-8851fa49e1ff-c000.snappy.parquet"
+         "path": "part-00000-da16f44e-ecb3-4ed8-974f-17a4f841a51d-c000.snappy.parquet"
         }
        ],
        "version": 3
@@ -7898,7 +7964,7 @@
      "history": {
       "operation": "UPDATE",
       "operationMetrics": {
-       "executionTimeMs": "9159",
+       "executionTimeMs": "10844",
        "numAddedBytes": "926",
        "numAddedChangeFiles": "0",
        "numAddedFiles": "1",
@@ -7909,8 +7975,8 @@
        "numRemovedBytes": "926",
        "numRemovedFiles": "1",
        "numUpdatedRows": "1",
-       "rewriteTimeMs": "241",
-       "scanTimeMs": "8917"
+       "rewriteTimeMs": "349",
+       "scanTimeMs": "10495"
       },
       "operationParameters": {
        "predicate": "[\"(id#22739L = 1)\"]"
@@ -8095,6 +8161,469 @@
      ],
      "sql": "UPDATE <t> SET n = 0 WHERE id = 999",
      "step": "update_nothing"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "causes": [
+       {
+        "condition": "DELTA_CAST_OVERFLOW_IN_TABLE_WRITE",
+        "jvm_class": "org.apache.spark.sql.delta.DeltaArithmeticException",
+        "message": "[DELTA_CAST_OVERFLOW_IN_TABLE_WRITE] Failed to write a value of \"BIGINT\" type into the \"INT\" type column `n` due to an overflow.",
+        "parameters": {
+         "ansiEnabledFlag": "spark.sql.ansi.enabled",
+         "columnName": "`n`",
+         "sourceType": "\"BIGINT\"",
+         "storeAssignmentPolicyFlag": "spark.sql.storeAssignmentPolicy",
+         "targetType": "\"INT\"",
+         "updateAndMergeCastingFollowsAnsiEnabledFlag": "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag"
+        },
+        "sqlstate": "22003"
+       }
+      ],
+      "condition": "TASK_WRITE_FAILED",
+      "jvm_class": "org.apache.spark.SparkException",
+      "message": "[TASK_WRITE_FAILED] Task failed while writing rows to file:<path>. SQLSTATE: 58030",
+      "parameters": {
+       "path": "file:<path>"
+      },
+      "sqlstate": "58030"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "UPDATE <t> SET n = n div 0 WHERE id = 1",
+     "step": "update_divide_by_zero"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "causes": [
+       {
+        "condition": "ARITHMETIC_OVERFLOW",
+        "jvm_class": "org.apache.spark.SparkArithmeticException",
+        "message": "[ARITHMETIC_OVERFLOW] overflow. Use 'try_add' to tolerate overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003",
+        "parameters": {
+         "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+         "config": "\"spark.sql.ansi.enabled\"",
+         "message": "overflow"
+        },
+        "sqlstate": "22003"
+       }
+      ],
+      "condition": "TASK_WRITE_FAILED",
+      "jvm_class": "org.apache.spark.SparkException",
+      "message": "[TASK_WRITE_FAILED] Task failed while writing rows to file:<path>. SQLSTATE: 58030",
+      "parameters": {
+       "path": "file:<path>"
+      },
+      "sqlstate": "58030"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "UPDATE <t> SET n = n + 2147483647 WHERE id = 3",
+     "step": "update_arithmetic_overflow"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "causes": [
+       {
+        "condition": "CAST_OVERFLOW",
+        "jvm_class": "org.apache.spark.SparkArithmeticException",
+        "message": "[CAST_OVERFLOW] The value 10000000000L of the type \"BIGINT\" cannot be cast to \"INT\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead. SQLSTATE: 22003",
+        "parameters": {
+         "ansiConfig": "\"spark.sql.ansi.enabled\"",
+         "sourceType": "\"BIGINT\"",
+         "targetType": "\"INT\"",
+         "value": "10000000000L"
+        },
+        "sqlstate": "22003"
+       }
+      ],
+      "condition": "TASK_WRITE_FAILED",
+      "jvm_class": "org.apache.spark.SparkException",
+      "message": "[TASK_WRITE_FAILED] Task failed while writing rows to file:<path>. SQLSTATE: 58030",
+      "parameters": {
+       "path": "file:<path>"
+      },
+      "sqlstate": "58030"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "UPDATE <t> SET n = CAST(id * 10000000000 AS INT) WHERE id = 1",
+     "step": "update_explicit_cast_overflow"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "condition": "DELTA_UNSUPPORTED_SUBQUERY",
+      "message": "[DELTA_UNSUPPORTED_SUBQUERY] Subqueries are not supported in the DELETE (condition = (spark_catalog.delta.`<path>`.id IN (listquery()))).",
+      "parameters": {
+       "cond": "(spark_catalog.delta.`<path>`.id IN (listquery()))",
+       "operation": "DELETE"
+      },
+      "sqlstate": "0AKDC"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE id IN (SELECT id FROM <t> WHERE n = 3)",
+     "step": "delete_in_subquery"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "condition": "DELTA_UNSUPPORTED_SUBQUERY",
+      "message": "[DELTA_UNSUPPORTED_SUBQUERY] Subqueries are not supported in the DELETE (condition = exists()).",
+      "parameters": {
+       "cond": "exists()",
+       "operation": "DELETE"
+      },
+      "sqlstate": "0AKDC"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE EXISTS (SELECT 1)",
+     "step": "delete_exists_subquery"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "condition": "DELTA_UNSUPPORTED_SUBQUERY",
+      "message": "[DELTA_UNSUPPORTED_SUBQUERY] Subqueries are not supported in the DELETE (condition = (spark_catalog.delta.`<path>`.id = scalarsubquery())).",
+      "parameters": {
+       "cond": "(spark_catalog.delta.`<path>`.id = scalarsubquery())",
+       "operation": "DELETE"
+      },
+      "sqlstate": "0AKDC"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE id = (SELECT max(id) FROM <t>)",
+     "step": "delete_scalar_subquery"
+    },
+    {
+     "commits": [],
+     "confs": {},
+     "error": {
+      "condition": "DELTA_UNSUPPORTED_SUBQUERY",
+      "message": "[DELTA_UNSUPPORTED_SUBQUERY] Subqueries are not supported in the UPDATE (condition = (spark_catalog.delta.`<path>`.id IN (listquery()))).",
+      "parameters": {
+       "cond": "(spark_catalog.delta.`<path>`.id IN (listquery()))",
+       "operation": "UPDATE"
+      },
+      "sqlstate": "0AKDC"
+     },
+     "history": {
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "923",
+       "numOutputRows": "3"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "version": 2
+     },
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "UPDATE <t> SET n = 0 WHERE id IN (SELECT 2)",
+     "step": "update_in_subquery"
     }
    ],
    "versions": 3
