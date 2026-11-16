@@ -11,8 +11,12 @@
 //! - `grpc`: the tonic service and its status mapping;
 //! - `browser`: the rules for requests that come from a browser (design §3).
 
+pub mod action;
 mod browser;
+mod core;
 mod grpc;
+pub mod idempotency;
+pub mod page;
 mod rest;
 #[cfg(feature = "session")]
 mod session_admin;
@@ -27,7 +31,7 @@ use axum::Router;
 use futures::future::BoxFuture;
 use prost_reflect::DescriptorPool;
 
-use crate::guard::Guard;
+use crate::guard::{Caller, Guard};
 
 #[expect(
     missing_docs,
@@ -43,8 +47,10 @@ mod pb {
 
 pub use pb::admin_service_server::{AdminService, AdminServiceServer};
 pub use pb::{
+    CancelQueriesByTagRequest, CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse,
     Capability, GetCapabilitiesRequest, GetCapabilitiesResponse, GetVersionRequest,
-    GetVersionResponse,
+    GetVersionResponse, KillSessionRequest, KillSessionResponse, ListQueriesRequest,
+    ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, Query, Session,
 };
 
 #[cfg(test)]
@@ -58,6 +64,9 @@ pub const ADMIN_V1_REVISION: i64 = 1;
 /// Whether the surface is still `preview` (design D8): until the first release that ships it a
 /// non-additive change is possible.
 pub const PREVIEW: bool = true;
+
+/// How long a mutating call is remembered by default.
+pub const DEFAULT_IDEMPOTENCY_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// The path every REST route sits under.
 pub const REST_PREFIX: &str = "/api/admin/v1";
@@ -225,24 +234,86 @@ impl AdminError {
 /// The result of an admin call.
 pub type AdminResult<T> = Result<T, AdminError>;
 
+/// One call as the API sees it: who made it, over which transport, and its request id (the
+/// idempotency key the caller sent, or one generated for the call).
+#[derive(Debug, Clone)]
+pub struct Call {
+    /// The authenticated caller.
+    pub caller: Caller,
+    /// `grpc` or `rest`.
+    pub transport: &'static str,
+    /// The request id.
+    pub request_id: String,
+}
+
 /// What `AdminService` does: one method per RPC, the same for gRPC and REST. The caller has been
-/// authenticated and authorized for the RPC before a method runs (the guard of [`router`]).
+/// authenticated before a method runs (the guard of [`router`]); what the caller may do with
+/// another principal's work is for the method to decide, and every mutating method writes its own
+/// record with [`action::record`].
 pub trait AdminApi: Send + Sync + 'static {
     /// The engine version and the surface revision.
-    fn get_version(&self) -> BoxFuture<'_, AdminResult<GetVersionResponse>>;
+    fn get_version(&self, call: &Call) -> BoxFuture<'_, AdminResult<GetVersionResponse>>;
 
     /// The `system.capabilities` rows.
-    fn get_capabilities(&self) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>>;
+    fn get_capabilities(&self, call: &Call) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>>;
+
+    /// The caller's sessions, or all of them with `Monitor`.
+    fn list_sessions(
+        &self,
+        call: &Call,
+        request: ListSessionsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListSessionsResponse>>;
+
+    /// Ends a session: the caller's own, or any with `Operate`.
+    fn kill_session(
+        &self,
+        call: &Call,
+        request: KillSessionRequest,
+    ) -> BoxFuture<'_, AdminResult<KillSessionResponse>>;
+
+    /// The caller's queries, or all of them with `Monitor`.
+    fn list_queries(
+        &self,
+        call: &Call,
+        request: ListQueriesRequest,
+    ) -> BoxFuture<'_, AdminResult<ListQueriesResponse>>;
+
+    /// Cancels a query: the caller's own, or any with `Operate`.
+    fn cancel_query(
+        &self,
+        call: &Call,
+        request: CancelQueryRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueryResponse>>;
+
+    /// Cancels the queries a tag selector matches: the caller's own, or all with `Operate`.
+    fn cancel_queries_by_tag(
+        &self,
+        call: &Call,
+        request: CancelQueriesByTagRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueriesByTagResponse>>;
 }
 
 /// How the admin listener is reached, for the browser rules of design §3.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AdminConfig {
     /// The listener is bound to a loopback address: a `Host` outside `localhost`, `127.0.0.1`,
     /// `[::1]` and [`AdminConfig::allowed_hosts`] is refused with 421 (DNS rebinding).
     pub loopback: bool,
     /// Extra host names accepted on a loopback listener (`krishiv.server.allowedHosts`).
     pub allowed_hosts: Vec<String>,
+    /// How long a mutating call's response is remembered for its request id (design §6.2:
+    /// `krishiv.server.admin.idempotencyTtl`, 1 h).
+    pub idempotency_ttl: std::time::Duration,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            loopback: false,
+            allowed_hosts: Vec::new(),
+            idempotency_ttl: DEFAULT_IDEMPOTENCY_TTL,
+        }
+    }
 }
 
 impl AdminConfig {
@@ -252,6 +323,7 @@ impl AdminConfig {
         Self {
             loopback: addr.to_canonical().is_loopback(),
             allowed_hosts,
+            idempotency_ttl: DEFAULT_IDEMPOTENCY_TTL,
         }
     }
 }
@@ -270,8 +342,9 @@ pub fn guard_version_alias(app: Router, guard: Arc<dyn Guard>) -> Router {
 /// The admin routes, REST and gRPC, behind `guard` and the browser rules: merge it into the admin
 /// listener's router.
 pub fn router(api: Arc<dyn AdminApi>, guard: Arc<dyn Guard>, config: AdminConfig) -> Router {
-    let rest = rest::router(Arc::clone(&api), Arc::clone(&guard));
-    let grpc = grpc::router(api, guard);
+    let core = Arc::new(core::Core::new(api, config.idempotency_ttl));
+    let rest = rest::router(Arc::clone(&core), Arc::clone(&guard));
+    let grpc = grpc::router(core, guard);
     rest.merge(grpc).layer(axum::middleware::from_fn_with_state(
         Arc::new(config),
         browser::enforce,

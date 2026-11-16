@@ -136,6 +136,56 @@ pub enum Refusal {
     Misconfigured,
 }
 
+/// Who a guarded request acts for, as the guard resolved it (P3-T066: the admin API needs the
+/// caller to tell its own work from other principals' and to log who acted).
+#[derive(Clone)]
+pub struct Caller {
+    /// The principal's name.
+    pub principal: String,
+    /// The role (`viewer`, `operator`, `admin`), if the credential maps to one.
+    pub role: Option<String>,
+    /// How the caller authenticated (`token`, `mtls`, `oidc`, `startup-token`).
+    pub method: String,
+    /// What the guard resolved, for the implementation behind the admin API to read (a
+    /// `krishiv_session::auth::Authenticated` from a [`crate::session_guard::SessionGuard`]).
+    pub identity: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl Caller {
+    /// The local administrator of a server without authentication: whoever holds its start-up
+    /// token (loopback only, ADR 0046 section 6).
+    #[must_use]
+    pub fn local_admin() -> Self {
+        Self {
+            principal: "local".to_owned(),
+            role: Some("admin".to_owned()),
+            method: "startup-token".to_owned(),
+            identity: None,
+        }
+    }
+
+    /// A caller a guard let through without saying who it is: no role, no identity.
+    #[must_use]
+    pub fn anonymous() -> Self {
+        Self {
+            principal: "unknown".to_owned(),
+            role: None,
+            method: "none".to_owned(),
+            identity: None,
+        }
+    }
+}
+
+impl fmt::Debug for Caller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Caller")
+            .field("principal", &self.principal)
+            .field("role", &self.role)
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Decides whether a request may use a guarded route.
 pub trait Guard: Send + Sync + 'static {
     /// `Ok` lets the request through.
@@ -143,6 +193,21 @@ pub trait Guard: Send + Sync + 'static {
     /// # Errors
     /// The [`Refusal`]; the guard has already logged it.
     fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>>;
+
+    /// [`Self::check`], returning who the request acts for. A guard that cannot say (the
+    /// default) returns [`Caller::anonymous`], which holds no role.
+    ///
+    /// # Errors
+    /// The [`Refusal`]; the guard has already logged it.
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        Box::pin(async move {
+            self.check(request).await?;
+            Ok(Caller::anonymous())
+        })
+    }
 }
 
 /// One shared secret: the start-up token of a server without authentication.
@@ -178,6 +243,14 @@ impl Guard for TokenGuard {
         } else {
             Err(Refusal::Unauthenticated)
         }))
+    }
+
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        let checked = self.check(request);
+        Box::pin(async move { checked.await.map(|()| Caller::local_admin()) })
     }
 }
 
