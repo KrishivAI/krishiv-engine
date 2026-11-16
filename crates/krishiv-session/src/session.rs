@@ -1271,6 +1271,7 @@ impl Session {
                 u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
+            relations: Arc::clone(&self.state.relations),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1909,15 +1910,6 @@ impl Session {
     }
 }
 
-/// Aborts a task when dropped.
-struct AbortOnDrop(krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -1931,5 +1923,6 @@ mod writes;
 use writes::*;
 
 mod ops;
+use ops::AbortOnDrop;
 
 mod planning;
