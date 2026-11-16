@@ -263,12 +263,23 @@ fn the_plan_has_a_top_n_and_no_sort() {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    // The shape, top to bottom: the final TopN, the gather, the partition-local TopN; no full sort.
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim_start_matches([' ', '+', '-']))
+        .collect();
+    let at = |prefix: &str| lines.iter().position(|l| l.starts_with(prefix));
+    let (top, gather, local) = (
+        at("TopN 5"),
+        at("Exchange SinglePartition"),
+        at("LocalTopN 5"),
+    );
     assert!(
-        text.contains("LocalTopN") && text.contains("TopN 5"),
+        matches!((top, gather, local), (Some(t), Some(g), Some(l)) if t < g && g < l),
         "{text}"
     );
     assert!(
-        !text.contains("Sort(") && !text.contains("SortExec"),
-        "{text}"
+        lines.iter().all(|l| !l.starts_with("Sort")),
+        "a full sort in the plan:\n{text}"
     );
 }
