@@ -48,8 +48,8 @@ impl TableProvider for Lineage {
     }
 }
 
-/// The rows of `sql` over `p`'s lineage scan as table `t`.
-fn lineage_rows(p: &IcebergTableProvider, sql: &str) -> Vec<String> {
+/// A session with `p`'s lineage scan as table `t`.
+fn lineage_session(p: &IcebergTableProvider) -> super::provider_tests::Session {
     let scan = p.lineage_scan().unwrap();
     let mut schema: Vec<StructField> = p.snapshot().schema.fields().to_vec();
     schema.push(StructField::new(ROW_ID, DataType::Long, true));
@@ -59,7 +59,21 @@ fn lineage_rows(p: &IcebergTableProvider, sql: &str) -> Vec<String> {
         StructType::new(schema),
         Arc::new(Lineage(scan)),
     )])
-    .rows(sql)
+}
+
+/// The rows of `sql` over `p`'s lineage scan as table `t`.
+fn lineage_rows(p: &IcebergTableProvider, sql: &str) -> Vec<String> {
+    lineage_session(p).rows(sql)
+}
+
+/// The sum of the scan counter `name` over the operators of `m`.
+fn scan_count(m: &krishiv_exec::QueryMetrics, name: &str) -> u64 {
+    m.operators
+        .values()
+        .flat_map(|o| o.extra.iter())
+        .filter(|(n, _)| n == name)
+        .filter_map(|(_, v)| v.value())
+        .sum()
 }
 
 fn load(env: &Env, location: &str) -> IcebergTable {
@@ -499,6 +513,17 @@ fn lineage_scan_output_schema_and_metadata_refusal() {
         ]
     );
     assert_eq!(scan.build(p.clone()).unwrap().schema().fields().len(), 4);
+    // A row id with `_metadata` and no lineage column: unsupported, not
+    // the file scan's internal error.
+    let mut q = p.clone();
+    q.projection = Some(vec![krishiv_io::ColumnPath::new("id")]);
+    q.metadata.file_path = true;
+    let e = scan.build(q).err().unwrap();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
     p.row_id = false;
     p.metadata.file_path = true;
     let e = scan.build(p).err().unwrap();
@@ -506,6 +531,195 @@ fn lineage_scan_output_schema_and_metadata_refusal() {
         e.error_class(),
         ErrorClass::KrishivUnsupportedFeature,
         "{e}"
+    );
+}
+
+/// A data file of `n` rows, ids `0..n` at their positions, x = 1, in row
+/// groups of `group` rows; a `DataFile` of partition x = 1.
+fn grouped_file(
+    env: &Env,
+    m: &TableMetadata,
+    name: &str,
+    n: i64,
+    group: usize,
+) -> (i32, iceberg::spec::DataFile) {
+    let ids: Vec<i64> = (0..n).collect();
+    let names: Vec<String> = ids.iter().map(|i| format!("n{i}")).collect();
+    let b = super::provider_tests::batch(
+        vec![
+            super::provider_tests::id_field("id", A::Int64, 1),
+            super::provider_tests::id_field("x", A::Int32, 2),
+            super::provider_tests::id_field("name", A::Utf8, 3),
+        ],
+        vec![
+            Arc::new(Int64Array::from(ids.clone())),
+            Arc::new(Int32Array::from(vec![1; ids.len()])),
+            Arc::new(arrow_array::StringArray::from(names)),
+        ],
+    );
+    let location = env.at(name);
+    let local = location.strip_prefix("file://").unwrap();
+    let props = parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(group))
+        .build();
+    let mut w = parquet::arrow::ArrowWriter::try_new(
+        std::fs::File::create(local).unwrap(),
+        b.schema(),
+        Some(props),
+    )
+    .unwrap();
+    w.write(&b).unwrap();
+    let meta = w.close().unwrap();
+    assert!(
+        meta.row_groups().len() > 2,
+        "{} row groups",
+        meta.row_groups().len()
+    );
+    let size = std::fs::metadata(local).unwrap().len();
+    let spec = m.default_partition_spec();
+    let partition = super::data_file::partition_tuple(
+        spec,
+        m.current_schema(),
+        &[Some(krishiv_io::ScalarValue::Int32(1))],
+    )
+    .unwrap();
+    let df = data_file(
+        &WrittenDataFile {
+            location,
+            size,
+            rows: u64::try_from(n).unwrap(),
+            metrics: crate::plan::file_metrics::FileMetrics::default(),
+            partition,
+            spec_id: spec.spec_id(),
+            split_offsets: None,
+            sort_order_id: None,
+        },
+        m.current_schema(),
+    )
+    .unwrap();
+    (spec.spec_id(), df)
+}
+
+/// Review finding 1: a file of several row groups read in several splits,
+/// under a filter that skips its first row group: every row's `_row_id` is
+/// the file's `first_row_id` plus its physical position, in later row
+/// groups too.
+#[test]
+fn row_ids_follow_physical_positions_across_row_groups_and_splits() {
+    let env = env();
+    let t = create(&env, 3);
+    let m0 = t.metadata().clone();
+    let loc0 = t.metadata_location().unwrap().to_owned();
+    let a = file(
+        &env,
+        &m0,
+        "a.parquet",
+        1,
+        &[(100, "a"), (101, "b"), (102, "c")],
+    );
+    let (m1, loc1) = append(&env, &m0, &loc0, vec![a], 501, 1);
+    let big = grouped_file(&env, &m1, "big.parquet", 60, 10);
+    let (m2, loc2) = append(&env, &m1, &loc1, vec![big], 502, 2);
+    let s2 = m2.current_snapshot().unwrap();
+    assert_eq!((s2.first_row_id(), s2.sequence_number()), (Some(3), 2));
+
+    let mut config = krishiv_common::config::Config::new();
+    config
+        .set("spark.sql.files.maxPartitionBytes", "300")
+        .unwrap();
+    config.set("spark.sql.files.openCostInBytes", "1").unwrap();
+    let table = load(&env, &loc2);
+    let p = env
+        .rt
+        .block_on(IcebergTableProvider::open(
+            &table,
+            &VersionSpec::Current,
+            &config,
+            4,
+        ))
+        .unwrap();
+    assert!(p.lineage_splits() > 2, "{} splits", p.lineage_splits());
+    let want: Vec<String> = (15..60).map(|i| format!("{i}|{}|2", 3 + i)).collect();
+    let (batches, metrics) = lineage_session(&p)
+        .run_metrics(
+            "SELECT id, _row_id, _last_updated_sequence_number FROM t \
+             WHERE id >= 15 AND id < 100 ORDER BY id",
+        )
+        .unwrap();
+    assert_eq!(super::provider_tests::render(&batches), want);
+    // The pushed filter skipped row groups: fewer rows decoded than the big
+    // file's 60 (its first group, 0..10, is never read), and the files were
+    // read as several splits.
+    assert!(
+        scan_count(&metrics, "scan_rows_decoded") < 60,
+        "{metrics:?}"
+    );
+    assert!(scan_count(&metrics, "scan_splits") > 2, "{metrics:?}");
+    let all = lineage_rows(&p, "SELECT id, _row_id FROM t WHERE id < 100 ORDER BY id");
+    assert_eq!(
+        all,
+        (0..60)
+            .map(|i| format!("{i}|{}", 3 + i))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `m` upgraded to format v3, written as the `n`th metadata; its location.
+fn upgrade(env: &Env, m: &TableMetadata, loc: &str, n: u32) -> (TableMetadata, String) {
+    let next =
+        iceberg::spec::TableMetadataBuilder::new_from_metadata(m.clone(), Some(loc.to_owned()))
+            .upgrade_format_version(iceberg::spec::FormatVersion::V3)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+    let path = env.at(&format!("v{n}.metadata.json"));
+    std::fs::write(
+        path.strip_prefix("file://").unwrap(),
+        serde_json::to_vec(&next).unwrap(),
+    )
+    .unwrap();
+    (next, path)
+}
+
+/// Review finding 3: a real v2 → v3 upgrade. Files from the v2 snapshots
+/// have no `first_row_id` and read null for both columns until the first v3
+/// snapshot, which assigns row ids to every data manifest, the existing ones
+/// included (spec "Row Lineage for Upgraded Tables": `next-row-id` starts at
+/// 0, and "When writing the manifest list, all data manifests must be
+/// assigned a `first_row_id`"); the old rows keep their data sequence number.
+#[test]
+fn an_upgraded_table_assigns_row_ids_at_its_first_v3_snapshot() {
+    let env = env();
+    let t = create(&env, 2);
+    let m0 = t.metadata().clone();
+    let loc0 = t.metadata_location().unwrap().to_owned();
+    let a = file(&env, &m0, "a.parquet", 1, &[(1, "a"), (2, "b")]);
+    let (m1, loc1) = append(&env, &m0, &loc0, vec![a], 601, 1);
+    let e = provider(&env, &loc1, None).lineage_scan().err().unwrap();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+
+    let (m2, loc2) = upgrade(&env, &m1, &loc1, 2);
+    assert_eq!((m2.format_version() as u8, m2.next_row_id()), (3, 0));
+    assert_eq!(
+        lineage_rows(&provider(&env, &loc2, None), SQL),
+        ["1|NULL|NULL", "2|NULL|NULL"]
+    );
+
+    let b = file(&env, &m2, "b.parquet", 2, &[(3, "c")]);
+    let (m3, loc3) = append(&env, &m2, &loc2, vec![b], 602, 3);
+    let s3 = m3.current_snapshot().unwrap();
+    assert_eq!((s3.first_row_id(), s3.sequence_number()), (Some(0), 2));
+    // The new manifest is listed first, then the base's: b gets 0, a 1..2.
+    assert_eq!(s3.added_rows_count(), Some(3));
+    assert_eq!(m3.next_row_id(), 3);
+    assert_eq!(
+        lineage_rows(&provider(&env, &loc3, None), SQL),
+        ["1|1|1", "2|2|1", "3|0|2"]
     );
 }
 
