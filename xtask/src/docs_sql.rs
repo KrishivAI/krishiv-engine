@@ -276,6 +276,7 @@ fn plan_owned(name: &str) -> bool {
                 | "range"
                 | "sql_keywords"
                 | "collate"
+                | "window"
                 | "session_window"
                 | "window_time"
         )

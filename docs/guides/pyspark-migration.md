@@ -150,6 +150,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [`TABLESAMPLE` rows follow the input's partitions](../concepts/known-differences.md#tablesample-rows-follow-the-inputs-partitions) |
 | [`histogram_numeric` bins depend on where partial histograms merge](../concepts/known-differences.md#histogram_numeric-bins-depend-on-where-partial-histograms-merge) |
 | [`SELECT *` next to `window(..)` or `session_window(..)`](../concepts/known-differences.md#select--next-to-window-or-session_window) |
+| [`session_window` over a string time column](../concepts/known-differences.md#session_window-over-a-string-time-column) |
 | [Filters move below only their deterministic prefix](../concepts/known-differences.md#filters-move-below-only-their-deterministic-prefix) |
 | [PySpark's `VariantVal`](../concepts/known-differences.md#pysparks-variantval) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |

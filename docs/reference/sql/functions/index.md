@@ -566,7 +566,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`weekofyear`](weekofyear.md) | scalar | yes | Returns the week of the year of the given date. A week is considered to start on a Monday and week 1 is the first week with >3 days. |
 | [`when`](when.md) | scalar | yes | When `expr1` = true, returns `expr2`; else when `expr3` = true, returns `expr4`; else returns `expr5`. |
 | [`width_bucket`](width_bucket.md) | scalar | yes | Returns the bucket number to which |
-| [`window`](window.md) | aggregate | not yet | Bucketize rows into one or more time windows given a timestamp specifying column. |
+| [`window`](window.md) | aggregate | yes | Bucketize rows into one or more time windows given a timestamp specifying column. |
 | [`window_time`](window_time.md) | aggregate | yes | Extract the time value from time/session window column which can be used for event time value of window. |
 | [`xpath`](xpath.md) | scalar | not yet | Returns a string array of values within the nodes of xml that match the XPath expression. |
 | [`xpath_boolean`](xpath_boolean.md) | scalar | not yet | Returns true if the XPath expression evaluates to true, or if a matching node is found. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-483 of 574 functions are implemented. The 91 that are not are listed in [functions not implemented yet](not-implemented.md).
+484 of 574 functions are implemented. The 90 that are not are listed in [functions not implemented yet](not-implemented.md).

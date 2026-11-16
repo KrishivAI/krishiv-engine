@@ -11,7 +11,7 @@ Window starts are inclusive but the window ends are exclusive, e.g. 12:05 will b
 Windows can support microsecond precision. Windows in the order of months are not supported.
 See <a href="https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time">'Window Operations on Event Time'</a> in Structured Streaming guide doc for detailed explanation and examples.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -23,7 +23,7 @@ window(time_column, window_duration[, slide_duration[, start_time]])
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `datetime_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 2.0.0 |
@@ -54,6 +54,7 @@ A2 | 2021-01-01 00:00:00 | 2021-01-01 00:10:00 | 1
 ## Version history
 
 - Added in Spark 2.0.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
