@@ -132,9 +132,10 @@ struct State {
     installed: bool,
     /// Every payload registered, for a clone's runtime.
     payloads: Vec<(String, u32, Arc<PythonUdf>)>,
-    /// The version of each inline UDF registered, by the digest of its definition.
+    /// The version of each unregistered UDF (inline or a relation's) registered, by the digest of its
+    /// definition.
     anonymous: HashMap<[u8; 32], u32>,
-    /// The last inline version handed out (without the top bit).
+    /// The last unregistered version handed out (without the top bit).
     last_anonymous: u32,
 }
 
@@ -252,7 +253,7 @@ fn def_of(udf: &PythonUdf) -> PythonUdfDef {
     }
 }
 
-/// The digest of everything that tells two inline UDFs apart.
+/// The digest of everything that tells two unregistered UDFs apart.
 fn digest(udf: &PythonUdf) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -274,7 +275,7 @@ pub(crate) struct InlineUdfs<'a> {
     udfs: &'a SessionPython,
     /// Analysis: names only, nothing registered.
     analysis: bool,
-    /// Whether the plan holds an inline UDF.
+    /// Whether the plan holds a Python UDF (an inline call or a relation's).
     seen: bool,
     /// UDFs new to the session, registered by [`Self::grant`].
     pending: Vec<([u8; 32], u32, PythonUdf)>,
@@ -299,7 +300,8 @@ impl<'a> InlineUdfs<'a> {
         }
     }
 
-    /// Whether the translated plan calls an inline Python UDF (it needs `Usage` on `System("udf")`).
+    /// Whether the translated plan calls a Python UDF, inline or in a relation (it needs `Usage` on
+    /// `System("udf")`).
     pub(crate) fn seen(&self) -> bool {
         self.seen
     }
@@ -356,7 +358,7 @@ impl InlineUdfs<'_> {
         let n = state.last_anonymous.wrapping_add(1);
         if n & ANONYMOUS_VERSION_BIT != 0 {
             return Err(KrishivUnsupportedFeature {
-                feature: "more than 2^31 - 1 distinct inline Python UDFs in one session".to_owned(),
+                feature: "more than 2^31 - 1 distinct unregistered Python UDFs (inline or in a relation) in one session".to_owned(),
             }
             .into());
         }

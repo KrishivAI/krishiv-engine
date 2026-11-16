@@ -398,8 +398,9 @@ fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
 }
 
 /// The plan of an `ExecutePlan` request, after its checks: a command's ADR
-/// 0046 §3b class is enforced before it runs; a relation with an inline
-/// Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// 0046 §3b class is enforced before it runs; a relation with a Python
+/// UDF (an inline call, or a `mapInPandas`/`applyInPandas` relation's)
+/// needs `Usage` on `System("udf")` before its UDFs are
 /// registered with the session's workers (ADR 0046 §3b, N1: fail closed,
 /// nothing is registered or started for a caller without it).
 ///
