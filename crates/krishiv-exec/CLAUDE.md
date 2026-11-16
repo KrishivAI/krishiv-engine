@@ -37,7 +37,8 @@ idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them befor
 30. Each probe driver then holds the build's level-0 tables, `build.rs` `Level0`, whose memory includes the per-partition
 reservations moved at the seal; the last probe driver done after the flush barrier releases them, so a downstream
 sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `grace.rs` spill partitions,
-flush-phase grace join · `broadcast.rs`
+flush-phase grace join · `block.rs` a
+partition's chunks kept few: the probe side's tiered merge, the build side's cut into the arena's 2^14-row blocks · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
@@ -74,6 +75,7 @@ failed, never a short result), `stream.rs` (a partition evaluated from disk: lea
 memory), `disk.rs` (frames and `lag`/`lead`/`nth_value` of a partition on disk: forward readers, a frame's batches held or folded from the file), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
 the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
 `planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality). `RANGE` value bounds are `FrameBound::RangeInt`/`RangeFloat` (the key's units), `RangeDayTime` (a day-time interval over a `TIMESTAMP`/`TIMESTAMP_NTZ` key: whole days on the zone's clock, then elapsed time) and `RangeMonths` (calendar months over a `DATE` or `TIMESTAMP` key; the `TIMESTAMP` zone is the session's, passed to `Window::new` because the column carries only a marker); `month_tests.rs` (month bounds from disk vs memory in a DST zone).
+`aggregate/observe.rs` (P3-T084) `Dataset.observe`: `PhysNode::CollectMetrics { input, name, measure, instance, limit }`, a pass-through operator that folds each driver's rows into a global partial `AggTable` (charged to the driver's consumer; `NeedMemory` under pressure) and forwards the batch unchanged; `limit` (set by `planner/observe.rs` `cap_observed` from a `LIMIT` above, through projections only) caps the rows folded, one budget per instance, as Spark counts the rows its consumer pulled. Drivers' states go to `QueryContext::observe_partial` keyed `(name, instance)` (the planner's plan-order rank, plan data; of one name the highest wins); `QueryContext::observed()` merges and finalizes them. `LIMIT 0` plans no node.
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `loops.rs` (T180 unit 5b) `UnionLoopSource`: a recursive CTE (`PhysNode::UnionLoop`/`LoopRef`) as one source. The anchor and each
 round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the
@@ -166,3 +168,6 @@ benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` �
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
 - `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `aggregate/sink/held.rs` (the breaker's reservation helpers); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
+
+## Vector carrier (P3-T075)
+`carrier::fixed_to_list` turns a vector carrier into a plain list (shared values, offsets 0,N,2N; null rows get empty slots); `recarried_array` has the FSL to List branch. Expressions never see the carrier: `column()` and `Column::eval` (`planner/eval/mod.rs`) convert on input, while a bare projected column keeps it. Grouping and join keys on lists stay unsupported, vector or not.

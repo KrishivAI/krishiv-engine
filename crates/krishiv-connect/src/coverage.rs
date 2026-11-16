@@ -123,7 +123,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     ToSchema => ("to_schema", 26, Missing, "", "lowering: Project of by-name Cast and reorder (Spark's Dataset.to)", "P3-T012", 4),
     RepartitionByExpression => ("repartition_by_expression", 27, Missing, "", "Repartition (hash or range)", "P3-T012", 3),
     MapPartitions => ("map_partitions", 28, Missing, "", "new MapPartitions (Python, T014)", "P3-T014", 6),
-    CollectMetrics => ("collect_metrics", 29, Missing, "", "new CollectMetrics (T084)", "P3-T084", 6),
+    CollectMetrics => ("collect_metrics", 29, Done, "", "CollectMetrics (observe); the server returns ObservedMetrics after the action", "P3-T084", 6),
     Parse => ("parse", 30, Missing, "", "lowering: Project of from_json / from_csv over a string relation", "P3-T012", 4),
     GroupMap => ("group_map", 31, Missing, "", "new GroupMap (applyInPandas, T014)", "P3-T014", 6),
     CoGroupMap => ("co_group_map", 32, Missing, "", "new CoGroupMap (T014)", "P3-T014", 6),

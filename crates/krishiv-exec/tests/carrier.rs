@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal64Type, Decimal128Type};
 use arrow_array::{
@@ -202,4 +203,113 @@ fn structs_and_maps_recarry_their_fields() {
             .as_ref(),
         map(D128, d128()).as_ref(),
     );
+}
+
+fn vectors(rows: &[Option<[f32; 3]>]) -> ArrayRef {
+    let values: Vec<Option<f32>> = rows
+        .iter()
+        .flat_map(|r| match r {
+            Some(v) => v.iter().copied().map(Some).collect::<Vec<_>>(),
+            None => vec![None; 3],
+        })
+        .collect();
+    let field = Arc::new(Field::new("item", DataType::Float32, true));
+    let nulls = rows
+        .iter()
+        .any(Option::is_none)
+        .then(|| NullBuffer::from(rows.iter().map(Option::is_some).collect::<Vec<_>>()));
+    Arc::new(
+        FixedSizeListArray::try_new(
+            field,
+            3,
+            Arc::new(arrow_array::Float32Array::from(values)),
+            nulls,
+        )
+        .unwrap(),
+    )
+}
+
+fn plain_list() -> DataType {
+    DataType::List(item(DataType::Float32))
+}
+
+/// Design P3-T075 §5: a vector column read by an expression or an edge is the plain list of the same values; with no
+/// null rows the values buffer is the carrier's own.
+#[test]
+fn a_vector_without_null_rows_becomes_a_list_sharing_its_values() {
+    let v = vectors(&[Some([1.0, 2.0, 3.0]), Some([4.0, 5.0, 6.0])]);
+    let out = recarried_array(&v, &plain_list()).unwrap();
+    let list = out.as_list::<i32>();
+    assert_eq!(
+        list.offsets().iter().copied().collect::<Vec<_>>(),
+        [0, 3, 6]
+    );
+    assert!(list.nulls().is_none());
+    let carrier = v.as_fixed_size_list();
+    assert_eq!(
+        list.values().to_data().buffers()[0].as_ptr(),
+        carrier.values().to_data().buffers()[0].as_ptr(),
+        "the values are shared, not copied"
+    );
+    assert_eq!(
+        list.values()
+            .as_primitive::<arrow_array::types::Float32Type>()
+            .values(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+}
+
+/// A null vector is an empty null slot, as a list builder writes it; the other rows keep their values.
+#[test]
+fn a_null_vector_becomes_an_empty_null_slot() {
+    let v = vectors(&[Some([1.0, 2.0, 3.0]), None, Some([7.0, 8.0, 9.0])]);
+    let out = recarried_array(&v, &plain_list()).unwrap();
+    let list = out.as_list::<i32>();
+    assert_eq!(
+        list.offsets().iter().copied().collect::<Vec<_>>(),
+        [0, 3, 3, 6]
+    );
+    assert!(list.is_valid(0) && list.is_null(1) && list.is_valid(2));
+    assert_eq!(
+        list.values()
+            .as_primitive::<arrow_array::types::Float32Type>()
+            .values(),
+        &[1.0, 2.0, 3.0, 7.0, 8.0, 9.0]
+    );
+}
+
+/// A sliced carrier converts what it shows, not what it hides.
+#[test]
+fn a_sliced_vector_converts_only_its_rows() {
+    let v = vectors(&[Some([1.0, 2.0, 3.0]), None, Some([7.0, 8.0, 9.0])]).slice(1, 2);
+    let out = recarried_array(&v, &plain_list()).unwrap();
+    let list = out.as_list::<i32>();
+    assert_eq!(list.len(), 2);
+    assert!(list.is_null(0));
+    assert_eq!(
+        list.value(1)
+            .as_primitive::<arrow_array::types::Float32Type>()
+            .values(),
+        &[7.0, 8.0, 9.0]
+    );
+}
+
+/// A vector inside a struct reaches the edge as a list too.
+#[test]
+fn a_vector_inside_a_struct_becomes_a_list() {
+    let fields = Fields::from(vec![Field::new("v", plain_list(), true)]);
+    let s: ArrayRef = Arc::new(
+        StructArray::try_new(
+            Fields::from(vec![Field::new(
+                "v",
+                DataType::FixedSizeList(item(DataType::Float32), 3),
+                true,
+            )]),
+            vec![vectors(&[Some([1.0, 2.0, 3.0])])],
+            None,
+        )
+        .unwrap(),
+    );
+    let out = recarried_array(&s, &DataType::Struct(fields)).unwrap();
+    assert_eq!(out.as_struct().column(0).as_list::<i32>().len(), 1);
 }

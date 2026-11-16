@@ -762,7 +762,8 @@ impl Resolver<'_> {
     /// of an aggregate calls a nondeterministic function. A call of a SQL
     /// function is as deterministic as its body, whatever its arguments.
     fn nondeterministic_arguments(&mut self, e: &Arc<Expr>, args: &[Bound]) {
-        if self.pending_nondeterministic.is_some() {
+        // `sum(rand())` is a legal observed metric.
+        if self.observing || self.pending_nondeterministic.is_some() {
             return;
         }
         let Some(bad) = args.iter().find(|k| {
@@ -860,6 +861,7 @@ fn call_checks(
     e: &Arc<Expr>,
     kids: &[Bound],
     n: usize,
+    observing: bool,
 ) -> Result<(), AnalysisError> {
     if entry.kind == FunctionKind::Window {
         let shown = with_children(e, kids.iter().map(Bound::shown).collect());
@@ -870,7 +872,9 @@ fn call_checks(
         ));
     }
     if entry.kind == FunctionKind::Aggregate {
-        if let Some(inner) = kids.iter().find_map(|k| k.agg) {
+        // Observed metrics report a nested aggregate as their own class
+        // (`observe` checks them).
+        if !observing && let Some(inner) = kids.iter().find_map(|k| k.agg) {
             return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
         }
         if kids[..n].iter().any(|k| k.win.is_some()) {
