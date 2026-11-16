@@ -311,25 +311,30 @@ impl Pool {
             for key in keys {
                 dropped.extend(state.idle.remove(&key).unwrap_or_default());
             }
-            for _ in &dropped {
-                state.forget(owner);
-            }
             if state.per_owner.contains_key(owner) {
                 state.released.insert(owner.clone());
             }
             dropped
         };
-        self.inner.freed.notify_all();
+        if dropped.is_empty() {
+            self.inner.freed.notify_all();
+            return;
+        }
         // Dropping a worker kills it and waits for its exit: off the caller, which may be an async worker
-        // thread (a session closed by an RPC or the idle sweep). The pool's accounting changed above.
-        if !dropped.is_empty() {
-            // If the thread cannot start, `spawn` drops the closure here, which stops the workers inline.
-            let spawned = std::thread::Builder::new()
-                .name("krishiv-udf-release".to_owned())
-                .spawn(move || drop(dropped));
-            if let Err(e) = spawned {
-                tracing::warn!("Python UDF workers were stopped on the caller's thread: {e}");
-            }
+        // thread (a session closed by an RPC or the idle sweep). The owner's slots are freed only once its
+        // workers are gone ([`Released`]), so a new session never runs more than `maxTotal` workers at once.
+        let released = Released {
+            inner: Arc::clone(&self.inner),
+            owner: owner.clone(),
+            workers: dropped,
+        };
+        // If the thread cannot start, `spawn` drops the closure, and with it `released`: the workers are then
+        // stopped, and their slots freed, on the caller's thread.
+        let spawned = std::thread::Builder::new()
+            .name("krishiv-udf-release".to_owned())
+            .spawn(move || drop(released));
+        if let Err(e) = spawned {
+            tracing::warn!("Python UDF workers were stopped on the caller's thread: {e}");
         }
     }
 
@@ -530,6 +535,28 @@ pub(crate) trait CallWatch {
     /// A worker is starting for the call and has `pidfd`: a cancel from now on kills it. False when the call
     /// was already cancelled; the start is then abandoned (the worker killed and reaped).
     fn starting(&self, pidfd: &Arc<OwnedFd>) -> bool;
+}
+
+/// Idle workers taken from a released owner: dropped, they stop the workers first (each waits for its exit),
+/// then free the owner's slots and wake the waiters, in that order.
+struct Released {
+    inner: Arc<Inner>,
+    owner: Owner,
+    workers: Vec<Idle>,
+}
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        let n = self.workers.len();
+        drop(std::mem::take(&mut self.workers));
+        {
+            let mut state = self.inner.lock();
+            for _ in 0..n {
+                state.forget(&self.owner);
+            }
+        }
+        self.inner.freed.notify_all();
+    }
 }
 
 impl Inner {
