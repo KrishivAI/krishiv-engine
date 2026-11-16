@@ -127,17 +127,33 @@ impl Session {
     /// Returns the qualified text the table is opened with.
     async fn authorize_delta_root(&self, path: &str) -> Result<String, KrishivError> {
         let qualified = self.qualify_path(path)?;
-        let (select, class) = (&[Privilege::Select], StatementClass::Ddl);
+        self.authorize_qualified_root(&qualified, &[Privilege::Select], StatementClass::Ddl)
+            .await?;
+        Ok(qualified)
+    }
+
+    /// Asks `privileges` on the already qualified Delta table root `qualified`: a `file:` root
+    /// through [`Self::authorize_path`] (links resolved), an object-store root as its qualified
+    /// path.
+    pub(super) async fn authorize_qualified_root(
+        &self,
+        qualified: &str,
+        privileges: &[Privilege],
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
         match qualified.strip_prefix("file:") {
             Some(local) => {
-                self.authorize_path(Path::new(local), select, class).await?;
+                self.authorize_path(Path::new(local), privileges, class)
+                    .await?;
             }
             None => {
-                let securable = Securable::Path(OptionValue::from_user("path", qualified.clone()));
-                self.authorize_securable(&securable, select, class).await?;
+                let securable =
+                    Securable::Path(OptionValue::from_user("path", qualified.to_owned()));
+                self.authorize_securable(&securable, privileges, class)
+                    .await?;
             }
         }
-        Ok(qualified)
+        Ok(())
     }
 
     /// `CREATE TABLE t [(columns)] USING delta [PARTITIONED BY (..)] LOCATION 'p'`: registers the
