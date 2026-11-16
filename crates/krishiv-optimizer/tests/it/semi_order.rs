@@ -27,7 +27,7 @@ fn run(plan: &Plan, on: bool) -> Plan {
 /// The kinds of the longest stack of semi/anti joins of `p` (each over the
 /// next through its left input), outermost first: q21's `EXISTS` and
 /// `NOT EXISTS`, not the key-only semi join `LatePayloadJoin` leaves under
-/// the orders join.
+/// the orders join. Subquery plans are not entered.
 fn stack(p: &Arc<LogicalPlan>) -> Vec<JoinKind> {
     fn semi_anti(n: &LogicalPlan) -> Option<(JoinKind, &Arc<LogicalPlan>)> {
         match &n.node {

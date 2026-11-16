@@ -14,6 +14,15 @@
 //! every input of the stack is estimated from statistics (`from_statistics`). A join moves only
 //! when its condition is deterministic and raises on no row ([`runs_on_any_row`], under ANSI):
 //! after the swap it sees rows the join that used to run first would have dropped.
+//!
+//! Only the condition is checked, not the right input. A right input that may raise (an ANSI
+//! error in a subquery's filter) raises whatever the order when every join of the stack is
+//! built; if the executor skips a join's build because its other side ran empty, whether that
+//! error is raised can depend on the order. The rule accepts that, as join ordering does for the
+//! inputs of an inner-join tree.
+//!
+//! The optimizer also sorts once more after its final pruning (`lib.rs`): a projection between
+//! two joins of a stack (a FROM subquery's, or `LatePayloadJoin`'s) hides the stack until then.
 
 use std::sync::Arc;
 

@@ -595,22 +595,20 @@ fn run(
                         ordered =
                             eager_pass(&ordered, stats, options.stats_propagation, joins, &mut t)?;
                     }
-                    let tidied = prune_and_tidy(&ordered, &mut t)?;
-                    // The move wraps its path in a projection, so the semi
-                    // joins it left in place and those already on the path
-                    // stand next to each other only once pruning collapsed
-                    // it: sort those stacks now, or the next `optimize`
-                    // would (not a fixed point). Sorting keeps every
-                    // column, so nothing needs pruning again.
-                    if joins.semi_anti_order {
-                        t.once("SemiAntiOrder", &tidied, |p| {
-                            semi_order::reorder(Arc::clone(p), stats, options.stats_propagation)
-                        })?
-                    } else {
-                        tidied
-                    }
+                    prune_and_tidy(&ordered, &mut t)?
                 }
             }
+            _ => root,
+        };
+        // Semi/anti joins separated by a projection (a FROM subquery's, or
+        // the one LatePayloadJoin wraps its path in) form one stack only
+        // after the final pruning collapsed it: sort those stacks now, or
+        // the next `optimize` would (not a fixed point). Sorting keeps
+        // every column, so nothing needs pruning again.
+        let root = match stats {
+            Some(stats) if joins.semi_anti_order => t.once("SemiAntiOrder", &root, |p| {
+                semi_order::reorder(Arc::clone(p), stats, options.stats_propagation)
+            })?,
             _ => root,
         };
         // Common-subexpression elimination runs once after the final
