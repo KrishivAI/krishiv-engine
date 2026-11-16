@@ -1,0 +1,40 @@
+---
+description: "Profile the time and memory of a Python UDF with spark.sql.pyspark.udf.profiler and spark.profile."
+---
+
+# Profile a Python UDF
+
+> The Python UDF profiler is not part of the 0.2.0 release; this page describes it as it is being built.
+
+Set `spark.sql.pyspark.udf.profiler` to `perf` or `memory`, run the query, and read the result with `spark.profile`. It is off by default, and while it is off a UDF runs exactly as before.
+
+```python
+import krishiv
+from krishiv.sql import functions as F
+
+spark = krishiv.session()
+
+@F.udf("long")
+def plus_one(x):
+    return x + 1
+
+spark.conf.set("spark.sql.pyspark.udf.profiler", "perf")
+spark.range(1000).select(plus_one("id")).collect()
+spark.profile.show()
+```
+
+`show` prints one block per UDF, headed `Profile of UDF<id=N>`; with `perf` the block is the `cProfile` table (calls, time per function, sorted by time).
+
+| Call | Does |
+| --- | --- |
+| `spark.profile.show(id=None, *, type=None)` | prints the profiles of UDF `id` (all when `None`) of `type` (`perf` and `memory` when `None`) |
+| `spark.profile.showPerfProfiles(id=None)`, `showMemoryProfiles(id=None)` | `show` for one type |
+| `spark.profile.dump(path, id=None, *, type=None)` | writes `udf_<id>_perf.pstats` (open with `pstats.Stats`) and `udf_<id>_memory.json` into `path` |
+| `spark.profile.clear(id=None, *, type=None)` | forgets what was collected; the profiler keeps collecting |
+
+## Differences from Spark
+
+- `memory` reports, per UDF, the calls, the peak and the net bytes the calls allocated (`tracemalloc`), not Spark's line-by-line `memory_profiler` report, and it needs no extra package.
+- A profiled call takes a lock, because `cProfile` and `tracemalloc` are one per process: while a profiler is on, calls of profiled UDFs do not overlap, free-threaded Python included. Turn it off for timing the whole query.
+- `spark.profile.render` is not available.
+- It profiles UDFs that run in your process. UDFs on a `krishiv server`'s isolated workers are not profiled yet.

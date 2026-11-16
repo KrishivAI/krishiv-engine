@@ -14,6 +14,8 @@ mod check_compat;
 mod common;
 mod complete;
 mod deadline;
+#[cfg(feature = "server")]
+mod doctor;
 mod editor;
 mod format;
 mod highlight;
@@ -73,6 +75,10 @@ enum Command {
     /// Run Krishiv single-node: serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
     #[cfg(feature = "server")]
     Server(server::ServerArgs),
+    /// Check a `krishiv server` configuration without starting it: settings, authentication,
+    /// TLS files, ports, directories and path allow lists; exit 1 when a check fails.
+    #[cfg(feature = "server")]
+    Doctor(doctor::DoctorArgs),
 }
 
 /// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
@@ -137,6 +143,8 @@ fn run() {
         // Returns only after the engine runtime is dropped (spill directory removed).
         #[cfg(feature = "server")]
         Command::Server(args) => std::process::exit(server::run(&args)),
+        #[cfg(feature = "server")]
+        Command::Doctor(args) => std::process::exit(doctor::run(&args)),
     }
 }
 

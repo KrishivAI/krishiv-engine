@@ -9,5 +9,7 @@
   "resource-groups": "Resource groups and request tags",
   "python-udf-sandbox": "Python UDFs in the server: the sandbox",
   "single-node-server-security": "Securing a single-node server",
-  "collations-and-icu": "Collations and ICU"
+  "collations-and-icu": "Collations and ICU",
+  "krishiv-doctor": "Check a server configuration with krishiv doctor",
+  "python-udf-profiler": "Profile a Python UDF"
 }
