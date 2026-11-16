@@ -3,8 +3,15 @@
 //! engine: each TPC-H and TPC-DS query is optimized with every rule on and
 //! with one switched rule off, planned and run by the executor over Parquet
 //! files, and the two results must be equal as multisets of rows, doubles
-//! within a relative 1e-9 (a reordered aggregation may round differently).
-//! Only arms whose optimized plan differs from the all-on plan run.
+//! within 1e-9 relative (absolute below magnitude 1). The goldens compare
+//! rendered text; a rule that reorders a double aggregation may change its
+//! last digits, so this tolerance stands in for theirs. Only arms whose
+//! optimized plan differs from the all-on plan run.
+//!
+//! The SF1 tests do not require every rule to change a plan in each suite:
+//! eager aggregation and late payload joins change TPC-H plans only, group
+//! key codes TPC-DS ones. On 2026-11-16 every rule changed at least one plan
+//! across the two (logs in the row 19 notes).
 //!
 //! The optimizer crate's `rule_differential` runs the same arms through the
 //! reference interpreter on small generated data; this one runs the design's
@@ -93,6 +100,8 @@ impl Cell {
     /// whose doubles differ in the last bits sort alike.
     fn key(&self) -> String {
         match self {
+            // `-0.0` matches `0.0`, so it sorts with it.
+            Self::F(v) if *v == 0.0 => format!("{:.8e}", 0.0),
             Self::F(v) if v.is_finite() => format!("{v:.8e}"),
             Self::F(v) => format!("{v}"),
             Self::S(s) => s.clone(),
