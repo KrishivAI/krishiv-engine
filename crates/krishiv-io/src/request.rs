@@ -576,13 +576,17 @@ pub enum FieldMapping {
 }
 
 /// How [`FieldMapping::FieldIdOr`] reads a file that has no field id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WithoutFieldIds {
     /// Its top-level columns have the ids 1..n by position, nested fields
     /// none (Iceberg's `ParquetSchemaUtil.addFallbackIds`, FC S4).
     Position,
+    /// Its fields take the ids the name mapping gives their names (Iceberg's
+    /// `schema.name-mapping.default`, `ApplyNameMapping`); an unmapped field
+    /// has none and is not read.
+    Names(Arc<crate::NameMapping>),
     /// The file is refused (`KRISHIV_UNSUPPORTED_FEATURE`): the table names
-    /// another rule (an Iceberg name mapping) that is not read yet.
+    /// a rule this reader does not apply.
     Refuse,
 }
 

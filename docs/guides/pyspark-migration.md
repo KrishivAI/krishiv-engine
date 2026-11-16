@@ -60,7 +60,7 @@ an empty cell means there is none yet.
 | [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
 | [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
 | [`hll_union_agg`](../reference/sql/functions/hll_union_agg.md) | not yet |  |
-| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet |  |
+| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet | try_parse_json(expr) IS NOT NULL is true for a string that parses as JSON and false for one that does not |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
@@ -163,6 +163,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 
 ## Where it runs
 

@@ -615,6 +615,11 @@ fn idle_workers_stop_and_released_sessions_free_theirs() {
     .expect("runs");
     assert_eq!(pool.live_workers(), 1);
     udfs.release();
+    // The workers stop on a release thread, and their slots are freed once they are gone.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while pool.live_workers() > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert_eq!(
         pool.live_workers(),
         0,

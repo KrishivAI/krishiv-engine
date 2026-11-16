@@ -19,7 +19,7 @@ Paths are relative to this crate.
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
   that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result readers `decode_result` (scalar) and `decode_batch` (a relation task's result, given the declared schema)
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
-- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; each call
+- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; its runner conf read at each `prepare` from a `ConfSource` (`with_conf_source`, the session's live conf) or set with `set_runner_conf`; each call
   runs on a pool call thread and is cancelled (worker killed, even one still starting) when its future is dropped
   (`with_worker`, shared with the relation tasks)
 - `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,

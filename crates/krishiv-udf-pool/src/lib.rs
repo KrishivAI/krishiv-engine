@@ -43,7 +43,7 @@ pub use interpreter::{Interpreter, choose};
 #[cfg(target_os = "linux")]
 pub use pool::{Launcher, Owner, Pool, PoolConfig};
 #[cfg(target_os = "linux")]
-pub use runtime::SessionUdfs;
+pub use runtime::{ConfSource, SessionUdfs};
 #[cfg(target_os = "linux")]
 pub use worker::{PythonPayload, decode_batch, decode_result};
 
