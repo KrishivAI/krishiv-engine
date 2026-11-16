@@ -1273,6 +1273,8 @@ MERGE_N_SRC = "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (10, 'k', 1), 
 MERGE_EMPTY_SRC = "(SELECT CAST(1 AS BIGINT) AS id, 'e' AS v, 1 AS n WHERE false) s"
 MERGE_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n) s"
 MERGE_WIDE_SRC = "(SELECT CAST(2 AS BIGINT) AS id, 'W' AS v, 2 AS n, 'extra' AS e) s"
+#: A source without the target's `n` column.
+MERGE_NARROW_SRC = "(SELECT CAST(id AS BIGINT) AS id, v FROM VALUES (2, 'B'), (7, 'G') AS s(id, v)) s"
 MERGE_PART_SRC = (
     "(SELECT CAST(id AS BIGINT) AS id, v, n, p FROM VALUES (2, 'B', 20, 'x'), (4, 'D', 40, 'q'), "
     "(7, 'G', 70, 'q') AS s(id, v, n, p)) s"
@@ -1281,6 +1283,9 @@ MERGE_PART_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n, 'q' A
 #: The rows of the file-backed sources (`<src_parquet>`, `<src_delta>`), written once by the
 #: generator.
 MERGE_FILE_SOURCE = "SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (3, 'P', 30), (9, 'Q', 90) AS s(id, v, n)"
+
+
+AUTO_MERGE = {"spark.databricks.delta.schema.autoMerge.enabled": "true"}
 
 
 def merge_on(src: str, clauses: str, on: str = "t.id = s.id") -> str:
@@ -1450,6 +1455,43 @@ MERGE_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
                 merge_on("delta.`<src_delta>` s", "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
                 {},
             ),
+            # Schema evolution on, but no clause brings a new column: the MERGE runs.
+            (
+                "schema_evolution_conf_no_new_column",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_explicit_assignments",
+                merge_on(
+                    MERGE_WIDE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v = s.e WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)",
+                ),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_narrow_source",
+                merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            ("star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("update_star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            (
+                "subquery_in_insert_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED AND s.id IN (SELECT 7) THEN INSERT *"),
+                {},
+            ),
+            (
+                "subquery_in_nmbs_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.id IN (SELECT 1) THEN DELETE"),
+                {},
+            ),
+            (
+                "subquery_in_update_clause",
+                merge_on(MERGE_SRC, "WHEN MATCHED AND s.id IN (SELECT 2) THEN UPDATE SET v = s.v"),
+                {},
+            ),
+            ("non_deterministic_clause", merge_on(MERGE_SRC, "WHEN MATCHED AND rand() < 2 THEN DELETE"), {}),
         ],
     ),
     (
@@ -1465,6 +1507,15 @@ MERGE_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
             ("nmbs_delete_partition", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN DELETE"), {}),
             ("on_partition_conjunct", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.id AND t.p = 'y'"), {}),
             ("insert_only", merge_on(MERGE_PART_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "upsert_and_conditional_nmbs",
+                merge_on(
+                    MERGE_PART_SRC,
+                    "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN UPDATE SET v = 'nmbs'",
+                ),
+                {},
+            ),
         ],
     ),
     (

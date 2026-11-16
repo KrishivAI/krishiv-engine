@@ -300,6 +300,49 @@
     "rows": 7
    }
   },
+  "partitioned--upsert_and_conditional_nmbs": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"id\":1,\"v\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v\":\"B\",\"n\":20,\"p\":\"x\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v\":\"D\",\"n\":40,\"p\":\"q\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"nmbs\",\"p\":\"z\"}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70,\"p\":\"q\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 8
+   }
+  },
   "partitioned--upsert_new_partition": {
    "count_id_ge_2": 6,
    "error": null,
