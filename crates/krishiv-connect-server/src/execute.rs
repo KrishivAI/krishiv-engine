@@ -38,9 +38,11 @@
 //! only the envelope is Connect's.
 
 pub mod arrow;
+pub mod observed;
 pub mod schema;
 mod sql_command;
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -307,13 +309,17 @@ pub async fn execute_plan(
         let logical = request_plan(entry, plan, limits).await?;
         let df = session.from_plan_with(&logical, query_options)?;
         let schema = df.schema().await?;
-        Ok(Prepared::Rows(df, schema))
+        Ok(Prepared::Rows(
+            df,
+            schema,
+            observed::plan_ids(logical.root()),
+        ))
     })
     .await;
     // A preparation error settles like a query error: an interrupt that
     // reported this operation first turns it into `OPERATION_CANCELED`.
-    let (df, schema) = match prepared {
-        Ok(Prepared::Rows(df, schema)) => (df, schema),
+    let (df, schema, plan_ids) = match prepared {
+        Ok(Prepared::Rows(df, schema, plan_ids)) => (df, schema, plan_ids),
         Ok(Prepared::Command(answer)) => {
             let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
             let stream =
@@ -338,14 +344,21 @@ pub async fn execute_plan(
     // before its first stream.
     let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
     registered.keep();
-    tokio::spawn(encode(sender, df, schema, schema_response, settings));
+    tokio::spawn(encode(
+        sender,
+        df,
+        schema,
+        schema_response,
+        settings,
+        plan_ids,
+    ));
     Ok(stream)
 }
 
 /// What a request's plan prepared.
 enum Prepared {
-    /// A relation: its frame and schema, streamed as batches.
-    Rows(DataFrame, SchemaRef),
+    /// A relation: its frame, schema and the plan ids of its observed nodes, streamed as batches.
+    Rows(DataFrame, SchemaRef, BTreeMap<String, i64>),
     /// A `sql_command`: the relation it answers.
     Command(sql_command::Answer),
 }
@@ -752,6 +765,7 @@ async fn encode(
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
+    plan_ids: BTreeMap<String, i64>,
 ) {
     let op = Arc::clone(&sender.op);
     // A close or an interrupt is seen at once, also while the encoder
@@ -760,7 +774,7 @@ async fn encode(
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, &df, &schema, schema_response, &settings) => r,
+        r = produce(&sender, &df, &schema, schema_response, &settings, &plan_ids) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
@@ -797,7 +811,10 @@ async fn produce(
     schema: &SchemaRef,
     schema_response: pb::DataType,
     settings: &EncodeSettings,
+    plan_ids: &BTreeMap<String, i64>,
 ) -> Result<(), Stop> {
+    let sink = krishiv_session::ObservedSink::new();
+    let df = &df.with_observed_sink(&sink);
     sender.admit().await?;
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
@@ -823,6 +840,29 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The observed nodes' metrics follow the SQL metrics, all in one response as Spark sends
+    // them; a query that ended in an error never gets here, so it sends none.
+    // An observation whose metrics failed to finalize, or have no literal yet, fails the action
+    // (Spark: the metric's error is the action's), after the others' metrics were sent.
+    let mut all = Vec::new();
+    let mut failed = None;
+    for (name, row) in sink.take().unwrap_or_default() {
+        let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        match row.and_then(|row| observed::observed_metrics(&name, plan_id, &row)) {
+            Ok(metrics) => all.push(metrics),
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    if !all.is_empty() {
+        let mut response = sender.response(None);
+        response.observed_metrics = all;
+        sender.send(response).await?;
+    }
+    if let Some(e) = failed {
+        return Err(e.into());
+    }
     // The end is atomic with interrupts: once finished, an interrupt
     // interrupts nothing; an interrupt that came first turns the end into
     // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines

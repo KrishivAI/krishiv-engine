@@ -71,6 +71,7 @@ mod merge_index;
 mod mode;
 mod moments;
 mod node;
+mod observe;
 mod partial;
 mod quantile;
 mod rowtable;
@@ -99,6 +100,7 @@ pub(crate) use collect::{collect_set_supported, kept_bytes};
 pub(crate) use hll::precision_for;
 pub(crate) use moments::arity;
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
+pub(crate) use observe::{CollectMetrics, Finalizer};
 pub use partial::{BypassPolicy, PartialAggregate};
 pub(crate) use quantile::decimal_to_double;
 #[cfg(test)]

@@ -26,7 +26,7 @@
   {"oneof": "Relation.rel_type", "field": "to_schema", "number": 26, "status": "missing", "refused": "", "target": "lowering: Project of by-name Cast and reorder (Spark's Dataset.to)", "task": "P3-T012", "group": 4},
   {"oneof": "Relation.rel_type", "field": "repartition_by_expression", "number": 27, "status": "missing", "refused": "", "target": "Repartition (hash or range)", "task": "P3-T012", "group": 3},
   {"oneof": "Relation.rel_type", "field": "map_partitions", "number": 28, "status": "missing", "refused": "", "target": "new MapPartitions (Python, T014)", "task": "P3-T014", "group": 6},
-  {"oneof": "Relation.rel_type", "field": "collect_metrics", "number": 29, "status": "missing", "refused": "", "target": "new CollectMetrics (T084)", "task": "P3-T084", "group": 6},
+  {"oneof": "Relation.rel_type", "field": "collect_metrics", "number": 29, "status": "done", "refused": "", "target": "CollectMetrics (observe); the server returns ObservedMetrics after the action", "task": "P3-T084", "group": 6},
   {"oneof": "Relation.rel_type", "field": "parse", "number": 30, "status": "missing", "refused": "", "target": "lowering: Project of from_json / from_csv over a string relation", "task": "P3-T012", "group": 4},
   {"oneof": "Relation.rel_type", "field": "group_map", "number": 31, "status": "missing", "refused": "", "target": "new GroupMap (applyInPandas, T014)", "task": "P3-T014", "group": 6},
   {"oneof": "Relation.rel_type", "field": "co_group_map", "number": 32, "status": "missing", "refused": "", "target": "new CoGroupMap (T014)", "task": "P3-T014", "group": 6},

@@ -134,6 +134,7 @@ registry! {
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (file_source_schema, FileSourceSchema, POST_MIGRATION_READER_VERSION, Semantic, "A user-declared schema on a file read (`ReadSource::Files.schema`). A reader without it would infer the columns again and misread formats such as CSV. The schema is a struct type, so a plan with one lists `nested_types` too."),
+    (fixed_size_list_carrier, FixedSizeListCarrier, POST_MIGRATION_READER_VERSION, Semantic, "A vector column on the `FixedSizeList` carrier (design P3-T075): an `array<float>` or `array<double>` stored with its length. A reader without it would read the column through code that expects a plain list."),
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -155,6 +156,7 @@ registry! {
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_literals, NestedLiterals, POST_MIGRATION_READER_VERSION, Semantic, "An array, map or struct literal value (`Literal::{Array, KeyValueMap, Struct}`). The literal's type is a nested type, so a plan with one lists `nested_types` too."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (observe, Observe, POST_MIGRATION_READER_VERSION, Semantic, "The `CollectMetrics` node (`Dataset.observe`): rows pass through while the metrics of a named observation are folded; a worker without it cannot report them."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
@@ -437,7 +439,10 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// excludes it (it is `calendar_struct`).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
     // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
-    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
+    // Nor is a vector carrier: it needs `fixed_size_list_carrier`.
+    !krishiv_types::arrow::is_variant_struct(t)
+        && !matches!(t, arrow_schema::DataType::FixedSizeList(..))
+        && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -464,6 +469,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             PhysNode::Sample { .. } => Some(Feature::Sample),
+            PhysNode::CollectMetrics { .. } => Some(Feature::Observe),
             PhysNode::PythonMap { .. }
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
@@ -572,6 +578,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             } else if krishiv_types::arrow::is_variant_struct(t) {
                 // A variant's carrier is one value, not a struct.
                 Some(Feature::VariantType)
+            } else if matches!(t, arrow_schema::DataType::FixedSizeList(..)) {
+                // A vector carrier is one value, not a nested type: a reader needs the carrier, not `nested_types`.
+                Some(Feature::FixedSizeListCarrier)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
@@ -787,6 +796,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::PythonEval { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::PythonAggregate { .. }
         | PhysNode::Union { .. } => {}
         PhysNode::PythonMap { udf, .. }
@@ -989,6 +999,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::Aggregate { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
         | PhysNode::Exchange(_)
@@ -1069,6 +1080,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
             out.extend(feature_of(c));
         });
         stack.extend(node.children());
+        stack.extend(node.measure());
     }
     for field in plan.schema().fields() {
         visit_arrow_field(field, &mut |c| out.extend(feature_of(c)));
