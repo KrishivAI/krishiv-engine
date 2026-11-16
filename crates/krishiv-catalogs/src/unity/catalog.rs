@@ -55,7 +55,9 @@ pub struct UnityTable {
     pub location: String,
     /// The partition columns, in order of `partition_index`.
     pub partition_columns: Vec<String>,
-    /// `MANAGED` or `EXTERNAL`, as UC says.
+    /// `MANAGED` or `EXTERNAL`, as UC says. A `MANAGED` Delta table of a v0.7.0 server may be catalog-managed: its
+    /// log has commits UC ratified and has not backfilled, so a by-path read of `location` can be stale. T021 decides
+    /// (design P3-lakehouse §3) before any reader opens one; until then nothing reads it.
     pub table_type: Option<String>,
     /// The table's string-valued properties.
     pub properties: BTreeMap<String, String>,
@@ -214,6 +216,29 @@ impl Catalog for UnityCatalog {
     }
 }
 
+/// Only `MANAGED` and `EXTERNAL` tables are read. A `VIEW`, `METRIC_VIEW`, `MATERIALIZED_VIEW` or `STREAMING_TABLE`
+/// has no storage location Krishiv can read as a table, and is not a catalog fault: it is refused before the location
+/// check. A table that declares no type is left to the format and location rules.
+fn check_table_type(relation: &str, table_type: Option<&str>) -> Result<(), KrishivError> {
+    let Some(kind) = table_type else {
+        return Ok(());
+    };
+    let kind = kind.to_ascii_uppercase();
+    if matches!(kind.as_str(), "MANAGED" | "EXTERNAL") {
+        return Ok(());
+    }
+    let shown = if kind.len() <= 32 && kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        kind.as_str()
+    } else {
+        "an unrecognised"
+    };
+    Err(UnsupportedFeatureTableOperation {
+        table_name: relation.to_owned(),
+        operation: format!("reading a Unity Catalog table of type {shown} (only MANAGED and EXTERNAL tables are read)"),
+    }
+    .into())
+}
+
 /// The format of a table, or `UNSUPPORTED_FEATURE.TABLE_OPERATION`. The server's format text reaches the error only
 /// when it is a short identifier.
 fn format_of(relation: &str, declared: Option<&str>) -> Result<UnityFormat, KrishivError> {
@@ -314,10 +339,17 @@ fn column(c: &UcColumn, catalog: &str, relation: &str) -> Result<TableColumn, Kr
         ));
     }
     let data_type = parse_data_type(&c.type_text).map_err(|_| {
+        // The server's type text goes to the log, cut short; the user's error names the table only.
+        tracing::warn!(
+            target: "krishiv::catalog",
+            catalog,
+            table = relation,
+            detail = shortened(&c.type_text).as_str(),
+            "a Unity catalog returned a column type Krishiv does not support"
+        );
         KrishivError::from(KrishivUnsupportedFeature {
             feature: format!(
-                "the Unity Catalog column type `{}` of {relation}",
-                shortened(&c.type_text).replace('`', "")
+                "a Unity Catalog column type of {relation} that Krishiv does not support"
             ),
         })
     })?;
@@ -333,6 +365,7 @@ fn convert(
     policy: &dyn LocationPolicy,
     max_columns: usize,
 ) -> Result<UnityTable, KrishivError> {
+    check_table_type(relation, raw.table_type.as_deref())?;
     let format = format_of(relation, raw.data_source_format.as_deref())?;
     let location = raw.storage_location.clone().unwrap_or_default();
     check_location(catalog, relation, &location, policy)?;

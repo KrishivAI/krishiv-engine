@@ -6,8 +6,8 @@
 //! One deadline covers a call, a paged listing included. A response is read within `max_response_bytes`, its nesting
 //! depth is pre-scanned before it is parsed, and a listing is bounded in pages and entries; a page token that repeats
 //! or is over 4 KiB ends it. Names that would change the URL (empty, `.`, `..`, with a `/`, `\`, `.` or control
-//! character) never reach a request. A 404 on a table is "absent" only when the body's `error_code` says the thing
-//! does not exist, so a wrong base URL answering 404 everywhere is a failure, not an empty catalog. Nothing a server
+//! character) never reach a request. A 404 on a table is "absent" only for the exact codes `TABLE_NOT_FOUND` and
+//! `SCHEMA_NOT_FOUND`, so a wrong base URL answering 404 everywhere is a failure, not an empty catalog. Nothing a server
 //! says in free text reaches a Krishiv error.
 
 use std::collections::{BTreeMap, HashSet};
@@ -27,6 +27,9 @@ const API: [&str; 3] = ["api", "2.1", "unity-catalog"];
 
 /// The longest page token Krishiv follows.
 const MAX_PAGE_TOKEN: usize = 4096;
+
+/// The longest column name or type string accepted.
+const MAX_COLUMN_TEXT: usize = 4096;
 
 /// One column of a table as UC reports it.
 #[derive(Debug, Clone)]
@@ -223,7 +226,12 @@ impl UnityClient {
                     .ok_or_else(|| protocol("a listed entry without a usable name"))?;
                 names.push(name.to_owned());
             }
-            match page.get("next_page_token").and_then(Value::as_str) {
+            let next = match page.get("next_page_token") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(t)) => Some(t.as_str()),
+                Some(_) => return Err(protocol("a page token that is not a string")),
+            };
+            match next {
                 None | Some("") => return Ok(names),
                 Some(next) => {
                     if next.len() > MAX_PAGE_TOKEN {
@@ -316,10 +324,14 @@ impl UnityClient {
     }
 }
 
-/// An `error_code` that says the thing asked for does not exist.
+/// The v0.7.0 404 codes of a table load that mean the table is not there: `TABLE_NOT_FOUND`, and `SCHEMA_NOT_FOUND`
+/// (a table of a schema that does not exist does not exist). `CATALOG_NOT_FOUND` is a failure, not absence: the
+/// declaration names a UC catalog the server lacks, which must not make every table read as absent. A bare
+/// `NOT_FOUND` (an unknown route) and any other code, `ENDPOINT_NOT_FOUND` of a wrong prefix included, are failures.
+const TABLE_ABSENT: &[&str] = &["TABLE_NOT_FOUND", "SCHEMA_NOT_FOUND"];
+
 fn is_absence(code: &str) -> bool {
-    let c = code.to_ascii_uppercase();
-    c.contains("NOT_FOUND") || c.contains("DOES_NOT_EXIST")
+    TABLE_ABSENT.contains(&code)
 }
 
 fn opt_str(v: &Value, key: &str) -> Option<String> {
@@ -340,7 +352,11 @@ fn parse_table(v: &Value, max_columns: usize) -> Result<UcTable, UnityError> {
     }
     let mut columns = Vec::with_capacity(raw.len());
     for c in raw {
-        let name = opt_str(c, "name").ok_or_else(|| protocol("a column without a name"))?;
+        let name = opt_str(c, "name")
+            .filter(|n| {
+                !n.is_empty() && n.len() <= MAX_COLUMN_TEXT && !n.chars().any(char::is_control)
+            })
+            .ok_or_else(|| protocol("a column without a usable name"))?;
         let type_text =
             opt_str(c, "type_text").ok_or_else(|| protocol("a column without a type_text"))?;
         columns.push(UcColumn {
@@ -382,9 +398,18 @@ mod unit_tests {
     }
 
     #[test]
-    fn only_a_does_not_exist_code_is_absence() {
-        assert!(is_absence("TABLE_DOES_NOT_EXIST"));
-        assert!(is_absence("NOT_FOUND"));
-        assert!(!is_absence("INTERNAL_ERROR"));
+    fn only_the_exact_table_and_schema_codes_are_absence() {
+        assert!(is_absence("TABLE_NOT_FOUND"));
+        assert!(is_absence("SCHEMA_NOT_FOUND"));
+        for not in [
+            "CATALOG_NOT_FOUND",
+            "NOT_FOUND",
+            "ENDPOINT_NOT_FOUND",
+            "table_not_found",
+            "TABLE_DOES_NOT_EXIST",
+            "INTERNAL_ERROR",
+        ] {
+            assert!(!is_absence(not), "{not}");
+        }
     }
 }

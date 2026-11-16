@@ -199,7 +199,8 @@ fn an_unknown_table_is_absent_and_the_contract_suite_passes() {
     let server = serve(|_| {
         Reply::Json(
             404,
-            r#"{"error_code": "TABLE_DOES_NOT_EXIST", "message": "Table not found", "details": []}"#.into(),
+            r#"{"error_code": "TABLE_NOT_FOUND", "message": "Table not found", "details": []}"#
+                .into(),
         )
     });
     let c = catalog_of(&server);
@@ -214,7 +215,14 @@ fn an_unknown_table_is_absent_and_the_contract_suite_passes() {
 
 #[test]
 fn a_404_that_is_not_about_the_table_is_a_failure_not_absence() {
-    for body in ["not json", r#"{"error_code": "ENDPOINT_MOVED"}"#, ""] {
+    for body in [
+        "not json",
+        r#"{"error_code": "ENDPOINT_NOT_FOUND"}"#,
+        r#"{"error_code": "CATALOG_NOT_FOUND"}"#,
+        r#"{"error_code": "NOT_FOUND"}"#,
+        r#"{"error_code": "ENDPOINT_MOVED"}"#,
+        "",
+    ] {
         let sent = body.to_owned();
         let server = serve(move |_| Reply::Json(404, sent.clone()));
         let e = load(&catalog_of(&server)).unwrap_err();
@@ -482,7 +490,7 @@ fn the_catalog_trait_folds_names_and_has_no_versions_temporary_or_nested_names()
 
 #[test]
 fn a_name_with_odd_characters_is_one_encoded_path_segment() {
-    let server = serve(|_| Reply::Json(404, r#"{"error_code": "TABLE_DOES_NOT_EXIST"}"#.into()));
+    let server = serve(|_| Reply::Json(404, r#"{"error_code": "TABLE_NOT_FOUND"}"#.into()));
     let c = catalog_of(&server);
     assert!(c.load("my schema", "t?x#y%").unwrap().is_none());
     assert_eq!(
@@ -498,7 +506,7 @@ fn a_name_with_odd_characters_is_one_encoded_path_segment() {
 
 #[test]
 fn the_server_uri_may_carry_a_path_prefix() {
-    let server = serve(|_| Reply::Json(404, r#"{"error_code": "TABLE_DOES_NOT_EXIST"}"#.into()));
+    let server = serve(|_| Reply::Json(404, r#"{"error_code": "TABLE_NOT_FOUND"}"#.into()));
     let mut config = config_for(&server);
     config.uri = url::Url::parse(&format!("{}/uc/", server.base)).unwrap();
     assert!(load(&catalog_with(config)).unwrap().is_none());
@@ -506,4 +514,72 @@ fn the_server_uri_may_carry_a_path_prefix() {
         server.seen()[0].target,
         "/uc/api/2.1/unity-catalog/tables/unity.default.marksheet"
     );
+}
+
+#[test]
+fn schema_not_found_is_absence_for_a_table_load() {
+    let server = serve(|_| Reply::Json(404, r#"{"error_code": "SCHEMA_NOT_FOUND"}"#.into()));
+    assert!(load(&catalog_of(&server)).unwrap().is_none());
+}
+
+#[test]
+fn views_and_other_table_types_are_table_operation_refusals_before_the_location_check() {
+    for kind in [
+        "VIEW",
+        "METRIC_VIEW",
+        "MATERIALIZED_VIEW",
+        "STREAMING_TABLE",
+        "weird type!",
+    ] {
+        // A recorded view body: no storage location, a view definition.
+        let body = format!(
+            r#"{{"name": "v", "table_type": "{kind}", "view_definition": "select 1", "storage_location": null,
+                "columns": [{{"name": "a", "type_text": "int", "position": 0}}]}}"#
+        );
+        let server = serve(move |_| Reply::Json(200, body.clone()));
+        let e = load(&catalog_of(&server)).unwrap_err();
+        assert_eq!(
+            class(&e),
+            ErrorClass::UnsupportedFeatureTableOperation,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn an_unsupported_column_type_text_stays_out_of_the_error() {
+    let body = r#"{"data_source_format": "PARQUET", "storage_location": "s3://b/t", "columns": [
+        {"name": "a", "type_text": "evil sentence", "position": 0}]}"#;
+    let server = serve(move |_| Reply::Json(200, body.into()));
+    let e = load(&catalog_of(&server)).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
+    assert!(!e.to_string().contains("evil"), "{e}");
+}
+
+#[test]
+fn column_names_are_bounded_and_a_non_string_page_token_is_a_fault() {
+    let one = |name: &str| {
+        format!(
+            r#"{{"data_source_format": "PARQUET", "storage_location": "s3://b/t", "columns": [
+                {{"name": "{name}", "type_text": "int"}}]}}"#
+        )
+    };
+    for name in ["".to_owned(), "a\\u0007b".to_owned(), "x".repeat(5000)] {
+        let body = one(&name);
+        let server = serve(move |_| Reply::Json(200, body.clone()));
+        let e = load(&catalog_of(&server)).unwrap_err();
+        assert_eq!(
+            class(&e),
+            ErrorClass::KrishivCatalogFailure,
+            "{}",
+            name.len()
+        );
+    }
+    let server = serve(|_| {
+        Reply::Json(
+            200,
+            r#"{"schemas": [{"name": "a"}], "next_page_token": 7}"#.into(),
+        )
+    });
+    assert!(catalog_of(&server).list_schemas().is_err());
 }
