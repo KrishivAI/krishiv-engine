@@ -30,7 +30,7 @@ impl HashAggregate {
 }
 
 /// Makes the final phase of the aggregate whose global state is `g` count
-/// its finished tables into `counter` ([`super::distinct`]).
+/// its finished tables into `counter` ([`crate::aggregate::distinct`]).
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for another operator's state, or a second counter.
