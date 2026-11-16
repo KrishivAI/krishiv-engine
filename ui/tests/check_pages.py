@@ -15,6 +15,7 @@ import sys
 import threading
 from pathlib import Path
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -172,7 +173,9 @@ def page_checks(origin: str) -> list[str]:
         page = ctx.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss()))
+        page.on(
+            "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
+        )
         page.goto(f"{origin}/?token=fixture")
         page.wait_for_timeout(800)
         # Session: the token left the address and no script can read it.
@@ -180,7 +183,12 @@ def page_checks(origin: str) -> list[str]:
             problems.append(f"the token is still in the address: {page.url}")
         if page.evaluate("document.cookie").find("fixture") >= 0:
             problems.append("the session cookie is readable by script (not HttpOnly)")
-        if page.evaluate("JSON.stringify([sessionStorage, localStorage])").find("fixture") >= 0:
+        if (
+            page.evaluate("JSON.stringify([sessionStorage, localStorage])").find(
+                "fixture"
+            )
+            >= 0
+        ):
             problems.append("the token is kept in web storage")
         # XSS: hostile text in query text, principals, catalog names, comments, results and errors renders as text.
         page.evaluate("window.location.hash = '#/queries'")
@@ -213,8 +221,10 @@ def page_checks(origin: str) -> list[str]:
         page.get_by_role("button", name="Cancel").click()
         try:
             page.get_by_text("cancelled", exact=True).wait_for(timeout=2000)
-        except Exception:
-            problems.append("the SQL editor did not show the cancelled state within 2 s")
+        except PlaywrightTimeout:
+            problems.append(
+                "the SQL editor did not show the cancelled state within 2 s"
+            )
         # Redaction on the environment page.
         page.evaluate("window.location.hash = '#/environment'")
         page.wait_for_timeout(600)
@@ -222,7 +232,9 @@ def page_checks(origin: str) -> list[str]:
             problems.append("the environment page does not show *** for the secrets")
         # Accessibility: no serious or critical axe violation on the four pages.
         if not AXE.exists():
-            problems.append(f"axe-core is not installed ({AXE}); run pnpm install in ui/")
+            problems.append(
+                f"axe-core is not installed ({AXE}); run pnpm install in ui/"
+            )
         else:
             axe_js = AXE.read_text()
             for frag in AXE_PAGES:
