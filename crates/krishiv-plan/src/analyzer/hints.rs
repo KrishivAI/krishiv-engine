@@ -160,7 +160,8 @@ impl Hints {
             PlanNode::SubqueryAlias { alias, .. } => Some(alias_parts(alias)),
             PlanNode::Scan(s) => match &s.source {
                 ReadSource::Table { name, .. } => Some(name.clone()),
-                ReadSource::Files { .. } => Some(Vec::new()),
+                // Neither a file read nor a local relation has a table name.
+                ReadSource::Files { .. } | ReadSource::Local(_) => Some(Vec::new()),
             },
             PlanNode::CteRef(r) => Some(vec![r.name.clone()]),
             PlanNode::JoinHint {
@@ -171,7 +172,7 @@ impl Hints {
                     PlanNode::SubqueryAlias { alias, .. } => Some(alias_parts(alias)),
                     PlanNode::Scan(s) => match &s.source {
                         ReadSource::Table { name, .. } => Some(name.clone()),
-                        ReadSource::Files { .. } => None,
+                        ReadSource::Files { .. } | ReadSource::Local(_) => None,
                     },
                     PlanNode::CteRef(r) => Some(vec![r.name.clone()]),
                     _ => None,

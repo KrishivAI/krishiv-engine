@@ -983,6 +983,8 @@ impl Walker<'_> {
                         column: column.to_owned(),
                     })
                     .collect(),
+                // Rows carried in the plan have no table or path to name.
+                ReadSource::Local(_) => Vec::new(),
             }
         };
         let metadata = s.metadata_column().map(|c| c.id);

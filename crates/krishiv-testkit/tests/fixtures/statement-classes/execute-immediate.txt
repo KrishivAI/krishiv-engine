@@ -4,115 +4,115 @@ SESSION	DECLARE sql_string STRING
 SESSION	SET VAR sql_string = 'SELECT * from tbl_view where name = \'name1\''
 SESSION	EXECUTE IMMEDIATE 'SET spark.sql.ansi.enabled=true'
 SESSION	EXECUTE IMMEDIATE 'CREATE TEMPORARY VIEW IDENTIFIER(:tblName) AS SELECT id, name FROM tbl_view' USING 'tbl_view_tmp' as 
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view_tmp'
-SESSION	EXECUTE IMMEDIATE 'REFRESH TABLE IDENTIFIER(:tblName)' USING 'x' as tblName
-SESSION	EXECUTE IMMEDIATE sql_string
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = \'name1\''
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view_tmp'
+ADMIN	EXECUTE IMMEDIATE 'REFRESH TABLE IDENTIFIER(:tblName)' USING 'x' as tblName
+ADMIN	EXECUTE IMMEDIATE sql_string
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = \'name1\''
 SESSION	SET VAR sql_string = 'SELECT * from tbl_view where name = ? or name = ?'
 SESSION	DECLARE a STRING
 SESSION	SET VAR a = 'name1'
-SESSION	EXECUTE IMMEDIATE sql_string USING 'name1', 'name3'
-SESSION	EXECUTE IMMEDIATE sql_string USING a, 'name2'
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING 'name1', 'name3'
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING a, 'name2'
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING (a, 'name2')
-SESSION	EXECUTE IMMEDIATE 'INSERT INTO x VALUES(?)' USING 1
+ADMIN	EXECUTE IMMEDIATE sql_string USING 'name1', 'name3'
+ADMIN	EXECUTE IMMEDIATE sql_string USING a, 'name2'
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING 'name1', 'name3'
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING a, 'name2'
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = ? or name = ?' USING (a, 'name2')
+WRITE	EXECUTE IMMEDIATE 'INSERT INTO x VALUES(?)' USING 1
 READ	SELECT * from x
 SESSION	SET VAR sql_string = 'SELECT * from tbl_view where name = :first or id = :second'
 SESSION	DECLARE b INT
 SESSION	SET VAR b = 40
-SESSION	EXECUTE IMMEDIATE sql_string USING 40 as second, 'name7' as first
-SESSION	EXECUTE IMMEDIATE sql_string USING b as second, 'name7' as first
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first or id = :second' USING 40 as second, 'name7' as first
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first or id = :second' USING 'name7' as first, b as second
-SESSION	EXECUTE IMMEDIATE 'SELECT tbl_view.*, :first as p FROM tbl_view WHERE name = :first' USING 'name7' as first
+ADMIN	EXECUTE IMMEDIATE sql_string USING 40 as second, 'name7' as first
+ADMIN	EXECUTE IMMEDIATE sql_string USING b as second, 'name7' as first
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first or id = :second' USING 40 as second, 'name7' as first
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first or id = :second' USING 'name7' as first, b as second
+READ	EXECUTE IMMEDIATE 'SELECT tbl_view.*, :first as p FROM tbl_view WHERE name = :first' USING 'name7' as first
 SESSION	EXECUTE IMMEDIATE 'SET VAR sql_string = ?' USING 'SELECT id from tbl_view where name = :first'
 READ	SELECT sql_string
 SESSION	DECLARE res_id INT
-SESSION	EXECUTE IMMEDIATE sql_string INTO res_id USING 'name7' as first
+ADMIN	EXECUTE IMMEDIATE sql_string INTO res_id USING 'name7' as first
 READ	SELECT res_id
-SESSION	EXECUTE IMMEDIATE sql_string INTO res_id USING a as first
+ADMIN	EXECUTE IMMEDIATE sql_string INTO res_id USING a as first
 READ	SELECT res_id
 SESSION	SET VAR sql_string = 'SELECT * from tbl_view where name = :first or id = :second'
 SESSION	EXECUTE IMMEDIATE 'SELECT 42' INTO res_id
 READ	SELECT res_id
 SESSION	EXECUTE IMMEDIATE 'SELECT id, name FROM tbl_view WHERE id = ?' INTO b, a USING 10
 READ	SELECT b, a
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where id = ? AND name = ?' USING b as first, a
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where id = ? AND name = ?' USING b as first, a
 SESSION	EXECUTE IMMEDIATE 'SELECT 42 WHERE 2 = 1' INTO res_id
 READ	SELECT res_id
 SESSION	EXECUTE IMMEDIATE 'SELECT \'1707\'' INTO res_id
 READ	SELECT res_id
 SESSION	EXECUTE IMMEDIATE 'SELECT \'invalid_cast_error_expected\'' INTO res_id
-SESSION	EXECUTE IMMEDIATE 'INSERT INTO x VALUES (?)' INTO res_id USING 1
+WRITE	EXECUTE IMMEDIATE 'INSERT INTO x VALUES (?)' INTO res_id USING 1
 SESSION	DECLARE OR REPLACE testvarA INT
 SESSION	EXECUTE IMMEDIATE 'SET VAR testVarA = 1' INTO testVarA
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view WHERE ? = id' USING id
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where ? = id and :first = name' USING 1 as x, 'name2' as first
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where :x = id and :first = name' USING 1, 'name2' as first
-SESSION	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where :first = name' USING 1, 'name2' as first
-SESSION	EXECUTE IMMEDIATE 'SELCT Fa'
-SESSION	EXECUTE IMMEDIATE 'SELCT Fa' INTO res_id
-SESSION	EXECUTE IMMEDIATE b
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view WHERE ? = id' USING id
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where ? = id and :first = name' USING 1 as x, 'name2' as first
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where :x = id and :first = name' USING 1, 'name2' as first
+READ	EXECUTE IMMEDIATE 'SELECT * FROM tbl_view where :first = name' USING 1, 'name2' as first
+ADMIN	EXECUTE IMMEDIATE 'SELCT Fa'
+ADMIN	EXECUTE IMMEDIATE 'SELCT Fa' INTO res_id
+ADMIN	EXECUTE IMMEDIATE b
 SESSION	SET VAR sql_string = 'SELECT * from tbl_view where name = :first or id = :second'
 SESSION	SET VAR a = 'na'
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first' USING CONCAT(a , "me1") as first
-SESSION	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first' USING (SELECT 42) as first, 'name2' as second
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first' USING CONCAT(a , "me1") as first
+READ	EXECUTE IMMEDIATE 'SELECT * from tbl_view where name = :first' USING (SELECT 42) as first, 'name2' as second
 SESSION	EXECUTE IMMEDIATE 'SELECT id, name FROM tbl_view WHERE id = ?' INTO a, b USING 10
 PARSE_ERROR	EXECUTE IMMEDIATE 'SELECT id, name FROM tbl_view WHERE id = ?' INTO (a, b) USING 10
 SESSION	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view' INTO res_id
 SESSION	EXECUTE IMMEDIATE 'SELECT id, data.f1 FROM tbl_view' INTO res_id
 SESSION	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view' INTO res_id, b
-SESSION	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :first' USING 10 as first, 20 as first
+READ	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :first' USING 10 as first, 20 as first
 SESSION	DECLARE p = 10
-SESSION	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :p' USING p
-SESSION	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :p' USING p, 'p'
+READ	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :p' USING p
+READ	EXECUTE IMMEDIATE 'SELECT id FROM tbl_view WHERE id = :p' USING p, 'p'
 SESSION	EXECUTE IMMEDIATE 'SELECT id, data.f1 FROM tbl_view WHERE id = 10' INTO res_id, res_id
-SESSION	EXECUTE IMMEDIATE 'EXECUTE IMMEDIATE \'SELECT id FROM tbl_view WHERE id = ?\' USING 10'
+READ	EXECUTE IMMEDIATE 'EXECUTE IMMEDIATE \'SELECT id FROM tbl_view WHERE id = ?\' USING 10'
 SESSION	SET VAR sql_string = null
-SESSION	EXECUTE IMMEDIATE sql_string
+ADMIN	EXECUTE IMMEDIATE sql_string
 SESSION	SET VAR sql_string = 5
-SESSION	EXECUTE IMMEDIATE sql_string
+ADMIN	EXECUTE IMMEDIATE sql_string
 SESSION	SET VAR sql_string = 'hello'
-SESSION	EXECUTE IMMEDIATE length(sql_string)
-SESSION	EXECUTE IMMEDIATE 'SELECT 42 where ? = :first' USING 1, 2 as first
+ADMIN	EXECUTE IMMEDIATE length(sql_string)
+READ	EXECUTE IMMEDIATE 'SELECT 42 where ? = :first' USING 1, 2 as first
 SESSION	DECLARE int_var INT
 SESSION	SET VAR int_var = 42
-SESSION	EXECUTE IMMEDIATE int_var
+ADMIN	EXECUTE IMMEDIATE int_var
 SESSION	DECLARE null_var STRING
 SESSION	SET VAR null_var = null
-SESSION	EXECUTE IMMEDIATE null_var
-SESSION	EXECUTE IMMEDIATE 'SELECT ?' USING (SELECT 1)
-SESSION	EXECUTE IMMEDIATE 'SELECT :first' USING 2, 3
-SESSION	EXECUTE IMMEDIATE (SELECT c FROM (VALUES(1)) AS T(c))
+ADMIN	EXECUTE IMMEDIATE null_var
+READ	EXECUTE IMMEDIATE 'SELECT ?' USING (SELECT 1)
+READ	EXECUTE IMMEDIATE 'SELECT :first' USING 2, 3
+ADMIN	EXECUTE IMMEDIATE (SELECT c FROM (VALUES(1)) AS T(c))
 DDL	DROP TABLE x
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5 AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5L AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5S AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5Y AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 3.14F AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 3.14159D AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 123.45BD AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING true AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING false AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 'hello world' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 'it''s a test' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING DATE '2023-12-25' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING TIMESTAMP '2023-12-25 10:30:45' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING TIMESTAMP_NTZ '2023-12-25 10:30:45' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING CAST(NULL AS INT) AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING CAST(NULL AS STRING) AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, hex(:p) as val' USING X'010203FF' AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '3' DAY AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '2' YEAR AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '1-2' YEAR TO MONTH AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '3 4:5:6' DAY TO SECOND AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 999.999BD AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p1) as type1, :p1 as val1, typeof(:p2) as type2, :p2 as val2'
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY(1, 2, 3) AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY('a', 'b', 'c') AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY(ARRAY(1, 2), ARRAY(3, 4)) AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING MAP('key1', 'value1', 'key2', 'value2') AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING MAP(1, 'one', 2, 'two') AS p
-SESSION	EXECUTE IMMEDIATE 'SELECT :param'
-SESSION	EXECUTE IMMEDIATE 'SELECT ?'
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5 AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5L AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5S AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 5Y AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 3.14F AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 3.14159D AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 123.45BD AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING true AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING false AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 'hello world' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 'it''s a test' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING DATE '2023-12-25' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING TIMESTAMP '2023-12-25 10:30:45' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING TIMESTAMP_NTZ '2023-12-25 10:30:45' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING CAST(NULL AS INT) AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING CAST(NULL AS STRING) AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, hex(:p) as val' USING X'010203FF' AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '3' DAY AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '2' YEAR AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '1-2' YEAR TO MONTH AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING INTERVAL '3 4:5:6' DAY TO SECOND AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING 999.999BD AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p1) as type1, :p1 as val1, typeof(:p2) as type2, :p2 as val2'
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY(1, 2, 3) AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY('a', 'b', 'c') AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING ARRAY(ARRAY(1, 2), ARRAY(3, 4)) AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING MAP('key1', 'value1', 'key2', 'value2') AS p
+READ	EXECUTE IMMEDIATE 'SELECT typeof(:p) as type, :p as val' USING MAP(1, 'one', 2, 'two') AS p
+READ	EXECUTE IMMEDIATE 'SELECT :param'
+READ	EXECUTE IMMEDIATE 'SELECT ?'

@@ -366,7 +366,17 @@ fn literal_type(l: &Literal) -> Option<DataType> {
         Literal::Double(_) => DataType::Double,
         Literal::Decimal { data_type, .. } => DataType::Decimal(*data_type),
         Literal::String(_) => DataType::String,
-        _ => return None,
+        Literal::Map(_)
+        | Literal::Array { .. }
+        | Literal::KeyValueMap { .. }
+        | Literal::Struct { .. }
+        | Literal::Binary(_)
+        | Literal::Date(_)
+        | Literal::Timestamp(_)
+        | Literal::TimestampNtz(_)
+        | Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. }
+        | Literal::CalendarInterval { .. } => return None,
     })
 }
 

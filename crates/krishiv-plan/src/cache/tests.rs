@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-
-//! Unit tests for plan-cache hashing and cache keys.
+//! Tests of the normalized plan hash and the relation-cache key.
 
 use super::*;
 use std::collections::BTreeMap;
@@ -691,6 +690,7 @@ fn every_node_and_expression_form_hashes_distinctly() {
                             OptionValue::from_user("password", "pw"),
                         ),
                     ]),
+                    schema: None,
                 })),
             ),
             (
@@ -823,7 +823,6 @@ fn cache_keys_separate_principals_policies_and_pins() {
     let context = || crate::analyzer::ContextFingerprint {
         profile: crate::analyzer::SparkProfile::default(),
         conf: crate::analyzer::ResolutionConf::default(),
-        mode: crate::analyzer::AnalysisMode::default(),
         current: vec!["spark_catalog".to_owned(), "default".to_owned()],
         catalogs: 0,
         catalog_epochs: BTreeMap::new(),
@@ -834,6 +833,7 @@ fn cache_keys_separate_principals_policies_and_pins() {
         policy: PolicyVersion(7),
         files: false,
         variables: 0,
+        mode: crate::analyzer::AnalysisMode::Execute,
     };
     let analyzed = |principal: &str, policy: u64| crate::analyzer::AnalyzedPlan {
         plan: plan.clone(),

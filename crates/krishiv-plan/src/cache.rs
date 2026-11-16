@@ -203,6 +203,16 @@ impl Encoder {
         self.out.extend_from_slice(s.as_bytes());
     }
 
+    /// An Arrow schema as names, Spark types and nullability (never data).
+    fn arrow_schema(&mut self, schema: &arrow_schema::Schema) {
+        self.num(schema.fields().len() as u64);
+        for f in schema.fields() {
+            self.text(f.name());
+            self.text(&crate::local::type_text(f));
+            self.flag(f.is_nullable());
+        }
+    }
+
     fn debug<T: std::fmt::Debug>(&mut self, v: &T) {
         let s = format!("{v:?}");
         self.text(&s);
@@ -276,10 +286,18 @@ impl Encoder {
                     self.option_value(value);
                 }
             }
+            ReadSource::Local(l) => {
+                self.tag("local");
+                self.text(&l.relation().hash.hex());
+                self.arrow_schema(l.schema());
+                self.num(l.batches() as u64);
+                self.num(l.rows());
+            }
             ReadSource::Files {
                 format,
                 paths,
                 options,
+                schema,
             } => {
                 self.tag("files");
                 self.text(format);
@@ -291,6 +309,11 @@ impl Encoder {
                 for (key, value) in options {
                     self.text(key);
                     self.option_value(value);
+                }
+                // Only when declared, so a read that infers keeps its key.
+                if let Some(schema) = schema {
+                    self.tag("schema");
+                    self.debug(schema);
                 }
             }
         }
