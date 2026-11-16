@@ -99,10 +99,22 @@ enum Partitions {
 /// file under the spelling of the path that listed it). A file without a root prints under its
 /// store id.
 ///
-/// Kept beside the scan, not in the plan: a worker re-lists the read from the plan's paths and
-/// derives the same roots from them.
+/// Kept beside the scan, not in the plan (plans stay pure data): a worker that builds the scan
+/// from plan data must list the read's paths and derive the roots from them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PathRoots(Arc<[(StoreId, Path, Arc<str>)]>);
+pub struct PathRoots(Arc<[PathRoot]>);
+
+/// One read path's root (see [`PathRoots`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathRoot {
+    store: StoreId,
+    /// The read path's key (a glob's directory).
+    key: Path,
+    /// Its number of segments.
+    depth: usize,
+    /// `<scheme>://<authority>` as written.
+    root: Arc<str>,
+}
 
 impl PathRoots {
     /// Roots of read paths: `(store, key of the path or a glob's directory, root)`.
@@ -111,7 +123,12 @@ impl PathRoots {
         Self(
             roots
                 .into_iter()
-                .map(|(store, key, root)| (store, key, Arc::from(root)))
+                .map(|(store, key, root)| PathRoot {
+                    depth: key.parts().count(),
+                    store,
+                    key,
+                    root: Arc::from(root),
+                })
                 .collect(),
         )
     }
@@ -123,13 +140,12 @@ impl PathRoots {
     #[must_use]
     pub fn root(&self, store: &StoreId, path: &Path) -> Option<&str> {
         let mut best: Option<(usize, &str)> = None;
-        for (s, key, root) in self.0.iter() {
-            if s != store || path.prefix_match(key).is_none() {
+        for r in self.0.iter() {
+            if r.store != *store || path.prefix_match(&r.key).is_none() {
                 continue;
             }
-            let depth = key.parts().count();
-            if best.is_none_or(|(d, _)| depth > d) {
-                best = Some((depth, root));
+            if best.is_none_or(|(d, _)| r.depth > d) {
+                best = Some((r.depth, &r.root));
             }
         }
         best.map(|(_, root)| root)
