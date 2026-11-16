@@ -224,6 +224,32 @@ struct Udf {
     /// An aggregate lane's task: its result has one row per group it saw
     /// (`EndGroup` frames) instead of `result_rows`.
     per_group: bool,
+    /// The sends of its tasks, held while the gate is closed.
+    gate: Arc<Gate>,
+    /// Its tasks fail at their first `EndGroup` (a UDF raising).
+    fails_end_group: std::sync::atomic::AtomicBool,
+}
+
+/// Holds every task's sends while closed, as a pool worker's thread that
+/// has not taken a frame yet: the send is pending, and opening the gate
+/// wakes it, so the frame is taken inside the next poll of its pump.
+#[derive(Default)]
+pub(super) struct Gate {
+    closed: std::sync::atomic::AtomicBool,
+    wakers: Mutex<Vec<Waker>>,
+}
+
+impl Gate {
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Opens the gate and wakes the held sends.
+    fn open(&self) {
+        self.closed.store(false, Ordering::SeqCst);
+        let wakers = std::mem::take(&mut *self.wakers.lock().unwrap());
+        wakers.into_iter().for_each(Waker::wake);
+    }
 }
 
 impl PreparedRelationUdf for Udf {
@@ -243,6 +269,8 @@ impl PreparedRelationUdf for Udf {
             twice: self.twice.load(Ordering::SeqCst),
             per_group: self.per_group,
             groups: Mutex::new(0),
+            gate: Arc::clone(&self.gate),
+            fails_end_group: self.fails_end_group.load(Ordering::SeqCst),
         }))
     }
 
@@ -263,6 +291,8 @@ struct Task {
     per_group: bool,
     /// `EndGroup` frames taken.
     groups: Mutex<usize>,
+    gate: Arc<Gate>,
+    fails_end_group: bool,
 }
 
 impl UdfTask for Task {
@@ -270,6 +300,15 @@ impl UdfTask for Task {
         let end = matches!(frame, Frame::End);
         let end_group = matches!(frame, Frame::EndGroup);
         Box::pin(poll_fn(move |cx| {
+            if self.gate.closed.load(Ordering::SeqCst) {
+                self.gate.wakers.lock().unwrap().push(cx.waker().clone());
+                return Poll::Pending;
+            }
+            if end_group && self.fails_end_group {
+                return Poll::Ready(Err(crate::error::internal(
+                    "the task fails on purpose".to_owned(),
+                )));
+            }
             if end_group {
                 *self.groups.lock().unwrap() += 1;
             }
@@ -345,6 +384,8 @@ struct Rig {
     udfs: Vec<Arc<Udf>>,
     slots: Arc<Slots>,
     ends: Arc<AtomicUsize>,
+    /// Every task's sends ([`Gate`]).
+    gate: Arc<Gate>,
 }
 
 /// A sink of `lanes` lanes (an aggregate's when more than one) over slots
@@ -442,6 +483,7 @@ fn rig_opts(
         state: Arc::default(),
     });
     let ends = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(Gate::default());
     let udfs: Vec<Arc<Udf>> = (0..lanes)
         .map(|_| {
             Arc::new(Udf {
@@ -451,6 +493,8 @@ fn rig_opts(
                 result_rows,
                 twice: std::sync::atomic::AtomicBool::new(false),
                 per_group: false,
+                gate: Arc::clone(&gate),
+                fails_end_group: std::sync::atomic::AtomicBool::new(false),
             })
         })
         .collect();
@@ -543,6 +587,7 @@ fn rig_opts(
         udfs,
         slots,
         ends,
+        gate,
     }
 }
 
@@ -1207,6 +1252,104 @@ async fn a_combined_backlog_s_framing_failure_fails_the_waiting_driver() {
     assert!(err.to_string().contains("fails on purpose"), "{err}");
 }
 
+/// R7b-1: a pass of the waiting driver's that starts with a combined window
+/// full (the send pending, as a pool thread that has not taken the frame)
+/// frames nothing, and the poll that follows takes the frame at once and
+/// empties the window. Framing before the poll then parked the waiting
+/// driver with room free and `EndGroup`, `End` unframed, and nothing to
+/// come; the poll comes first in every pass.
+#[tokio::test(start_paused = true)]
+async fn a_combined_window_emptied_by_a_poll_after_a_full_start_is_framed_on() {
+    let r = rig_opts(
+        1,
+        1,
+        64 << 20,
+        0,
+        2,
+        Opts {
+            window: 1,
+            grouped: true,
+            ..Opts::default()
+        },
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let run = async {
+        let mut a = r.sink.local_state(&r.ctx, &g)?;
+        let mut b = r.sink.local_state(&r.ctx, &g)?;
+        // a takes the slot: a frame of two rows sent, one row held.
+        feed(&r, rows(&[1, 1, 1]), &mut a, &g).await?;
+        // The task takes no frame now: a's held row stays in flight (its
+        // window of one full), `EndGroup` and `End` wait.
+        r.gate.close();
+        r.sink.combine(a, &g)?;
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[5, 5]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        // The task takes the frame: the waiting driver's next pass starts
+        // with the window full and empties it in its poll.
+        r.gate.open();
+        waiting.await.unwrap();
+        finish(&r, b, &g).await
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver parked with room free in the combined window")
+        .unwrap();
+    assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+    assert_eq!(r.slots.state.most.load(Ordering::SeqCst), 1);
+}
+
+/// R7b-2: a combined aggregate driver whose one task failed (at its
+/// `EndGroup`, a UDF raising) while its `End` waits behind a full window:
+/// its other task holds its slot waiting for that `End`. The failure is the
+/// waiting driver's error; skipping the driver's backlog would leave the
+/// other slot held and the waiting driver parked for good.
+#[tokio::test(start_paused = true)]
+async fn a_combined_lane_s_failure_fails_the_driver_waiting_for_its_slots() {
+    let r = rig_opts(
+        2,
+        2,
+        64 << 20,
+        0,
+        0,
+        Opts {
+            window: 1,
+            ..Opts::default()
+        },
+    );
+    r.udfs[0].fails_end_group.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let run = async {
+        let mut a = r.sink.local_state(&r.ctx, &g)?;
+        let mut b = r.sink.local_state(&r.ctx, &g)?;
+        // a takes both slots: one group's rows sent to both lanes.
+        feed(&r, rows(&[1, 1]), &mut a, &g).await?;
+        assert_eq!(r.slots.held(), 2);
+        // The tasks take no frame now: `EndGroup` fills each window of
+        // one, `End` waits.
+        r.gate.close();
+        r.sink.combine(a, &g)?;
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[5, 5]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slots");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        // Lane 0's task fails at `EndGroup`; lane 1's waits for `End`.
+        r.gate.open();
+        waiting.await.unwrap();
+        let empty = Batch::new(RecordBatch::new_empty(input()));
+        Ok::<_, krishiv_common::error::KrishivError>(r.sink.sink(empty, &mut b, &g).map(drop))
+    };
+    let err = tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung on a combined driver's failed lane")
+        .unwrap()
+        .expect_err("the waiting driver must fail");
+    assert!(err.to_string().contains("fails on purpose"), "{err}");
+}
+
 /// A small seeded generator (xorshift64*), so a failing case is named by
 /// its seed and runs again the same way.
 struct Rng(u64);
@@ -1361,6 +1504,8 @@ fn session(case: &Case, owner: usize, state: &Arc<SlotState>, root: &Arc<TreePoo
                 result_rows: case.result_rows,
                 twice: std::sync::atomic::AtomicBool::new(!case.aggregate && owner % 2 == 1),
                 per_group: case.aggregate,
+                gate: Arc::default(),
+                fails_end_group: std::sync::atomic::AtomicBool::new(false),
             }) as Arc<dyn PreparedRelationUdf>,
             sides: vec![vec![Arc::new(InputColumn {
                 index: 1,

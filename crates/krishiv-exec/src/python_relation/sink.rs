@@ -1136,10 +1136,12 @@ fn reserve_combined(
 }
 
 /// Frames the combined drivers' backlogs (`feeds`) while their windows have
-/// room, the copies reserved in `spare`, only where their tasks run: they
-/// hold slots, a combined driver never queues for slots through another's
-/// poll (review R4-1), and a task that ended (in error) takes no more
-/// frames. Whether a cut moved, and the bytes the first frame whose copies
+/// room, the copies reserved in `spare`, only where their tasks are open:
+/// they hold slots, and a combined driver never queues for slots through
+/// another's poll (review R4-1). A lane whose task failed is not skipped
+/// here (its driver's other lanes would keep their slots, waiting for the
+/// `End` it holds back): [`drive_combined`]'s poll makes its failure the
+/// waiting driver's error first. Whether a cut moved, and the bytes the first frame whose copies
 /// the pool refuses still needs: nothing the waiting driver waits on frees
 /// them, so its caller asks for them (`Blocked` ends, the next `sink`
 /// returns `NeedMemory`) rather than leaving them to `finalize`, which
@@ -1165,7 +1167,7 @@ fn frame_combined(
 ) -> Result<(bool, Option<usize>)> {
     let mut moved = false;
     for (feed, lanes, partition) in feeds {
-        if !lanes.iter().all(Lane::running) {
+        if !lanes.iter().all(Lane::opened) {
             continue;
         }
         let mut theirs = lock(feed);
@@ -1187,17 +1189,20 @@ fn frame_combined(
     Ok((moved, None))
 }
 
-/// Moves the combined drivers on for a driver waiting for their slots:
-/// their backlogs framed ([`frame_combined`]), their lanes polled with `cx`
-/// and their refused results reserved ([`reserve_combined`], in
-/// reservations split from `spare`), again until no cut moves. A frame the
-/// poll's pump takes at once empties a window inside the poll with no event
-/// to come (no result follows a frame mid-group), so one pass could leave
-/// the rest of a backlog, its `End` among it, with nothing to wake the
-/// caller (review R7-1); the last pass ends at a window still full after
-/// the poll (its pump's send pending: the pump wakes `cx`) or with nothing
-/// left to frame. The bytes the pool refuses (a frame's copies or a
-/// result), for the caller to ask for.
+/// Moves the combined drivers on for a driver waiting for their slots, in
+/// passes: their lanes polled with `cx`, their refused results reserved
+/// ([`reserve_combined`], in reservations split from `spare`), then their
+/// backlogs framed ([`frame_combined`]); again while a cut moved. A pump
+/// that takes a frame inside a poll can empty its window with no event to
+/// come (no result follows a frame mid-group), so the framing comes after
+/// the poll in every pass, as for the driver's own backlog (review R7-1,
+/// R7b-1): a pass that frames nothing saw each backlog's windows as the
+/// latest poll left them, so the loop ends only with a window still full
+/// after that poll (its pump's send pending, which wakes `cx`) or with
+/// nothing left to frame. A combined lane's failure is the waiting
+/// driver's error (R7b-2: the query fails, and `finalize`, which would
+/// report it, cannot start while this driver waits). The bytes the pool
+/// refuses (a result or a frame's copies), for the caller to ask for.
 fn drive_combined(
     specs: &[RelationLane],
     window: usize,
@@ -1207,12 +1212,10 @@ fn drive_combined(
     cx: &mut Context<'_>,
 ) -> Result<Option<usize>> {
     loop {
-        let (moved, missing) = frame_combined(specs, window, feeds, spare, cx)?;
-        if missing.is_some() {
-            return Ok(missing);
-        }
         for lane in others {
-            let _ = lane.poll(cx);
+            if let Some(Err(e)) = lane.poll(cx) {
+                return Err(e);
+            }
         }
         // A combined driver's result the pool refused stops its task, which
         // then never frees its slot: reserved here if the pool has room
@@ -1220,6 +1223,10 @@ fn drive_combined(
         // (R2-2).
         if let Some(bytes) = reserve_combined(others, || spare.split(0), cx) {
             return Ok(Some(bytes));
+        }
+        let (moved, missing) = frame_combined(specs, window, feeds, spare, cx)?;
+        if missing.is_some() {
+            return Ok(missing);
         }
         if !moved {
             return Ok(None);
@@ -1459,15 +1466,15 @@ fn blocked(
                 Ok(Flushed::Slots) => {
                     drop(f);
                     // Their `End` frames out and results in, so their tasks
-                    // end and free the slots this driver waits for (a
-                    // failure of a lane is `finalize`'s to report).
+                    // end and free the slots this driver waits for.
                     let (others, feeds) = {
                         let mut c = lock(&combined);
                         register(&mut c.parked, cx.waker());
                         (c.lanes.clone(), c.feeds.clone())
                     };
                     // Memory the pool refuses ends this future: the next
-                    // `sink` asks for it; a framing failure is its error.
+                    // `sink` asks for it; a failure of their framing or of
+                    // a lane is its error.
                     return match drive_combined(&specs, window, &others, &feeds, &mut spare, cx) {
                         Ok(None) => Poll::Pending,
                         Ok(Some(_)) => Poll::Ready(()),
