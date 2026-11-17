@@ -1009,3 +1009,57 @@ fn a_bodys_author_is_asked_the_columns_it_reads() {
         &["secret_col", "TOPSECRET"],
     );
 }
+
+/// Review r12 n17: the owner of a function WITH an argument is asked the columns its body reads,
+/// one of which depends on the argument. Narrowed to `pii(a)`, ana's view over it is refused,
+/// redacted, for carl; once the owner's grant covers the columns again it answers.
+#[test]
+fn a_parameterised_bodys_owner_is_asked_the_columns_it_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = pii_world(&w);
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.fx(x INT) RETURNS INT RETURN (SELECT max(CASE WHEN x > 0 THEN length(secret_col) ELSE a END) FROM default.pii)",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.fx TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW default.dvx SQL SECURITY DEFINER AS SELECT ns2.fx(1) AS c",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvx TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvx"), ["9"]);
+    narrow_bob(&root);
+    assert_redacted(
+        &carl,
+        "SELECT * FROM default.dvx",
+        &["secret_col", "TOPSECRET"],
+    );
+    ok(&root, "GRANT SELECT (a, secret_col) ON pii TO user:bob");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvx"), ["9"]);
+}
+
+/// Review r12 n17: the same for a table function with an argument.
+#[test]
+fn a_parameterised_table_functions_owner_is_asked_the_columns_it_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = pii_world(&w);
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.ft(x INT) RETURNS TABLE (c STRING) RETURN SELECT secret_col FROM default.pii WHERE a = x",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.ft TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW default.dvt SQL SECURITY DEFINER AS SELECT * FROM ns2.ft(1)",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvt TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvt"), ["TOPSECRET"]);
+    narrow_bob(&root);
+    assert_redacted(
+        &carl,
+        "SELECT * FROM default.dvt",
+        &["secret_col", "TOPSECRET"],
+    );
+    ok(&root, "GRANT SELECT (a, secret_col) ON pii TO user:bob");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvt"), ["TOPSECRET"]);
+}

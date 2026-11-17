@@ -144,7 +144,7 @@ impl Session {
                     .await?;
                 // And the columns it reads, through the column pass the definer's analysis
                 // made (review r11 B1).
-                if let krishiv_plan::analyzer::FunctionLookup::Sql(def) =
+                let krishiv_plan::analyzer::FunctionLookup::Sql(def) =
                     krishiv_plan::analyzer::FunctionRegistry::lookup(
                         &*calls,
                         &[
@@ -154,11 +154,20 @@ impl Session {
                         ],
                         self.state.profile,
                     )
-                {
-                    let qualifier = [crate::catalog::CATALOG.to_owned(), owned.function.0.clone()];
-                    let call = crate::sql_functions::null_call(&def, &qualifier);
-                    Self::analyze_as_writer(&call, &ctx, &calls, &writer).await?;
-                }
+                else {
+                    // Fail closed: a body whose text cannot be found is not checked, so refuse.
+                    return Err(self.definer_failure(
+                        env,
+                        krishiv_common::error::InternalError {
+                            message: "a definer's function body is not a stored SQL function"
+                                .to_owned(),
+                        }
+                        .into(),
+                    ));
+                };
+                let qualifier = [crate::catalog::CATALOG.to_owned(), owned.function.0.clone()];
+                let call = crate::sql_functions::null_call(&def, &qualifier);
+                Self::analyze_as_writer(&call, &ctx, &calls, &writer).await?;
             }
         }
         // So does each stored view it reaches (review r10 M10): its lookups, and the calls and
@@ -189,9 +198,17 @@ impl Session {
                 }
                 // And the columns its text reads, through the column pass the definer's
                 // analysis made (review r11 B1).
-                if let Some(q) = &v.query {
-                    Self::analyze_as_writer(q, &ctx, &calls, &writer).await?;
-                }
+                let Some(q) = &v.query else {
+                    // Fail closed: a view whose text is missing is not checked, so refuse.
+                    return Err(self.definer_failure(
+                        env,
+                        krishiv_common::error::InternalError {
+                            message: "a definer's reached view has no text".to_owned(),
+                        }
+                        .into(),
+                    ));
+                };
+                Self::analyze_as_writer(q, &ctx, &calls, &writer).await?;
             }
         }
         env.sql_functions.note_definer_calls(scope.calls);
