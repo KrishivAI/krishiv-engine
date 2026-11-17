@@ -151,6 +151,11 @@ pub struct Caller {
     pub identity: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
+/// The identity marker of [`Caller::local_admin`]: the only caller without an `Authenticated`
+/// identity that holds rights. A guard that sets `role` without an identity gets none.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalAdmin;
+
 impl Caller {
     /// The local administrator of a server without authentication: whoever holds its start-up
     /// token (loopback only, ADR 0046 section 6).
@@ -160,7 +165,7 @@ impl Caller {
             principal: "local".to_owned(),
             role: Some("admin".to_owned()),
             method: "startup-token".to_owned(),
-            identity: None,
+            identity: Some(Arc::new(LocalAdmin)),
         }
     }
 

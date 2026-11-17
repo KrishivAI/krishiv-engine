@@ -97,7 +97,11 @@ impl Who {
             };
         }
         // The local administrator of a server without authentication (its start-up token).
-        let admin = call.caller.role.as_deref() == Some("admin");
+        let admin = call
+            .caller
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.is::<crate::guard::LocalAdmin>());
         Self {
             principal: Principal::new(&call.caller.principal, PrincipalKind::User),
             monitor: admin,
@@ -162,10 +166,17 @@ fn tag_matches(selector: &str, tags: &[(String, String)]) -> bool {
 }
 
 fn not_found(class: &str, what: &str, id: &str) -> AdminError {
+    // The SQLSTATE comes from the registry (default profile): `OPERATION_NOT_FOUND` has none of its
+    // own (`HY000`), `SESSION_NOT_FOUND` is `08003` only from Spark 4.3.
+    let state = if class.ends_with("SESSION_NOT_FOUND") {
+        krishiv_common::error::ErrorClass::InvalidHandleSessionNotFound.sql_state()
+    } else {
+        krishiv_common::error::ErrorClass::InvalidHandleOperationNotFound.sql_state()
+    };
     AdminError::new(
         ErrorKind::NotFound,
         class,
-        "08003",
+        state.unwrap_or("HY000"),
         format!("{what} {id} was not found."),
     )
     .with_parameter("handle", id)

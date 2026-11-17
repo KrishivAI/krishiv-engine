@@ -466,16 +466,95 @@ impl tracing::Subscriber for Records {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-#[tokio::test]
-async fn every_mutating_call_writes_one_action_record_and_a_replay_says_so() {
-    // One global subscriber, so a callsite first hit by a parallel test is never cached as off;
-    // this test reads only the records of its own principals.
+/// One global subscriber, so a callsite first hit by a parallel test is never cached as off;
+/// each test reads only the records of its own principals.
+fn records() -> &'static Records {
     static RECORDS: std::sync::OnceLock<Records> = std::sync::OnceLock::new();
-    let records = RECORDS.get_or_init(|| {
+    RECORDS.get_or_init(|| {
         let r = Records::default();
         let _ = tracing::subscriber::set_global_default(r.clone());
         r
-    });
+    })
+}
+
+/// Design 5.6 over the other mutating rows: KillSession (allowed, refused, unknown),
+/// CancelQueriesByTag, and an operator acting on another principal's work (`own=false`).
+#[tokio::test]
+async fn kill_by_tag_and_operator_actions_write_their_records() {
+    let records = records();
+    let f = fixture();
+    let (a, b, c) = (f.session("kay"), f.session("kit"), f.session("kai"));
+    let _ta = f.start(&a, 1, &["rpt"]);
+    let _tb = f.start(&b, 2, &["rpt"]);
+    let _tc = f.start(&c, 3, &[]);
+    f.gate.queued(3).await;
+    let session_of = |who: &str| {
+        f.rt.session_infos()
+            .into_iter()
+            .find(|s| s.principal == who)
+            .unwrap()
+            .session_id
+    };
+
+    // Refused (another's session), unknown, by tag (own), operator on another's session.
+    let kit = session_of("kit");
+    f.call(
+        "kay:viewer",
+        "POST",
+        &format!("/sessions/{kit}:kill"),
+        Some("{}"),
+    )
+    .await;
+    f.call("kay:viewer", "POST", "/sessions/no-such:kill", Some("{}"))
+        .await;
+    f.call(
+        "kay:viewer",
+        "POST",
+        "/queries:cancelByTag",
+        Some(r#"{"selector":"rpt"}"#),
+    )
+    .await;
+    let kai = session_of("kai");
+    f.call(
+        "kay:operator",
+        "POST",
+        &format!("/sessions/{kai}:kill"),
+        Some("{}"),
+    )
+    .await;
+
+    let log: Vec<String> = records
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("principal=\"kay\""))
+        .cloned()
+        .collect();
+    assert_eq!(log.len(), 4, "{log:#?}");
+    for l in &log[..2] {
+        assert!(
+            l.contains("rpc=\"KillSession\"") && l.contains("result=\"denied\""),
+            "{l}"
+        );
+    }
+    assert!(
+        log[2].contains("rpc=\"CancelQueriesByTag\"") && log[2].contains("result=\"ok\""),
+        "{}",
+        log[2]
+    );
+    assert!(
+        log[3].contains("rpc=\"KillSession\"") && log[3].contains("own=false"),
+        "{}",
+        log[3]
+    );
+    assert!(log[3].contains("result=\"ok\""), "{}", log[3]);
+    assert!(log.iter().all(|l| !l.contains("kay:viewer")));
+}
+
+#[tokio::test]
+async fn every_mutating_call_writes_one_action_record_and_a_replay_says_so() {
+    let records = records();
     let f = fixture();
     let (a, b) = (f.session("zed"), f.session("yan"));
     let _ta = f.start(&a, 1, &[]);
