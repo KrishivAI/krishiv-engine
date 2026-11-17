@@ -22,13 +22,18 @@
 //!   open question; this is the proposed answer). A session's policy is fixed for its life,
 //!   so a caller whose **role** differs from the role its session was built with does not get
 //!   that session: the session manager replaces it (`crate::manager`). A session keeps the
-//!   principal (groups included) of the caller that created it.
+//!   principal (groups included) of the caller that created it. An impersonated principal's
+//!   owner also holds its delegator and its groups (P3-T061 note A4, §4.2 rule 5): the end user
+//!   through one front end is its own owner, and a changed act-as identity finds no session.
+//! - Act-as metadata (`x-krishiv-act-as-*`) is decided in the layer too, per RPC, by the
+//!   server's `ServerAuth` ([`ConnectAuth::with_impersonation`]; `act_as` module).
 //! - [`check_rpc`] and [`check_command`] give every RPC and every `Command` arm its ADR 0046
 //!   §3b class. Neither has a wildcard arm, so a proto update that adds an RPC or a command
 //!   does not compile until the new arm is classified.
 //! - [`role_sessions`] builds each caller's session as `krishiv server` does:
 //!   `PathPrefixPolicy(RolePolicy(role))` (design §3.6).
 
+mod act_as;
 mod layer;
 
 use std::net::SocketAddr;
@@ -43,7 +48,7 @@ use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
 use krishiv_plan::analyzer::insufficient_permissions;
 use krishiv_session::auth::{
     AuthFailure, Authenticated, Authenticator, Credentials, DeniedCounts, Method, Role, RolePolicy,
-    Surface,
+    ServerAuth, Surface,
 };
 use krishiv_session::{
     PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass,
@@ -52,6 +57,7 @@ use tonic::codegen::http::HeaderMap;
 use tonic::codegen::http::header::AUTHORIZATION;
 use tonic::{Request, Status};
 
+pub use act_as::{ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER};
 pub use layer::{AuthLayer, AuthService};
 
 use crate::manager::SessionFactory;
@@ -72,6 +78,9 @@ pub struct ConnectAuth {
     authenticator: Option<Arc<dyn Authenticator>>,
     local: Principal,
     denials: Option<Arc<DeniedCounts>>,
+    /// Who decides act-as requests (P3-T061): normally the same `ServerAuth` as
+    /// `authenticator`. Without it every act-as request is refused.
+    impersonation: Option<Arc<ServerAuth>>,
 }
 
 impl std::fmt::Debug for ConnectAuth {
@@ -97,6 +106,7 @@ impl ConnectAuth {
             authenticator: None,
             local: Principal::local_user(),
             denials: None,
+            impersonation: None,
         }
     }
 
@@ -108,6 +118,7 @@ impl ConnectAuth {
             authenticator: Some(authenticator),
             local: Principal::local_user(),
             denials: None,
+            impersonation: None,
         }
     }
 
@@ -116,6 +127,14 @@ impl ConnectAuth {
     #[must_use]
     pub fn with_denials(mut self, denials: Arc<DeniedCounts>) -> Self {
         self.denials = Some(denials);
+        self
+    }
+
+    /// The same, with act-as requests (`x-krishiv-act-as-*` metadata, P3-T061 §4) decided by
+    /// `server`, the server's `ServerAuth` (the authenticator itself in `krishiv server`).
+    #[must_use]
+    pub fn with_impersonation(mut self, server: Arc<ServerAuth>) -> Self {
+        self.impersonation = Some(server);
         self
     }
 
@@ -145,6 +164,9 @@ impl ConnectAuth {
         peer_leaf: Option<&[u8]>,
     ) -> Result<Authenticated, Status> {
         let Some(authenticator) = &self.authenticator else {
+            if act_as::asks(headers) {
+                return Err(self.no_impersonation(&self.local(), peer));
+            }
             return Ok(self.local());
         };
         let Some(peer) = peer else {
@@ -192,7 +214,30 @@ impl ConnectAuth {
             }
             return Err(status_of(&error));
         }
-        Ok(caller)
+        if !act_as::asks(headers) {
+            return Ok(caller);
+        }
+        let Some(server) = &self.impersonation else {
+            return Err(self.no_impersonation(&caller, Some(peer)));
+        };
+        act_as::resolve(server, headers, peer, caller)
+            .await
+            .map_err(|e| status_of(&e))
+    }
+
+    /// The refusal of act-as metadata on a listener that decides none (authentication off, or
+    /// no [`ConnectAuth::with_impersonation`]): never ignored (P3-T061 §4.2 rule 1).
+    fn no_impersonation(&self, caller: &Authenticated, peer: Option<SocketAddr>) -> Status {
+        tracing::warn!(
+            target: "krishiv::audit",
+            listener = Surface::Connect.as_str(),
+            caller = %caller.principal.name,
+            decision = "denied",
+            reason_code = "no_impersonation",
+            remote_addr = peer.map(tracing::field::display),
+            "impersonation"
+        );
+        status_of(&krishiv_session::auth::Denial::NoPrivilege.error())
     }
 
     /// The caller of `request`: what [`AuthLayer`] attached to it, or the local user with
@@ -265,6 +310,13 @@ pub struct SessionOwner {
     kind: PrincipalKind,
     tenant: Option<String>,
     name: String,
+    /// The service acting for the principal (P3-T061 note A4): a front end acting for alice
+    /// and alice herself, or two front ends acting for her, never share a session.
+    delegated_by: Option<String>,
+    /// An impersonated principal's groups, sorted and without repeats (the act-as identity
+    /// pinned per session, P3-T061 §4.2 rule 5); empty for a principal that authenticated
+    /// itself, whose groups may change between two tokens.
+    act_as_groups: Vec<String>,
 }
 
 impl SessionOwner {
@@ -276,6 +328,26 @@ impl SessionOwner {
             kind: caller.principal.kind,
             tenant: caller.principal.tenant.clone(),
             name: caller.principal.name.clone(),
+            delegated_by: caller.principal.delegated_by.clone(),
+            act_as_groups: if caller.principal.delegated_by.is_some() {
+                let mut groups = caller.principal.groups.clone();
+                groups.sort_unstable();
+                groups.dedup();
+                groups
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// The owner `krishiv.connect.maxSessionsPerPrincipal` counts under: this one without the
+    /// act-as groups, which are the front end's own claim (review m1), so one front end acting
+    /// for one user has one cap whatever groups it sends.
+    #[must_use]
+    pub(crate) fn cap_key(&self) -> Self {
+        Self {
+            act_as_groups: Vec::new(),
+            ..self.clone()
         }
     }
 }
@@ -286,8 +358,8 @@ pub enum Rpc {
     /// `ExecutePlan`; its commands are classified by [`check_command`].
     ExecutePlan,
     /// `AnalyzePlan`: `Browse` on what the plan names for most analyses; its `persist` /
-    /// `unpersist` subtypes are [`Check::SideEffect`] and `input_files` is `Select` on the
-    /// paths (ADR 0046 §3b), classified per subtype when PR-11b implements the RPC.
+    /// `unpersist` subtypes are [`Check::SideEffect`] (`analyze` enforces it) and `input_files` is
+    /// `Select` on the paths (ADR 0046 §3b).
     AnalyzePlan,
     /// `Config`.
     Config,
@@ -323,8 +395,8 @@ pub enum Check {
     Plan,
     /// A non-durable side effect (`checkpoint_command`; `AnalyzePlan` `persist` / `unpersist`):
     /// the plan's securables plus the operator floor of the ADR 0046 §3 side-effect row
-    /// (a viewer is refused even for a plan that reads no table), applied with the SQL
-    /// `CACHE TABLE` path when P3-T012 / PR-11b run them.
+    /// (a viewer is refused even for a plan that reads no table): [`enforce`] asks `Operate` on
+    /// `System("cache")` before anything is registered or held.
     SideEffect,
     /// The `Write` class: `Modify` on the target, plus `Create` when the save mode makes one,
     /// plus the source plan's securables, through the session's write path (P3-T012 runs it).
@@ -341,6 +413,9 @@ pub enum Check {
     /// Refused for every role: not supported in P3 (ADR 0046 §3b); `what` names it.
     Unsupported(&'static str),
 }
+
+/// The `System` securable of the session's cache, which the side-effect floor asks `Operate` on.
+const SYSTEM_CACHE: &str = "cache";
 
 /// The class of client code: `Usage` on `System("udf")` (ADR 0046 §3b, §4).
 pub(crate) fn client_code() -> Check {
@@ -458,11 +533,18 @@ pub async fn enforce(check: &Check, session: &Session) -> Result<(), KrishivErro
                 .authorize_privilege(securable, *privilege, *class)
                 .await
         }
-        Check::OwnSession
-        | Check::Plan
-        | Check::SideEffect
-        | Check::Write
-        | Check::Unsupported(_) => Ok(()),
+        // The operator floor of the non-durable side-effect row: `Operate` on the session's cache
+        // (an operator and an admin hold it, a viewer does not, whatever the plan reads).
+        Check::SideEffect => {
+            session
+                .authorize_privilege(
+                    &Securable::System(SYSTEM_CACHE.to_owned()),
+                    Privilege::Operate,
+                    StatementClass::Session,
+                )
+                .await
+        }
+        Check::OwnSession | Check::Plan | Check::Write | Check::Unsupported(_) => Ok(()),
     }
 }
 

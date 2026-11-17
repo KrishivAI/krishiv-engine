@@ -42,7 +42,7 @@ use super::Role;
 use super::impersonation::ImpersonationConfig;
 use super::mtls::MtlsConfig;
 use super::oidc_config::OidcConfig;
-use super::principals::PrincipalTable;
+use super::principals::{PrincipalTable, check_name};
 use super::secret_ref::{SecretRef, invalid};
 
 /// The key prefix of every Krishiv authentication setting.
@@ -73,7 +73,9 @@ pub struct TokenSpec {
     /// The role.
     pub role: Role,
     /// When the token stops working: `krishiv.auth.principals.<principal>.expires`. Required
-    /// for a service principal (P3-T061 Q5).
+    /// for a service principal (P3-T061 Q5). [`ServerAuth`](super::ServerAuth) applies the
+    /// earlier of this and the principal's own `expires`, so a hand-set later date never
+    /// extends it.
     pub expires: Option<SystemTime>,
 }
 
@@ -199,7 +201,11 @@ impl AuthConfig {
                 let entry = groups.entry(name.to_owned()).or_default();
                 match field {
                     "secret" => entry.secret = Some(SecretRef::parse(key, raw, false)?),
-                    "principal" => entry.principal = Some(non_empty(key, raw)?),
+                    "principal" => {
+                        let name = non_empty(key, raw)?;
+                        check_name(key, &name)?;
+                        entry.principal = Some(name);
+                    }
                     "kind" => entry.kind = Some(parse_kind(key, raw)?),
                     "role" => entry.role = Some(parse_role(key, raw)?),
                     _ => return Err(unknown(key)),
@@ -227,7 +233,10 @@ impl AuthConfig {
                 continue;
             }
             match rest {
-                "sparkTokenPrincipal" => spark_principal = non_empty(key, raw)?,
+                "sparkTokenPrincipal" => {
+                    spark_principal = non_empty(key, raw)?;
+                    check_name(key, &spark_principal)?;
+                }
                 "failureThrottle.maxFailures" => {
                     throttle.max_failures = raw
                         .trim()

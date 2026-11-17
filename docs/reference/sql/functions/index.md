@@ -201,7 +201,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`grouping_id`](grouping_id.md) | aggregate | yes | returns the level of grouping, equals to |
 | [`hash`](hash.md) | scalar | yes | Returns a hash value of the arguments. |
 | [`hex`](hex.md) | scalar | yes | Converts `expr` to hexadecimal. |
-| [`histogram_numeric`](histogram_numeric.md) | aggregate | not yet | Computes a histogram on numeric 'expr' using nb bins. |
+| [`histogram_numeric`](histogram_numeric.md) | aggregate | yes | Computes a histogram on numeric 'expr' using nb bins. |
 | [`hll_sketch_agg`](hll_sketch_agg.md) | aggregate | not yet | Returns the HllSketch's updatable binary representation. |
 | [`hll_sketch_estimate`](hll_sketch_estimate.md) | aggregate | not yet | Returns the estimated number of unique values given the binary representation |
 | [`hll_union`](hll_union.md) | aggregate | not yet | Merges two binary representations of |
@@ -393,7 +393,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`sentences`](sentences.md) | scalar | not yet | Splits `str` into an array of array of words. |
 | [`sequence`](sequence.md) | scalar | yes | Generates an array of elements from start to stop (inclusive), |
 | [`session_user`](session_user.md) | scalar | yes | user name of current execution context. |
-| [`session_window`](session_window.md) | aggregate | not yet | Generates session window given a timestamp specifying column and gap duration. |
+| [`session_window`](session_window.md) | aggregate | yes | Generates session window given a timestamp specifying column and gap duration. |
 | [`sha`](sha.md) | scalar | yes | Returns a sha1 hash value as a hex string of the `expr`. |
 | [`sha1`](sha1.md) | scalar | yes | Returns a sha1 hash value as a hex string of the `expr`. |
 | [`sha2`](sha2.md) | scalar | yes | Returns a checksum of SHA-2 family as a hex string of `expr`. |
@@ -566,8 +566,8 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`weekofyear`](weekofyear.md) | scalar | yes | Returns the week of the year of the given date. A week is considered to start on a Monday and week 1 is the first week with >3 days. |
 | [`when`](when.md) | scalar | yes | When `expr1` = true, returns `expr2`; else when `expr3` = true, returns `expr4`; else returns `expr5`. |
 | [`width_bucket`](width_bucket.md) | scalar | yes | Returns the bucket number to which |
-| [`window`](window.md) | aggregate | not yet | Bucketize rows into one or more time windows given a timestamp specifying column. |
-| [`window_time`](window_time.md) | aggregate | not yet | Extract the time value from time/session window column which can be used for event time value of window. |
+| [`window`](window.md) | aggregate | yes | Bucketize rows into one or more time windows given a timestamp specifying column. |
+| [`window_time`](window_time.md) | aggregate | yes | Extract the time value from time/session window column which can be used for event time value of window. |
 | [`xpath`](xpath.md) | scalar | not yet | Returns a string array of values within the nodes of xml that match the XPath expression. |
 | [`xpath_boolean`](xpath_boolean.md) | scalar | not yet | Returns true if the XPath expression evaluates to true, or if a matching node is found. |
 | [`xpath_double`](xpath_double.md) | scalar | not yet | Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-483 of 574 functions are implemented. The 91 that are not are listed in [functions not implemented yet](not-implemented.md).
+487 of 574 functions are implemented. The 87 that are not are listed in [functions not implemented yet](not-implemented.md).
