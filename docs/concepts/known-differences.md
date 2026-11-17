@@ -203,14 +203,17 @@ it does not stop it early.
 ## Python artifacts in server mode
 
 Pyfiles a Connect client adds (`addArtifacts(..., pyfile=True)`) reach the session's Python UDF workers on
-`sys.path`, as in Spark: the directory of the `.py` files, then each zip or egg. Archives (`archive=True`: zip, jar,
-tar, tar.gz, tgz) are unpacked into a read-only directory of the server, each under its file name, and that
-directory is put on `sys.path` too, which Spark does not do (its worker's `setup_spark_files` adds only the files
-directory and each `.zip`/`.egg` include): a package at an archive's top level is importable in Krishiv and not in
-Spark, and, being added at index 1, it shadows an installed package of the same name (for example a `pandas` inside
-the archive). Spark unpacks archives into the executor's working directory, so code that opens an archive's files
-by a path relative to the working directory finds them in Spark only. A tar member that is a link leaving its archive's directory, a device file, or artifacts
-past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
+`sys.path`, as in Spark: the files directory, then each zip or egg. Archives (`archive=True`: zip, jar, tar, tar.gz,
+tgz) are unpacked into the same files directory under their `#alias`, or else their file name, as Spark's executor
+does; an archive's own directory is not on `sys.path` (as in Spark, its packages import as `alias.pkg`), and each
+entry of the files directory is reachable by a path relative to the worker's working directory (`./alias/...`), as
+in Spark. Two differences remain. The working directory is the worker's own writable directory, where the entries
+are links to a read-only directory of the server, so code cannot write into an unpacked archive. Spark takes any
+alias (a fragment like `../x` unpacks outside its directory) and lets a second archive of one alias replace the
+first; Krishiv refuses an empty, hidden (`.`, `..`) or `/`-containing alias with `INVALID_ARTIFACT_PATH`, and two
+artifacts of one name with `ARTIFACT_ALREADY_EXISTS`. A tar member that is a link leaving its archive's
+directory, a device file, or artifacts past the server's size limit fail the session's UDF calls with
+`KRISHIV_PYTHON_ARTIFACT_REFUSED`.
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 

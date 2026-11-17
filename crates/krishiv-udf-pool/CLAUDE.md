@@ -43,18 +43,22 @@ Paths are relative to this crate.
   `try_take_now` is the no-wait form (no ticket, no waker)
   (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
-- `src/artifacts.rs` (PR-26c-3) a session's pyfiles and archives (`SessionUdfs::set_artifacts`): paths checked
-  when set (absolute, a regular file, canonical: no symbolic link at or above it, `INVALID_ARTIFACT_PATH`; one name
-  once, `ARTIFACT_ALREADY_EXISTS`; the device and inode recorded), prepared once per set by the first worker start
-  into a directory of the pool (each file opened `O_NOFOLLOW` and refused unless it is the file checked by the same
-  canonical path; `py/` copies; each archive copied to `in/` and that copy unpacked into `archives/<name>/` by
-  `unpack.py` with the worker interpreter, sandboxed when the sandbox is on, killed through its pidfd on a cancel;
-  `tarfile`'s `data` filter, a hard link counted at its target's size), within `PoolConfig::artifact_limit`
-  (`KRISHIV_PYTHON_ARTIFACT_REFUSED`); only a failure about the artifacts is kept for the set (`Failure::lasting`),
-  a cancel, timeout or server I/O failure is retried by the next call, and the set's lock is not held while it is
-  made; the directory is the worker's only extra read path, its entries go on `sys.path` (index 1, Spark's
-  `add_path`; the archives too, a recorded difference) after the worker's own imports; the pool key carries the
-  set's id (a worker never serves another set)
+- `src/artifacts.rs` (PR-26c-3) a session's pyfiles and archives (`SessionUdfs::set_artifacts`, `PythonArchive`
+  with its `#fragment` alias): paths checked when set (absolute, lexically canonical, a regular file opened by
+  `openat2` with `RESOLVE_NO_SYMLINKS`: no symbolic link anywhere, `INVALID_ARTIFACT_PATH`; an alias plain, not
+  empty, hidden or with a `/`, `INVALID_ARTIFACT_PATH`; one name once across pyfiles and archives,
+  `ARTIFACT_ALREADY_EXISTS`; the device and inode recorded), prepared once per set by the first worker start into
+  a directory of the pool (each file opened again the same way and refused unless it is the file checked; `py/`,
+  the files directory, holds the pyfile copies and each archive unpacked into `py/<alias or file name>/`: the
+  archive copied to `in/` and that copy unpacked by `unpack.py` with the worker interpreter, sandboxed when the
+  sandbox is on, killed through its pidfd on a cancel; `tarfile`'s `data` filter, a hard or symbolic link counted
+  at its target's size), within `PoolConfig::artifact_limit` (`KRISHIV_PYTHON_ARTIFACT_REFUSED`; the disk peaks at
+  twice the limit while the last archive's copy and its unpacking coexist); only a failure about the artifacts is
+  kept for the set (`Failure::lasting`, and the `MAX_TIMEOUTS`th timeout), a cancel, timeout or server I/O failure
+  is retried by the next call, and the set's lock is not held while it is made; the directory is the worker's only
+  extra read path; `py/` and each zip or egg go on `sys.path` (index 1, Spark's `add_path`) after the worker's own
+  imports, an unpacked archive does not (as Spark); each entry of `py/` is linked into the worker's own working
+  directory (`pool.rs` `link_files`); the pool key carries the set's id (a worker never serves another set)
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap (`bootstrap_for`: the worker with its
@@ -66,6 +70,8 @@ Paths are relative to this crate.
 - `python/krishiv/_udf/relations.py` (through the link) the relation kinds' runners, Spark 4.2.0's per-eval-type
   loops of `worker.py` over the engine's frames (host-agnostic: the in-process runtime of PR-48 can reuse them)
 - `tests/relations.rs` each relation kind through the pool with real workers (same interpreter rule as below)
+- `tests/window_iter_goldens.rs` PySpark 4.2.0's goldens for window aggregates and scalar iterators
+  (`python/tests/pyspark_udf/window_iter/goldens.json`) replayed as SQL on a `krishiv_session::Session` over the pool
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
 
@@ -117,8 +123,8 @@ Paths are relative to this crate.
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
 - One worker serves one `Owner` (principal and session), one interpreter and one artifact set; reuse only within
-  that key. Archive artifacts are reachable on `sys.path` and by their absolute path, not from the worker's working
-  directory (Spark's executor working directory holds them): a recorded difference.
+  that key. Artifacts are reachable from the worker's working directory through links into a read-only directory
+  (Spark's worker runs in a writable files directory): a recorded difference.
 - Blocking work (spawn, socket I/O, waits) runs on the pool's threads, never on a compute worker.
 - A relation task's server side writes to the worker only after the worker's `want`, so neither side blocks on a
   full socket while the other writes; the worker is given back before the task's results end.

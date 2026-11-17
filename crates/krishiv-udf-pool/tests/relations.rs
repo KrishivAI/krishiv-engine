@@ -29,7 +29,9 @@ use krishiv_exec::python_eval::UdfRuntime;
 use krishiv_exec::python_relation::{Frame, RelationCallSpec, RunnerConf, UdfTask};
 use krishiv_plan::function::PythonEvalType;
 use krishiv_types::DataType;
-use krishiv_udf_pool::{Launcher, Owner, Pool, PoolConfig, PythonPayload, SessionUdfs};
+use krishiv_udf_pool::{
+    Launcher, Owner, Pool, PoolConfig, PythonArchive, PythonPayload, SessionUdfs,
+};
 
 /// The child entry: run as the trampoline when started with `--` and spec arguments.
 #[test]
@@ -1366,10 +1368,24 @@ fn importing(py: &Path, module: &str) -> PythonPayload {
     )
 }
 
-/// `set_artifacts`: a pyfile and a zip archive reach the workers' `sys.path` (the archive unpacked, read
-/// only, in the sandbox); a later set gets workers of its own.
+/// A scalar iterator adding to each value the `V = n` its working directory's file `path` holds.
+fn reading(py: &Path, path: &str) -> PythonPayload {
+    command(
+        py,
+        &format!(
+            "def f(it):\n    v = int(open({path:?}).read().split('=')[1])\n    for s in it:\n        yield s + v"
+        ),
+        "LongType()",
+        204,
+    )
+}
+
+/// `set_artifacts`, as Spark 4.2.0 places artifacts: a pyfile on the workers' `sys.path`; an archive unpacked
+/// (read only, in the sandbox) into the files directory under its alias or its file name, reachable from the
+/// worker's working directory and importable as a package of the files directory, but not itself on
+/// `sys.path`; a later set gets workers of its own.
 #[test]
-fn pyfiles_and_archives_reach_the_workers_sys_path() {
+fn pyfiles_and_archives_reach_the_workers_as_in_spark() {
     let Some(py) = python() else { return };
     let pool = pool(&py);
     let udfs = udfs(&pool);
@@ -1388,18 +1404,45 @@ fn pyfiles_and_archives_reach_the_workers_sys_path() {
         "import io, tarfile\nwith tarfile.open(out, 'w:gz') as t:\n    data = b'V = 1000\\n'\n    \
          i = tarfile.TarInfo('tpkg/__init__.py')\n    i.size = len(data)\n    t.addfile(i, io.BytesIO(data))",
     );
-    udfs.set_artifacts(vec![dir.join("helper.py")], vec![archive, tar]);
-    for (module, add) in [("helper", 100), ("pkg", 7), ("tpkg", 1000)] {
-        let prepared = prepare(
-            &udfs,
-            importing(&py, module),
-            &iter_call(PythonEvalType::ScalarPandasIter),
-        )
-        .expect("prepare");
-        let out = run(prepared.as_ref(), iter_frames()).unwrap_or_else(|e| panic!("{module}: {e}"));
+    udfs.set_artifacts(
+        vec![dir.join("helper.py")],
+        vec![
+            PythonArchive {
+                path: archive,
+                alias: Some("deps".to_owned()),
+            },
+            PythonArchive {
+                path: tar,
+                alias: None,
+            },
+        ],
+    );
+    let cases = [
+        ("helper", importing(&py, "helper"), 100),
+        ("deps.pkg", importing(&py, "deps.pkg"), 7),
+        ("./deps", reading(&py, "deps/pkg/__init__.py"), 7),
+        (
+            "./more.tar.gz",
+            reading(&py, "more.tar.gz/tpkg/__init__.py"),
+            1000,
+        ),
+    ];
+    for (what, payload, add) in cases {
+        let prepared =
+            prepare(&udfs, payload, &iter_call(PythonEvalType::ScalarPandasIter)).expect("prepare");
+        let out = run(prepared.as_ref(), iter_frames()).unwrap_or_else(|e| panic!("{what}: {e}"));
         let want: Vec<String> = (1..=5).map(|v| (v + add).to_string()).collect();
-        assert_eq!(rows(&out), want, "{module}");
+        assert_eq!(rows(&out), want, "{what}");
     }
+    // An archive's own directory is not on `sys.path` (Spark's `setup_spark_files` does not add it).
+    let prepared = prepare(
+        &udfs,
+        importing(&py, "pkg"),
+        &iter_call(PythonEvalType::ScalarPandasIter),
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), iter_frames()).expect_err("pkg is not on sys.path");
+    assert!(err.to_string().contains("ModuleNotFoundError"), "{err}");
     // A worker of the old set never serves the new one: without the pyfile the import fails.
     udfs.set_artifacts(Vec::new(), Vec::new());
     let prepared = prepare(
@@ -1455,13 +1498,19 @@ fn unsafe_or_oversized_artifacts_are_refused() {
         ),
         (
             Vec::new(),
-            vec![evil],
+            vec![PythonArchive {
+                path: evil,
+                alias: None,
+            }],
             ErrorClass::KrishivPythonArtifactRefused,
             "leaves the archive's directory",
         ),
         (
             Vec::new(),
-            vec![big],
+            vec![PythonArchive {
+                path: big,
+                alias: None,
+            }],
             ErrorClass::KrishivPythonArtifactRefused,
             "over the 1048576 bytes left",
         ),

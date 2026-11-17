@@ -3,14 +3,17 @@
 //! (`addArtifacts(pyfile=True)`, `addArtifacts(archive=True)`), as its workers see them.
 //!
 //! Spark's worker puts its files directory and each `.zip`/`.egg` include on `sys.path` (`add_path`, at index
-//! 1, `worker_util.py` L59-65 and L133-154 at v4.2.0), and its executor unpacks archives into its working
-//! directory (`Utils.unpack`: `.zip`, `.jar`, `.tar`, `.tar.gz`, `.tgz`). Here a set of artifacts is prepared
-//! once, by the first worker start that needs it, into a directory of the pool's own:
-//! - `py/` holds a copy of every pyfile; it, then each pyfile that is not a `.py` (a zip, an egg), go on the
-//!   worker's `sys.path` in Spark's order;
-//! - `archives/<name>/` holds each archive unpacked (by the archive's file name), also on `sys.path`: a
-//!   recorded difference (`docs/concepts/known-differences.md`), since Spark's `setup_spark_files` does not
-//!   put an unpacked archive there.
+//! 1, `worker_util.py` L59-65 and L133-154 at v4.2.0). Its executor unpacks each archive into that same
+//! directory (`Executor.updateDependencies`, `Utils.unpack`: `.zip`, `.jar`, `.tar`, `.tar.gz`, `.tgz`), into a
+//! directory named by the archive's URI fragment, or else by its file name, and starts the Python worker in it
+//! (`PythonWorkerFactory`, the session's directory under `SparkFiles.getRootDirectory()`). Here a set of
+//! artifacts is prepared once, by the first worker start that needs it, into a directory of the pool's own:
+//! - `py/` is the files directory: a copy of every pyfile, and each archive unpacked into `py/<alias>/` (the
+//!   [`PythonArchive::alias`], or the file name). It, then each pyfile that is not a `.py` (a zip, an egg), go
+//!   on the worker's `sys.path` in Spark's order; an unpacked archive is not on it (Spark's
+//!   `setup_spark_files` does not add one), but is importable as a package of the files directory, as in Spark.
+//! - Each entry of `py/` is reachable from the worker's working directory (a link in the worker's own
+//!   directory, which stays its writable working directory), as Spark's worker reaches them from its own.
 //!
 //! The directory is one of the worker's read-only paths in the sandbox (Landlock), and nothing else of the
 //! server's artifact directory is. A worker serves one set only (the pool key carries the set's id), since its
@@ -107,11 +110,23 @@ impl Failure {
     }
 }
 
-/// A checked artifact: its path and the file it named when checked.
+/// An archive artifact (`addArtifacts(archive=True)`): the file, and the `#fragment` the client gave it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonArchive {
+    /// The archive file: absolute, with no symbolic link at or above it.
+    pub path: PathBuf,
+    /// The name of the directory it is unpacked into (Spark's URI fragment, `env.tar.gz#env`); the file's
+    /// name without one.
+    pub alias: Option<String>,
+}
+
+/// A checked artifact: its path, the file it named when checked, and its name in the files directory (a
+/// pyfile's file name; an archive's alias, or its file name).
 struct Artifact {
     path: PathBuf,
     dev: u64,
     ino: u64,
+    name: String,
 }
 
 /// A set's preparation.
@@ -152,6 +167,11 @@ pub(crate) struct Prepared {
     pub(crate) sys_path: Vec<PathBuf>,
     /// The worker's extra read-only paths in the sandbox.
     pub(crate) read_paths: Vec<PathBuf>,
+    /// The files directory (Spark's `SparkFiles` root of the session): the pyfiles and the unpacked archives.
+    pub(crate) files_dir: PathBuf,
+    /// The names in [`Self::files_dir`], each reachable from the worker's working directory (Spark's worker
+    /// runs in that directory).
+    pub(crate) entries: Vec<String>,
 }
 
 /// The attempt in progress: dropped, it ends the attempt with `end` (an empty slot unless set; a timeout
@@ -195,16 +215,20 @@ impl ArtifactSet {
         }
     }
 
-    /// The set of `pyfiles` and `archives`, their paths checked now (a refusal is raised by the calls).
-    pub(crate) fn new(pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) -> Self {
+    /// The set of `pyfiles` and `archives`, their paths and names checked now (a refusal is raised by the
+    /// calls).
+    pub(crate) fn new(pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) -> Self {
         if pyfiles.is_empty() && archives.is_empty() {
             return Self::empty();
         }
-        let (pyfiles, archives, refused) =
-            match check(pyfiles).and_then(|p| check(archives).map(|a| (p, a))) {
-                Ok((p, a)) => (p, a, None),
-                Err(e) => (Vec::new(), Vec::new(), Some(e)),
-            };
+        let mut names = HashSet::new();
+        let checked = check(pyfiles.into_iter().map(|p| (p, None)), &mut names).and_then(|p| {
+            check(archives.into_iter().map(|a| (a.path, a.alias)), &mut names).map(|a| (p, a))
+        });
+        let (pyfiles, archives, refused) = match checked {
+            Ok((p, a)) => (p, a, None),
+            Err(e) => (Vec::new(), Vec::new(), Some(e)),
+        };
         ArtifactSet {
             id: NEXT_SET.fetch_add(1, Ordering::Relaxed),
             pyfiles,
@@ -297,28 +321,29 @@ impl ArtifactSet {
             .tempdir_in(root)
             .map_err(|e| server_io("cannot make the UDF artifact directory", &e))?;
         let py = dir.path().join("py");
-        let unpacked = dir.path().join("archives");
         let incoming = dir.path().join("in");
-        for d in [&py, &unpacked, &incoming] {
+        for d in [&py, &incoming] {
             fs::create_dir(d)
                 .map_err(|e| server_io("cannot make the UDF artifact directory", &e))?;
         }
         let mut used = 0u64;
         let mut sys_path = vec![py.clone()];
         for file in &self.pyfiles {
-            let name = file_name(&file.path).map_err(Failure::lasting)?;
-            let to = py.join(name);
+            let to = py.join(&file.name);
             used = used.saturating_add(copy_capped(file, &to, limit.saturating_sub(used))?);
-            if !name.ends_with(".py") {
+            if !file.name.ends_with(".py") {
                 sys_path.push(to);
             }
         }
-        for archive in &self.archives {
-            let name = file_name(&archive.path).map_err(Failure::lasting)?;
-            // The unpacker reads this copy only, never a path the client named.
-            let copy = incoming.join(name);
+        for (i, archive) in self.archives.iter().enumerate() {
+            let file = file_name(&archive.path).map_err(Failure::lasting)?;
+            // The unpacker reads this copy only, never a path the client named; its name keeps the file's
+            // (the format is read from it), made unique since two aliases may name one file.
+            let copy = incoming.join(format!("{i}-{file}"));
             copy_capped(archive, &copy, limit.saturating_sub(used))?;
-            let to = unpacked.join(name);
+            // Into the files directory, by its alias or its file name (Spark's `addArchive`); not on
+            // `sys.path` itself (Spark's `setup_spark_files` adds only the files directory and the includes).
+            let to = py.join(&archive.name);
             fs::create_dir(&to)
                 .map_err(|e| server_io("cannot make the UDF archive directory", &e))?;
             let bytes = unpack(&copy, &to, limit.saturating_sub(used));
@@ -327,24 +352,35 @@ impl ArtifactSet {
             let bytes = bytes?;
             removed.map_err(|e| server_io("cannot remove a UDF archive's copy", &e))?;
             used = used.saturating_add(bytes);
-            sys_path.push(to);
         }
         fs::remove_dir(&incoming)
             .map_err(|e| server_io("cannot remove the UDF archive copies' directory", &e))?;
+        let entries = self
+            .pyfiles
+            .iter()
+            .chain(&self.archives)
+            .map(|a| a.name.clone())
+            .collect();
         Ok(Prepared {
             read_paths: vec![dir.path().to_path_buf()],
             _dir: dir,
             sys_path,
+            files_dir: py,
+            entries,
         })
     }
 }
 
 /// Refuses a path that is not an absolute, canonical path of a regular file (no symbolic link at it or above
-/// it), and two files of one name; else the paths with the files they name.
-fn check(paths: Vec<PathBuf>) -> Result<Vec<Artifact>, KrishivError> {
-    let mut names = HashSet::new();
-    let mut checked = Vec::with_capacity(paths.len());
-    for path in paths {
+/// it), a bad alias, and two artifacts of one name in the files directory (`names`, shared by the pyfiles and
+/// the archives: a pyfile's file name, an archive's alias or else its file name); else the paths with the
+/// files they name.
+fn check(
+    paths: impl Iterator<Item = (PathBuf, Option<String>)>,
+    names: &mut HashSet<String>,
+) -> Result<Vec<Artifact>, KrishivError> {
+    let mut checked = Vec::new();
+    for (path, alias) in paths {
         let file = open_no_links(&path).map_err(|e| match e {
             Errno::NOSYS => no_openat2(&path),
             _ => invalid(&path),
@@ -353,13 +389,23 @@ fn check(paths: Vec<PathBuf>) -> Result<Vec<Artifact>, KrishivError> {
         if !meta.file_type().is_file() {
             return Err(invalid(&path));
         }
-        let name = file_name(&path)?;
-        if name.starts_with('.') {
+        let file = file_name(&path)?;
+        if file.starts_with('.') {
             return Err(invalid(&path));
         }
-        if !names.insert(name.to_owned()) {
+        let name = match alias {
+            None => file.to_owned(),
+            Some(alias) if plain_alias(&alias) => alias,
+            Some(alias) => {
+                return Err(InvalidArtifactPath {
+                    name: format!("{}#{alias}", path.display()),
+                }
+                .into());
+            }
+        };
+        if !names.insert(name.clone()) {
             return Err(ArtifactAlreadyExists {
-                normalized_remote_relative_path: name.to_owned(),
+                normalized_remote_relative_path: name,
             }
             .into());
         }
@@ -367,9 +413,17 @@ fn check(paths: Vec<PathBuf>) -> Result<Vec<Artifact>, KrishivError> {
             path,
             dev: meta.dev(),
             ino: meta.ino(),
+            name,
         });
     }
     Ok(checked)
+}
+
+/// Whether `alias` names one plain entry of the files directory: not empty, no `/` or NUL, and not hidden
+/// (which also refuses `.` and `..`). Spark 4.2.0 takes any fragment (`new File(root, fragment)`), so a
+/// fragment like `../x` would leave its directory there; here it is refused (`INVALID_ARTIFACT_PATH`).
+fn plain_alias(alias: &str) -> bool {
+    !alias.is_empty() && !alias.starts_with('.') && !alias.contains(['/', '\0'])
 }
 
 /// `INVALID_ARTIFACT_PATH` for `path`.
@@ -523,6 +577,102 @@ mod tests {
         Ok(0)
     }
 
+    /// An archive without an alias.
+    fn file(path: PathBuf) -> PythonArchive {
+        PythonArchive { path, alias: None }
+    }
+
+    fn aliased(path: PathBuf, alias: &str) -> PythonArchive {
+        PythonArchive {
+            path,
+            alias: Some(alias.to_owned()),
+        }
+    }
+
+    #[test]
+    fn an_archive_is_unpacked_by_its_alias_into_the_files_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::write(root.join("env.tar.gz"), "abc").unwrap();
+        fs::write(root.join("m.py"), "").unwrap();
+        let pool_root = tempfile::tempdir().unwrap();
+        // One file under two aliases (Spark keys an archive by its URI with the fragment), and once by name.
+        let set = ArtifactSet::new(
+            vec![root.join("m.py")],
+            vec![
+                aliased(root.join("env.tar.gz"), "env"),
+                aliased(root.join("env.tar.gz"), "env2"),
+                file(root.join("env.tar.gz")),
+            ],
+        );
+        assert!(set.refused().is_none(), "{:?}", set.refused());
+        let seen = Mutex::new(Vec::new());
+        let unpack = |archive: &Path, to: &Path, _: u64| {
+            assert!(archive.starts_with(pool_root.path()));
+            seen.lock().unwrap().push(to.to_path_buf());
+            Ok(3)
+        };
+        let prepared = set
+            .prepare(pool_root.path(), 1 << 20, &unpack, &never)
+            .unwrap();
+        let files = &prepared.files_dir;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                files.join("env"),
+                files.join("env2"),
+                files.join("env.tar.gz")
+            ]
+        );
+        assert_eq!(prepared.sys_path, std::slice::from_ref(files));
+        assert_eq!(prepared.entries, ["m.py", "env", "env2", "env.tar.gz"]);
+    }
+
+    #[test]
+    fn a_bad_alias_or_a_name_taken_twice_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::write(root.join("env.zip"), "z").unwrap();
+        fs::write(root.join("m.py"), "").unwrap();
+        for bad in ["", ".", "..", "../x", "a/b", "/abs", ".hidden", "a\0b"] {
+            let set = ArtifactSet::new(Vec::new(), vec![aliased(root.join("env.zip"), bad)]);
+            let e = set
+                .refused()
+                .unwrap_or_else(|| panic!("{bad:?} was accepted"));
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::InvalidArtifactPath,
+                "{bad:?}: {e}"
+            );
+        }
+        for (pyfiles, archives) in [
+            (
+                Vec::new(),
+                vec![
+                    aliased(root.join("env.zip"), "x"),
+                    aliased(root.join("env.zip"), "x"),
+                ],
+            ),
+            (
+                vec![root.join("m.py")],
+                vec![aliased(root.join("env.zip"), "m.py")],
+            ),
+            (
+                Vec::new(),
+                vec![
+                    file(root.join("env.zip")),
+                    aliased(root.join("env.zip"), "env.zip"),
+                ],
+            ),
+        ] {
+            let set = ArtifactSet::new(pyfiles, archives);
+            assert_eq!(
+                set.refused().map(KrishivError::error_class),
+                Some(ErrorClass::ArtifactAlreadyExists)
+            );
+        }
+    }
+
     fn never() -> bool {
         false
     }
@@ -611,7 +761,7 @@ mod tests {
         fs::write(root.join("m.py"), vec![b'#'; 30]).unwrap();
         fs::write(root.join("env.tar.gz"), "abc").unwrap();
         let pool_root = tempfile::tempdir().unwrap();
-        let set = ArtifactSet::new(vec![root.join("m.py")], vec![root.join("env.tar.gz")]);
+        let set = ArtifactSet::new(vec![root.join("m.py")], vec![file(root.join("env.tar.gz"))]);
         let seen = Mutex::new(None);
         let unpack = |archive: &Path, to: &Path, budget: u64| {
             let bytes = fs::read(archive).unwrap();
@@ -625,13 +775,19 @@ mod tests {
             "{}",
             archive.display()
         );
-        assert!(archive.ends_with("in/env.tar.gz"), "{}", archive.display());
+        assert!(
+            archive.ends_with("in/0-env.tar.gz"),
+            "{}",
+            archive.display()
+        );
         assert_eq!(bytes, b"abc");
         // The copy is gone once unpacked, and not counted beside the unpacked bytes.
         assert!(!archive.exists());
         assert_eq!(budget, 70);
-        assert!(to.ends_with("archives/env.tar.gz"));
-        assert_eq!(prepared.sys_path.last(), Some(&to));
+        // Into the files directory, by its file name; that directory alone is on `sys.path`.
+        assert_eq!(to, prepared.files_dir.join("env.tar.gz"));
+        assert_eq!(prepared.sys_path, std::slice::from_ref(&prepared.files_dir));
+        assert_eq!(prepared.entries, ["m.py", "env.tar.gz"]);
     }
 
     /// What `prepare` left under the pool's root: nothing, after a refusal.
@@ -695,7 +851,7 @@ mod tests {
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::write(root.join("m.py"), "X = 1\n").unwrap();
         let pyfiles = ArtifactSet::new(vec![root.join("m.py")], Vec::new());
-        let archives = ArtifactSet::new(Vec::new(), vec![root.join("m.py")]);
+        let archives = ArtifactSet::new(Vec::new(), vec![file(root.join("m.py"))]);
         // A new file (made while the old one still exists, so its inode differs) renamed over it.
         fs::write(root.join("other.py"), "X = 2\n").unwrap();
         fs::rename(root.join("other.py"), root.join("m.py")).unwrap();
@@ -707,7 +863,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::write(root.join("env.zip"), "z").unwrap();
-        let set = ArtifactSet::new(Vec::new(), vec![root.join("env.zip")]);
+        let set = ArtifactSet::new(Vec::new(), vec![file(root.join("env.zip"))]);
         (dir, set)
     }
 
@@ -778,7 +934,10 @@ mod tests {
         let calls = Mutex::new(0u32);
         let slow = |archive: &Path, _: &Path, _: u64| {
             *calls.lock().unwrap() += 1;
-            Err(Failure::timed_out(refused(archive, "it could not be unpacked in 300 s")))
+            Err(Failure::timed_out(refused(
+                archive,
+                "it could not be unpacked in 300 s",
+            )))
         };
         for _ in 0..MAX_TIMEOUTS + 2 {
             let e = set

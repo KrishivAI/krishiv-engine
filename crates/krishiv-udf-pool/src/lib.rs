@@ -41,6 +41,8 @@ pub mod wire;
 mod worker;
 
 #[cfg(target_os = "linux")]
+pub use artifacts::PythonArchive;
+#[cfg(target_os = "linux")]
 pub use interpreter::{Interpreter, choose};
 #[cfg(target_os = "linux")]
 pub use pool::{DEFAULT_ARTIFACT_LIMIT, Launcher, Owner, Pool, PoolConfig};

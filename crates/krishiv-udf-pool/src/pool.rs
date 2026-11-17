@@ -512,6 +512,9 @@ impl Pool {
             .prefix("w")
             .tempdir_in(inner.root.path())
             .map_err(|e| internal(format!("cannot make a UDF worker directory: {e}")))?;
+        if let Some(p) = &prepared {
+            link_files(p, private_dir.path())?;
+        }
         let (server_end, worker_end) = rustix::net::socketpair(
             AddressFamily::UNIX,
             SocketType::SEQPACKET,
@@ -722,6 +725,21 @@ impl Pool {
             },
         )))
     }
+}
+
+/// Makes each entry of `prepared`'s files directory reachable from a worker's working directory `dir` (its
+/// own new directory): a symbolic link `dir/<name>` to it. Spark's worker runs in its files directory; this
+/// worker keeps its private directory as its (writable) working directory. Links are made by the server, in a
+/// directory only it has written, so a name cannot collide with or follow anything the client made.
+fn link_files(prepared: &artifacts::Prepared, dir: &Path) -> Result<(), KrishivError> {
+    for name in &prepared.entries {
+        std::os::unix::fs::symlink(prepared.files_dir.join(name), dir.join(name)).map_err(|e| {
+            internal(format!(
+                "cannot link the UDF artifact {name} into a worker directory: {e}"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// The longest an archive artifact's unpacking may take.
