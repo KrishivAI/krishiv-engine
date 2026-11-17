@@ -230,12 +230,15 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive`
-    /// mode, as the SQL `USE` does. (Divergence: Spark 4.2 resets the namespace to `default` when the name differs
-    /// from the current catalog's only in case; here the current namespace is kept.)
+    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees (design P3-T067
+    /// §2.4). A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+    /// `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets the namespace to `default` when the name
+    /// differs from the current catalog's only in case; here the current namespace is kept.) The `system` catalog is
+    /// Krishiv's own (ADR 0023) and is reached with `USE system`, not here: Spark has no such catalog, so it is
+    /// `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
-    /// `CATALOG_NOT_FOUND` for a name that is not a catalog (a namespace's name is not one).
+    /// `CATALOG_NOT_FOUND` for any other name (a namespace's name is not a catalog).
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
         // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
         let Some(known) = self
@@ -252,11 +255,14 @@ impl Catalog<'_> {
         self.run(&format!("USE {}", quoted(&known))).await
     }
 
-    /// The catalogs, sorted.
+    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (design P3-T067 §2.4;
+    /// Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
+    /// [`Catalog::set_current_catalog`].
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
-        // With the declared catalogs this principal sees (design P3-T067 §2.4).
-        self.session.catalog_names()
+        let mut names = self.session.catalog_names();
+        names.retain(|c| c != crate::system::SYSTEM);
+        names
     }
 
     /// The current namespace.
@@ -270,7 +276,7 @@ impl Catalog<'_> {
     /// # Errors
     /// `SCHEMA_NOT_FOUND` for an unknown namespace.
     pub async fn set_current_database(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("USE {}", quoted(name))).await
+        self.run(&format!("USE NAMESPACE {}", quoted(name))).await
     }
 
     fn database_of(&self, name: &str, meta: &crate::store::NamespaceMeta) -> Database {

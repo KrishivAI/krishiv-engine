@@ -20,15 +20,20 @@ pub use python::{
     PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
     UDF_SANDBOX,
 };
+mod access;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
 mod server;
+pub use access::{
+    ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+};
 pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
@@ -42,7 +47,7 @@ pub use server::{
     CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS,
     CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
     CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+    SERVER_ALLOWED_HOSTS, SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -100,9 +105,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &LATE_PAYLOAD_JOIN,
     &GROUP_KEY_CODE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
@@ -111,6 +118,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -225,6 +233,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SERVER_SHUTDOWN_TIMEOUT,
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
+    &SERVER_ALLOWED_HOSTS,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -854,7 +863,8 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           seed, so an operator that spills splits its rows the same way on every run. Costs \
           parallelism where it falls back to one driver: meant for reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns. The \
+          can still change when an operator spills, or whether a hash join build copies its \
+          rows into blocks as they arrive, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
           probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",
@@ -960,6 +970,21 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
+pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.atScale",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
+          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
+          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. A cap set explicitly still binds unless \
+          this key is also set explicitly to true. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 
@@ -1264,25 +1289,6 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// `krishiv.access.provider`.
-pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
-    key: "krishiv.access.provider",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Server mode: the access-policy provider that decides data securables (tables, views, \
-          columns, namespaces, functions, paths, secrets, connections). `grants`: \
-          `GRANT`/`REVOKE` decide them, and the role matrix keeps deciding the server's own \
-          objects; an admin passes every data check. `roles`: the role matrix decides \
-          everything. Unset: `grants` when authentication is configured, otherwise `roles`. \
-          `catalog`, `external` and provider lists are refused until they are available. Path \
-          confinement (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) \
-          applies first under every provider.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.2.0",
-    spark_alias: None,
-};
-
 /// `krishiv.io.local.allowedRoots`.
 pub static IO_LOCAL_ALLOWED_ROOTS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.local.allowedRoots",
@@ -1320,56 +1326,6 @@ pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
           table's options stored by an admin are not asked about again when others read or \
           insert. Unset or empty: no object-store path \
           is allowed. Embedded use and a server without authentication do not read it.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.2.0",
-    spark_alias: None,
-};
-
-/// `krishiv.io.egress.privateAddresses` (design P3-T067 §5.1).
-pub static IO_EGRESS_PRIVATE_ADDRESSES: ConfigEntry = ConfigEntry {
-    key: "krishiv.io.egress.privateAddresses",
-    value_type: ValueType::Enum(&["allow", "deny"]),
-    default: None,
-    doc: "Whether the server's outbound connections for catalogs and data (catalog APIs, token \
-          endpoints, object-store requests, metastore connections) may reach addresses that are \
-          not globally routable. `deny` (the server-mode default when unset) allows only \
-          globally routable unicast addresses (IANA special-purpose registries), the networks of \
-          `krishiv.io.egress.allowedCidrs`, and private (RFC 1918, unique-local) or loopback \
-          addresses of a host an administrator declared, by its exact name and only for the \
-          client that owns it; link-local addresses (cloud metadata) never pass by name. The \
-          rule is checked after DNS resolution and on every redirect hop. Under `deny`, in \
-          server and embedded mode alike, certificate verification stays on: a store option \
-          that turns it off is refused. `allow` (the embedded \
-          default) applies no rule.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.2.0",
-    spark_alias: None,
-};
-
-/// `krishiv.io.egress.allowedCidrs` (design P3-T067 §5.1).
-pub static IO_EGRESS_ALLOWED_CIDRS: ConfigEntry = ConfigEntry {
-    key: "krishiv.io.egress.allowedCidrs",
-    value_type: ValueType::String,
-    default: None,
-    doc: "A comma-separated list of networks (`10.20.0.0/16`, `fd12:3456::/48`) the egress \
-          policy always allows, for every client. The only way to open a link-local address. \
-          Unset: none.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.2.0",
-    spark_alias: None,
-};
-
-/// `krishiv.io.egress.proxy` (design P3-T067 §5.2).
-pub static IO_EGRESS_PROXY: ConfigEntry = ConfigEntry {
-    key: "krishiv.io.egress.proxy",
-    value_type: ValueType::String,
-    default: None,
-    doc: "An HTTP(S) proxy URL every egress-policy client sends through; the proxy then decides \
-          where requests may go (logged at startup). Unset: the policy clients use no proxy, \
-          environment proxy variables included.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
@@ -1527,7 +1483,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4_000_000)),
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none.",
+          none, and one that turns out larger publishes none. Left at its default, it is raised to \
+          20,000,000 for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1540,7 +1497,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(8 * MIB)),
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%.",
+          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
+          for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",

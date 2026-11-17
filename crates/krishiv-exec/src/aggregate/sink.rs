@@ -38,7 +38,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
-use super::{AggregateSpec, is_order_sensitive, unsupported};
+use super::{AggregateSpec, observes_order, unsupported};
 use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
@@ -696,8 +696,9 @@ struct Run {
     /// ([`u32::MAX`] for runs of many partitions, which keep their
     /// insertion order). Runs merge grouped by hash partition, runs of
     /// one partition in this order, so order-sensitive aggregates
-    /// (`collect_*`, the vector ones) merge partitions in partition-index
-    /// order whatever thread spilled first.
+    /// ([`observes_order`]: `collect_*`, the vector ones, `first`,
+    /// `last`, the ties of `max_by`/`min_by`, float `max`/`min`) merge partitions in
+    /// partition-index order whatever thread spilled first.
     partition: u32,
 }
 
@@ -1249,14 +1250,9 @@ impl HashAggregate {
             return self.must_free(inner, ctx, 0);
         }
         let tables = &mut inner.tables;
-        // Order-sensitive aggregates merge in driver-partition order (see
-        // [`Run::partition`]), not biggest-first.
-        let ordered = self
-            .core
-            .spec
-            .aggregates
-            .iter()
-            .any(|a| is_order_sensitive(&a.function));
+        // Aggregates that observe order ([`observes_order`]) merge in
+        // driver-partition order (see [`Run::partition`]), not biggest-first.
+        let ordered = self.core.spec.aggregates.iter().any(observes_order);
         if !ordered
             && inner.merged == 0
             && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len())

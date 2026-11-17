@@ -206,6 +206,20 @@ pub(crate) fn anonymous_call_name(
     ))
 }
 
+/// The encoded name an unregistered UDF's call goes by under the `session`
+/// qualifier: `def` at `version` (whose [`ANONYMOUS_VERSION_BIT`] must be
+/// set), as [`functions::python_udf_call`](crate::functions::python_udf_call)
+/// names it. For servers that build the IR call themselves (Spark Connect's
+/// inline Python UDFs).
+///
+/// # Errors
+/// `KRISHIV_INTERNAL_ERROR` when `version` lacks the bit or the name holds
+/// a NUL.
+#[cfg(feature = "unstable-ir")]
+pub fn python_udf_call_name(def: &PythonUdfDef, version: u32) -> Result<String, KrishivError> {
+    anonymous_call_name(def, version)
+}
+
 /// The definition and version an encoded name ([`anonymous_call_name`])
 /// carries; `None` for any other name.
 #[must_use]

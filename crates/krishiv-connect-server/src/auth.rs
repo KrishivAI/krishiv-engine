@@ -342,7 +342,8 @@ pub enum Check {
     Unsupported(&'static str),
 }
 
-fn client_code() -> Check {
+/// The class of client code: `Usage` on `System("udf")` (ADR 0046 §3b, §4).
+pub(crate) fn client_code() -> Check {
     Check::Privilege {
         securable: Securable::System(SYSTEM_UDF.to_owned()),
         privilege: Privilege::Usage,

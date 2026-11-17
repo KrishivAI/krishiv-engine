@@ -12,3 +12,5 @@ pub mod hive;
 #[cfg(feature = "iceberg-rest")]
 pub mod iceberg_rest;
 pub mod location;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;

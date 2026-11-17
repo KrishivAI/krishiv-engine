@@ -14,10 +14,10 @@ description: "`SparkSession`: the entry point, as `pyspark.sql.SparkSession` (em
 class Catalog
 ```
 
-The catalog of temporary views, as `pyspark.sql.catalog.Catalog`.
+The catalog API, as `pyspark.sql.catalog.Catalog`; the lists are Python lists of named tuples.
 
-The embedded engine has no databases or persistent tables: every table
-is a temporary view in the `default` database.
+`spark_catalog` is the only catalog this API lists or accepts; its `default` database holds the
+temporary views and the tables `CREATE TABLE` made.
 
 ### `cacheTable`
 
@@ -36,13 +36,29 @@ def clearCache(self) -> None
 
 Drops every cached relation: later actions run uncached.
 
+### `currentCatalog`
+
+```python
+def currentCatalog(self) -> str
+```
+
+The current catalog's name.
+
 ### `currentDatabase`
 
 ```python
 def currentDatabase(self) -> str
 ```
 
-The current database: always `default` (there is no other).
+The current database's name.
+
+### `databaseExists`
+
+```python
+def databaseExists(self, dbName: str) -> bool
+```
+
+Whether the database `dbName` exists.
 
 ### `dropTempView`
 
@@ -52,6 +68,38 @@ def dropTempView(self, viewName: str) -> bool
 
 Drops the temporary view `viewName`; whether it existed.
 
+### `functionExists`
+
+```python
+def functionExists(self, functionName: str, dbName: str | None=None) -> bool
+```
+
+Whether the function `functionName` exists.
+
+### `getDatabase`
+
+```python
+def getDatabase(self, dbName: str) -> Database
+```
+
+The database `dbName`; `SCHEMA_NOT_FOUND` when there is none.
+
+### `getFunction`
+
+```python
+def getFunction(self, functionName: str) -> Function
+```
+
+The function `functionName`; `UNRESOLVED_ROUTINE` when there is none.
+
+### `getTable`
+
+```python
+def getTable(self, tableName: str) -> Table
+```
+
+The table or view `tableName`; `TABLE_OR_VIEW_NOT_FOUND` when there is none.
+
 ### `isCached`
 
 ```python
@@ -60,25 +108,53 @@ def isCached(self, tableName: str) -> bool
 
 Whether the table `tableName` is cached now.
 
+### `listCatalogs`
+
+```python
+def listCatalogs(self, pattern: str | None=None) -> list[CatalogMetadata]
+```
+
+The catalogs, filtered by the `|`-separated glob `pattern`.
+
+Only `spark_catalog` is listed; the system tables stay reachable through SQL `USE system`.
+
+### `listColumns`
+
+```python
+def listColumns(self, tableName: str, dbName: str | None=None) -> list[Column]
+```
+
+The columns of `tableName` (in `dbName` when given).
+
 ### `listDatabases`
 
 ```python
-def listDatabases(self) -> DataFrame
+def listDatabases(self, pattern: str | None=None) -> list[Database]
 ```
 
-The databases: just `default`.
+The databases, filtered by the `|`-separated glob `pattern`.
+
+### `listFunctions`
+
+```python
+def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
+```
+
+The functions, filtered by `pattern`.
+
+.. note:: Functions live in no database here; a `dbName` must name an existing database and
+    does not narrow the list.
 
 ### `listTables`
 
 ```python
-def listTables(self, dbName: str | None=None) -> DataFrame
+def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
 ```
 
-The temporary views as a DataFrame of `(name, database,
-description, tableType, isTemporary)` rows.
+The tables and views of `dbName` (default: the current database), filtered by `pattern`.
 
-.. note:: The engine has no catalogs or namespaces, so this is the
-    classic five-column shape rather than Spark 4.x's namespaced one.
+Local temporary views are included in the current database, as in Spark; the tables that hold
+`createDataFrame` data are not.
 
 ### `refreshByPath`
 
@@ -106,13 +182,31 @@ def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
 
 An alias for `spark.udf.register` (deprecated since 2.3.0, `pyspark/sql/catalog.py:1272`).
 
+### `setCurrentCatalog`
+
+```python
+def setCurrentCatalog(self, catalogName: str) -> None
+```
+
+Makes `catalogName` the current catalog; only `spark_catalog` is accepted.
+
+SQL `USE system` still reaches the system tables.
+
+### `setCurrentDatabase`
+
+```python
+def setCurrentDatabase(self, dbName: str) -> None
+```
+
+Makes `dbName` the current database.
+
 ### `tableExists`
 
 ```python
 def tableExists(self, tableName: str, dbName: str | None=None) -> bool
 ```
 
-Whether the temporary view `tableName` exists.
+Whether the table or view `tableName` exists (in `dbName` when given).
 
 ### `uncacheTable`
 

@@ -63,11 +63,11 @@ fn catalog() -> MemoryCatalog {
     cat
 }
 
-fn ctx() -> AnalysisContext {
+pub(super) fn ctx() -> AnalysisContext {
     context(catalog(), ResolutionConf::default())
 }
 
-fn run(plan: LogicalPlan, ctx: &AnalysisContext) -> Result<AnalyzedPlan, AnalysisError> {
+pub(super) fn run(plan: LogicalPlan, ctx: &AnalysisContext) -> Result<AnalyzedPlan, AnalysisError> {
     let plan = Plan::try_new(plan).map_err(|error| AnalysisError {
         error,
         origin: Origin::UNKNOWN,
