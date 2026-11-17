@@ -267,7 +267,10 @@ impl ArrowStream {
 
     /// The schema as an `arrow_schema` capsule; does not consume the stream.
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
-        let schema = FFI_ArrowSchema::try_from(self.schema.as_ref())
+        // As `__arrow_c_stream__`: a NUL in a field name cannot cross the C data interface.
+        let safe = ffi::nul_safe_schema(&self.schema, self.placeholders.load(Ordering::Relaxed))
+            .map_err(|e| crate::errors::to_py(py, &e))?;
+        let schema = FFI_ArrowSchema::try_from(safe.as_deref().unwrap_or(self.schema.as_ref()))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         PyCapsule::new_with_value(py, schema, SCHEMA_CAPSULE)
     }
@@ -308,7 +311,7 @@ impl ArrowStream {
         // names (`names` has the true ones); a NUL in a nested name is refused with a Krishiv error.
         let requested = match (
             requested,
-            ffi::nul_safe_schema(&self.schema, self.placeholders.load(Ordering::Acquire)),
+            ffi::nul_safe_schema(&self.schema, self.placeholders.load(Ordering::Relaxed)),
         ) {
             (_, Err(e)) => return Err(crate::errors::to_py(py, &e)),
             (Some(Requested::Use(schema)), Ok(_)) => Some(Requested::Use(schema)),
@@ -337,7 +340,7 @@ impl ArrowStream {
     /// renames its columns back to [`Self::names`] (the DataFrame's own pyarrow import). Without it, such a name
     /// is refused with `KRISHIV_UNSUPPORTED_FEATURE` (Polars and DuckDB cannot rename).
     fn use_placeholder_names(&self) {
-        self.placeholders.store(true, Ordering::Release);
+        self.placeholders.store(true, Ordering::Relaxed);
     }
 
     /// The top-level column names, as they are (a name with a NUL is exported under a placeholder by

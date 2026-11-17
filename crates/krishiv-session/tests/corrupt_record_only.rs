@@ -211,6 +211,47 @@ fn run(fmt: &str, file: &str) {
         count(&s, "v WHERE _bad IS NOT NULL").is_err_and(|e| e.0 == QUERY_ONLY),
         "{fmt}: a filter on the renamed column"
     );
+    // The DataFrame `count()` (Python `df.count()`) is a count over the frame, whatever it selects.
+    view(&s, fmt, &path, sch, "");
+    let want = g["probes"][format!("{fmt}.count").as_str()]["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for q in [
+        "SELECT * FROM v",
+        "SELECT _corrupt_record FROM v",
+        "SELECT * FROM v WHERE a IS NULL OR a IS NOT NULL",
+    ] {
+        let n = block_on(sql(&s, q).unwrap().count()).map(|n| n.to_string());
+        assert_eq!(
+            n.as_deref().ok(),
+            Some(want.as_str()),
+            "{fmt}: df.count() of `{q}`"
+        );
+    }
+    // `explain` shows the plan; only running it raises (Spark's check is in the reader).
+    for mode in [
+        krishiv_session::ExplainMode::Simple,
+        krishiv_session::ExplainMode::Extended,
+    ] {
+        let df = sql(&s, "SELECT _corrupt_record FROM v").unwrap();
+        let text = block_on(df.explain(mode));
+        assert!(text.is_ok(), "{fmt}: explain: {text:?}");
+    }
+    // KNOWN DIFFERENCES (they never refuse a valid query): Spark raises for a UNION ALL branch or a CTE that
+    // reads only the corrupt column; here the branch / CTE is not seen as such.
+    let union = rows(sql(
+        &s,
+        "SELECT CAST(a AS STRING) FROM v UNION ALL SELECT _corrupt_record FROM v",
+    ));
+    let cte = rows(sql(
+        &s,
+        "WITH c AS (SELECT _corrupt_record FROM v) SELECT * FROM c",
+    ));
+    // The check sees the columns the plan references by attribute; a union branch and a CTE body rename them
+    // (positional union inputs; the CTE reference has attributes of its own), so neither is recognised.
+    assert!(union.is_ok(), "{fmt}: known difference, union: {union:?}");
+    assert!(cte.is_ok(), "{fmt}: known difference, cte: {cte:?}");
     view(&s, fmt, &path, sch2, bad);
     put("renamed.select_bad", rows(sql(&s, "SELECT _bad FROM v")));
     put(
@@ -328,6 +369,11 @@ fn a_parquet_directory_read_as_json_is_refused_whenever_its_rows_are_read() {
     let df = sql(&s, "SELECT id AS a, CAST(id AS STRING) AS b FROM range(3)").unwrap();
     block_on(df.write().parquet(&path)).unwrap();
     let ds = || s.read().format("json").load([path.as_str()]);
+    let counted = block_on(ds().count());
+    assert!(
+        counted.is_ok(),
+        "df.count() of the only-corrupt-column read: {counted:?}"
+    );
     let schema = block_on(ds().schema()).unwrap();
     assert_eq!(schema.fields().len(), 1);
     assert_eq!(schema.field(0).name(), "_corrupt_record");

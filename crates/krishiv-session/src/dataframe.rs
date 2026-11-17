@@ -1325,10 +1325,30 @@ impl DataFrame {
     /// # Errors
     /// As [`Self::collect`].
     pub async fn count(&self) -> Result<u64, KrishivError> {
-        let mut stream = self.execute_stream().await?;
+        // As Spark's `Dataset.count` (`groupBy().count()`): an aggregate over the frame, so column pruning
+        // leaves the scan reading no column of its own (a count of a JSON/CSV read of only the corrupt-record
+        // column is a count, not Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+        let mut stream = self
+            .agg([crate::functions::count_star()])
+            .execute_stream()
+            .await?;
         let mut rows = 0_u64;
         while let Some(batch) = stream.next().await {
-            rows += batch?.num_rows() as u64;
+            let batch = batch?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let counted = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .map(|a| a.value(0));
+            let counted = counted.ok_or_else(|| {
+                KrishivError::from(krishiv_common::error::InternalError {
+                    message: "count(*) did not give a bigint".to_owned(),
+                })
+            })?;
+            rows += u64::try_from(counted).unwrap_or(0);
         }
         Ok(rows)
     }

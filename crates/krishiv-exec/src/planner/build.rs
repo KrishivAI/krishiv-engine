@@ -1206,7 +1206,7 @@ impl<'a> Planner<'a> {
             .filter(|c| self.referenced.contains(&c.id))
             .map(|c| c.name.as_str())
             .collect();
-        if factory.only_reads_corrupt_record(&referenced) {
+        if !self.cx.inspect && factory.only_reads_corrupt_record(&referenced) {
             return Err(UnsupportedFeatureQueryOnlyCorruptRecordColumn {}.into());
         }
         let mut projection = Vec::with_capacity(scan.output.len());
