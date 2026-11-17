@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::builder::make_view;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
+    ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
     StructArray, TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
@@ -59,15 +59,14 @@ use krishiv_io::split::{
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
-    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScalarValue,
-    ScanOptions, ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest,
-    TakeStream,
+    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest, TakeStream,
 };
-use krishiv_io::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
 use object_store::path::Path;
 
+use super::partition_prune::{dropping_filter, reads_partition_column, statically_dropped};
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
@@ -328,7 +327,7 @@ impl ScanPushdown for FileScan {
     }
 
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
-        if reads_partition_column(self, filter) {
+        if reads_partition_column(&self.partition_columns, filter) {
             return FilterPushdown::Unsupported;
         }
         // Pruning keeps a superset of the matching rows; the row evaluator
@@ -695,51 +694,6 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
     Ok(())
 }
 
-/// The one value of a partition column in a file, for the types partitions are made of.
-fn partition_scalar(array: &dyn Array) -> Option<ScalarValue> {
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Date32Type, Int8Type, Int16Type, Int32Type, Int64Type};
-    if array.is_empty() || array.is_null(0) {
-        return None;
-    }
-    Some(match array.data_type() {
-        DataType::Boolean => ScalarValue::Boolean(array.as_boolean().value(0)),
-        DataType::Int8 => ScalarValue::Int8(array.as_primitive::<Int8Type>().value(0)),
-        DataType::Int16 => ScalarValue::Int16(array.as_primitive::<Int16Type>().value(0)),
-        DataType::Int32 => ScalarValue::Int32(array.as_primitive::<Int32Type>().value(0)),
-        DataType::Int64 => ScalarValue::Int64(array.as_primitive::<Int64Type>().value(0)),
-        DataType::Date32 => ScalarValue::Date32(array.as_primitive::<Date32Type>().value(0)),
-        DataType::Utf8 => ScalarValue::Utf8(array.as_string::<i32>().value(0).to_owned()),
-        DataType::Utf8View => ScalarValue::Utf8(array.as_string_view().value(0).to_owned()),
-        _ => return None,
-    })
-}
-
-/// Whether the typed tree of `filter` reads a partition column of `scan`
-/// (a filter without one prunes nothing).
-fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
-    if scan.partition_columns.is_empty() {
-        return false;
-    }
-    filter.expr.as_ref().is_some_and(|e| {
-        e.columns()
-            .iter()
-            .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
-    })
-}
-
-/// The runtime filter that no row of a file with these partition values
-/// passes, if any.
-fn dropping_filter<'a>(
-    filters: &'a [(usize, ScanFilter)],
-    values: &[ArrayRef],
-) -> Option<&'a ScanFilter> {
-    filters.iter().find_map(|(k, filter)| {
-        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
-        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
-    })
-}
-
 /// Where a column of a partitioned scan's output comes from.
 #[derive(Clone, Copy, Debug)]
 enum Slot {
@@ -814,7 +768,7 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     let usable: Vec<PushedFilter> = p
         .filters
         .iter()
-        .take_while(|f| !reads_partition_column(scan, f))
+        .take_while(|f| !reads_partition_column(&scan.partition_columns, f))
         .cloned()
         .collect();
     let exprs: Vec<PushdownExpr> = usable.iter().filter_map(|f| f.expr.clone()).collect();
@@ -939,7 +893,7 @@ impl FileScanSource {
         let static_partition = p
             .filters
             .iter()
-            .filter(|f| reads_partition_column(scan, f))
+            .filter(|f| reads_partition_column(&scan.partition_columns, f))
             .filter_map(|f| f.expr.clone())
             .collect();
         Ok(Self {
@@ -1202,7 +1156,11 @@ impl FileScanSource {
             return Ok(());
         }
         // Static partition pruning: the filters on partition columns rule the file out.
-        if self.statically_dropped(&partition_values) {
+        if statically_dropped(
+            &self.static_partition,
+            &self.partition_fields,
+            &partition_values,
+        ) {
             self.metrics
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -1357,32 +1315,9 @@ impl FileScanSource {
     fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
         (!partition_filters.is_empty() || !self.static_partition.is_empty())
             && self.partition_values(file).is_ok_and(|v| {
-                dropping_filter(partition_filters, &v).is_some() || self.statically_dropped(&v)
+                dropping_filter(partition_filters, &v).is_some()
+                    || statically_dropped(&self.static_partition, &self.partition_fields, &v)
             })
-    }
-
-    /// Whether the pushed filters on partition columns cannot match any row of a file with these partition values
-    /// (each is the one value of its column in the file, so `prune` decides exactly; a null or an unhandled type
-    /// is unknown and keeps the file).
-    fn statically_dropped(&self, values: &[ArrayRef]) -> bool {
-        if self.static_partition.is_empty() {
-            return false;
-        }
-        let mut stats = FileStatistics::unknown();
-        stats.rows = Precision::Exact(1);
-        for (field, array) in self.partition_fields.iter().zip(values) {
-            let Some(value) = partition_scalar(array.as_ref()) else {
-                continue;
-            };
-            let mut column = ColumnStatistics::new(ColumnPath::new(field.name()));
-            column.null_count = Precision::Exact(0);
-            column.min = Precision::Exact(value.clone());
-            column.max = Precision::Exact(value);
-            stats.columns.push(column);
-        }
-        self.static_partition
-            .iter()
-            .any(|e| prune(e, &stats) == TriState::False)
     }
 
     /// The values of `file`'s partition columns, one row each.
