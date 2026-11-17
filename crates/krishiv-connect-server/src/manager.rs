@@ -51,7 +51,7 @@ use krishiv_common::error::{
     KrishivError, KrishivSessionLimit,
 };
 use krishiv_session::auth::{Authenticated, Role, Surface};
-use krishiv_session::{QueryId, Session};
+use krishiv_session::{DataFrame, QueryId, Session};
 
 use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
@@ -136,6 +136,8 @@ pub struct SessionEntry {
     session: Session,
     caller: Authenticated,
     client_user_id: String,
+    /// The session id the client sent: what Spark's own messages name (`SessionHolder.sessionId`).
+    client_session_id: String,
     operations: Arc<Operations>,
     /// The errors sent on the session, for `FetchErrorDetails`.
     errors: Arc<SessionErrors>,
@@ -144,6 +146,11 @@ pub struct SessionEntry {
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
     python: SessionPython,
+    /// The DataFrames the session holds for the client (`checkpoint_command`, Spark's
+    /// `SessionHolder.dataFrameCache`): id to frame, ended by
+    /// `remove_cached_remote_relation_command` or with the session. A frame's rows and files end
+    /// when the last frame that reads them is dropped.
+    cached_frames: Mutex<HashMap<String, DataFrame>>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
     /// Held shared by the RPCs that change the session's state while they
@@ -152,6 +159,34 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    /// Holds `frame` under `id` (a checkpoint's result).
+    pub(crate) fn cache_frame(&self, id: String, frame: DataFrame) {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, frame);
+    }
+
+    /// The frame held under `id`.
+    pub(crate) fn cached_frame(&self, id: &str) -> Option<DataFrame> {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    /// Lets go of the frame held under `id`; an id that is not held is not an error (Spark's
+    /// `removeCachedDataFrame`). The frame is dropped outside the lock.
+    pub(crate) fn remove_cached_frame(&self, id: &str) {
+        let removed = self
+            .cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        drop(removed);
+    }
+
     /// The engine session.
     #[must_use]
     pub fn session(&self) -> &Session {
@@ -170,6 +205,12 @@ impl SessionEntry {
     #[must_use]
     pub fn caller(&self) -> &Authenticated {
         &self.caller
+    }
+
+    /// The session id the client sent (Spark's `sessionId`, as opposed to the server-side one).
+    #[must_use]
+    pub fn client_session_id(&self) -> &str {
+        &self.client_session_id
     }
 
     /// The `UserContext.user_id` the client sent when it created the
@@ -226,6 +267,15 @@ impl SessionEntry {
         self.session.close();
         self.artifacts.close();
         self.python.release();
+        // The held DataFrames go with the session, whoever still holds the entry; dropped
+        // outside the lock.
+        let held = std::mem::take(
+            &mut *self
+                .cached_frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        drop(held);
         ops
     }
 }
@@ -388,7 +438,7 @@ impl SessionManager {
         &self,
         caller: &Authenticated,
         session: Session,
-        client_user_id: &str,
+        (client_user_id, client_session_id): (&str, &str),
         python: SessionPython,
     ) -> Arc<SessionEntry> {
         session.set_client_info(
@@ -403,8 +453,10 @@ impl SessionManager {
             session,
             caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
+            client_session_id: client_session_id.to_owned(),
             operations: Arc::default(),
             python,
+            cached_frames: Mutex::default(),
             last_access: AtomicU64::new(self.now_ms()),
             gate: tokio::sync::RwLock::new(()),
         })
@@ -481,7 +533,7 @@ impl SessionManager {
         // this one is closed unused.
         let session = (self.factory)(caller)?;
         let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
-        let entry = self.new_entry(caller, session, client_user_id, python);
+        let entry = self.new_entry(caller, session, (client_user_id, session_id), python);
         let mut retired = None;
         let raced = {
             let mut inner = self.lock();

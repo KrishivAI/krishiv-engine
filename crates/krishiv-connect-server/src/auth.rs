@@ -358,8 +358,8 @@ pub enum Rpc {
     /// `ExecutePlan`; its commands are classified by [`check_command`].
     ExecutePlan,
     /// `AnalyzePlan`: `Browse` on what the plan names for most analyses; its `persist` /
-    /// `unpersist` subtypes are [`Check::SideEffect`] and `input_files` is `Select` on the
-    /// paths (ADR 0046 §3b), classified per subtype when PR-11b implements the RPC.
+    /// `unpersist` subtypes are [`Check::SideEffect`] (`analyze` enforces it) and `input_files` is
+    /// `Select` on the paths (ADR 0046 §3b).
     AnalyzePlan,
     /// `Config`.
     Config,
@@ -395,8 +395,8 @@ pub enum Check {
     Plan,
     /// A non-durable side effect (`checkpoint_command`; `AnalyzePlan` `persist` / `unpersist`):
     /// the plan's securables plus the operator floor of the ADR 0046 §3 side-effect row
-    /// (a viewer is refused even for a plan that reads no table), applied with the SQL
-    /// `CACHE TABLE` path when P3-T012 / PR-11b run them.
+    /// (a viewer is refused even for a plan that reads no table): [`enforce`] asks `Operate` on
+    /// `System("cache")` before anything is registered or held.
     SideEffect,
     /// The `Write` class: `Modify` on the target, plus `Create` when the save mode makes one,
     /// plus the source plan's securables, through the session's write path (P3-T012 runs it).
@@ -413,6 +413,9 @@ pub enum Check {
     /// Refused for every role: not supported in P3 (ADR 0046 §3b); `what` names it.
     Unsupported(&'static str),
 }
+
+/// The `System` securable of the session's cache, which the side-effect floor asks `Operate` on.
+const SYSTEM_CACHE: &str = "cache";
 
 /// The class of client code: `Usage` on `System("udf")` (ADR 0046 §3b, §4).
 pub(crate) fn client_code() -> Check {
@@ -530,11 +533,18 @@ pub async fn enforce(check: &Check, session: &Session) -> Result<(), KrishivErro
                 .authorize_privilege(securable, *privilege, *class)
                 .await
         }
-        Check::OwnSession
-        | Check::Plan
-        | Check::SideEffect
-        | Check::Write
-        | Check::Unsupported(_) => Ok(()),
+        // The operator floor of the non-durable side-effect row: `Operate` on the session's cache
+        // (an operator and an admin hold it, a viewer does not, whatever the plan reads).
+        Check::SideEffect => {
+            session
+                .authorize_privilege(
+                    &Securable::System(SYSTEM_CACHE.to_owned()),
+                    Privilege::Operate,
+                    StatementClass::Session,
+                )
+                .await
+        }
+        Check::OwnSession | Check::Plan | Check::Write | Check::Unsupported(_) => Ok(()),
     }
 }
 

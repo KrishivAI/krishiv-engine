@@ -13,6 +13,7 @@
 pub mod analyze;
 pub mod artifacts;
 pub mod auth;
+mod cache;
 pub mod codec;
 pub mod config;
 pub mod errors;
