@@ -1333,10 +1333,34 @@ impl DataFrame {
         // As Spark's `Dataset.count` (`groupBy().count()`): an aggregate over the frame, so column pruning
         // leaves the scan reading no column of its own (a count of a JSON/CSV read of only the corrupt-record
         // column is a count, not Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
-        let mut stream = self
-            .agg([crate::functions::count_star()])
-            .execute_stream()
-            .await?;
+        let mut frame = self.agg([crate::functions::count_star()]);
+        // Still the frame's statement: its text (a run-time error's SQL context, `system.queries`) and span.
+        frame.trace.clone_from(&self.trace);
+        let parent = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(a) = parent
+            && let Some(redacted) = a.env.redacted.as_deref()
+        {
+            let mut env = self.session.query_env();
+            env.copy_text_from(&a.env);
+            env.statement_class = a.env.statement_class;
+            env.row = Arc::clone(&a.env.row);
+            env.sample_salt = a.env.sample_salt;
+            if let Err(error) = frame.analyzed_in_with_text(env, Some(redacted)).await {
+                // As `action_analysis`: a failed re-analysis is the statement's row of `system.queries`.
+                let id = self.session.record_refused(
+                    a.env.text.as_deref(),
+                    a.env.statement_class,
+                    &error,
+                );
+                *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+                return Err(error);
+            }
+        }
+        let mut stream = frame.execute_stream().await?;
         let mut rows = 0_u64;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
@@ -1353,7 +1377,11 @@ impl DataFrame {
                     message: "count(*) did not give a bigint".to_owned(),
                 })
             })?;
-            rows += u64::try_from(counted).unwrap_or(0);
+            rows += u64::try_from(counted).map_err(|_| {
+                KrishivError::from(krishiv_common::error::InternalError {
+                    message: format!("count(*) gave a negative count {counted}"),
+                })
+            })?;
         }
         Ok(rows)
     }

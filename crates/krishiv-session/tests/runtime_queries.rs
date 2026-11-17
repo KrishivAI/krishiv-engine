@@ -346,3 +346,24 @@ fn a_running_stream_holds_its_operation_id() {
     );
     assert!(block_on(first.next()).unwrap().is_ok());
 }
+
+/// `sql(q).count()` runs as `q`'s statement: its `system.queries` row shows the text.
+#[test]
+fn a_count_of_a_statement_shows_its_text() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT id FROM range(5) WHERE id > 1")).unwrap();
+    assert_eq!(block_on(df.count()).unwrap(), 3);
+    let texts = column(
+        &s,
+        "SELECT query_text FROM system.queries WHERE query_text LIKE 'SELECT id FROM range(5)%'",
+    );
+    assert!(!texts.is_empty(), "{texts:?}");
+    let all = column(
+        &s,
+        "SELECT coalesce(query_text, '<none>') FROM system.queries",
+    );
+    assert!(
+        !all.iter().any(|t| t.as_deref() == Some("<none>")),
+        "{all:?}"
+    );
+}
