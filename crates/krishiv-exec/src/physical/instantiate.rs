@@ -97,7 +97,9 @@ mod observe;
 use distributed::planned_schema_holds;
 pub(crate) use join::hash_join;
 pub(crate) use observe::collect_metrics_op;
-use order::{range_ordered_evals, reads_range_in_order};
+use order::{
+    SCAN_LIMIT_IN_ORDER_ROWS, range_ordered_evals, reads_range_in_order, reads_scan_in_order,
+};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -1118,7 +1120,9 @@ impl Instantiation<'_> {
                 offset,
                 limit,
             } => {
-                let ordered = reads_range_in_order(input);
+                let ordered = reads_range_in_order(input)
+                    || (reads_scan_in_order(input)
+                        && offset.saturating_add(*limit) <= SCAN_LIMIT_IN_ORDER_ROWS);
                 let input = self.node(input)?;
                 let op = crate::operators::Limit::with_offset(
                     Arc::clone(&input.schema),
@@ -1127,7 +1131,9 @@ impl Instantiation<'_> {
                 );
                 let built = operator(input, op);
                 // Which rows a parallel limit passes follows the batch
-                // order; a `range` has a defined order, so one driver keeps it.
+                // order; a `range` has a defined order, and a scan with no
+                // filter reads its first split first (Spark's take reads
+                // the partitions in order), so one driver keeps it.
                 Ok(if ordered {
                     Built {
                         schema: built.schema,

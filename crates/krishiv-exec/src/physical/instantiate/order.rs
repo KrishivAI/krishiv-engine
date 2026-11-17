@@ -22,6 +22,31 @@ pub(super) fn reads_range_in_order(n: &PhysNode) -> bool {
     }
 }
 
+/// The most rows (`offset + limit`) a `LIMIT` over a filterless scan reads on one driver
+/// ([`reads_scan_in_order`]): the first morsel holds that many rows or the read moves on to the next in order, so
+/// a larger limit would turn a parallel scan into a serial one for little of the benefit.
+pub(super) const SCAN_LIMIT_IN_ORDER_ROWS: u64 = 1 << 20;
+
+/// Whether `n` streams a file or table scan with no filter of its own (pushed or runtime) through projections and
+/// limits only, to a `LIMIT`. Spark's `executeTake` reads the scan's partitions in index order, so a `LIMIT` over
+/// one file returns the file's first rows; here several drivers would each read a morsel and the limit would keep
+/// whichever batch came first (PY-067). One driver claims the morsels in order, and the limit needs only the first
+/// batch, so no parallelism is lost. A filter between (which may make the limit read much more) keeps its drivers.
+pub(super) fn reads_scan_in_order(n: &PhysNode) -> bool {
+    match n {
+        PhysNode::Scan(s) => {
+            s.filter.is_none()
+                && s.runtime_filters.is_empty()
+                && !s.row_id
+                && !matches!(s.scan.source, krishiv_plan::ReadSource::Local(_))
+        }
+        PhysNode::Project { input, .. } | PhysNode::Limit { input, .. } => {
+            reads_scan_in_order(input)
+        }
+        _ => false,
+    }
+}
+
 /// The `PythonEval` nodes (by address) whose output must keep the order of
 /// the `range` below them: those a `LIMIT`, or `result` (the plan's root,
 /// when given), reads the range through. Any other one reads its
