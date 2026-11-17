@@ -234,3 +234,70 @@ fn a_copy_into_a_closed_session_leaves_nothing_behind() {
     // The source session keeps its own artifacts.
     assert!(source.artifacts().snapshot().is_some());
 }
+
+/// A UDF host whose runtimes count the artifact sets they get.
+#[derive(Debug, Default)]
+struct CountingHost(Arc<std::sync::atomic::AtomicUsize>);
+
+#[derive(Debug)]
+struct CountingRuntime(Arc<std::sync::atomic::AtomicUsize>);
+
+impl krishiv_exec::python_eval::UdfRuntime for CountingRuntime {
+    fn prepare(
+        &self,
+        spec: &krishiv_exec::python_eval::UdfCallSpec,
+    ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::python_eval::PreparedUdf>> {
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
+}
+
+impl crate::SessionUdfRuntime for CountingRuntime {
+    fn register(&self, _: &str, _: u32, _: &krishiv_connect::translate::PythonUdf) {}
+    fn release(&self) {}
+    fn set_artifacts(&self, _: Vec<std::path::PathBuf>, _: Vec<crate::PythonArchive>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl crate::UdfHost for CountingHost {
+    fn session_runtime(
+        &self,
+        _: &str,
+        _: &str,
+        _: crate::RunnerConf,
+    ) -> Arc<dyn crate::SessionUdfRuntime> {
+        Arc::new(CountingRuntime(Arc::clone(&self.0)))
+    }
+}
+
+#[test]
+fn no_artifact_set_reaches_a_released_sessions_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = store(tmp.path());
+    let host = CountingHost::default();
+    let sets = Arc::clone(&host.0);
+    let m = sessions().with_udf_host(Arc::new(host));
+    let e = entry(&m, S1);
+    let add = |name: &str| {
+        let mut t = transfer(&store, &e);
+        t.on_message(&request(Some(single(name, b"X = 1\n"))))
+            .unwrap();
+        t.finish().unwrap();
+    };
+    let count = || sets.load(std::sync::atomic::Ordering::SeqCst);
+    add("pyfiles/a.py");
+    e.python().sync_artifacts(e.artifacts());
+    assert_eq!(count(), 1);
+    // A set that did not change is not handed over again.
+    e.python().sync_artifacts(e.artifacts());
+    assert_eq!(count(), 1);
+    // After the release a changed set is not handed over: its runtime serves nothing any more.
+    add("pyfiles/b.py");
+    e.python().release();
+    e.python().sync_artifacts(e.artifacts());
+    assert_eq!(count(), 1);
+}
