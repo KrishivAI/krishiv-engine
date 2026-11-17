@@ -1344,6 +1344,33 @@ pub(crate) fn one_row_project(exprs: Vec<Arc<Expr>>) -> Arc<LogicalPlan> {
     }))
 }
 
+/// A call of `def` named `qualifier`.`name` with a typed `NULL` for each parameter it needs
+/// (defaults fill the rest): `SELECT name(NULL, ...)` for a scalar function, the table function's
+/// rows for a table one. What `CREATE FUNCTION` resolves to check a body, and what a definer
+/// view's read analyzes to ask a body's writers the columns it reads (review r11 B1).
+pub(crate) fn null_call(def: &SqlFunction, qualifier: &[String]) -> Arc<LogicalPlan> {
+    let args: Vec<Expr> = def.params[..def.required()]
+        .iter()
+        .map(|p| Expr::literal(krishiv_plan::Literal::Null(Some(p.data_type.clone()))))
+        .collect();
+    if def.returns_table.is_some() {
+        let name: Vec<&str> = qualifier
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(def.name.as_str()))
+            .collect();
+        return Arc::new(LogicalPlan::new(PlanNode::TableFunction {
+            name: name.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
+            args: args.into_iter().map(Arc::new).collect(),
+        }));
+    }
+    let mut call = Expr::function(def.name.clone(), args);
+    if let ExprNode::Function(function) = &mut call.node {
+        function.qualifier = qualifier.to_vec();
+    }
+    one_row_project(vec![Arc::new(call)])
+}
+
 #[cfg(test)]
 mod tests {
     use krishiv_plan::analyzer::BuiltinFunctions;

@@ -142,6 +142,23 @@ impl Session {
                     .await?;
                 self.authorize_calls_as(&owned.calls, &writer, privilege)
                     .await?;
+                // And the columns it reads, through the column pass the definer's analysis
+                // made (review r11 B1).
+                if let krishiv_plan::analyzer::FunctionLookup::Sql(def) =
+                    krishiv_plan::analyzer::FunctionRegistry::lookup(
+                        &*calls,
+                        &[
+                            crate::catalog::CATALOG.to_owned(),
+                            owned.function.0.clone(),
+                            owned.function.1.clone(),
+                        ],
+                        self.state.profile,
+                    )
+                {
+                    let qualifier = [crate::catalog::CATALOG.to_owned(), owned.function.0.clone()];
+                    let call = crate::sql_functions::null_call(&def, &qualifier);
+                    Self::analyze_as_writer(&call, &ctx, &calls, &writer).await?;
+                }
             }
         }
         // So does each stored view it reaches (review r10 M10): its lookups, and the calls and
@@ -169,6 +186,11 @@ impl Session {
                         .await?;
                     self.authorize_calls_as(&under.calls, &writer, privilege)
                         .await?;
+                }
+                // And the columns its text reads, through the column pass the definer's
+                // analysis made (review r11 B1).
+                if let Some(q) = &v.query {
+                    Self::analyze_as_writer(q, &ctx, &calls, &writer).await?;
                 }
             }
         }
@@ -248,6 +270,37 @@ impl Session {
             writers.push(author.to_owned());
         }
         writers
+    }
+
+    /// Analyzes `text`, a writer's text inside a definer view's read (a reached stored view's
+    /// inlined query, or a call of a reached function body), as `writer` in the definer's
+    /// analysis context `ctx` (review r11 B1): Bind asks the writer about its tables, and under a
+    /// column-level policy the analyzer's column pass asks it `Select` on exactly the columns the
+    /// text reads (every column a `*` expands to; whole rows ask the table), the check the
+    /// definer gets, never only whether the table may be seen. The texts of the definer views
+    /// inside it stay their definers' (`ctx.definer_texts`). Its calls are recorded apart and
+    /// dropped: the caller asks the writer about them.
+    ///
+    /// # Errors
+    /// The writer's refusal (42501), or the text's analysis error: a definer failure.
+    async fn analyze_as_writer(
+        text: &Arc<LogicalPlan>,
+        ctx: &AnalysisContext,
+        calls: &crate::sql_functions::QueryFunctions,
+        writer: &Arc<Principal>,
+    ) -> Result<(), KrishivError> {
+        let mut ctx = ctx.clone();
+        ctx.principal = Arc::clone(writer);
+        ctx.functions =
+            Arc::new(calls.recording_fork()) as Arc<dyn krishiv_plan::analyzer::FunctionRegistry>;
+        ctx.stored_view_texts =
+            krishiv_plan::analyzer::views::DefinerTexts::new(vec![Arc::clone(text)]);
+        let plan = Plan::try_new(Arc::clone(text))?;
+        DefaultAnalyzer
+            .analyze(&plan, &ctx)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.error)
     }
 
     /// Asks the policy whether `principal` may call each stored function of `calls`.

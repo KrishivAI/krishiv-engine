@@ -873,3 +873,139 @@ fn a_body_the_definer_owns_but_another_wrote_reads_as_its_author_too() {
     ok(&root, "REVOKE SELECT ON TABLE secret FROM user:bob");
     assert_redacted(&carl, "SELECT * FROM default.dvg", &["secret", "S3CRET"]);
 }
+
+/// root's `pii (a INT, secret_col STRING)` = `(1, 'TOPSECRET')`, readable by ana and bob; ana may
+/// create in `default`, bob in `ns2`, ana may use `ns2`.
+fn pii_world(w: &World) -> (Session, Session, Session, Session) {
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(
+        &root,
+        "CREATE TABLE pii (a INT, secret_col STRING) USING parquet",
+    );
+    ok(&root, "INSERT INTO pii VALUES (1, 'TOPSECRET')");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    for u in ["ana", "bob"] {
+        ok(&root, &format!("GRANT SELECT ON TABLE pii TO user:{u}"));
+    }
+    (root, ana, bob, carl)
+}
+
+/// root narrows bob from the whole of `pii` to its column `a`.
+fn narrow_bob(root: &Session) {
+    ok(root, "REVOKE SELECT ON TABLE pii FROM user:bob");
+    ok(root, "GRANT SELECT (a) ON pii TO user:bob");
+}
+
+/// Review r11 B1 (function owner, who wrote it too): under the column-level grants policy the body
+/// a definer view's text calls is asked of its owner per column read, as the definer is. Once root
+/// narrows bob to `pii(a)`, ana's view over his `max(secret_col)` body is refused, redacted, for
+/// carl and bob; the one over his `max(a)` body still reads `[1]`.
+#[test]
+fn a_bodys_owner_is_asked_the_columns_it_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = pii_world(&w);
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.fs() RETURNS STRING RETURN (SELECT max(secret_col) FROM default.pii)",
+    );
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.fa() RETURNS INT RETURN (SELECT max(a) FROM default.pii)",
+    );
+    for f in ["fs", "fa"] {
+        ok(
+            &bob,
+            &format!("GRANT SELECT ON FUNCTION ns2.{f} TO user:ana"),
+        );
+    }
+    ok(
+        &ana,
+        "CREATE VIEW default.dvf SQL SECURITY DEFINER AS SELECT ns2.fs() AS c",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dva SQL SECURITY DEFINER AS SELECT ns2.fa() AS c",
+    );
+    for v in ["dvf", "dva"] {
+        for u in ["bob", "carl"] {
+            ok(
+                &ana,
+                &format!("GRANT SELECT ON VIEW default.{v} TO user:{u}"),
+            );
+        }
+    }
+    assert_eq!(read(&carl, "SELECT * FROM default.dvf"), ["TOPSECRET"]);
+    narrow_bob(&root);
+    for s in [&carl, &bob] {
+        assert_redacted(
+            s,
+            "SELECT * FROM default.dvf",
+            &["secret_col", "TOPSECRET", "fs"],
+        );
+        assert_eq!(read(s, "SELECT * FROM default.dva"), ["1"]);
+    }
+}
+
+/// Review r11 B1 (function owner who did not write the current version): root (who owns `pii`)
+/// replaced bob's function; bob still owns it and is asked the body's columns: narrowed to
+/// `pii(a)`, ana's view over it is refused, redacted.
+#[test]
+fn a_bodys_owner_is_asked_its_columns_when_another_wrote_it() {
+    let w = World::new();
+    let (root, ana, bob, carl) = pii_world(&w);
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.fs() RETURNS STRING RETURN 'none'",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.fs TO user:ana");
+    ok(
+        &root,
+        "CREATE OR REPLACE FUNCTION ns2.fs() RETURNS STRING RETURN (SELECT max(secret_col) FROM default.pii)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvf SQL SECURITY DEFINER AS SELECT ns2.fs() AS c",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvf TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvf"), ["TOPSECRET"]);
+    narrow_bob(&root);
+    assert_redacted(
+        &carl,
+        "SELECT * FROM default.dvf",
+        &["secret_col", "TOPSECRET"],
+    );
+}
+
+/// Review r11 B1 (function author): ana owns `g`, bob (allowed to drop it) replaced its body with
+/// a read of `secret_col`, and ana pinned that version. bob is asked the body's columns: narrowed
+/// to `pii(a)`, ana's view is refused, redacted.
+#[test]
+fn a_bodys_author_is_asked_the_columns_it_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = pii_world(&w);
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(
+        &ana,
+        "CREATE FUNCTION default.g() RETURNS STRING RETURN 'none'",
+    );
+    ok(&ana, "GRANT DROP ON FUNCTION default.g TO user:bob");
+    ok(
+        &bob,
+        "CREATE OR REPLACE FUNCTION default.g() RETURNS STRING RETURN (SELECT max(secret_col) FROM default.pii)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvg SQL SECURITY DEFINER AS SELECT default.g() AS v",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvg TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvg"), ["TOPSECRET"]);
+    narrow_bob(&root);
+    assert_redacted(
+        &carl,
+        "SELECT * FROM default.dvg",
+        &["secret_col", "TOPSECRET"],
+    );
+}

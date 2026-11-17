@@ -51,7 +51,7 @@ use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_na
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session};
-use crate::sql_functions::{Entry, one_row_project};
+use crate::sql_functions::Entry;
 use crate::store::{CatalogStore, StoredFunction};
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
@@ -1195,34 +1195,16 @@ impl Session {
         env: QueryEnv,
         redacted: &RedactedSql,
     ) -> Result<DataType, KrishivError> {
-        let args: Vec<PlanExpr> = def.params[..def.required()]
-            .iter()
-            .map(|p| PlanExpr::literal(Literal::Null(Some(p.data_type.clone()))))
-            .collect();
-        // A table function is probed by reading its rows; only the check
-        // matters, its columns are declared.
-        if def.returns_table.is_some() {
-            let name: Vec<&str> = qualifier
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::once(def.name.as_str()))
-                .collect();
-            let plan = Arc::new(LogicalPlan::new(PlanNode::TableFunction {
-                name: name.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
-                args: args.into_iter().map(Arc::new).collect(),
-            }));
-            DataFrame::new(self.clone(), plan)
-                .analyzed_in_with_text(env, Some(redacted))
-                .await?;
+        let plan = crate::sql_functions::null_call(def, qualifier);
+        let table = def.returns_table.is_some();
+        let analysis = DataFrame::new(self.clone(), plan)
+            .analyzed_in_with_text(env, Some(redacted))
+            .await?;
+        // A table function is probed by reading its rows; only the check matters, its columns
+        // are declared.
+        if table {
             return Ok(DataType::Null);
         }
-        let mut call = PlanExpr::function(def.name.clone(), args);
-        if let ExprNode::Function(function) = &mut call.node {
-            function.qualifier = qualifier.to_vec();
-        }
-        let plan = one_row_project(vec![Arc::new(call)]);
-        let df = DataFrame::new(self.clone(), plan);
-        let analysis = df.analyzed_in_with_text(env, Some(redacted)).await?;
         analysis
             .analyzed
             .output

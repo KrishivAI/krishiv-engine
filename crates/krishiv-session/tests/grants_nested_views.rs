@@ -267,3 +267,138 @@ fn the_definers_own_nested_view_is_followed_and_a_nested_definer_view_is_pinned(
         assert_redacted(s, "SELECT * FROM default.dvd", &["bd", "bob"]);
     }
 }
+
+/// root's `pii (a INT, secret_col STRING)` = `(1, 'TOPSECRET')`, readable by ana and `writer`.
+fn pii(root: &Session, writer: &str) {
+    ok(
+        root,
+        "CREATE TABLE pii (a INT, secret_col STRING) USING parquet",
+    );
+    ok(root, "INSERT INTO pii VALUES (1, 'TOPSECRET')");
+    for u in ["ana", writer] {
+        ok(root, &format!("GRANT SELECT ON TABLE pii TO user:{u}"));
+    }
+}
+
+/// root narrows `writer` from the whole of `pii` to its column `a` (a PII-hardening step).
+fn narrow(root: &Session, writer: &str) {
+    ok(
+        root,
+        &format!("REVOKE SELECT ON TABLE pii FROM user:{writer}"),
+    );
+    ok(root, &format!("GRANT SELECT (a) ON pii TO user:{writer}"));
+}
+
+/// Review r11 B1 (view owner, who wrote it too): under the column-level grants policy a nested
+/// view's owner is asked `Select` on exactly the columns its text reads, as the definer is, never
+/// only whether the table may be seen. Once root narrows bob to `pii(a)`, ana's definer views over
+/// bob's `SELECT secret_col` and `SELECT *` views are refused, redacted, for carl and bob; the one
+/// over bob's `SELECT a` view still reads `[1]`.
+#[test]
+fn a_nested_views_owner_is_asked_the_columns_its_text_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = base(&w);
+    pii(&root, "bob");
+    ok(
+        &bob,
+        "CREATE VIEW ns2.bv AS SELECT secret_col FROM default.pii",
+    );
+    ok(&bob, "CREATE VIEW ns2.bstar AS SELECT * FROM default.pii");
+    ok(&bob, "CREATE VIEW ns2.ba AS SELECT a FROM default.pii");
+    for v in ["bv", "bstar", "ba"] {
+        ok(&bob, &format!("GRANT SELECT ON VIEW ns2.{v} TO user:ana"));
+    }
+    definer_view(&ana, "dv", "SELECT * FROM ns2.bv");
+    definer_view(&ana, "dvstar", "SELECT * FROM ns2.bstar");
+    definer_view(&ana, "dva", "SELECT * FROM ns2.ba");
+    assert_eq!(read(&carl, "SELECT * FROM default.dv"), ["TOPSECRET"]);
+    assert_eq!(read(&carl, "SELECT * FROM default.dvstar"), ["1|TOPSECRET"]);
+    narrow(&root, "bob");
+    assert!(rows(&bob, "SELECT secret_col FROM default.pii").is_err());
+    for s in [&carl, &bob] {
+        assert_redacted(
+            s,
+            "SELECT * FROM default.dv",
+            &["secret_col", "TOPSECRET", "bv"],
+        );
+        assert_redacted(
+            s,
+            "SELECT * FROM default.dvstar",
+            &["secret_col", "TOPSECRET", "bstar"],
+        );
+        // bob's column grant covers exactly what `ba` reads.
+        assert_eq!(read(s, "SELECT * FROM default.dva"), ["1"]);
+    }
+}
+
+/// Review r11 B1, the reverse case: bob only ever held `pii(a)`, and his view reads only `a`: ana's
+/// definer view over it reads `[1]` for carl and ana.
+#[test]
+fn a_nested_view_within_its_owners_column_grant_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = base(&w);
+    ok(
+        &root,
+        "CREATE TABLE pii (a INT, secret_col STRING) USING parquet",
+    );
+    ok(&root, "INSERT INTO pii VALUES (1, 'TOPSECRET')");
+    ok(&root, "GRANT SELECT ON TABLE pii TO user:ana");
+    ok(&root, "GRANT SELECT (a) ON pii TO user:bob");
+    ok(&bob, "CREATE VIEW ns2.ba AS SELECT a FROM default.pii");
+    ok(&bob, "GRANT SELECT ON VIEW ns2.ba TO user:ana");
+    definer_view(&ana, "dva", "SELECT * FROM ns2.ba");
+    for s in [&carl, &ana] {
+        assert_eq!(read(s, "SELECT * FROM default.dva"), ["1"]);
+    }
+}
+
+/// Review r11 B1 (view owner who did not write the current version): root (an admin, who owns
+/// `pii`) altered bob's view; bob still owns it, so he is asked its columns too: narrowed to
+/// `pii(a)`, ana's definer view over it is refused, redacted.
+#[test]
+fn a_nested_views_owner_is_asked_its_columns_when_another_wrote_it() {
+    let w = World::new();
+    let (root, ana, bob, carl) = base(&w);
+    pii(&root, "bob");
+    ok(&bob, "CREATE VIEW ns2.bv AS SELECT a FROM default.pii");
+    ok(&bob, "GRANT SELECT ON VIEW ns2.bv TO user:ana");
+    ok(
+        &root,
+        "ALTER VIEW ns2.bv AS SELECT secret_col FROM default.pii",
+    );
+    definer_view(&ana, "dv", "SELECT * FROM ns2.bv");
+    assert_eq!(read(&carl, "SELECT * FROM default.dv"), ["TOPSECRET"]);
+    narrow(&root, "bob");
+    for s in [&carl, &bob] {
+        assert_redacted(
+            s,
+            "SELECT * FROM default.dv",
+            &["secret_col", "TOPSECRET", "bv"],
+        );
+    }
+}
+
+/// Review r11 B1 (view author): ana owns `av`, bob (allowed to drop it) replaced its text with a
+/// read of `secret_col`, and ana pinned that version. bob wrote the text, so he is asked its
+/// columns: narrowed to `pii(a)`, ana's definer view over it is refused, redacted.
+#[test]
+fn a_nested_views_author_is_asked_the_columns_its_text_reads() {
+    let w = World::new();
+    let (root, ana, bob, carl) = base(&w);
+    pii(&root, "bob");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(&ana, "CREATE VIEW default.av AS SELECT a FROM default.pii");
+    ok(&ana, "GRANT DROP ON VIEW default.av TO user:bob");
+    ok(
+        &bob,
+        "CREATE OR REPLACE VIEW default.av AS SELECT secret_col FROM default.pii",
+    );
+    definer_view(&ana, "dv", "SELECT * FROM default.av");
+    assert_eq!(read(&carl, "SELECT * FROM default.dv"), ["TOPSECRET"]);
+    narrow(&root, "bob");
+    assert_redacted(
+        &carl,
+        "SELECT * FROM default.dv",
+        &["secret_col", "TOPSECRET"],
+    );
+}
