@@ -1,0 +1,12 @@
+create temporary view v as select * from values (X'0801', 1), (X'ff', 2) as t(b, id);
+select id, case when id = 1 then from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc').i32 else -1 end from v order by id;
+select id, if(id = 1, from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc').i32, -1) from v order by id;
+select id, coalesce(if(id = 2, cast(null as int), from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc').i32), -1) from v order by id;
+select id, id = 2 or from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc').i32 = 1 from v order by id;
+select id, id = 1 and from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc').i32 = 1 from v order by id;
+select id, from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc') from v order by id;
+select id, from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc', map('mode', 'PERMISSIVE')) from v order by id;
+select id from v where from_protobuf(b, 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc', map('mode', 'PERMISSIVE')) is not null;
+select id, hex(case when id = 1 then to_protobuf(named_struct('i32', id), 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc') else cast(null as binary) end) from v order by id;
+select id, hex(case when id = 1 then to_protobuf(named_struct('i32', id), 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc') else to_protobuf(named_struct('nope', id), 'krishiv.golden.Scalars', '/golden/from_to_protobuf/fixtures/krishiv_golden.desc') end) from v order by id;
+drop view v;
