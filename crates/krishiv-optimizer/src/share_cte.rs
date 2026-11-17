@@ -142,10 +142,17 @@ pub(crate) fn share(
 /// (a group nested in another group's body is read by that body's
 /// definition), as a `WITH` lists them; otherwise in their given order.
 fn dependencies_first(ctes: Vec<Cte>) -> Vec<Cte> {
-    let names: HashMap<String, usize> = ctes
+    // Keyed by output ids, as references are: a query's `WITH` may use a
+    // generated name too.
+    let keys: HashMap<Vec<AttrId>, usize> = ctes
         .iter()
         .enumerate()
-        .map(|(i, c)| (c.name.clone(), i))
+        .filter(|(_, c)| c.generated)
+        .filter_map(|(i, c)| {
+            c.plan
+                .resolved_output()
+                .map(|out| (out.iter().map(|o| o.id).collect(), i))
+        })
         .collect();
     let reads: Vec<Vec<usize>> = ctes
         .iter()
@@ -153,7 +160,8 @@ fn dependencies_first(ctes: Vec<Cte>) -> Vec<Cte> {
             let mut out = Vec::new();
             walk(&c.plan, &mut |p| {
                 if let PlanNode::CteRef(r) = &p.node
-                    && let Some(&i) = names.get(&r.name)
+                    && r.generated
+                    && let Some(&i) = keys.get(&r.source)
                 {
                     out.push(i);
                 }

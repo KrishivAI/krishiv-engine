@@ -141,3 +141,33 @@ fn a_query_cte_named_like_a_shared_one_is_still_inlined() {
         }
     }
 }
+
+/// A query's nondeterministic `WITH` named `__shared_0` (read twice, so not
+/// inlined) inside a body `ShareCte` shares: both definitions stay, the plan
+/// is valid and a fixed point, and the join is computed once, as with
+/// another name.
+#[test]
+fn a_query_cte_named_like_a_shared_one_beside_a_shared_body() {
+    let shape = "WITH {n} AS (SELECT s_suppkey, rand(7) AS r FROM supplier) \
+                 SELECT ps_partkey, sum(ps_supplycost * ps_availqty) AS v \
+                 FROM partsupp JOIN {n} ON ps_suppkey = s_suppkey GROUP BY ps_partkey \
+                 HAVING sum(ps_supplycost * ps_availqty) > \
+                   (SELECT sum(ps_supplycost * ps_availqty) * 0.001 \
+                    FROM partsupp JOIN {n} ON ps_suppkey = s_suppkey)";
+    let reserved = run(&shape.replace("{n}", "`__shared_0`"), true);
+    let plain = run(&shape.replace("{n}", "w"), true);
+    let text = reserved.root().to_string();
+    Plan::try_new(std::sync::Arc::clone(reserved.root())).unwrap();
+    assert!(
+        run(&shape.replace("{n}", "`__shared_0`"), true).structurally_eq(&reserved),
+        "{text}"
+    );
+    let scans = |t: &str| t.matches("Scan spark_catalog.default.partsupp").count();
+    assert_eq!(scans(&text), scans(&plain.root().to_string()), "{text}");
+    assert_eq!(scans(&text), 1, "{text}");
+    assert_eq!(
+        text.matches("CteRef").count(),
+        plain.root().to_string().matches("CteRef").count(),
+        "{text}"
+    );
+}

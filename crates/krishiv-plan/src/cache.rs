@@ -849,6 +849,7 @@ impl Encoder {
                 self.num(ctes.len() as u64);
                 for cte in ctes {
                     self.text(&cte.name);
+                    self.num(u64::from(cte.generated));
                     self.plan(&cte.plan, bias);
                 }
                 self.plan(input, bias);
@@ -856,6 +857,7 @@ impl Encoder {
             PlanNode::CteRef(r) => {
                 self.tag("CteRef");
                 self.text(&r.name);
+                self.num(u64::from(r.generated));
                 self.num(r.source.len() as u64);
                 for id in &r.source {
                     self.attr(*id, bias);

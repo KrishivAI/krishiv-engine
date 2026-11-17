@@ -376,7 +376,7 @@ impl Expander<'_> {
             expanded.push(Cte {
                 name: cte.name,
                 plan: definition,
-                generated: false,
+                generated: cte.generated,
             });
         }
         let input = self.go(input, scope)?;
