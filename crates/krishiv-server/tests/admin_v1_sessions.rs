@@ -562,12 +562,18 @@ async fn kill_by_tag_and_operator_actions_write_their_records() {
         .cloned()
         .collect();
     assert_eq!(log.len(), 4, "{log:#?}");
-    for l in &log[..2] {
-        assert!(
-            l.contains("rpc=\"KillSession\"") && l.contains("result=\"denied\""),
-            "{l}"
-        );
-    }
+    // Another principal's id is a disguised refusal; an unknown id is only a failure
+    // (ADR 0046, update 2026-11-14).
+    assert!(
+        log[0].contains("rpc=\"KillSession\"") && log[0].contains("result=\"denied\""),
+        "{}",
+        log[0]
+    );
+    assert!(
+        log[1].contains("rpc=\"KillSession\"") && log[1].contains("result=\"failed\""),
+        "{}",
+        log[1]
+    );
     assert!(
         log[2].contains("rpc=\"CancelQueriesByTag\"") && log[2].contains("result=\"ok\""),
         "{}",

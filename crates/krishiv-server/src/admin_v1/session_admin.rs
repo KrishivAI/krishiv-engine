@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::future::{BoxFuture, FutureExt};
-use krishiv_session::auth::{Authenticated, DeniedCounts, Role, RolePolicy, Surface};
+use krishiv_session::auth::{Authenticated, Role, RolePolicy};
 use krishiv_session::{
     CancelReason, EngineRuntime, PolicyVersion, Principal, PrincipalKind, Privilege, QueryId,
     QueryInfo, Securable, SessionInfo,
@@ -39,7 +39,6 @@ use super::{
 #[derive(Clone)]
 pub struct SessionAdmin {
     runtime: Arc<EngineRuntime>,
-    denials: Option<Arc<DeniedCounts>>,
 }
 
 impl std::fmt::Debug for SessionAdmin {
@@ -57,17 +56,7 @@ impl SessionAdmin {
             &ADMIN_V1_REVISION.to_string(),
             if PREVIEW { "preview" } else { "" },
         );
-        Self {
-            runtime,
-            denials: None,
-        }
-    }
-
-    /// The same, counting its denials into `denials` (`krishiv_auth_denied_total`, ADR 0046 §8).
-    #[must_use]
-    pub fn with_denials(mut self, denials: Arc<DeniedCounts>) -> Self {
-        self.denials = Some(denials);
-        self
+        Self { runtime }
     }
 }
 
@@ -191,29 +180,34 @@ fn not_found(class: &str, what: &str, id: &str) -> AdminError {
 }
 
 impl SessionAdmin {
-    /// A refusal that looks like a missing id, written as the denial it is.
+    /// A refusal that looks like a missing id (ADR 0046, update 2026-11-14).
+    ///
+    /// An unknown id is only a not-found: no 42501, no audit record, no counter. An id another
+    /// principal holds is answered the same way, writes one `krishiv::audit` record with the kind of
+    /// id (`securable`) and never the id or its owner, and does not bump
+    /// `krishiv_auth_denied_total`: no privilege was asked.
     fn denied(
         &self,
         call: &Call,
-        privilege: Privilege,
         rpc: &str,
         securable: &str,
         target: &str,
+        exists: bool,
         error: AdminError,
     ) -> AdminError {
+        if !exists {
+            self.log(call, rpc, target, false, "failed", &error.error_class);
+            return error;
+        }
         tracing::warn!(
             target: "krishiv::audit",
             principal = %call.caller.principal,
+            method = %call.caller.method,
             role = call.caller.role.as_deref().unwrap_or("none"),
             surface = "admin",
-            securable = %Securable::System(securable.to_owned()),
-            privilege = %privilege,
-            error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
-            "access denied"
+            id_kind = securable,
+            "id held by another principal"
         );
-        if let Some(d) = &self.denials {
-            d.record(Surface::Admin, privilege);
-        }
         self.log(call, rpc, target, false, "denied", &error.error_class);
         error.disguised_denial()
     }
@@ -323,10 +317,10 @@ impl AdminApi for SessionAdmin {
                 }
                 return Err(self.denied(
                     &call,
-                    Privilege::Operate,
                     "KillSession",
                     "sessions",
                     &id,
+                    found.is_some(),
                     error,
                 ));
             }
@@ -434,10 +428,10 @@ impl AdminApi for SessionAdmin {
                 }
                 return Err(self.denied(
                     &call,
-                    Privilege::Operate,
                     "CancelQuery",
                     "queries",
                     &id,
+                    found.is_some(),
                     error,
                 ));
             }
