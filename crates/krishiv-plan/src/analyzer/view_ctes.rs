@@ -9,7 +9,7 @@
 //! text is placed in the reader's plan, so no pass the reader's policy runs over the whole plan
 //! (`LEGACY` inlining, the `EXCEPTION` check) ever meets a definition of the view's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
@@ -181,11 +181,67 @@ impl Corrected {
     }
 }
 
+/// The name of the first single-part table read of `plan` that no `WITH` definition around it
+/// defines (the `CORRECTED` scoping: a definition's body sees the definitions before it, a main
+/// query all of its level's, a subquery those of the query around it), or `None`.
+///
+/// Over the inlined query of a definer view (P3-T062 review r4 Y1c) every such read is left over:
+/// the session qualifies each table name of a view's text to the view's namespace, so a bare read
+/// there would bind wherever the reader's analysis is current, and is refused instead.
+#[must_use]
+pub fn unscoped_read(plan: &LogicalPlan, case_sensitive: bool) -> Option<Vec<String>> {
+    enum At<'a> {
+        Plan(&'a LogicalPlan),
+        Expr(&'a Expr),
+    }
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut stack: Vec<(At<'_>, Arc<Vec<String>>)> = vec![(At::Plan(plan), Arc::new(Vec::new()))];
+    while let Some((at, scope)) = stack.pop() {
+        let address = match at {
+            At::Plan(p) => std::ptr::from_ref(p) as usize,
+            At::Expr(e) => std::ptr::from_ref(e) as usize,
+        };
+        if !seen.insert((address, Arc::as_ptr(&scope) as usize)) {
+            continue;
+        }
+        match at {
+            At::Plan(p) => match &p.node {
+                PlanNode::Read(ReadSource::Table { name, .. }) => {
+                    if let [one] = name.as_slice()
+                        && !scope.iter().any(|n| same(n, one, case_sensitive))
+                    {
+                        return Some(name.clone());
+                    }
+                }
+                PlanNode::WithCte { input, ctes } => {
+                    let mut names = (*scope).clone();
+                    for c in ctes {
+                        stack.push((At::Plan(&c.plan), Arc::new(names.clone())));
+                        names.push(c.name.clone());
+                    }
+                    stack.push((At::Plan(input), Arc::new(names)));
+                }
+                _ => {
+                    p.for_each_child(&mut |c| stack.push((At::Plan(c), Arc::clone(&scope))));
+                    p.for_each_expr(&mut |e| stack.push((At::Expr(e), Arc::clone(&scope))));
+                }
+            },
+            At::Expr(e) => {
+                if let ExprNode::Subquery { plan, .. } = &e.node {
+                    stack.push((At::Plan(plan), Arc::clone(&scope)));
+                }
+                e.for_each_child(&mut |c| stack.push((At::Expr(c), Arc::clone(&scope))));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use super::inline_view_ctes;
+    use super::{inline_view_ctes, unscoped_read};
     use crate::analyzer::CtePrecedencePolicy::{Corrected, Exception, Legacy};
     use crate::{Cte, Expr, LogicalPlan, PlanNode, ReadSource};
 
@@ -262,5 +318,48 @@ mod tests {
         // A definition reading its own name reads the table of that name.
         let own = Arc::new(with(read("t"), vec![("t", read("t"))]));
         assert_eq!(inlined(&own, Corrected), ["t"]);
+    }
+
+    /// Review r4 Y1c: a single-part read no `WITH` around it defines is found, through nested
+    /// definitions, main queries and subqueries; a read of a definition in scope, or a qualified
+    /// read, is not.
+    #[test]
+    fn an_unscoped_read_is_found_wherever_it_is() {
+        let scoped = with(
+            read("d"),
+            vec![
+                ("c", LogicalPlan::table(["ns", "t"])),
+                ("d", with(read("e"), vec![("e", read("c"))])),
+            ],
+        );
+        assert_eq!(unscoped_read(&scoped, false), None);
+        // `C` is `c` only case-insensitively.
+        let upper = with(read("C"), vec![("c", LogicalPlan::table(["ns", "t"]))]);
+        assert_eq!(unscoped_read(&upper, false), None);
+        assert_eq!(unscoped_read(&upper, true), Some(vec!["C".to_owned()]));
+        // A definition does not define itself, nor does a later sibling reach an earlier one.
+        let own = with(
+            read("x"),
+            vec![("c", read("c")), ("x", LogicalPlan::table(["ns", "t"]))],
+        );
+        assert_eq!(unscoped_read(&own, false), Some(vec!["c".to_owned()]));
+        // Inside a subquery of the main query, the definitions are in scope; a bare name is not.
+        let sub = |name: &str| {
+            LogicalPlan::table(["ns", "t"]).filter(Expr {
+                node: crate::ExprNode::Subquery {
+                    kind: crate::SubqueryKind::Exists,
+                    plan: Arc::new(read(name)),
+                },
+                origin: crate::Origin::default(),
+            })
+        };
+        assert_eq!(
+            unscoped_read(
+                &with(sub("c"), vec![("c", LogicalPlan::table(["ns", "t"]))]),
+                false
+            ),
+            None
+        );
+        assert_eq!(unscoped_read(&sub("c"), false), Some(vec!["c".to_owned()]));
     }
 }

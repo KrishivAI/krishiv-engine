@@ -31,6 +31,23 @@ impl Session {
             d.definer.clone(),
             self.state.principal.name.clone(),
         ));
+        // Defence in depth (review r4 Y1c): every table name of the view's text was qualified to its
+        // namespace when it was inlined; a bare read left over would bind wherever an analysis is current,
+        // so it is refused, never trusted.
+        if let Some(name) =
+            krishiv_plan::analyzer::unscoped_read(query, env.analysis.conf.case_sensitive)
+        {
+            let table = krishiv_plan::analyzer::TableIdent {
+                catalog: crate::catalog::CATALOG.to_owned(),
+                namespace: vec![d.namespace.clone()],
+                name: name.join("."),
+            };
+            return Err(krishiv_plan::analyzer::insufficient_permissions(
+                &definer,
+                &krishiv_plan::analyzer::Securable::Table(table),
+                Privilege::Select,
+            ));
+        }
         let views = self.authorize_reads_as(&d.reads, env, &definer).await?;
         let mut ctx = env.analysis.clone();
         ctx.principal = definer;

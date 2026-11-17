@@ -169,7 +169,7 @@ pub use table_change::{
     TableChange, TypeWidening, apply_changes,
 };
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
-pub use view_ctes::inline_view_ctes;
+pub use view_ctes::{inline_view_ctes, unscoped_read};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
