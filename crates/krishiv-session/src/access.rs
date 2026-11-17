@@ -641,9 +641,7 @@ impl Session {
     /// `CREATE` on the namespace does not show every table in it), otherwise `Browse` on it.
     /// Asked quietly: leaving an entry out is not a refusal (no audit record, no denial counter).
     pub(crate) async fn may_list(&self, securable: &Securable) -> bool {
-        if let Some(grants) = &self.state.grants
-            && let Some(listed) = grants.listable(&self.state.principal, securable)
-        {
+        if let Some(listed) = self.grants_listable(securable) {
             return listed;
         }
         krishiv_plan::analyzer::allowed(
@@ -655,26 +653,52 @@ impl Session {
         .await
     }
 
-    /// The relations of the session catalog's namespace `namespace` among `tables` that this
-    /// session's principal may see ([`Self::may_list`]).
+    /// The grants provider's listing rule for `securable` (`GrantsPolicy::listable`): `None`
+    /// without the provider or for a securable the `system` policy decides.
+    fn grants_listable(&self, securable: &Securable) -> Option<bool> {
+        self.state
+            .grants
+            .as_ref()
+            .and_then(|g| g.listable(&self.state.principal, securable))
+    }
+
+    /// Whether a lookup of the one object `securable` by name answers as for a missing object
+    /// (review B3; ADR 0046 §8: no existence oracle): the grants provider does not list it to this
+    /// principal ([`Self::may_list`]'s rule, the same predicate). Other policies decide such a
+    /// lookup by `Browse`, as they decide what a listing shows, and refuse it with 42501.
+    pub(crate) fn hidden(&self, securable: &Securable) -> bool {
+        self.grants_listable(securable) == Some(false)
+    }
+
+    /// Whether the grants provider hides the session catalog's namespace `namespace` from this
+    /// principal, by the rule of [`Self::may_list_namespace`] (review B3).
+    pub(crate) async fn namespace_hidden(&self, namespace: &str) -> bool {
+        self.state.grants.is_some() && !self.may_list_namespace(namespace).await
+    }
+
+    /// The securable of the stored relation `t` of the session catalog: its view or its table.
+    pub(crate) fn relation_securable(t: &crate::store::CatalogTable) -> Securable {
+        let ident = TableIdent {
+            catalog: crate::catalog::CATALOG.to_owned(),
+            namespace: vec![t.namespace.clone()],
+            name: t.name.clone(),
+        };
+        if t.view.is_some() {
+            Securable::View(ident)
+        } else {
+            Securable::Table(ident)
+        }
+    }
+
+    /// The relations of the session catalog among `tables` that this session's principal may
+    /// see ([`Self::may_list`]).
     pub(crate) async fn listed_relations(
         &self,
-        namespace: &str,
         tables: Vec<Arc<crate::store::CatalogTable>>,
     ) -> Vec<Arc<crate::store::CatalogTable>> {
         let mut out = Vec::with_capacity(tables.len());
         for t in tables {
-            let ident = TableIdent {
-                catalog: crate::catalog::CATALOG.to_owned(),
-                namespace: vec![namespace.to_owned()],
-                name: t.name.clone(),
-            };
-            let securable = if t.view.is_some() {
-                Securable::View(ident)
-            } else {
-                Securable::Table(ident)
-            };
-            if self.may_list(&securable).await {
+            if self.may_list(&Self::relation_securable(&t)).await {
                 out.push(t);
             }
         }

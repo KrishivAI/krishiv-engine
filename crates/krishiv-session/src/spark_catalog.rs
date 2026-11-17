@@ -331,17 +331,34 @@ impl Catalog<'_> {
     pub async fn get_database(&self, name: &str) -> Result<Database, KrishivError> {
         self.authorize_as(&format!("DESCRIBE NAMESPACE {}", quoted(name)))
             .await?;
-        self.lookup_database(name)
+        let found = self.lookup_database(name)?;
+        // One the principal may not list reads as missing (review B3).
+        if self.session.namespace_hidden(&found.name).await {
+            return Err(Self::database_not_found(name));
+        }
+        Ok(found)
     }
 
-    fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
-        // `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it.
+    /// `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it: the namespace's name.
+    fn bare_database(name: &str) -> String {
         let p = parts(name);
-        let bare = match p.as_slice() {
+        match p.as_slice() {
             [db] => db.clone(),
             [cat, db] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => db.clone(),
             _ => name.to_owned(),
-        };
+        }
+    }
+
+    /// `SCHEMA_NOT_FOUND` for the namespace `name`.
+    fn database_not_found(name: &str) -> KrishivError {
+        krishiv_common::error::SchemaNotFound {
+            schema_name: quote(&Self::bare_database(name)),
+        }
+        .into()
+    }
+
+    fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
+        let bare = Self::bare_database(name);
         let name = bare.as_str();
         let want = self.fold(name);
         self.session
@@ -352,12 +369,7 @@ impl Catalog<'_> {
             .iter()
             .find(|(n, _)| self.fold(n) == want)
             .map(|(n, m)| self.database_of(n, m))
-            .ok_or_else(|| {
-                krishiv_common::error::SchemaNotFound {
-                    schema_name: quote(name),
-                }
-                .into()
-            })
+            .ok_or_else(|| Self::database_not_found(name))
     }
 
     /// Whether the namespace exists.
@@ -461,7 +473,7 @@ impl Catalog<'_> {
             // Only what the principal may see, as `SHOW TABLES` lists (P3-T062 §2.4).
             let listed = self
                 .session
-                .listed_relations(&db, catalog.store.tables_in(&db))
+                .listed_relations(catalog.store.tables_in(&db))
                 .await;
             permanent.extend(
                 listed
@@ -488,17 +500,34 @@ impl Catalog<'_> {
     pub async fn get_table(&self, name: &str) -> Result<Table, KrishivError> {
         self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
             .await?;
-        self.lookup_table(name)
+        self.visible_table(name).await
+    }
+
+    /// [`Self::lookup_table`], with a stored table or view the principal may not list reading as
+    /// missing (review B3: the rule of the listings, so no existence oracle).
+    async fn visible_table(&self, name: &str) -> Result<Table, KrishivError> {
+        let table = self.lookup_table(name)?;
+        if !table.is_temporary
+            && let Some(ns) = table.namespace.as_ref().and_then(|n| n.first())
+            && let Some(stored) = self.session.state.catalog.store.table(ns, &table.name)
+            && self.session.hidden(&Session::relation_securable(&stored))
+        {
+            return Err(Self::table_not_found(name));
+        }
+        Ok(table)
+    }
+
+    /// `TABLE_OR_VIEW_NOT_FOUND` for `name`.
+    fn table_not_found(name: &str) -> KrishivError {
+        krishiv_common::error::TableOrViewNotFound {
+            relation_name: quoted(name),
+            search_path: crate::catalog::search_path(),
+        }
+        .into()
     }
 
     fn lookup_table(&self, name: &str) -> Result<Table, KrishivError> {
-        let not_found = || -> KrishivError {
-            krishiv_common::error::TableOrViewNotFound {
-                relation_name: quoted(name),
-                search_path: crate::catalog::search_path(),
-            }
-            .into()
-        };
+        let not_found = || Self::table_not_found(name);
         let catalog = &self.session.state.catalog;
         let cs = self.case_sensitive();
         let p = parts(name);
@@ -557,7 +586,7 @@ impl Catalog<'_> {
     pub async fn list_columns(&self, name: &str) -> Result<Vec<Column>, KrishivError> {
         self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
             .await?;
-        let table = self.lookup_table(name)?;
+        let table = self.visible_table(name).await?;
         if table.is_temporary {
             let df = self
                 .session
@@ -641,22 +670,28 @@ impl Catalog<'_> {
         // A stored function is listed only to a principal that may see it (P3-T062 §2.4).
         let mut out = Vec::new();
         for f in self.functions(pattern) {
-            let visible = match (&f.catalog, &f.namespace) {
-                (Some(catalog), Some(namespace)) => {
-                    let mut parts = vec![catalog.clone()];
-                    parts.extend(namespace.iter().cloned());
-                    parts.push(f.name.clone());
-                    self.session
-                        .may_list(&krishiv_plan::analyzer::Securable::Function(parts))
-                        .await
-                }
-                _ => true,
-            };
-            if visible {
+            if self.function_listed(&f).await {
                 out.push(f);
             }
         }
         Ok(out)
+    }
+
+    /// Whether the principal may see the function `f` (`Session::may_list`; built-in and
+    /// temporary functions are not securables): what `list_functions` lists, and what
+    /// `get_function` / `function_exists` find (review B3).
+    async fn function_listed(&self, f: &Function) -> bool {
+        match (&f.catalog, &f.namespace) {
+            (Some(catalog), Some(namespace)) => {
+                let mut parts = vec![catalog.clone()];
+                parts.extend(namespace.iter().cloned());
+                parts.push(f.name.clone());
+                self.session
+                    .may_list(&krishiv_plan::analyzer::Securable::Function(parts))
+                    .await
+            }
+            _ => true,
+        }
     }
 
     fn functions(&self, pattern: Option<&str>) -> Vec<Function> {
@@ -748,31 +783,38 @@ impl Catalog<'_> {
             }
             _ => return Err(not_found()),
         };
-        let Some(db) = database else {
-            return self
-                .functions(None)
-                .into_iter()
-                .find(|f| f.name == last)
-                .ok_or_else(not_found);
+        let found = match database {
+            None => self.functions(None).into_iter().find(|f| f.name == last),
+            Some(db) => {
+                let db = self.lookup_database(db).map_err(|_| not_found())?.name;
+                self.stored_function(&db, &last)
+            }
         };
-        let db = self.lookup_database(db).map_err(|_| not_found())?.name;
+        // One the principal may not list reads as missing (review B3).
+        match found {
+            Some(f) if self.function_listed(&f).await => Ok(f),
+            _ => Err(not_found()),
+        }
+    }
+
+    /// The stored function `last` (lower case) of the namespace `db`.
+    fn stored_function(&self, db: &str, last: &str) -> Option<Function> {
         self.session
             .state
             .catalog
             .store
             .functions()
-            .in_namespace(&db)
+            .in_namespace(db)
             .into_iter()
             .find(|f| f.to_lowercase() == last)
             .map(|f| Function {
                 name: f,
                 catalog: Some(crate::catalog::CATALOG.to_owned()),
-                namespace: Some(vec![db.clone()]),
+                namespace: Some(vec![db.to_owned()]),
                 description: None,
                 class_name: String::new(),
                 is_temporary: false,
             })
-            .ok_or_else(not_found)
     }
 
     /// Whether the function exists.

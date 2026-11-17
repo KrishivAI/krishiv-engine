@@ -291,6 +291,7 @@ impl Session {
         }
         Ok(self
             .stored_relation(name)
+            .await
             .map(|t| {
                 t.columns
                     .iter()
@@ -462,7 +463,7 @@ impl Session {
                 }
                 // Only what the principal may see (P3-T062 §2.4).
                 let mut rows: Vec<Vec<Cell>> = self
-                    .listed_relations(&ns, store.tables_in(&ns))
+                    .listed_relations(store.tables_in(&ns))
                     .await
                     .iter()
                     .filter(|t| keep(pattern.as_ref(), &t.name))
@@ -495,7 +496,7 @@ impl Session {
                         .await;
                 }
                 let mut rows: Vec<Vec<Cell>> = self
-                    .listed_relations(&ns, store.tables_in(&ns))
+                    .listed_relations(store.tables_in(&ns))
                     .await
                     .iter()
                     .filter(|t| t.view.is_some() && keep(pattern.as_ref(), &t.name))
@@ -587,7 +588,7 @@ impl Session {
                         .ordered_frame(cols::SHOW_TBLPROPERTIES, &[], Vec::new())
                         .await;
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 if table.view.is_some() {
                     self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                         .await?;
@@ -625,7 +626,7 @@ impl Session {
                     }
                     .into());
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 // A view prints the same either way; a data source table has no serde to show,
                 // and Spark's error for it is not modelled yet.
                 if *serde && table.view.is_none() {
@@ -653,7 +654,7 @@ impl Session {
                 if self.temp_entry_of(&name, &env) {
                     return Err(unsupported("SHOW PARTITIONS on a temporary view"));
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 if table.view.is_some() {
                     return Err(unsupported("SHOW PARTITIONS on a view"));
                 }
@@ -708,7 +709,7 @@ impl Session {
             let p = self
                 .described_partition(&name, false, spec, original, "SHOW TABLE EXTENDED")
                 .await?;
-            let t = self.stored_relation(&name)?;
+            let t = self.stored_relation(&name).await?;
             // `CatalogTablePartition.simpleString`: the partition's own entries.
             let entries: Vec<(String, String)> = partition_details(&t, &p)
                 .into_iter()
@@ -727,14 +728,23 @@ impl Session {
         }
         let mut rows: Vec<Vec<Cell>> = Vec::new();
         let tables = self.state.catalog.store.tables_in(&ns);
-        for t in self.listed_relations(&ns, tables).await {
+        for t in self.listed_relations(tables).await {
             if !keep(Some(pattern), &t.name) {
                 continue;
             }
-            if t.view.is_some() {
-                // The information holds the view's text, as SHOW CREATE TABLE does.
-                self.authorize_view(&ns, &t.name, Privilege::Select, &self.query_env())
-                    .await?;
+            // The information holds a view's text, as SHOW CREATE TABLE does: a listed view the
+            // principal may not `Select` is left out, quietly, as a listing leaves out what it
+            // may not see (review M5), never refusing the whole listing.
+            if t.view.is_some()
+                && !krishiv_plan::analyzer::allowed(
+                    &*self.state.policy,
+                    &self.state.principal,
+                    &Self::relation_securable(&t),
+                    Privilege::Select,
+                )
+                .await
+            {
+                continue;
             }
             let mut entries = self.table_information(&t);
             if t.is_partitioned() {
@@ -849,12 +859,18 @@ impl Session {
     }
 
     /// The stored table or view `name` names (temporary views have no stored form).
-    fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
-        self.state
+    /// One the principal may not see under the grants provider reads as missing (review B3).
+    async fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
+        let table = self
+            .state
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found())
+            .ok_or_else(|| name.not_found())?;
+        if self.hidden(&Self::relation_securable(&table)) {
+            return Err(name.not_found());
+        }
+        Ok(table)
     }
 
     /// The (name, type, comment) of the columns of a table, view or temporary view. A permanent
@@ -899,7 +915,7 @@ impl Session {
                 .map(|c| (c.name.clone(), c.data_type.clone(), None))
                 .collect());
         }
-        let table = self.stored_relation(name)?;
+        let table = self.stored_relation(name).await?;
         if table.view.is_some() {
             self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
@@ -1014,7 +1030,7 @@ impl Session {
                         return Err(unsupported("DESCRIBE ... AS JSON of a temporary view"));
                     }
                     self.require_current_profile("DESCRIBE EXTENDED")?;
-                    let t = self.stored_relation(&name)?;
+                    let t = self.stored_relation(&name).await?;
                     let json = describe_json(&t, described.as_ref())?;
                     return self
                         .ordered_frame(cols::DESCRIBE_JSON, &[], vec![vec![s(json)]])
@@ -1051,7 +1067,7 @@ impl Session {
                 let stored = if temp {
                     None
                 } else {
-                    Some(self.stored_relation(&name)?)
+                    Some(self.stored_relation(&name).await?)
                 };
                 if let Some(t) = stored.as_ref().filter(|t| t.is_partitioned()) {
                     rows.push(vec![s("# Partition Information"), s(""), s("")]);
@@ -1078,7 +1094,7 @@ impl Session {
                 } else if mode.is_some() && stored.is_some() {
                     rows.push(vec![s(""), s(""), s("")]);
                     rows.push(vec![s("# Detailed Table Information"), s(""), s("")]);
-                    let info = self.detailed_information(&name)?;
+                    let info = self.detailed_information(&name).await?;
                     rows.extend(info.into_iter().map(|(k, v)| vec![s(k), s(v), s("")]));
                 }
                 // `ResolveDefaultColumns.getDescribeMetadata`: the columns' `DEFAULT` texts, last.
@@ -1280,12 +1296,12 @@ impl Session {
     }
 
     /// The `# Detailed Table Information` rows of `DESCRIBE EXTENDED|FORMATTED`.
-    fn detailed_information(
+    async fn detailed_information(
         &self,
         name: &TableName,
     ) -> Result<Vec<(String, String)>, KrishivError> {
         self.require_current_profile("DESCRIBE EXTENDED")?;
-        let t = self.stored_relation(name)?;
+        let t = self.stored_relation(name).await?;
         Ok(self.table_information(&t))
     }
 

@@ -144,6 +144,9 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         "CREATE FUNCTION ufn() RETURNS INT RETURN (SELECT max(a) FROM canary)",
         "GRANT SELECT ON FUNCTION ufn TO user:ana",
         "GRANT USAGE ON SCHEMA default TO user:lister",
+        "GRANT USAGE ON CATALOG spark_catalog TO user:lister",
+        // A namespace lister holds nothing on (review B3).
+        "CREATE NAMESPACE vaultns",
         // A definer view ana may read over `pub` (review B1).
         "CREATE VIEW dpub SQL SECURITY DEFINER AS SELECT a FROM pub",
         "GRANT SELECT ON VIEW dpub TO user:ana",
@@ -479,6 +482,96 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
                 "B1 Connect sql {n}: {other:?}, {} audit records",
                 records.len()
             )),
+        }
+    }
+    // Review B3: one object looked up by name reads for `lister`, who may not list it, exactly as
+    // a missing one (class, text with the name swapped, audit records).
+    type Look<'a> = Box<dyn Fn(&Session, &str) -> Result<String, KrishivError> + 'a>;
+    type Lookup<'a> = (&'a str, &'a str, Look<'a>);
+    let statement = |template: &'static str| -> Look<'static> {
+        Box::new(move |s: &Session, name: &str| sql(&template.replace("{}", name))(s))
+    };
+    let lookups: Vec<Lookup<'_>> = vec![
+        ("canary", "nosuch", statement("DESCRIBE {}")),
+        ("canary", "nosuch", statement("DESCRIBE EXTENDED {}")),
+        ("canary", "nosuch", statement("SHOW COLUMNS IN {}")),
+        ("canary", "nosuch", statement("SHOW CREATE TABLE {}")),
+        ("canary", "nosuch", statement("SHOW TBLPROPERTIES {}")),
+        ("dvc", "nosuch", statement("DESCRIBE {}")),
+        ("dvc", "nosuch", statement("SHOW CREATE TABLE {}")),
+        (
+            "canary",
+            "nosuch",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().get_table(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "canary",
+            "nosuch",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().table_exists(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "canary",
+            "nosuch",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().list_columns(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "default.canary_fn",
+            "default.nosuch_fn",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().get_function(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "canary_fn",
+            "nosuch_fn",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().function_exists(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().get_database(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().database_exists(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+    ];
+    // The name's last part, wherever the text quotes it.
+    let answer = |r: Result<String, KrishivError>, name: &str| {
+        let last = name.rsplit('.').next().unwrap_or(name);
+        match r {
+            Ok(text) => format!("ok {}", text.replace(last, "<name>")),
+            Err(e) => format!(
+                "{} {}",
+                e.error_class().name(),
+                e.to_string().replace(last, "<name>")
+            ),
+        }
+    };
+    take();
+    for (hidden, missing, look) in &lookups {
+        let shown = answer(look(&lister, hidden), hidden);
+        let shown_records = take().len();
+        let absent = answer(look(&lister, missing), missing);
+        let absent_records = take().len();
+        if shown != absent || shown_records != absent_records {
+            bad.push(format!(
+                "lookup of {hidden}: {shown} ({shown_records} records) vs {missing}: {absent} \
+                 ({absent_records} records)"
+            ));
         }
     }
     // ana's own history holds only ana's statements: root's (which name the vault) are not shown.
