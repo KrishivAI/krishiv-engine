@@ -192,7 +192,7 @@ def page_checks(origin: str) -> list[str]:
                 problems.append("the session cookie is not HttpOnly")
             if c["sameSite"] != "Strict":
                 problems.append(f"the session cookie is SameSite={c['sameSite']}")
-            if c["path"] != "/":
+            if c["path"] != "/api/internal":
                 problems.append(f"the session cookie path is {c['path']}")
         if page.evaluate("document.cookie").find("fixture") >= 0:
             problems.append("the session cookie is readable by script (not HttpOnly)")
