@@ -117,6 +117,8 @@ impl SessionManager {
                     }
                     .into()
                 })??;
+            // The clone's workers get the copied `pyfiles/` and `archives/` (its own paths).
+            entry.python().sync_artifacts(entry.artifacts());
         }
         {
             let mut inner = self.lock();

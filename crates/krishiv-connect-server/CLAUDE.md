@@ -31,7 +31,7 @@ Paths are relative to this crate.
   counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
   quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
   `cached(hash)` for T012; a blob's pool reservation covers its whole capacity; the installed files are indexed, and
-  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first), `ArtifactStore` (the server's root,
+  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first; `python_artifacts`: the installed `pyfiles/` and `archives/` files as absolute paths (each archive with its `#fragment`, `PythonArchive`), which `SessionPython::sync_artifacts` hands to the session's UDF runtime, the whole set when it changed, after every transfer (a failed one too: it may have installed some) and after a clone's copy, never after the session's release; `tests/artifacts.rs` `python_artifacts_reach_the_sessions_udf_runtime_and_its_clones`, `a_transfer_that_fails_still_hands_over_what_it_installed`), `ArtifactStore` (the server's root,
   created on first use, removed by the awaited `shutdown` that `serve` calls after closing the sessions); `src/artifacts/dir.rs` the
   private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
   resolved per segment from a directory descriptor without following links; removal on the blocking pool
@@ -100,9 +100,10 @@ Paths are relative to this crate.
   `InlineUdfs` is the translator's host (inline UDFs as the session's encoded unregistered-UDF names, one version per
   distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege; the UDFs of
   `mapInPandas`/`applyInPandas`/cogroup relations (PR-26d part 2, `relation_python_udf`) take a version the same way
-  under the same check, and fail with `KRISHIV_UDF_NOT_AVAILABLE` when run until the pool's `prepare_relation`,
-  PR-26c-2; `tests/udf.rs` `a_relation_udf_is_client_code_and_does_not_run_yet`); `copy_for` gives a
-  `CloneSession` clone a runtime of its own (to be called by PR-15's CloneSession); `tests/udf.rs` (real workers with
+  under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
+  `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
+  `admin_runs_map_in_arrow`, `admin_runs_each_grouped_map_kind_per_group`, `admin_runs_each_cogrouped_map_kind`); `copy_for` gives a
+  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `SessionUdfRuntime::set_artifacts` takes the session's Python artifacts (default: ignored; the pool's `SessionUdfs::set_artifacts` arrives with PR-26c-3); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
