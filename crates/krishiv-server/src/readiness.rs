@@ -62,6 +62,8 @@ pub struct CheckOutcome {
 struct Round {
     at: Instant,
     outcomes: Vec<CheckOutcome>,
+    /// Consecutive failures per check, parallel to `outcomes`.
+    streaks: Vec<u32>,
 }
 
 /// The cached readiness of the server.
@@ -70,6 +72,10 @@ pub struct Readiness {
     checks: Vec<Arc<dyn ReadinessCheck>>,
     interval: Duration,
     timeout: Duration,
+    /// Consecutive failures after which a required check fails readiness.
+    failure_threshold: u32,
+    /// Names of the checks that can fail readiness; `None` means all of them.
+    required: Option<Vec<String>>,
     last: Mutex<Option<Round>>,
 }
 
@@ -88,8 +94,40 @@ impl Readiness {
             checks,
             interval,
             timeout,
+            failure_threshold: 1,
+            required: None,
             last: Mutex::new(None),
         })
+    }
+
+    /// Like [`Readiness::new`], with the design's rules (P3-T066 §5.2): a check
+    /// fails readiness only after `failure_threshold` consecutive failures (one
+    /// slow moment is not a failure), and only checks named in `required` can
+    /// fail it; the others are reported by [`Readiness::outcomes`] only.
+    #[must_use]
+    pub fn with_policy(
+        serving: Arc<AtomicBool>,
+        checks: Vec<Arc<dyn ReadinessCheck>>,
+        interval: Duration,
+        timeout: Duration,
+        failure_threshold: u32,
+        required: Vec<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            serving,
+            checks,
+            interval,
+            timeout,
+            failure_threshold: failure_threshold.max(1),
+            required: Some(required),
+            last: Mutex::new(None),
+        })
+    }
+
+    fn is_required(&self, name: &str) -> bool {
+        self.required
+            .as_ref()
+            .is_none_or(|names| names.iter().any(|n| n == name))
     }
 
     /// Whether `/readyz` answers 200: serving, and, when there are checks,
@@ -105,7 +143,10 @@ impl Readiness {
         let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
         let fresh = self.interval.saturating_mul(STALE_AFTER_INTERVALS);
         last.as_ref().is_some_and(|r| {
-            r.at.elapsed() <= fresh && r.outcomes.iter().all(|o| o.failure.is_none())
+            r.at.elapsed() <= fresh
+                && r.outcomes.iter().zip(&r.streaks).all(|(o, streak)| {
+                    !self.is_required(o.name) || *streak < self.failure_threshold
+                })
         })
     }
 
@@ -136,9 +177,19 @@ impl Readiness {
             });
         }
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let streaks = outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, o)| match (&o.failure, last.as_ref()) {
+                (None, _) => 0,
+                (Some(_), Some(prev)) => prev.streaks.get(i).copied().unwrap_or(0) + 1,
+                (Some(_), None) => 1,
+            })
+            .collect();
         *last = Some(Round {
             at: Instant::now(),
             outcomes,
+            streaks,
         });
     }
 
@@ -270,5 +321,48 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(r.is_ready());
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failure_counts_only_after_the_threshold_and_recovers_at_once() {
+        let up = Arc::new(AtomicBool::new(true));
+        let serving = Arc::new(AtomicBool::new(true));
+        let r = Readiness::with_policy(
+            serving,
+            vec![Arc::new(Fixed("store", Arc::clone(&up)))],
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            3,
+            vec!["store".to_owned()],
+        );
+        r.run_round().await;
+        up.store(false, Ordering::SeqCst);
+        r.run_round().await;
+        r.run_round().await;
+        assert!(
+            r.is_ready(),
+            "two failures are below the threshold of three"
+        );
+        r.run_round().await;
+        assert!(!r.is_ready());
+        up.store(true, Ordering::SeqCst);
+        r.run_round().await;
+        assert!(r.is_ready(), "the first success recovers");
+    }
+
+    #[tokio::test]
+    async fn a_check_not_required_is_reported_but_never_fails_readiness() {
+        let up = Arc::new(AtomicBool::new(false));
+        let r = Readiness::with_policy(
+            Arc::new(AtomicBool::new(true)),
+            vec![Arc::new(Fixed("warehouse", up))],
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            1,
+            vec!["auth".to_owned()],
+        );
+        r.run_round().await;
+        assert!(r.is_ready());
+        assert_eq!(r.outcomes()[0].failure.as_deref(), Some("down"));
     }
 }

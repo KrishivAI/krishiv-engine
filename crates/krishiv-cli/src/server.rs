@@ -26,7 +26,8 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, SERVER_READINESS_INTERVAL,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
+    SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
     SERVER_READINESS_TIMEOUT, UI_ENABLED,
 };
 use krishiv_connect_server::{
@@ -258,11 +259,29 @@ async fn run_listeners(
     let ready = Arc::new(AtomicBool::new(false));
     // `/readyz` answers from the cached checks (design P3-T066 §5.2); the serving flag is
     // read on every probe, so a drain flips it at once.
-    let readiness = krishiv_server::readiness::Readiness::new(
+    // `auth` always fails readiness; `krishiv.server.readiness.required` adds shared dependencies.
+    let mut required = vec!["auth".to_owned()];
+    required.extend(
+        config
+            .get(&SERVER_READINESS_REQUIRED)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned),
+    );
+    let readiness = krishiv_server::readiness::Readiness::with_policy(
         Arc::clone(&ready),
         vec![Arc::new(krishiv_server::readiness::AuthReady(Arc::clone(&auth))) as Arc<_>],
         duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10)),
         duration(config, &SERVER_READINESS_TIMEOUT, Duration::from_secs(2)),
+        config
+            .get(&SERVER_READINESS_FAILURE_THRESHOLD)
+            .and_then(ConfigValue::as_int)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(3),
+        required,
     );
     let checker = readiness.spawn();
     let app = admin_router(

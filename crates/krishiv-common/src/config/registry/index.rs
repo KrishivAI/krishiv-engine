@@ -199,6 +199,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &SERVER_READINESS_INTERVAL,
     ),
     (
+        "krishiv.server.readiness.required",
+        &SERVER_READINESS_REQUIRED,
+    ),
+    (
         "krishiv.sql.files.maxPartitionNum",
         &FILES_MAX_PARTITION_NUM,
     ),
@@ -499,6 +503,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.server.readiness.failureThreshold",
+        &SERVER_READINESS_FAILURE_THRESHOLD,
     ),
     (
         "krishiv.sql.avro.datetimeRebaseModeInRead",

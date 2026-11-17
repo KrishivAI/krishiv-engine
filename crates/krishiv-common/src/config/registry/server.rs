@@ -352,6 +352,28 @@ pub static SERVER_READINESS_TIMEOUT: ConfigEntry = startup(
     None,
 );
 
+/// Consecutive failures before a readiness check fails `/readyz`.
+pub static SERVER_READINESS_FAILURE_THRESHOLD: ConfigEntry = startup(
+    "krishiv.server.readiness.failureThreshold",
+    ValueType::PositiveInt,
+    ConfigValue::Int(3),
+    "How many consecutive failures of a readiness check make `/readyz` answer 503; one slow \
+     moment is not a failure. A success recovers at once.",
+    None,
+);
+
+/// The readiness checks that can fail `/readyz`.
+pub static SERVER_READINESS_REQUIRED: ConfigEntry = startup(
+    "krishiv.server.readiness.required",
+    ValueType::String,
+    ConfigValue::String(std::borrow::Cow::Borrowed("")),
+    "Comma-separated readiness checks that fail `/readyz` when they fail, besides the always \
+     required `auth`. `warehouse` adds the warehouse object store. Other checks are reported by \
+     the admin API only, because every replica shares them and failing them would remove the \
+     whole fleet at once.",
+    None,
+);
+
 /// Core dumps of the server process.
 pub static SERVER_ALLOW_CORE_DUMPS: ConfigEntry = startup(
     "krishiv.server.allowCoreDumps",
