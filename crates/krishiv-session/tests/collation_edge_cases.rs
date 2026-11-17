@@ -196,3 +196,30 @@ fn nvl2_name_and_cast_to_string_end_the_collation() {
         "SYSTEM.BUILTIN.UTF8_BINARY"
     );
 }
+
+/// A comparison of two operands whose collations differ and are both implicit (a `UTF8_LCASE`
+/// column against a plain `STRING` column, or against its own cast to `STRING`) has no one
+/// collation: Spark 4.2.0 raises `INDETERMINATE_COLLATION_IN_EXPRESSION` (SQLSTATE 42P22) for
+/// `=` in a join, a correlated subquery and a projection alike.
+#[test]
+fn comparing_two_implicit_collations_is_indeterminate() {
+    let s = Session::new().unwrap();
+    let with = "WITH t AS (SELECT 'a' COLLATE utf8_lcase AS c), u AS (SELECT 'A' AS k) ";
+    for q in [
+        "SELECT 1 FROM t JOIN u ON t.c = u.k",
+        "SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.c)",
+        "SELECT CAST(c AS STRING) = c FROM t",
+    ] {
+        let err = match block_on(s.sql(&format!("{with}{q}"))) {
+            Err(e) => e.to_string(),
+            Ok(df) => block_on(df.collect())
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default(),
+        };
+        assert!(
+            err.contains("INDETERMINATE_COLLATION_IN_EXPRESSION"),
+            "{q}: {err}"
+        );
+    }
+}

@@ -1769,7 +1769,9 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
-            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name) => {
+            Err(Conflict::Indeterminate)
+                if !FAILS_INDETERMINATE.contains(&name) && !KEYED.contains(&name) =>
+            {
                 indeterminate = true;
                 None
             }
