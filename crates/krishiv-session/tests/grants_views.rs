@@ -1257,3 +1257,42 @@ fn a_relation_the_principal_may_not_list_is_refused_before_its_columns_resolve()
         "{e}"
     );
 }
+
+/// Review r4 N1: a refused column is named only when the statement's reference to it (resolved
+/// to that table's column) wrote it, not when the statement holds the same name elsewhere: an
+/// alias of another relation, another table's column, a lambda variable.
+#[test]
+fn a_refused_column_is_named_only_by_a_reference_to_it() {
+    let w = World::new();
+    let root = w.admin();
+    let ana = w.user("ana");
+    ok(
+        &root,
+        "CREATE TABLE ct (x INT, secret_a INT, secret_b INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO ct VALUES (1, 2, 3)");
+    ok(&root, "CREATE TABLE o (x INT, secret_a INT) USING parquet");
+    ok(&root, "INSERT INTO o VALUES (1, 2)");
+    ok(&root, "GRANT SELECT (x) ON ct TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE o TO user:ana");
+    for sql in [
+        "SELECT ct.*, v.secret_a FROM ct, (SELECT 1 AS secret_a) v",
+        "SELECT ct.*, o.secret_a FROM ct, o",
+        "SELECT ct.*, transform(array(1), secret_a -> secret_a) FROM ct",
+    ] {
+        let e = denied(&ana, sql);
+        for h in ["secret_a", "secret_b"] {
+            assert!(!e.contains(h), "{sql}: {h}: {e}");
+        }
+    }
+    // A reference to the refused column names it, however it is reached.
+    for (sql, named) in [
+        ("SELECT secret_b FROM ct", "`secret_b`"),
+        ("SELECT x FROM ct WHERE secret_a = 2", "`secret_a`"),
+        ("SELECT s.secret_a FROM (SELECT * FROM ct) s", "`secret_a`"),
+        ("SELECT x FROM ct ORDER BY secret_a", "`secret_a`"),
+    ] {
+        let e = denied(&ana, sql);
+        assert!(e.contains(named), "{sql}: {e}");
+    }
+}

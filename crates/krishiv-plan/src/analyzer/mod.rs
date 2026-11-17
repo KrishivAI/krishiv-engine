@@ -1129,7 +1129,7 @@ async fn analyze_with(
         &securables,
         &reads,
         &bindings.definer_only,
-        |column| written::wrote_column(plan.root(), &bindings, &ctx.definer_texts, column),
+        |securable, column| written::wrote_column(&root, plan.root(), &bindings, securable, column),
         plan.root().origin,
     )
     .await?;

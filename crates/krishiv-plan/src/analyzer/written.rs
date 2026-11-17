@@ -1,32 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The column names a statement wrote (ADR 0048 §3 Denials, A1 §3 Listings; P3-T062 review r3
-//! M1): a refusal of a column read names the column only when the statement wrote that name, so
-//! a `*`, a `* EXCEPT`, a `table()` or a view's text never makes a refusal list a table's other
-//! columns. Asked only once a column is refused, so the walk costs nothing on a granted query.
+//! The column references a statement wrote (ADR 0048 §3 Denials, A1 §3 Listings; P3-T062 review r3
+//! M1, r4 N1): a refusal of a column read names the column only when the statement wrote a
+//! reference to it, so a `*`, a `* EXCEPT`, a `table()`, a view's text, or the same name written
+//! for something else (another relation's column, an alias, a lambda variable) never makes a
+//! refusal name a table's other columns. Asked only once a column is refused, so the walk costs
+//! nothing on a granted query.
+
+use std::collections::HashSet;
 
 use crate::walk::{Node, PtrSet, children};
-use crate::{ExprNode, JoinCondition, LogicalPlan, Origin, PlanNode, SourceId};
+use crate::{ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr, SourceId};
 
-use super::bind::Bindings;
-use super::views::DefinerTexts;
+use super::bind::{Bindings, BoundTable};
 
-/// Whether the statement `root` (with the lowered SQL texts of its `PlanNode::Sql` nodes in
-/// `bindings`) wrote `column` as a column name: a part of a column reference, a `* EXCEPT` path
-/// or a `USING` key, compared ignoring ASCII case (over-names, never under). Only what the
-/// statement's own text holds counts: a node lowered from the SQL source of `root` or of an
-/// embedded text. A stored view's text (lowered from a source of its own) and the read
-/// projection the session builds over it (no source) are not the statement's, nor is a
-/// DataFrame column (no source: such a refusal names the table, failing toward less); the
-/// inlined queries of definer views (`definer_texts`) are skipped whole.
+/// Whether the statement `input` (with the lowered SQL texts of its `PlanNode::Sql` nodes in
+/// `bindings`) wrote a reference to `column` of the table read `securable` (an index of
+/// [`Bindings::securables`]): a column reference naming it, lowered from the statement's own SQL
+/// source or an embedded text's, whose resolved form in `root` (found by its position) reads that
+/// column of a scan of that table (the attribute itself, as a bare column or `*` passes it
+/// through; not a name the statement wrote for something else, nor a `*` expanded to it). A stored view's text (a source of its own), the
+/// read projection the session builds over a view (no source) and DataFrame columns (no source)
+/// are not the statement's: such a refusal names the table, failing toward less.
 pub(super) fn wrote_column(
     root: &LogicalPlan,
+    input: &LogicalPlan,
     bindings: &Bindings,
-    definer_texts: &DefinerTexts,
+    securable: usize,
     column: &str,
 ) -> bool {
-    let same = |name: &String| name.eq_ignore_ascii_case(column);
     let mut sources: Vec<SourceId> = Vec::new();
-    sources.extend(root.origin.sql.map(|(s, _)| s));
+    sources.extend(input.origin.sql.map(|(s, _)| s));
     sources.extend(
         bindings
             .sql
@@ -34,40 +37,103 @@ pub(super) fn wrote_column(
             .filter_map(|p| p.origin.sql.map(|(s, _)| s)),
     );
     let own = |origin: &Origin| origin.sql.is_some_and(|(s, _)| sources.contains(&s));
-    let mut seen: PtrSet<*const ()> = PtrSet::default();
-    let mut stack = vec![Node::Plan(root)];
+    // Where the statement wrote the name: its column references naming it (a `*`'s expansion
+    // carries the star's position, never one of these).
+    let mut at: Vec<Origin> = Vec::new();
+    let mut seen_input: PtrSet<*const ()> = PtrSet::default();
+    let mut walk = vec![Node::Plan(input)];
     let mut next = Vec::new();
-    while let Some(node) = stack.pop() {
-        if !seen.insert(node.key()) {
+    while let Some(node) = walk.pop() {
+        if !seen_input.insert(node.key()) {
             continue;
         }
         match node {
             Node::Plan(p) => {
-                if definer_texts.contains(p) {
-                    continue;
-                }
-                match &p.node {
-                    PlanNode::Sql { .. } => {
-                        if let Some(lowered) = bindings.sql.get(&super::bind::addr(p)) {
-                            stack.push(Node::Plan(lowered));
-                        }
-                    }
-                    PlanNode::Join {
-                        condition: JoinCondition::Using(keys),
-                        ..
-                    } if own(&p.origin) && keys.iter().any(same) => return true,
-                    _ => {}
+                if let PlanNode::Sql { .. } = &p.node
+                    && let Some(lowered) = bindings.sql.get(&super::bind::addr(p))
+                {
+                    walk.push(Node::Plan(lowered));
                 }
             }
-            Node::Expr(e) if own(&e.origin) => match &e.node {
-                ExprNode::Column(c) if c.name.iter().any(same) => return true,
-                ExprNode::Star(s) if s.except.iter().flatten().any(same) => return true,
-                _ => {}
-            },
-            Node::Expr(_) => {}
+            Node::Expr(e) => {
+                if let ExprNode::Column(c) = &e.node
+                    && own(&e.origin)
+                    && c.name.iter().any(|n| n.eq_ignore_ascii_case(column))
+                {
+                    at.push(e.origin);
+                }
+            }
         }
         children(node, &mut next);
-        stack.append(&mut next);
+        walk.append(&mut next);
     }
-    false
+    if at.is_empty() {
+        return false;
+    }
+    // The names a scan of the securable carries.
+    let mut names: Vec<Vec<String>> = bindings
+        .tables
+        .values()
+        .filter_map(|bound| match bound {
+            BoundTable::Found { meta, securable: i } if *i == securable => Some(meta.ident.parts()),
+            _ => None,
+        })
+        .collect();
+    names.extend(
+        bindings
+            .scans
+            .iter()
+            .filter(|(_, i)| **i == securable)
+            .map(|(name, _)| name.clone()),
+    );
+    // Attribute ids (as seen from the root, past `Shift` instances) of the column's scans, and
+    // those the statement's own column references read.
+    let mut column_ids: HashSet<u64> = HashSet::new();
+    let mut written: HashSet<u64> = HashSet::new();
+    let mut seen: HashSet<(*const LogicalPlan, u64)> = HashSet::new();
+    let mut seen_exprs: HashSet<(*const crate::Expr, u64)> = HashSet::new();
+    let mut stack: Vec<(&LogicalPlan, u64)> = vec![(root, 0)];
+    while let Some((p, off)) = stack.pop() {
+        if !seen.insert((std::ptr::from_ref(p), off)) {
+            continue;
+        }
+        let mut exprs: Vec<&crate::Expr> = Vec::new();
+        p.for_each_expr(&mut |e| exprs.push(e));
+        while let Some(e) = exprs.pop() {
+            if !seen_exprs.insert((std::ptr::from_ref(e), off)) {
+                continue;
+            }
+            match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c))
+                    if at.contains(&e.origin) =>
+                {
+                    written.extend(c.id.0.checked_add(off));
+                }
+                ExprNode::Subquery { plan, .. } => stack.push((plan, off)),
+                _ => {}
+            }
+            e.for_each_child(&mut |c| exprs.push(c));
+        }
+        match &p.node {
+            PlanNode::Scan(s) => {
+                if let ReadSource::Table { name, .. } = &s.source
+                    && names.contains(name)
+                {
+                    column_ids.extend(
+                        s.output
+                            .iter()
+                            .filter(|c| c.name.eq_ignore_ascii_case(column))
+                            .filter_map(|c| c.id.0.checked_add(off)),
+                    );
+                }
+            }
+            PlanNode::Shift { input, offset } => {
+                stack.push((input, off.saturating_add(*offset)));
+                continue;
+            }
+            _ => {}
+        }
+        p.for_each_child(&mut |c| stack.push((c, off)));
+    }
+    !written.is_disjoint(&column_ids)
 }
