@@ -268,7 +268,9 @@ def page_checks(origin: str) -> list[str]:
             axe_js = AXE.read_text()
             for frag in AXE_PAGES:
                 page.evaluate(f"window.location.hash = {frag!r}")
-                page.wait_for_load_state("networkidle")
+                # The event stream keeps the network busy, so "networkidle" never comes: wait for the page.
+                page.locator("h1").first.wait_for(timeout=10000)
+                page.wait_for_timeout(500)
                 page.evaluate(axe_js)
                 found = page.evaluate(
                     "axe.run().then(r => r.violations.filter(v => ['serious','critical'].includes(v.impact))"
