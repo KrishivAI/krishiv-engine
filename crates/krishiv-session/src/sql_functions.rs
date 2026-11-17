@@ -160,7 +160,7 @@ pub(crate) struct QueryFunctions {
 }
 
 /// Stored functions by (namespace, name as stored), each once.
-type Calls = Vec<(String, String)>;
+pub(crate) type Calls = Vec<(String, String)>;
 
 /// [`QueryFunctions::definer_calls`].
 #[derive(Default)]
@@ -172,6 +172,28 @@ struct DefinerCalls {
     /// The bodies (by `cache_key`) the query calls outside definer views' texts, directly or
     /// through bodies; `None` until settled, or when unknown (every body is the principal's).
     own_bodies: Option<Vec<String>>,
+}
+
+/// What a definer view's text reaches through stored functions ([`QueryFunctions::definer_scope`]),
+/// all asked of its definer (review r5 M7, r6 M8).
+pub(crate) struct DefinerScope {
+    /// The stored functions it calls, directly or through bodies.
+    pub(crate) calls: Calls,
+    /// What the bodies it reaches look up, merged.
+    pub(crate) body: BodyReads,
+    /// Each stored function body it reaches, also asked of that function's owner (review r7 M9).
+    pub(crate) owned: Vec<OwnedBody>,
+}
+
+/// One stored function body a definer view's text reaches: what it looks up and calls itself,
+/// asked of the function's owner too (review r7 M9).
+pub(crate) struct OwnedBody {
+    /// The function (namespace, name).
+    pub(crate) function: (String, String),
+    /// The body's own lookups.
+    pub(crate) reads: BodyReads,
+    /// The stored functions the body calls itself.
+    pub(crate) calls: Calls,
 }
 
 /// [`QueryFunctions::bodies`].
@@ -190,6 +212,8 @@ struct Bodies {
 pub(crate) struct BodyReads {
     /// The body's `cache_key`.
     key: String,
+    /// The stored function whose body it is (namespace, name), `None` for a temporary one.
+    pub(crate) function: Option<(String, String)>,
     /// Its own lookups.
     pub(crate) reads: Vec<ReadCandidate>,
     /// The lookups of the texts of the definer views it reads (read as invoker ones, fails closed):
@@ -333,26 +357,86 @@ impl QueryFunctions {
         query: &Arc<LogicalPlan>,
         nested: &krishiv_plan::analyzer::views::DefinerTexts,
         profile: SparkProfile,
-    ) -> (Calls, BodyReads) {
+    ) -> DefinerScope {
         let reads = self
             .bodies
             .reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        match self.calls_outside(query, nested, profile) {
-            Some((calls, bodies)) => {
-                let reads = reads
-                    .iter()
+        let (calls, reached) = match self.calls_outside(query, nested, profile) {
+            Some((calls, bodies)) => (
+                calls,
+                reads
+                    .into_iter()
                     .filter(|r| bodies.contains(&r.key))
-                    .fold(BodyReads::default(), BodyReads::merge);
-                (calls, reads)
-            }
-            None => (
-                self.stored_calls(),
-                reads.iter().fold(BodyReads::default(), BodyReads::merge),
+                    .collect::<Vec<_>>(),
             ),
+            None => (self.stored_calls(), reads),
+        };
+        let owned = reached
+            .iter()
+            .filter_map(|body| {
+                let function = body.function.clone()?;
+                Some(OwnedBody {
+                    calls: self.direct_calls(&body.key, profile),
+                    function,
+                    reads: body.clone(),
+                })
+            })
+            .collect();
+        DefinerScope {
+            body: reached.iter().fold(BodyReads::default(), BodyReads::merge),
+            calls,
+            owned,
         }
+    }
+
+    /// The stored functions the body expanded under `key` calls itself (not through the bodies of
+    /// the functions it calls), as this registry resolves them.
+    fn direct_calls(&self, key: &str, profile: SparkProfile) -> Calls {
+        let Some(def) = self
+            .bodies
+            .expanded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .cloned()
+        else {
+            return Calls::new();
+        };
+        let fork = self.recording_fork();
+        let mut plans: Vec<Arc<LogicalPlan>> = Vec::new();
+        let mut exprs: Vec<Arc<Expr>> = std::iter::once(Arc::clone(&def.body))
+            .chain(def.params.iter().filter_map(|p| p.default.clone()))
+            .collect();
+        loop {
+            if let Some(p) = plans.pop() {
+                if let PlanNode::TableFunction { name, .. } = &p.node {
+                    let parts: Vec<String> = name
+                        .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                        .map(str::to_owned)
+                        .collect();
+                    fork.lookup(&parts, profile);
+                }
+                p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+                p.for_each_child(&mut |c| plans.push(Arc::clone(c)));
+            } else if let Some(e) = exprs.pop() {
+                match &e.node {
+                    ExprNode::Function(call) => {
+                        let mut parts = call.qualifier.clone();
+                        parts.push(call.name.clone());
+                        fork.lookup(&parts, profile);
+                    }
+                    ExprNode::Subquery { plan, .. } => plans.push(Arc::clone(plan)),
+                    _ => {}
+                }
+                e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
+            } else {
+                break;
+            }
+        }
+        fork.stored_calls()
     }
 
     /// The stored functions `plan` calls outside the subtrees `texts`, directly or through the
@@ -543,12 +627,13 @@ impl QueryFunctions {
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         let next_source = |views: &ViewSource| (views.next_source)();
-        // The calls of a view a body reads resolve as in any stored view's text (review r5 Z1).
-        let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>]| {
-            self.qualify_calls(e, namespace, path, profile, true)
+        // The calls of a view a body reads resolve as in any stored view's text (review r5 Z1), and a
+        // stored body's own calls, at every level, through its frozen path or namespace (r7 R7-1).
+        let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>], in_view: bool| {
+            self.qualify_calls(e, namespace, path, profile, in_view)
         };
-        let qualify_table = |name: &str, namespace: &str, path: &[Vec<String>]| {
-            self.qualify_table_call(name, namespace, path, profile)
+        let qualify_table = |name: &str, namespace: &str, path: &[Vec<String>], in_view: bool| {
+            self.qualify_table_call(name, namespace, path, profile, in_view)
         };
         let expansion = match &self.views {
             Some(views) => {
@@ -568,6 +653,7 @@ impl QueryFunctions {
                     next_source: &|| next_source(views),
                     qualify: Some(&qualify),
                     qualify_table: Some(&qualify_table),
+                    stored_body: stored_in.is_some(),
                     namespace: stored_in
                         .clone()
                         .unwrap_or_else(|| self.catalog.current_namespace()),
@@ -577,7 +663,7 @@ impl QueryFunctions {
                     &wrapper,
                     self.case_sensitive,
                     Some(&stored),
-                    stored_in,
+                    stored_in.clone(),
                     (!def.path.is_empty()).then(|| def.path.clone()),
                 )
             }
@@ -598,6 +684,7 @@ impl QueryFunctions {
                 // lookups of its text are the caller's too (P3-T062 §2.4).
                 let mine = BodyReads {
                     key: key.clone(),
+                    function: stored_in.as_ref().map(|ns| (ns.clone(), def.name.clone())),
                     reads: expansion.reads,
                     definer_reads: expansion
                         .definers
@@ -637,18 +724,30 @@ impl QueryFunctions {
         out
     }
 
-    /// `def` with, for a stored function, its bare calls qualified.
+    /// `def` with, for a stored function, the bare calls of its body and of its parameters'
+    /// defaults qualified (review r7 R7-1: nothing of the caller's session answers in them).
     fn qualified(&self, def: &Arc<SqlFunction>, profile: SparkProfile) -> Arc<SqlFunction> {
         let Some(namespace) = def.qualifier.last() else {
             return Arc::clone(def);
         };
-        match self.qualify_calls(&def.body, namespace, &def.path, profile, false) {
-            Some(body) => Arc::new(SqlFunction {
-                body,
-                ..(**def).clone()
-            }),
-            None => Arc::clone(def),
+        let qualify = |e: &Arc<Expr>| self.qualify_calls(e, namespace, &def.path, profile, false);
+        let body = qualify(&def.body);
+        let mut params = def.params.clone();
+        let mut defaults = false;
+        for p in &mut params {
+            if let Some(d) = p.default.as_ref().and_then(qualify) {
+                p.default = Some(d);
+                defaults = true;
+            }
         }
+        if body.is_none() && !defaults {
+            return Arc::clone(def);
+        }
+        Arc::new(SqlFunction {
+            body: body.unwrap_or_else(|| Arc::clone(&def.body)),
+            params,
+            ..(**def).clone()
+        })
     }
 }
 
@@ -768,22 +867,24 @@ impl QueryFunctions {
         }
     }
 
-    /// The name of a table function a stored view's text calls (`name` as written, its parts joined
-    /// by [`krishiv_plan::TABLE_FUNCTION_NAME_SEP`]) qualified as [`Self::qualify_calls`] qualifies
-    /// a scalar call of a view (review r6 R6-1): a bare name no built-in table function answers goes
-    /// to the stored function its frozen `path` (or its `namespace`) holds, never to a temporary
-    /// one of the reader. `None` when it stays as written.
+    /// The name of a table function a stored view's text (`in_view`) or a stored function's body
+    /// calls (`name` as written, its parts joined by [`krishiv_plan::TABLE_FUNCTION_NAME_SEP`])
+    /// qualified as [`Self::qualify_calls`] qualifies a scalar call there (review r6 R6-1, r7
+    /// R7-1): a bare name no built-in table function answers goes to the stored function its frozen
+    /// `path` (or its `namespace`) holds, never to a temporary one or the reader's namespace. `None`
+    /// when it stays as written.
     pub(crate) fn qualify_table_call(
         &self,
         name: &str,
         namespace: &str,
         path: &[Vec<String>],
         profile: SparkProfile,
+        in_view: bool,
     ) -> Option<String> {
         if name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP) || builtin_table(name, profile) {
             return None;
         }
-        let mut parts = self.stored_qualifier(name, namespace, path, true)?;
+        let mut parts = self.stored_qualifier(name, namespace, path, in_view)?;
         parts.push(name.to_owned());
         Some(parts.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()))
     }

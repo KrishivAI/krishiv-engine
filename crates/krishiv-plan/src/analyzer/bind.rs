@@ -131,7 +131,9 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     }
     // Per root: whether it is only under definer views' texts (a body only they call).
     let mut root_under = vec![false; roots.len()];
-    sql_function_roots(ctx, &mut roots, &mut root_under)?;
+    // Per root: whether it is a stored function's body (resolved like a stored view's text).
+    let mut root_stored = vec![false; roots.len()];
+    sql_function_roots(ctx, &mut roots, &mut root_under, &mut root_stored)?;
     let mut found = Vec::new();
     // Per `found` entry: whether it is under a definer view's text.
     let mut definer = Vec::new();
@@ -139,8 +141,13 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     // Every CTE scope stays alive for the walk, so no scope address is
     // reused while `seen` holds it.
     let mut scopes: Vec<Arc<[String]>> = vec![Arc::from(Vec::new())];
-    for (root, &root_under) in roots.iter().zip(&root_under) {
-        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), root_under, false)];
+    for ((root, &root_under), &root_stored) in roots.iter().zip(&root_under).zip(&root_stored) {
+        let mut stack = vec![(
+            Node::Plan(root),
+            Arc::clone(&scopes[0]),
+            root_under,
+            root_stored,
+        )];
         while let Some((node, env, under, in_view)) = stack.pop() {
             if !seen.insert((node.key() as usize, addr(&*env), under, in_view)) {
                 continue;
@@ -320,10 +327,15 @@ fn visit<'a>(
 /// under definer views' texts ([`AnalysisContext::definer_texts`]): such a
 /// body reads as the view's definer, who was asked about it (review r6 M8). A
 /// body also called outside them is added (again) as the principal's.
+/// `stored` (one flag per root) holds whether a root is a stored function's
+/// body: like a stored view's text, nothing of the reading session answers in
+/// it (review r7 R7-1). A temporary function's body is never the definer's:
+/// one reached under a definer view's text is refused (fails closed).
 fn sql_function_roots(
     ctx: &AnalysisContext,
     roots: &mut Vec<Arc<LogicalPlan>>,
     under: &mut Vec<bool>,
+    stored: &mut Vec<bool>,
 ) -> Result<(), AnalysisError> {
     // Each function added, and whether only as reached under a definer's text.
     let mut known: HashMap<String, bool> = HashMap::new();
@@ -346,6 +358,15 @@ fn sql_function_roots(
         }
         next += 1;
         for (def, below) in defs {
+            if below && def.qualifier.is_empty() {
+                return Err(AnalysisError::new(
+                    UnresolvedRoutine {
+                        routine_name: def.routine_name(),
+                        search_path: search_path(ctx),
+                    },
+                    roots[0].origin,
+                ));
+            }
             match known.get(&def.routine_name()) {
                 Some(&only_under) if !only_under || below => continue,
                 _ => {}
@@ -366,6 +387,7 @@ fn sql_function_roots(
                 exprs,
             })));
             under.push(below);
+            stored.push(!def.qualifier.is_empty());
         }
     }
     Ok(())

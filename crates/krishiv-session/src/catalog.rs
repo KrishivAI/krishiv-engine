@@ -1431,15 +1431,22 @@ pub(crate) struct StoredViews<'a> {
     /// As [`Self::qualify`], for the name of a table function a stored view's query calls (review
     /// r6 R6-1): the qualified name, its parts joined by `TABLE_FUNCTION_NAME_SEP`.
     pub(crate) qualify_table: Option<&'a QualifyTableCall<'a>>,
+    /// The plan expanded is the body of a stored function (its namespace is the expansion's
+    /// `namespace`): its own calls, scalar and table ones at every level, resolve through the
+    /// function's frozen path or namespace as [`Self::qualify`] qualifies them for a body, never
+    /// through the reader's session (review r7 R7-1; Spark v4.2.0 `Analyzer.scala` lines 260-270).
+    pub(crate) stored_body: bool,
 }
 
-/// See [`StoredViews::qualify`]: the expression, the namespace it was written in and the path frozen with it.
+/// See [`StoredViews::qualify`]: the expression, the namespace it was written in, the path frozen with it and
+/// whether it is a stored view's text (else a stored function's body).
 pub(crate) type QualifyCalls<'a> =
-    dyn Fn(&Arc<Expr>, &str, &[Vec<String>]) -> Option<Arc<Expr>> + 'a;
+    dyn Fn(&Arc<Expr>, &str, &[Vec<String>], bool) -> Option<Arc<Expr>> + 'a;
 
 /// See [`StoredViews::qualify_table`]: the table function's name as written, the namespace it was
-/// written in and the path frozen with it.
-pub(crate) type QualifyTableCall<'a> = dyn Fn(&str, &str, &[Vec<String>]) -> Option<String> + 'a;
+/// written in, the path frozen with it and whether it is a stored view's text (else a stored function's body).
+pub(crate) type QualifyTableCall<'a> =
+    dyn Fn(&str, &str, &[Vec<String>], bool) -> Option<String> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.

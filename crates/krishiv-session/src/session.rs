@@ -1413,14 +1413,20 @@ impl Session {
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
                 in_system: env.catalog.in_system(),
                 cte_precedence: env.analysis.conf.cte_precedence,
-                qualify: Some(&|e, namespace, path| {
+                qualify: Some(&|e, namespace, path, in_view| {
                     env.sql_functions
-                        .qualify_calls(e, namespace, path, self.state.profile, true)
+                        .qualify_calls(e, namespace, path, self.state.profile, in_view)
                 }),
-                qualify_table: Some(&|name, namespace, path| {
-                    env.sql_functions
-                        .qualify_table_call(name, namespace, path, self.state.profile)
+                qualify_table: Some(&|name, namespace, path, in_view| {
+                    env.sql_functions.qualify_table_call(
+                        name,
+                        namespace,
+                        path,
+                        self.state.profile,
+                        in_view,
+                    )
                 }),
+                stored_body: false,
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);

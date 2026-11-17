@@ -325,6 +325,20 @@ impl GrantsPolicy {
         Some(self.grants.store.snapshot().0.lists(principal, &key, cs))
     }
 
+    /// The owner (creator) recorded for `securable` itself, not a parent's (review r7 M9: the owner
+    /// of a stored function whose body a definer view's text calls is asked about the body's reads).
+    pub(crate) fn owner_of(&self, securable: &Securable) -> Option<String> {
+        let key = ObjectKey::of(securable).and_then(physical_key)?;
+        let cs = self.exact_for(&key);
+        let state = self.grants.store.snapshot();
+        state
+            .0
+            .owners
+            .iter()
+            .find(|(k, _)| k.same(&key, cs))
+            .map(|(_, owner)| owner.clone())
+    }
+
     /// The shared grants.
     #[must_use]
     pub fn grants(&self) -> &Arc<Grants> {

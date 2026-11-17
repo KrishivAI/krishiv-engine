@@ -31,8 +31,9 @@ pub(super) struct Expander<'a> {
     /// The definer views whose text the expansion is inside, innermost last (indexes of
     /// [`Self::definers`]): a lookup there is the innermost one's, asked of its definer.
     pub(super) in_definer: Vec<usize>,
-    /// How many stored views' texts the expansion is inside: only their calls are qualified by
-    /// [`StoredViews::qualify`] (a stored function's body, expanded in its namespace, is not one).
+    /// How many stored views' texts the expansion is inside: their calls are qualified by
+    /// [`StoredViews::qualify`] under a view's rule (a stored function's body, expanded in its
+    /// namespace, is qualified under a body's rule, [`StoredViews::stored_body`]).
     pub(super) in_stored_view: usize,
     /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
     pub(super) keeps: Vec<Keep>,
@@ -189,23 +190,37 @@ impl Expander<'_> {
         self.expand_stored(plan, scope)
     }
 
-    /// `plan`, or inside a stored view's text, when it calls a table function by a bare name, the
-    /// call qualified as the text's scalar calls are (review r6 R6-1, [`StoredViews::qualify_table`]).
-    fn qualified_table_function(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-        if self.in_stored_view == 0 {
-            return plan;
+    /// Where the calls of the plan being expanded resolve, when not through the reader's session:
+    /// inside a stored view's text, its namespace and frozen path (a view's rule); else, in a stored
+    /// function's body, the function's namespace and frozen path (a body's rule, review r7 R7-1).
+    /// The last field: whether it is a view's text.
+    fn call_scope(&self) -> Option<(&str, &[Vec<String>], bool)> {
+        let namespace = self.view_namespace.as_deref()?;
+        if self.in_stored_view > 0 {
+            return Some((namespace, self.view_path.as_deref()?, true));
         }
+        self.stored.filter(|s| s.stored_body).map(|_| {
+            (
+                namespace,
+                self.view_path.as_deref().unwrap_or_default(),
+                false,
+            )
+        })
+    }
+
+    /// `plan`, or inside a stored view's text or a stored function's body, when it calls a table
+    /// function by a bare name, the call qualified as its scalar calls are (review r6 R6-1, r7
+    /// R7-1, [`StoredViews::qualify_table`]).
+    fn qualified_table_function(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         let PlanNode::TableFunction { name, args } = &plan.node else {
             return plan;
         };
-        let (Some(qualify), Some(namespace), Some(path)) = (
-            self.stored.and_then(|s| s.qualify_table),
-            &self.view_namespace,
-            &self.view_path,
-        ) else {
+        let (Some(qualify), Some((namespace, path, in_view))) =
+            (self.stored.and_then(|s| s.qualify_table), self.call_scope())
+        else {
             return plan;
         };
-        match qualify(name, namespace, path) {
+        match qualify(name, namespace, path, in_view) {
             Some(name) => Arc::new(
                 LogicalPlan::new(PlanNode::TableFunction {
                     name,
@@ -502,15 +517,12 @@ impl Expander<'_> {
         scope: &mut Vec<String>,
     ) -> Result<Arc<Expr>, KrishivError> {
         let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
-        // Inside a stored view the calls of its query resolve through the path it was created under.
+        // Inside a stored view (or a stored function's body) the calls of its query resolve through
+        // the path it was created under.
         if matches!(expr.node, ExprNode::Function(_))
-            && self.in_stored_view > 0
-            && let (Some(qualify), Some(namespace), Some(path)) = (
-                self.stored.and_then(|s| s.qualify),
-                &self.view_namespace,
-                &self.view_path,
-            )
-            && let Some(next) = qualify(&expr, namespace, path)
+            && let (Some(qualify), Some((namespace, path, in_view))) =
+                (self.stored.and_then(|s| s.qualify), self.call_scope())
+            && let Some(next) = qualify(&expr, namespace, path, in_view)
         {
             expr = next;
         }

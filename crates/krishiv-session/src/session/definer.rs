@@ -79,24 +79,48 @@ impl Session {
         let privilege = env.analysis.mode.read_privilege();
         // Its own calls and what their bodies look up, not those of the definer views inside it,
         // which are their definers' (review r6 m1); the bodies read as the definer (r6 M8).
-        let (called, body) = calls.definer_scope(query, &ctx.definer_texts, self.state.profile);
-        self.authorize_reads_as(&body.reads, env, &definer, false)
+        let scope = calls.definer_scope(query, &ctx.definer_texts, self.state.profile);
+        self.authorize_reads_as(&scope.body.reads, env, &definer, false)
             .await?;
-        self.authorize_reads_as(&body.definer_reads, env, &definer, false)
+        self.authorize_reads_as(&scope.body.definer_reads, env, &definer, false)
             .await?;
-        if let Some((e, _)) = body.deferred {
+        if let Some((e, _)) = scope.body.deferred {
             return Err(e);
         }
-        for (namespace, name) in &called {
-            let securable = krishiv_plan::analyzer::Securable::Function(vec![
-                crate::catalog::CATALOG.to_owned(),
-                namespace.clone(),
-                name.clone(),
-            ]);
-            krishiv_plan::analyzer::authorize(&*self.state.policy, &definer, &securable, privilege)
-                .await?;
+        for call in &scope.calls {
+            krishiv_plan::analyzer::authorize(
+                &*self.state.policy,
+                &definer,
+                &function_securable(call),
+                privilege,
+            )
+            .await?;
         }
-        env.sql_functions.note_definer_calls(called);
+        // Each body reads with the intersection of the definer and the function's owner (review
+        // r7 M9): the owner wrote its text, so every read and call in it is asked of the owner too.
+        for owned in &scope.owned {
+            let Some(owner) = self.function_owner(&owned.function) else {
+                continue;
+            };
+            if owner == d.definer {
+                continue;
+            }
+            let owner = Arc::new(Principal::definer(owner, self.state.principal.name.clone()));
+            self.authorize_reads_as(&owned.reads.reads, env, &owner, false)
+                .await?;
+            self.authorize_reads_as(&owned.reads.definer_reads, env, &owner, false)
+                .await?;
+            for call in &owned.calls {
+                krishiv_plan::analyzer::authorize(
+                    &*self.state.policy,
+                    &owner,
+                    &function_securable(call),
+                    privilege,
+                )
+                .await?;
+            }
+        }
+        env.sql_functions.note_definer_calls(scope.calls);
         // The views its text inlines show in a plan of it too (review M1): a reader shown the
         // plan is asked `Select` on each, as on a view it read itself.
         let mut reads = analyzed.securables;
@@ -111,6 +135,16 @@ impl Session {
             }
         }
         Ok(reads)
+    }
+
+    /// The owner the grants provider records for the stored function `(namespace, name)`; `None`
+    /// without the grants provider, or for a function it records no owner of (then the definer
+    /// alone is asked about its body).
+    fn function_owner(&self, function: &(String, String)) -> Option<String> {
+        self.state
+            .grants
+            .as_ref()?
+            .owner_of(&function_securable(function))
     }
 
     /// The views the bodies of the functions a query called read, once the policy allows them; a
@@ -214,6 +248,15 @@ impl Session {
         }
         Ok((synced, renames))
     }
+}
+
+/// The stored function `(namespace, name)` of the session catalog as a securable.
+fn function_securable((namespace, name): &(String, String)) -> krishiv_plan::analyzer::Securable {
+    krishiv_plan::analyzer::Securable::Function(vec![
+        crate::catalog::CATALOG.to_owned(),
+        namespace.clone(),
+        name.clone(),
+    ])
 }
 
 /// The query's catalogs as a stored view's text sees them (Spark's `viewCatalogAndNamespace` and
