@@ -9,7 +9,8 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::principal::{Principal, PrincipalKind};
 
 use super::{
-    ActAs, AuthConfig, Authenticated, ImpersonationCount, Method, Role, ServerAuth, Surface,
+    ActAs, ActAsHint, AuthConfig, Authenticated, ImpersonationCount, Method, Role, ServerAuth,
+    Surface,
 };
 
 fn loopback() -> SocketAddr {
@@ -465,7 +466,13 @@ async fn signed_assertion_off_is_refused_audited_and_counted() {
     let _guard = tracing::subscriber::set_default(subscriber);
     let auth = server(&[]);
     let r = auth
-        .impersonate_signed(&portal(), Surface::Connect, remote(), "a.b.c")
+        .impersonate_signed(
+            &portal(),
+            Surface::Connect,
+            remote(),
+            "a.b.c",
+            &ActAsHint::new(),
+        )
         .await;
     assert!(
         matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied
@@ -500,7 +507,13 @@ async fn signed_assertion_from_a_caller_without_the_privilege_is_refused() {
     let auth = server(&[]);
     let batch = caller("batch", Role::Admin, Method::Token);
     let r = auth
-        .impersonate_signed(&batch, Surface::Connect, remote(), "a.b.c")
+        .impersonate_signed(
+            &batch,
+            Surface::Connect,
+            remote(),
+            "a.b.c",
+            &ActAsHint::new(),
+        )
         .await;
     assert!(matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied));
     assert_eq!(auth.impersonation_counts().denied, 1);
@@ -592,7 +605,13 @@ async fn signed_assertion_from_a_delegated_principal_is_refused() {
         )
         .expect("allowed");
     let r = auth
-        .impersonate_signed(&alice, Surface::Connect, remote(), "a.b.c")
+        .impersonate_signed(
+            &alice,
+            Surface::Connect,
+            remote(),
+            "a.b.c",
+            &ActAsHint::new(),
+        )
         .await;
     assert!(matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied));
     assert_eq!(

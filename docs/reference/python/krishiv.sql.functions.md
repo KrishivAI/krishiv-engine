@@ -1383,7 +1383,7 @@ Calls the registry function `hex`.
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `histogram_numeric`.
 
 ### `hll_sketch_agg`
 
@@ -1527,7 +1527,7 @@ Calls the registry function `is_valid_utf8`.
 def is_valid_variant(v: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `is_valid_variant`.
 
 ### `is_variant_null`
 

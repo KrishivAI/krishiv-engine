@@ -12,6 +12,8 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   `file://`, no credentials in the URL, no `..`), `check_location` (raises `KRISHIV_CATALOG_LOCATION_REFUSED`, which names the
   catalog and the table and never the location, and logs a catalog fault on `krishiv::catalog`; it is not an authorization
   denial). The allowlists of ADR 0046 §3a and the egress policy join through the trait when they exist.
+- HMS egress (P3-T067 §5.2 S10): `HmsConfig::egress` (an `EgressScope` of `krishiv-store`) makes `HmsClient` dial only the
+  resolved addresses the rule allows for the declared host (exempt by name); `None` is no rule (embedded).
 - `src/hive/` (feature `hive`; the plain `thrift` runtime, default features off) the Hive metastore: `types.rs` the structs of
   `hive_metastore.thrift` by field id (read-only; unknown or mistyped fields are skipped, a list or map of the wrong element
   type is refused), `limits.rs` the budget of one call (a deadline for the whole call, bytes read, decoded elements, longest

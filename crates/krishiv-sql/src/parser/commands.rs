@@ -112,6 +112,9 @@ impl Parser<'_> {
             } else {
                 self.set_command()?
             }
+        } else if explains.is_empty() && self.at_access_control() {
+            // Krishiv's access-control statements (P3-T062): never explained.
+            self.access_control_command()?
         } else if explains.is_empty() && self.kw_at(0, "BEGIN") && self.in_script == 0 {
             self.script_command()?
         } else if self.kw_at(0, "EXECUTE") && self.kw_at(1, "IMMEDIATE") {

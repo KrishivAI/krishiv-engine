@@ -235,7 +235,15 @@ impl OptionSchema {
         let mut file_source = FileSourceFlags::default();
         for (key, value) in user {
             if let Some(spec) = self.spec(key) {
-                values.insert(spec.name, self.typed(spec, key, value)?);
+                // A format that declares a framework flag itself (CSV and
+                // JSON declare `ignoreCorruptFiles` for inference) reads it
+                // as the framework does and still gives the scan its
+                // per-read value.
+                let typed = match self.file_source_flag(&mut file_source, key, value)? {
+                    Some(b) => Value::Bool(b),
+                    None => self.typed(spec, key, value)?,
+                };
+                values.insert(spec.name, typed);
             } else if is_store_option(key) {
                 // Object-store configuration (`fs.s3a.*`, `fs.gs.*`,
                 // `fs.azure.*`): resolved by the store layer from the same
@@ -244,13 +252,12 @@ impl OptionSchema {
                 // `OptionValue`'s `Display` prints plain values as given
                 // and secrets redacted, so only non-secrets are visible.
                 ignored.push(format!("{key}={value}"));
-            } else if key.eq_ignore_ascii_case("ignoreCorruptFiles") {
-                file_source.ignore_corrupt_files = Some(self.flag(key, value)?);
-            } else if key.eq_ignore_ascii_case("ignoreMissingFiles") {
-                file_source.ignore_missing_files = Some(self.flag(key, value)?);
-            } else if !FILE_SOURCE_OPTIONS
-                .iter()
-                .any(|o| o.eq_ignore_ascii_case(key))
+            } else if self
+                .file_source_flag(&mut file_source, key, value)?
+                .is_none()
+                && !FILE_SOURCE_OPTIONS
+                    .iter()
+                    .any(|o| o.eq_ignore_ascii_case(key))
             {
                 let suggestion = self.closest(key);
                 if strict {
@@ -326,6 +333,13 @@ impl OptionSchema {
                 continue;
             }
             if let Some(raw) = conf_value(session, conf) {
+                // Spark trims a boolean conf (`booleanConf`), but an option
+                // is not trimmed (`toBoolean`): carry the conf as it reads.
+                let raw = if spec.kind == OptionKind::Bool {
+                    raw.trim().to_owned()
+                } else {
+                    raw
+                };
                 out.insert(spec.name.to_owned(), OptionValue::from_user(spec.name, raw));
             }
         }
@@ -379,12 +393,39 @@ impl OptionSchema {
         }
     }
 
-    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`).
+    /// Records `key` in `flags` when it is a per-read framework flag
+    /// (`ignoreCorruptFiles`, `ignoreMissingFiles`) and returns its value;
+    /// `None` for any other key.
+    fn file_source_flag(
+        &self,
+        flags: &mut FileSourceFlags,
+        key: &str,
+        value: &OptionValue,
+    ) -> Result<Option<bool>> {
+        let slot = if key.eq_ignore_ascii_case("ignoreCorruptFiles") {
+            &mut flags.ignore_corrupt_files
+        } else if key.eq_ignore_ascii_case("ignoreMissingFiles") {
+            &mut flags.ignore_missing_files
+        } else {
+            return Ok(None);
+        };
+        let b = self.flag(key, value)?;
+        *slot = Some(b);
+        Ok(Some(b))
+    }
+
+    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`),
+    /// read as Spark's `FileSourceOptions` does (Scala's `toBoolean`): any
+    /// case, but not trimmed, so `" true "` is refused (Spark 4.2.0:
+    /// `IllegalArgumentException: For input string: " true "`). The SQL conf
+    /// of the same name is trimmed, as Spark's `booleanConf` is: `parse`'s
+    /// own fallback reads it through `typed`, and `with_conf_fallbacks`
+    /// carries a boolean conf trimmed.
     fn flag(&self, key: &str, value: &OptionValue) -> Result<bool> {
         let Some(raw) = value.as_plain() else {
             return Err(self.invalid(key, "<secret>", "a secret is not allowed here"));
         };
-        match raw.trim() {
+        match raw {
             s if s.eq_ignore_ascii_case("true") => Ok(true),
             s if s.eq_ignore_ascii_case("false") => Ok(false),
             _ => Err(self.invalid(key, raw, "expected `true` or `false`")),

@@ -142,8 +142,11 @@ def tokens(spark, rng):
     return cases
 
 
-# (name, file text, read options, schema DDL or None to infer, selected columns or None)
-READS: list[tuple[str, str | None, dict[str, str], str | None, list[str] | None]] = [
+# (name, file text, read options, schema DDL or None to infer, selected columns or None[, session conf])
+READS: list[
+    tuple[str, str | None, dict[str, str], str | None, list[str] | None]
+    | tuple[str, str | None, dict[str, str], str | None, list[str] | None, dict[str, str]]
+] = [
     (
         "header",
         'i,s,d\n1,x,2020-01-01\n\n   \n2,"y,z",2020-01-02\n',
@@ -249,6 +252,94 @@ READS += [
     ("enforceSchema false order", "A,b\n1,2\n", {"header": "true", "enforceSchema": "false"}, "b int, a int", None),
     ("enforceSchema false count", "a\n1\n", {"header": "true", "enforceSchema": "false"}, "a int, b int", None),
     ("enforceSchema true", "x,y\n1,2\n", {"header": "true"}, "a int, b int", None),
+    # The header check (Spark's `CSVHeaderChecker`): names under `spark.sql.caseSensitive` (exact, else after
+    # Java's `toLowerCase`), and with column pruning only the selected columns, each at its own header position.
+    *[
+        (
+            f"enforceSchema false {n} caseSensitive={cs}",
+            t,
+            {"header": "true", "enforceSchema": "false"},
+            sch,
+            sel,
+            {"spark.sql.caseSensitive": cs},
+        )
+        for cs in ["false", "true"]
+        for n, t, sch, sel in [
+            ("upper", "A,B\n1,2\n", "a int, b int", None),
+            ("upper select b", "A,B\n1,2\n", "a int, b int", ["b"]),
+            ("upper count", "A,B\n1,2\n", "a int, b int", []),
+            ("lower", "a,b\n1,2\n", "a int, b int", None),
+            ("non-ascii", "\u00c9,b\n1,2\n", "`\u00e9` int, b int", None),
+            ("other column", "A,X\n1,2\n", "a int, b int", None),
+            ("other column select a", "A,X\n1,2\n", "a int, b int", ["a"]),
+            ("other column select b", "A,X\n1,2\n", "a int, b int", ["b"]),
+            ("wide header select a", "a,b,c\n1,2,3\n", "a int, b int", ["a"]),
+            ("swapped select b", "b,a\n1,2\n", "a int, b int", ["b"]),
+        ]
+    ],
+    # Spark turns pruning off by default under multiLine (`!multiLine && columnPruning`), so the whole header is
+    # checked; an explicit `columnPruning` option still wins.
+    *[
+        (
+            f"enforceSchema false multiLine {n}",
+            t,
+            {"header": "true", "enforceSchema": "false", "multiLine": "true", **o},
+            "a int, b int",
+            sel,
+        )
+        for n, t, o, sel in [
+            ("other column select a", "A,X\n1,2\n", {}, ["a"]),
+            ("wide header select a", "a,b,c\n1,2,3\n", {}, ["a"]),
+            ("other column select a pruning", "A,X\n1,2\n", {"columnPruning": "true"}, ["a"]),
+            ("short record select a", "a,b\n1\n3,4\n", {"mode": "DROPMALFORMED"}, ["a"]),
+        ]
+    ],
+    ("short record select a", "a,b\n1\n3,4\n", {"header": "true", "mode": "DROPMALFORMED"}, "a int, b int", ["a"]),
+    (
+        "enforceSchema false short header select b",
+        "a\n1,2\n",
+        {"header": "true", "enforceSchema": "false"},
+        "a int, b int",
+        ["b"],
+    ),
+    (
+        "enforceSchema false no pruning",
+        "A,X\n1,2\n",
+        {"header": "true", "enforceSchema": "false"},
+        "a int, b int",
+        ["a"],
+        {"spark.sql.csv.parser.columnPruning.enabled": "false"},
+    ),
+    # The conf is combined with `!multiLine` by AND (`getBool(columnPruning, !multiLine && conf)`): set to true it
+    # does not prune a multiLine read; only the read option does.
+    *[
+        (
+            f"columnPruning conf {n}",
+            t,
+            {"header": "true", **o},
+            "a int, b int",
+            ["a"],
+            {"spark.sql.csv.parser.columnPruning.enabled": c},
+        )
+        for n, t, o, c in [
+            ("true multiLine other column", "A,X\n1,2\n", {"enforceSchema": "false", "multiLine": "true"}, "true"),
+            (
+                "true multiLine option true",
+                "A,X\n1,2\n",
+                {"enforceSchema": "false", "multiLine": "true", "columnPruning": "true"},
+                "true",
+            ),
+            (
+                "false option true",
+                "A,X\n1,2\n",
+                {"enforceSchema": "false", "columnPruning": "true"},
+                "false",
+            ),
+            ("true other column", "A,X\n1,2\n", {"enforceSchema": "false"}, "true"),
+            ("true multiLine short record", "a,b\n1\n3,4\n", {"multiLine": "true", "mode": "DROPMALFORMED"}, "true"),
+            ("false short record", "a,b\n1\n3,4\n", {"mode": "DROPMALFORMED"}, "false"),
+        ]
+    ],
     ("integers", "v\n 1\n1 \n+1\n1.0\n0x10\n2147483648\n-0\n127\n-129\n", {"header": "true"}, None, None),
     (
         "integer types",
@@ -352,7 +443,18 @@ READS += [
 
 
 def read_case(spark, root, case):
-    name, text, opts, schema, select = case
+    name, text, opts, schema, select = case[:5]
+    conf = case[5] if len(case) > 5 else {}
+    for k, v in conf.items():
+        spark.conf.set(k, v)
+    try:
+        return read_case_under_conf(spark, root, name, text, opts, schema, select, conf)
+    finally:
+        for k in conf:
+            spark.conf.unset(k)
+
+
+def read_case_under_conf(spark, root, name, text, opts, schema, select, conf):
     path = os.path.join(root, re.sub(r"[^a-z0-9]+", "_", name.lower()))
     os.makedirs(path)
     if text is None:
@@ -364,6 +466,8 @@ def read_case(spark, root, case):
     with open(os.path.join(path, "part.csv"), "wb") as f:
         f.write(data)
     out = {"name": name, "file": base64.b64encode(data).decode(), "options": opts, "schema": schema, "select": select}
+    if conf:
+        out["conf"] = conf
     try:
         reader = spark.read.options(**opts)
         if schema is not None:

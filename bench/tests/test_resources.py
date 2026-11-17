@@ -29,6 +29,11 @@ def test_parse_io_reads_the_three_read_counters():
     assert parse_io(PROC_IO) == IoCounters(rchar=1000, read_bytes=4096, syscr=20)
 
 
+def test_parse_io_reads_the_bytes_written_to_storage():
+    assert parse_io(PROC_IO.replace("write_bytes: 0", "write_bytes: 8192")).write_bytes == 8192
+    assert parse_io("rchar: 1\nread_bytes: 2\nsyscr: 3\n").write_bytes == 0  # an older kernel without the line
+
+
 def test_parse_io_refuses_text_without_the_counters():
     with pytest.raises(RuntimeError, match="syscr"):
         parse_io("rchar: 1\nread_bytes: 2\n")
@@ -464,3 +469,16 @@ def test_a_cpu_delta_needs_a_reading_taken_after_the_baseline():
     finally:
         p.kill()
         p.wait()
+
+
+def test_workers_spill_to_the_data_root_unless_told_otherwise(monkeypatch, tmp_path):
+    from krishiv_bench.adapters.process import worker_env
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("POLARS_TEMP_DIR", raising=False)
+    env = worker_env()
+    assert env["TMPDIR"] == env["POLARS_TEMP_DIR"] == str(tmp_path / "tmp" / "spill")
+    assert (tmp_path / "tmp" / "spill").is_dir()
+    monkeypatch.setenv("POLARS_TEMP_DIR", "/elsewhere")
+    assert worker_env()["POLARS_TEMP_DIR"] == "/elsewhere"

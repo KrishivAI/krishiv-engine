@@ -148,15 +148,7 @@ impl PrincipalTable {
         if name.is_empty() {
             return Err(invalid(key, name, "a principal name must not be empty"));
         }
-        // An empty segment or surrounding space is a typo, never a real principal: refuse it
-        // rather than let `expires` or `impersonates` silently miss the intended name.
-        if name.split('.').any(str::is_empty) || name.trim() != name {
-            return Err(invalid(
-                key,
-                name,
-                "a principal name has no empty dot segment and no surrounding spaces",
-            ));
-        }
+        check_name(key, name)?;
         let entry = self.by_name.entry(name.to_owned()).or_default();
         match field {
             "privileges" => entry.privileges = parse_privileges(key, raw)?,
@@ -180,6 +172,21 @@ impl PrincipalTable {
         }
         Ok(())
     }
+}
+
+/// Refuses principal `name` given at `key` when it has an empty dot segment or surrounding
+/// spaces. Such a name is a typo, never a real principal: refused rather than let `expires` or
+/// `impersonates` silently miss the intended name. The same rule holds for the principal a
+/// token names (#785 review R1), so the two can always meet.
+pub(super) fn check_name(key: &str, name: &str) -> Result<(), KrishivError> {
+    if name.split('.').any(str::is_empty) || name.trim() != name {
+        return Err(invalid(
+            key,
+            name,
+            "a principal name has no empty dot segment and no surrounding spaces",
+        ));
+    }
+    Ok(())
 }
 
 fn items(raw: &str) -> impl Iterator<Item = &str> {

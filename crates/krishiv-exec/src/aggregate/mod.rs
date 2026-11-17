@@ -65,6 +65,8 @@
 
 mod accumulator;
 mod collect;
+mod distinct;
+mod histogram;
 mod hll;
 mod listagg;
 mod merge_index;
@@ -79,6 +81,8 @@ mod sink;
 mod table;
 mod udf;
 
+#[cfg(test)]
+mod merge_order_tests;
 #[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
@@ -99,7 +103,8 @@ pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_va
 pub(crate) use collect::{collect_set_supported, kept_bytes};
 pub(crate) use hll::precision_for;
 pub(crate) use moments::arity;
-pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
+pub(crate) use node::distinct_count_at_merge;
+pub use node::{AggregateNode, PartialNode, distinct_plan, distinct_plan_with, union_distinct};
 pub(crate) use observe::{CollectMetrics, Finalizer};
 pub use partial::{BypassPolicy, PartialAggregate};
 pub(crate) use quantile::decimal_to_double;
@@ -318,6 +323,13 @@ pub enum AggregateFunction {
     ApproxCountDistinct {
         /// The addressing bits `p`.
         p: u32,
+    },
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram` of `nb` bins
+    /// (the analyzer-folded `nb >= 2`), `array<struct<x, y>>` with `x` of the
+    /// input's type. An empty group is NULL.
+    HistogramNumeric {
+        /// The number of bins.
+        nb: i32,
     },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
@@ -619,6 +631,10 @@ impl AggregateExpr {
             (F::PercentileApprox { array, .. }, t) if accumulator::quantile_supported(t, true) => {
                 quantile_approx_result(t, *array)?
             }
+            // `histogram_numeric`: `array<struct<x: input type, y: double>>`.
+            (F::HistogramNumeric { .. }, t) if histogram::histogram_supported(t) => {
+                histogram_result(t)?
+            }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
@@ -774,6 +790,9 @@ impl AggregateExpr {
             (F::PercentileApprox { .. }, _) => {
                 vec![Field::new(n("summary"), DataType::Binary, true)]
             }
+            (F::HistogramNumeric { .. }, _) => {
+                vec![Field::new(n("histogram"), DataType::Binary, true)]
+            }
             (F::ApproxCountDistinct { .. }, _) => {
                 vec![Field::new(n("registers"), DataType::Binary, true)]
             }
@@ -849,7 +868,49 @@ pub fn is_order_sensitive(f: &AggregateFunction) -> bool {
             | F::ModeMin
             | F::ModeMax
             | F::ListAgg { .. }
+            // The pick keeps the earliest (or latest) partition's row, and
+            // `max_by`/`min_by` break ties by arrival: a biggest-first merge
+            // would make the answer depend on table sizes, and on whether the
+            // aggregate spilled (the disk phase merges runs in partition order).
+            | F::First { .. }
+            | F::Last { .. }
+            | F::AnyValue { .. }
+            | F::MaxBy
+            | F::MinBy
+            | F::MaxByKeyFirst
+            | F::MinByKeyFirst
+            // The Greenwald-Khanna merge is not symmetric: the answer moves
+            // within its error with the merge order.
+            | F::PercentileApprox { .. }
+            // A session UDAF's merge may keep or concatenate in arrival order
+            // (nothing says it commutes): merge its states as the disk does.
+            | F::Udf(_)
     )
+}
+
+/// Whether `a`'s merges must run in partition-index order: an
+/// [order-sensitive](is_order_sensitive) function, or `max`/`min` over a
+/// float (or a struct or array holding one). `0.0` and `-0.0` compare equal
+/// and a tie keeps the held value, so the zero's sign is the first one seen
+/// (NaNs of different payloads tie the same way); Spark 4.2.0 keeps the first
+/// in input order, across partitions too. A final phase over an exchange
+/// still sees states in fetch order, as Spark's does.
+pub fn observes_order(a: &AggregateExpr) -> bool {
+    is_order_sensitive(&a.function)
+        || (matches!(a.function, AggregateFunction::Min | AggregateFunction::Max)
+            && holds_float(&a.arg_type))
+}
+
+/// Whether `t` is a float or nests one.
+fn holds_float(t: &DataType) -> bool {
+    match t {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::Struct(fields) => fields.iter().any(|f| holds_float(f.data_type())),
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            holds_float(f.data_type())
+        }
+        _ => false,
+    }
 }
 
 /// `decimal(p, s)` on the carrier of the input type `like` (design
@@ -902,6 +963,21 @@ fn quantile_approx_result(t: &DataType, array: bool) -> Result<DataType> {
     let child = PlanDataType::from_arrow(t)
         .map_err(|e| internal(format!("an approximate percentile of {e}")))?;
     Ok(PlanDataType::Array(ArrayType::new(child, false).into()).to_arrow())
+}
+
+/// Spark's `HistogramNumeric.dataType` for an Arrow input type `t`:
+/// `array<struct<x: t, y: double>>`, every field nullable.
+fn histogram_result(t: &DataType) -> Result<DataType> {
+    use krishiv_types::{ArrayType, DataType as PlanDataType, StructField, StructType};
+    let x = PlanDataType::from_arrow(t).map_err(|e| internal(format!("a histogram of {e}")))?;
+    let fields = vec![
+        StructField::new("x".to_owned(), x, true),
+        StructField::new("y".to_owned(), PlanDataType::Double, true),
+    ];
+    Ok(PlanDataType::Array(
+        ArrayType::new(PlanDataType::Struct(StructType::new(fields)), true).into(),
+    )
+    .to_arrow())
 }
 
 /// A hash aggregation: grouping columns, aggregates and the output kind.

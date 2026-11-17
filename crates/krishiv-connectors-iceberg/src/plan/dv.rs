@@ -271,6 +271,7 @@ mod tests {
             krishiv_common::error::ErrorClass::KrishivIcebergInvalidDeletes
         );
     }
+
     /// A blob around `bitmap` (the bytes after the magic) with a correct
     /// length prefix and CRC.
     fn frame(bitmap: &[u8]) -> Vec<u8> {
@@ -282,12 +283,17 @@ mod tests {
         out
     }
 
+    /// The message of decoding `frame(bitmap)`, whose class is
+    /// `KRISHIV_ICEBERG_INVALID_DELETES`.
     fn frame_err(bitmap: &[u8]) -> String {
         let b = frame(bitmap);
-        decode_dv(&b, len(&b), 0, "k.puffin")
-            .unwrap_err()
-            .message()
-            .to_owned()
+        let e = decode_dv(&b, len(&b), 0, "k.puffin").unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivIcebergInvalidDeletes,
+            "{e}"
+        );
+        e.message().to_owned()
     }
 
     #[test]
@@ -304,6 +310,10 @@ mod tests {
         let mut longer = blob.clone();
         longer.push(0);
         let e = decode_dv(&longer, len(&blob), 1, "l.puffin").unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivIcebergInvalidDeletes
+        );
         assert!(
             e.message().ends_with("bytes is too short"),
             "{}",

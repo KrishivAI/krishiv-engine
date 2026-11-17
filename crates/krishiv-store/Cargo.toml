@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-store"
 description = "Object-store layer shared by the Krishiv engine and platform: URLs, store building, credentials (ADR 0044)"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 # Meant to be published (ADR 0044); stays unpublished until the owner's first release of it.
 publish = true
 
@@ -14,10 +17,16 @@ workspace = true
 
 # krishiv-common and object_store only (layer L1, ADR 0044).
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 # Bearer header of `hf://` reads; only with `cloud`.
 http = { workspace = true, optional = true }
+# The egress policy client (design P3-T067 §5.2): Krishiv's copy of object_store's reqwest client,
+# with the egress resolver and redirect policy; both already in the tree through object_store.
+reqwest = { workspace = true, optional = true, features = ["http2", "rustls"] }
+humantime = { workspace = true, optional = true }
 object_store.workspace = true
+# The WHATWG host parser of egress literal checks (already in the tree through object_store).
+url.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }
@@ -28,8 +37,17 @@ tokio = { workspace = true, features = ["sync"] }
 # The S3, GCS, Azure and web builders (reqwest over rustls). Opt-in so the default build stays inside the
 # dependency and binary-size budgets; `krishiv-io/cloud` turns it on. Without it, cloud URLs parse but no
 # store is built (`KRISHIV_UNSUPPORTED_FEATURE`).
-cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http", "dep:http"]
+cloud = [
+    "object_store/aws",
+    "object_store/azure",
+    "object_store/gcp",
+    "object_store/http",
+    "dep:http",
+    "dep:reqwest",
+    "dep:humantime",
+    "tokio/net",
+]
 
 [dev-dependencies]
 async-trait.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "process", "rt-multi-thread", "sync", "test-util", "time"] }
