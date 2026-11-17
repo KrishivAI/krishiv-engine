@@ -57,8 +57,8 @@ use super::{
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
+    HashAggregate,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -93,8 +93,10 @@ mod python_relation;
 mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
+mod observe;
 use distributed::planned_schema_holds;
 pub(crate) use join::hash_join;
+pub(crate) use observe::collect_metrics_op;
 use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
@@ -331,6 +333,12 @@ impl WorkerContext {
         self
     }
 
+    /// `krishiv.exec.agg.distinctCountAtMerge` from this worker's configuration
+    /// (`aggregate/distinct.rs`); every path building a distinct plan reads it.
+    pub(crate) fn distinct_count_at_merge(&self) -> bool {
+        crate::aggregate::distinct_count_at_merge(self.config.as_deref())
+    }
+
     /// The fixed spill scope, if one is set ([`Self::with_spill`]).
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
@@ -347,6 +355,30 @@ impl WorkerContext {
             (Some(scope), _) => Ok(Some(scope.clone())),
             (None, Some(scopes)) => Ok(Some(scopes.scope()?)),
             (None, None) => Ok(None),
+        }
+    }
+
+    /// As [`Self::spill_scope`], for a query that does not need to spill to run: when the
+    /// factory cannot make the spill directory (a read-only root, no writable home, RS-29) the
+    /// query runs without spilling and the first such failure is logged with the error; an
+    /// operator that then needs to spill fails with its memory error. Every later failure is a
+    /// debug record, so a server does not log once per query.
+    pub fn spill_scope_if_available(&self) -> Option<SpillScope> {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        match self.spill_scope() {
+            Ok(scope) => scope,
+            Err(e) => {
+                if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::debug!(error = %e, "queries run without spilling");
+                } else {
+                    tracing::warn!(
+                        error = %e,
+                        "the spill directory cannot be used, so queries run without spilling; \
+                         set `krishiv.spill.dir` to a writable local directory"
+                    );
+                }
+                None
+            }
         }
     }
 
@@ -434,7 +466,7 @@ fn instantiate_with_schemas(
     task: &TaskSpec,
 ) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = worker.spill_scope()?;
+        let spill = worker.spill_scope_if_available();
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
@@ -658,13 +690,13 @@ pub(crate) fn fused_aggregate<'p>(
 
 /// The phases of `single`, an aggregation with `DISTINCT` aggregates over raw
 /// input, around an exchange (Spark's single-distinct plan, as
-/// [`distinct_plan`] runs it in one place): a partial phase grouped by the
+/// [`distinct_plan`](crate::aggregate::distinct_plan) runs it in one place): a partial phase grouped by the
 /// keys and the distinct arguments computing the other aggregates' states; a
 /// partial merge after the exchange on the same columns, which removes the
 /// pairs several tasks sent; and the final phase grouped by the keys, which
 /// aggregates each distinct value once (as plain aggregates over the now
 /// distinct argument columns) and merges the other states. `None` where
-/// [`distinct_plan`] has no such plan: no distinct aggregate, distinct
+/// [`distinct_plan`](crate::aggregate::distinct_plan) has no such plan: no distinct aggregate, distinct
 /// aggregates over different arguments or with a filter, or input that is not
 /// raw.
 pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 3]> {
@@ -1045,6 +1077,15 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 Ok(project_op(input, layout, items, nullable.as_deref(), v)? as Arc<dyn Operator>)
             }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => self.with_subqueries(input, &[], |input, v| {
+                collect_metrics_op(name, *instance, *limit, measure, input, v)
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout,
@@ -1208,7 +1249,12 @@ impl Instantiation<'_> {
                         let spec =
                             aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
                         let schema = spec.output_schema()?;
-                        let node = aggregate_node(input.node, spec, &single.distinct)?;
+                        let node = crate::aggregate::distinct_plan_with(
+                            input.node,
+                            spec,
+                            &single.distinct,
+                            self.worker.distinct_count_at_merge(),
+                        )?;
                         return Ok(Built { node, schema });
                     }
                     // Written out, the partial phase is where a row's weight
@@ -1222,7 +1268,12 @@ impl Instantiation<'_> {
                     aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
-                let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
+                let node = aggregate_node(
+                    input.node,
+                    spec,
+                    &aggregate.distinct,
+                    self.worker.distinct_count_at_merge(),
+                )?;
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
@@ -1822,14 +1873,17 @@ pub(crate) fn aggregate_spec(
     }
 }
 
-/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates).
+/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates, or
+/// one counting at the merge with `count_at_merge`: see
+/// [`crate::aggregate::distinct_plan_with`]).
 pub(crate) fn aggregate_node(
     input: Arc<dyn ExecNode>,
     spec: AggregateSpec,
     distinct: &[bool],
+    count_at_merge: bool,
 ) -> Result<Arc<dyn ExecNode>> {
     if distinct.iter().any(|d| *d) {
-        distinct_plan(input, spec, distinct)
+        crate::aggregate::distinct_plan_with(input, spec, distinct, count_at_merge)
     } else {
         Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
     }

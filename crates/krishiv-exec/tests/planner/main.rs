@@ -25,6 +25,7 @@ mod group_code;
 mod group_limit;
 mod hints;
 mod late_fetch;
+mod late_payload;
 mod listing;
 mod orientation;
 mod partial_aggregate;
@@ -32,6 +33,7 @@ mod physical;
 mod plan_stats;
 mod prefix_cache;
 mod python_relations;
+mod rule_differential;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
@@ -606,11 +608,11 @@ fn tables_and_statistics() {
     );
     // Reading files by path needs a resolver that lists files.
     let mut files = scan.clone();
-    files.source = krishiv_plan::ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: Vec::new(),
-        options: std::collections::BTreeMap::new(),
-    };
+    files.source = krishiv_plan::ReadSource::files(
+        "parquet".to_owned(),
+        Vec::new(),
+        std::collections::BTreeMap::new(),
+    );
     let e = MemoryTables::new().provider(&files).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     let dir = tempfile::tempdir().unwrap();
@@ -678,11 +680,11 @@ fn unoptimized_plans_and_file_sources() {
         p.for_each_child(&mut |c| find.push(Arc::clone(c)));
     }
     let mut scan = scan.unwrap();
-    scan.source = krishiv_plan::ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: Vec::new(),
-        options: std::collections::BTreeMap::new(),
-    };
+    scan.source = krishiv_plan::ReadSource::files(
+        "parquet".to_owned(),
+        Vec::new(),
+        std::collections::BTreeMap::new(),
+    );
     let (schema, batches) = table(5);
     let any = AnyTable(Arc::new(Bare(MemoryTable::new(schema, batches))));
     assert!(any.0.statistics().is_none());

@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use krishiv_common::error::{InvalidPandasUdfPlacement, KrishivError};
+use krishiv_common::error::{
+    InvalidNonDeterministicExpressions, InvalidPandasUdfPlacement, KrishivError,
+};
 
 use crate::{Expr, ExprNode, FunctionId, FunctionKind, PlanNode, PythonUdfKind, ResolvedExpr};
 
@@ -36,6 +38,98 @@ pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
         | PlanNode::PythonTableFunction { udf, .. } => udf.deterministic,
         _ => true,
     }
+}
+
+/// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is
+/// deterministic: the optimizer's test for inlining a `WITH` definition at each reference (`InlineCTE`), shared
+/// with the analyzer's binding of `input_file_name()`, which instantiates a definition the same way.
+#[must_use]
+pub fn plan_is_deterministic(plan: &crate::LogicalPlan) -> bool {
+    use crate::walk::{Node, visit_distinct};
+    let mut ok = true;
+    let _ = visit_distinct(Node::Plan(plan), |n| {
+        ok &= match n {
+            Node::Plan(p) => python_relation_is_deterministic(&p.node),
+            Node::Expr(e) => !matches!(
+                &e.node,
+                crate::ExprNode::Resolved(crate::ResolvedExpr::Function(f)) if !f.deterministic
+            ),
+        };
+        if ok {
+            std::ops::ControlFlow::Continue(())
+        } else {
+            std::ops::ControlFlow::Break(())
+        }
+    });
+    ok
+}
+
+/// Refuses a grouped or cogrouped map whose UDF is nondeterministic:
+/// Spark's `CheckAnalysis` allows nondeterministic expressions only on some
+/// operators, of the Python relations `MapInPandas` and `MapInArrow`
+/// (CheckAnalysis.scala L1032-1052 at v4.2.0), and a node's `functionExpr`
+/// is a `PythonUDF` whose `deterministic` is `udfDeterministic`. Spark
+/// lists the node's expressions (`QueryPlan.expressions`), each as
+/// `toSQLExpr` shows it: a grouped map's grouping attributes, its UDF call
+/// over the input's columns (`PrettyPythonUDF`: `name(a, b)`) and its
+/// output attributes; a cogroup's UDF call and output (its key counts are
+/// not expressions). Spark raises it at analysis (`df.schema`, `explain`
+/// and SQL fail): the analyzer calls it where it resolves the node
+/// (`analyzer/python_relations.rs`). The physical planner calls it too, for
+/// plans built resolved that never went through the analyzer.
+///
+/// Known differences: the UDF's name is the canonical lower-case one (a
+/// [`crate::PythonUdfRef`] keeps no other), and a
+/// computed key shows as `toPrettySQL` names it, where Spark aliases it by
+/// the unresolved expression's `toString`. The text is derived from the
+/// source; a Spark-run golden awaits a lane with Spark.
+///
+/// # Errors
+/// `INVALID_NON_DETERMINISTIC_EXPRESSIONS` (42K0E).
+pub fn check_python_relation_determinism(node: &PlanNode) -> Result<(), KrishivError> {
+    let call = |udf: &crate::PythonUdfRef, inputs: &[&crate::LogicalPlan]| {
+        let args: Vec<String> = inputs
+            .iter()
+            .flat_map(|p| p.resolved_output().unwrap_or_default())
+            .map(|c| c.name)
+            .collect();
+        format!(
+            "{}({})",
+            crate::function::shown_call_name("", &udf.name),
+            args.join(", ")
+        )
+    };
+    let shown: Vec<String> = match node {
+        PlanNode::GroupMap {
+            input,
+            keys,
+            udf,
+            output,
+        } if !udf.deterministic => keys
+            .iter()
+            .map(|k| crate::analyzer::pretty_sql(k))
+            .chain(std::iter::once(call(udf, &[input])))
+            .chain(output.iter().map(|c| c.name.clone()))
+            .collect(),
+        PlanNode::CoGroupMap {
+            left,
+            right,
+            udf,
+            output,
+            ..
+        } if !udf.deterministic => std::iter::once(call(udf, &[left, right]))
+            .chain(output.iter().map(|c| c.name.clone()))
+            .collect(),
+        _ => return Ok(()),
+    };
+    Err(InvalidNonDeterministicExpressions {
+        sql_exprs: shown
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+    .into())
 }
 
 /// Refuses an aggregate whose expressions call a grouped-aggregate Python UDF

@@ -190,6 +190,7 @@ fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<Ord
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::Sample { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. } => order
             .iter()
@@ -312,6 +313,12 @@ pub(crate) struct Planner<'a> {
     pub(crate) moves: super::build_project::Moves,
     /// The unseeded samples planned so far (each draws its own seed).
     unseeded_samples: u64,
+    /// Nesting depth of the relations whose rows are never read (under a
+    /// `LIMIT 0`): `observe` plans no node there.
+    pub(super) unobserved: u32,
+    /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
+    /// order.
+    pub(super) observers: u32,
 }
 
 impl<'a> Planner<'a> {
@@ -347,6 +354,8 @@ impl<'a> Planner<'a> {
             loops: HashMap::new(),
             moves: super::build_project::Moves::default(),
             unseeded_samples: 0,
+            unobserved: 0,
+            observers: 0,
         }
     }
 
@@ -532,14 +541,24 @@ impl<'a> Planner<'a> {
             }
             PlanNode::Limit { input, limit } => {
                 let n = limit_value(limit)?;
+                // Spark replaces what a `LIMIT 0` reads with an empty
+                // relation, so an `observe` under it reports nothing.
+                self.unobserved += u32::from(n == 0);
                 // `LIMIT n OFFSET m` is the limit over the offset: skip, then keep.
-                match &input.node {
+                let planned = match &input.node {
                     PlanNode::Offset { input, offset } => {
                         self.limit(input, limit_value(offset)?, n)
                     }
                     _ => self.limit(input, 0, n),
-                }
+                };
+                self.unobserved -= u32::from(n == 0);
+                planned
             }
+            PlanNode::CollectMetrics {
+                input,
+                name,
+                metrics,
+            } => self.collect_metrics(input, name, metrics),
             PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
             PlanNode::Sort {
                 input,
@@ -647,7 +666,10 @@ impl<'a> Planner<'a> {
                 keys,
                 udf,
                 output,
-            } => self.group_map(input, keys, udf, output),
+            } => {
+                krishiv_plan::check_python_relation_determinism(&p.node)?;
+                self.group_map(input, keys, udf, output)
+            }
             PlanNode::CoGroupMap {
                 left,
                 right,
@@ -655,7 +677,10 @@ impl<'a> Planner<'a> {
                 right_keys,
                 udf,
                 output,
-            } => self.cogroup_map(left, right, left_keys, right_keys, udf, output),
+            } => {
+                krishiv_plan::check_python_relation_determinism(&p.node)?;
+                self.cogroup_map(left, right, left_keys, right_keys, udf, output)
+            }
             PlanNode::PythonTableFunction { .. } => Err(super::python_relation::later_kind(
                 "a Python table function",
             )),
@@ -813,7 +838,11 @@ impl<'a> Planner<'a> {
             deterministic: krishiv_optimizer::plan_is_deterministic(&def),
             ordered,
         });
-        self.shared_ids.insert(source.to_vec(), id);
+        // Planned under a `LIMIT 0`, the definition lost its observed nodes: that copy is the
+        // zero-row reference's own, and a live reference plans (and shares) one that observes.
+        if self.unobserved == 0 {
+            self.shared_ids.insert(source.to_vec(), id);
+        }
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
     }
@@ -841,7 +870,11 @@ impl<'a> Planner<'a> {
             }
             return Ok(Self::skip_rows(top, skip, n));
         }
-        let input = self.plan(input)?;
+        let mut input = self.plan(input)?;
+        // Spark counts the rows an observed relation was pulled for: the rows a limit above takes.
+        if let Some(total) = skip.checked_add(n) {
+            super::observe::cap_observed(&mut input.node, total);
+        }
         // Each partition keeps at most `skip + n` rows before the gather;
         // the skip applies only after it.
         let input = if input.placement.satisfies(Distribution::Single) {
@@ -1192,13 +1225,18 @@ impl<'a> Planner<'a> {
                 exact,
             });
         }
-        let schema = factory.output_schema(&ScanPushdowns {
+        let pushdowns = ScanPushdowns {
             projection: Some(projection.clone()),
             filters: pushed,
             row_id,
             metadata,
             ..ScanPushdowns::default()
-        })?;
+        };
+        if let Some(more) = factory.explain(&pushdowns) {
+            detail.push_str(", ");
+            detail.push_str(&more);
+        }
+        let schema = factory.output_schema(&pushdowns)?;
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
@@ -1576,9 +1614,20 @@ impl<'a> Planner<'a> {
         input: Planned,
         exprs: &[Arc<Expr>],
     ) -> Result<(Planned, Vec<usize>)> {
+        // A vector carrier (design P3-T075) is never handed to an aggregate, window or key as it is stored: it goes
+        // through a computed column, where the expression input guard turns it into Spark's plain list.
+        let plain = |c: &usize| {
+            input
+                .stored(*c)
+                .is_ok_and(|t| !krishiv_types::arrow::is_vector_carrier(t))
+        };
         let computed: Vec<&Expr> = exprs
             .iter()
-            .filter(|e| column_of(e).is_none_or(|id| input.column(id).is_err()))
+            .filter(|e| {
+                column_of(e)
+                    .and_then(|id| input.column(id).ok())
+                    .is_none_or(|c| !plain(&c))
+            })
             .map(AsRef::as_ref)
             .collect();
         if computed.is_empty() {
@@ -1596,7 +1645,10 @@ impl<'a> Planner<'a> {
         let mut columns = Vec::with_capacity(exprs.len());
         let mut values = prepared.exprs.iter();
         for e in exprs {
-            match column_of(e).and_then(|id| input.column(id).ok()) {
+            match column_of(e)
+                .and_then(|id| input.column(id).ok())
+                .filter(plain)
+            {
                 Some(c) => columns.push(c),
                 None => {
                     let value = values.next().ok_or_else(|| internal("key arity"))?;

@@ -193,6 +193,33 @@ impl core::fmt::Debug for krishiv_session::auth::ClientCertificates
 pub fn krishiv_session::auth::ClientCertificates::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::ClientCertificates
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ClientCertificates
+#[non_exhaustive] pub enum krishiv_session::auth::Denial
+pub krishiv_session::auth::Denial::ActorMismatch
+pub krishiv_session::auth::Denial::AssertionOff
+pub krishiv_session::auth::Denial::AssertionUnavailable
+pub krishiv_session::auth::Denial::BadAssertion
+pub krishiv_session::auth::Denial::Chained
+pub krishiv_session::auth::Denial::Expired
+pub krishiv_session::auth::Denial::Malformed
+pub krishiv_session::auth::Denial::MetadataMismatch
+pub krishiv_session::auth::Denial::NoPrivilege
+pub krishiv_session::auth::Denial::NotAllowed
+pub krishiv_session::auth::Denial::OtherTenant
+pub krishiv_session::auth::Denial::UntrustedChannel
+impl krishiv_session::auth::Denial
+pub fn krishiv_session::auth::Denial::as_str(self) -> &'static str
+pub fn krishiv_session::auth::Denial::error(self) -> krishiv_common::error::KrishivError
+impl core::clone::Clone for krishiv_session::auth::Denial
+pub fn krishiv_session::auth::Denial::clone(&self) -> krishiv_session::auth::Denial
+impl core::cmp::Eq for krishiv_session::auth::Denial
+impl core::cmp::PartialEq for krishiv_session::auth::Denial
+pub fn krishiv_session::auth::Denial::eq(&self, &krishiv_session::auth::Denial) -> bool
+impl core::fmt::Debug for krishiv_session::auth::Denial
+pub fn krishiv_session::auth::Denial::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::auth::Denial
+pub fn krishiv_session::auth::Denial::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::auth::Denial
+impl core::marker::StructuralPartialEq for krishiv_session::auth::Denial
 #[non_exhaustive] pub enum krishiv_session::auth::DerError
 pub krishiv_session::auth::DerError::BadLength
 pub krishiv_session::auth::DerError::BadText
@@ -211,6 +238,19 @@ impl core::fmt::Display for krishiv_session::auth::DerError
 pub fn krishiv_session::auth::DerError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::DerError
 impl core::marker::StructuralPartialEq for krishiv_session::auth::DerError
+#[non_exhaustive] pub enum krishiv_session::auth::ImpersonationTarget
+pub krishiv_session::auth::ImpersonationTarget::Group(alloc::string::String)
+pub krishiv_session::auth::ImpersonationTarget::Name(alloc::string::String)
+impl krishiv_session::auth::ImpersonationTarget
+pub fn krishiv_session::auth::ImpersonationTarget::matches(&self, &str, &[alloc::string::String]) -> bool
+impl core::clone::Clone for krishiv_session::auth::ImpersonationTarget
+pub fn krishiv_session::auth::ImpersonationTarget::clone(&self) -> krishiv_session::auth::ImpersonationTarget
+impl core::cmp::Eq for krishiv_session::auth::ImpersonationTarget
+impl core::cmp::PartialEq for krishiv_session::auth::ImpersonationTarget
+pub fn krishiv_session::auth::ImpersonationTarget::eq(&self, &krishiv_session::auth::ImpersonationTarget) -> bool
+impl core::fmt::Debug for krishiv_session::auth::ImpersonationTarget
+pub fn krishiv_session::auth::ImpersonationTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ImpersonationTarget
 #[non_exhaustive] pub enum krishiv_session::auth::Method
 pub krishiv_session::auth::Method::Mtls
 pub krishiv_session::auth::Method::None
@@ -248,6 +288,25 @@ impl core::fmt::Debug for krishiv_session::auth::PrincipalFrom
 pub fn krishiv_session::auth::PrincipalFrom::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::PrincipalFrom
 impl core::marker::StructuralPartialEq for krishiv_session::auth::PrincipalFrom
+#[non_exhaustive] pub enum krishiv_session::auth::PrincipalPrivilege
+pub krishiv_session::auth::PrincipalPrivilege::Impersonate
+impl krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::as_str(self) -> &'static str
+impl core::clone::Clone for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::clone(&self) -> krishiv_session::auth::PrincipalPrivilege
+impl core::cmp::Eq for krishiv_session::auth::PrincipalPrivilege
+impl core::cmp::Ord for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::cmp(&self, &krishiv_session::auth::PrincipalPrivilege) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::eq(&self, &krishiv_session::auth::PrincipalPrivilege) -> bool
+impl core::cmp::PartialOrd for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::partial_cmp(&self, &krishiv_session::auth::PrincipalPrivilege) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::auth::PrincipalPrivilege
+pub fn krishiv_session::auth::PrincipalPrivilege::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::auth::PrincipalPrivilege
+impl core::marker::StructuralPartialEq for krishiv_session::auth::PrincipalPrivilege
 pub enum krishiv_session::auth::Role
 pub krishiv_session::auth::Role::Admin
 pub krishiv_session::auth::Role::Operator
@@ -307,9 +366,48 @@ impl core::hash::Hash for krishiv_session::auth::Surface
 pub fn krishiv_session::auth::Surface::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for krishiv_session::auth::Surface
 impl core::marker::StructuralPartialEq for krishiv_session::auth::Surface
+#[non_exhaustive] pub struct krishiv_session::auth::ActAs
+pub krishiv_session::auth::ActAs::groups: alloc::vec::Vec<alloc::string::String>
+pub krishiv_session::auth::ActAs::tenant: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::ActAs::user: alloc::string::String
+impl krishiv_session::auth::ActAs
+pub fn krishiv_session::auth::ActAs::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAs::with_groups(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAs::with_tenant(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::auth::ActAs
+pub fn krishiv_session::auth::ActAs::clone(&self) -> krishiv_session::auth::ActAs
+impl core::cmp::Eq for krishiv_session::auth::ActAs
+impl core::cmp::PartialEq for krishiv_session::auth::ActAs
+pub fn krishiv_session::auth::ActAs::eq(&self, &krishiv_session::auth::ActAs) -> bool
+impl core::fmt::Debug for krishiv_session::auth::ActAs
+pub fn krishiv_session::auth::ActAs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::auth::ActAs
+pub fn krishiv_session::auth::ActAs::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ActAs
+#[non_exhaustive] pub struct krishiv_session::auth::ActAsHint
+pub krishiv_session::auth::ActAsHint::groups: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub krishiv_session::auth::ActAsHint::tenant: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::ActAsHint::user: core::option::Option<alloc::string::String>
+impl krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::new() -> Self
+pub fn krishiv_session::auth::ActAsHint::with_groups(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAsHint::with_tenant(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAsHint::with_user(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::clone(&self) -> krishiv_session::auth::ActAsHint
+impl core::cmp::Eq for krishiv_session::auth::ActAsHint
+impl core::cmp::PartialEq for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::eq(&self, &krishiv_session::auth::ActAsHint) -> bool
+impl core::default::Default for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::default() -> krishiv_session::auth::ActAsHint
+impl core::fmt::Debug for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ActAsHint
 #[non_exhaustive] pub struct krishiv_session::auth::AuthConfig
+pub krishiv_session::auth::AuthConfig::impersonation: krishiv_session::auth::ImpersonationConfig
 pub krishiv_session::auth::AuthConfig::mtls: krishiv_session::auth::MtlsConfig
 pub krishiv_session::auth::AuthConfig::oidc: krishiv_session::auth::OidcConfig
+pub krishiv_session::auth::AuthConfig::principals: krishiv_session::auth::PrincipalTable
 pub krishiv_session::auth::AuthConfig::roles: krishiv_session::auth::RoleLists
 pub krishiv_session::auth::AuthConfig::throttle: krishiv_session::auth::ThrottleConfig
 pub krishiv_session::auth::AuthConfig::tokens: alloc::vec::Vec<krishiv_session::auth::TokenSpec>
@@ -331,8 +429,10 @@ impl core::marker::StructuralPartialEq for krishiv_session::auth::AuthConfig
 pub krishiv_session::auth::Authenticated::method: krishiv_session::auth::Method
 pub krishiv_session::auth::Authenticated::principal: krishiv_common::principal::Principal
 pub krishiv_session::auth::Authenticated::role: core::option::Option<krishiv_session::auth::Role>
+pub krishiv_session::auth::Authenticated::token_id: core::option::Option<alloc::string::String>
 impl krishiv_session::auth::Authenticated
 pub fn krishiv_session::auth::Authenticated::new(krishiv_common::principal::Principal, core::option::Option<krishiv_session::auth::Role>, krishiv_session::auth::Method) -> Self
+pub fn krishiv_session::auth::Authenticated::with_token_id(self, core::option::Option<alloc::string::String>) -> Self
 impl core::clone::Clone for krishiv_session::auth::Authenticated
 pub fn krishiv_session::auth::Authenticated::clone(&self) -> krishiv_session::auth::Authenticated
 impl core::cmp::Eq for krishiv_session::auth::Authenticated
@@ -414,6 +514,34 @@ pub fn krishiv_session::auth::FailureThrottle::new(krishiv_session::auth::Thrott
 pub fn krishiv_session::auth::FailureThrottle::record_failure(&self, core::net::ip_addr::IpAddr, std::time::Instant) -> bool
 impl core::fmt::Debug for krishiv_session::auth::FailureThrottle
 pub fn krishiv_session::auth::FailureThrottle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::auth::ImpersonationConfig
+pub krishiv_session::auth::ImpersonationConfig::assertion: krishiv_session::auth::OidcConfig
+pub krishiv_session::auth::ImpersonationConfig::roles: krishiv_session::auth::RoleLists
+pub krishiv_session::auth::ImpersonationConfig::signed_assertion: bool
+impl core::clone::Clone for krishiv_session::auth::ImpersonationConfig
+pub fn krishiv_session::auth::ImpersonationConfig::clone(&self) -> krishiv_session::auth::ImpersonationConfig
+impl core::cmp::Eq for krishiv_session::auth::ImpersonationConfig
+impl core::cmp::PartialEq for krishiv_session::auth::ImpersonationConfig
+pub fn krishiv_session::auth::ImpersonationConfig::eq(&self, &krishiv_session::auth::ImpersonationConfig) -> bool
+impl core::default::Default for krishiv_session::auth::ImpersonationConfig
+pub fn krishiv_session::auth::ImpersonationConfig::default() -> Self
+impl core::fmt::Debug for krishiv_session::auth::ImpersonationConfig
+pub fn krishiv_session::auth::ImpersonationConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ImpersonationConfig
+#[non_exhaustive] pub struct krishiv_session::auth::ImpersonationCount
+pub krishiv_session::auth::ImpersonationCount::allowed: u64
+pub krishiv_session::auth::ImpersonationCount::denied: u64
+impl core::clone::Clone for krishiv_session::auth::ImpersonationCount
+pub fn krishiv_session::auth::ImpersonationCount::clone(&self) -> krishiv_session::auth::ImpersonationCount
+impl core::cmp::Eq for krishiv_session::auth::ImpersonationCount
+impl core::cmp::PartialEq for krishiv_session::auth::ImpersonationCount
+pub fn krishiv_session::auth::ImpersonationCount::eq(&self, &krishiv_session::auth::ImpersonationCount) -> bool
+impl core::default::Default for krishiv_session::auth::ImpersonationCount
+pub fn krishiv_session::auth::ImpersonationCount::default() -> krishiv_session::auth::ImpersonationCount
+impl core::fmt::Debug for krishiv_session::auth::ImpersonationCount
+pub fn krishiv_session::auth::ImpersonationCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::auth::ImpersonationCount
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ImpersonationCount
 #[non_exhaustive] pub struct krishiv_session::auth::MtlsConfig
 pub krishiv_session::auth::MtlsConfig::client_ca: core::option::Option<std::path::PathBuf>
 pub krishiv_session::auth::MtlsConfig::client_certificates: krishiv_session::auth::ClientCertificates
@@ -440,6 +568,7 @@ pub krishiv_session::auth::OidcConfig::clock_skew: core::time::Duration
 pub krishiv_session::auth::OidcConfig::issuer: core::option::Option<alloc::string::String>
 pub krishiv_session::auth::OidcConfig::jwks_refresh: core::time::Duration
 pub krishiv_session::auth::OidcConfig::jwks_uri: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::OidcConfig::max_lifetime: core::time::Duration
 pub krishiv_session::auth::OidcConfig::principal_claim: alloc::string::String
 pub krishiv_session::auth::OidcConfig::role_claim: alloc::string::String
 pub krishiv_session::auth::OidcConfig::roles: krishiv_session::auth::RoleLists
@@ -457,6 +586,40 @@ pub fn krishiv_session::auth::OidcConfig::default() -> Self
 impl core::fmt::Debug for krishiv_session::auth::OidcConfig
 pub fn krishiv_session::auth::OidcConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::auth::OidcConfig
+#[non_exhaustive] pub struct krishiv_session::auth::PrincipalRights
+pub krishiv_session::auth::PrincipalRights::expires: core::option::Option<std::time::SystemTime>
+pub krishiv_session::auth::PrincipalRights::impersonates: alloc::vec::Vec<krishiv_session::auth::ImpersonationTarget>
+pub krishiv_session::auth::PrincipalRights::privileges: alloc::vec::Vec<krishiv_session::auth::PrincipalPrivilege>
+impl krishiv_session::auth::PrincipalRights
+pub fn krishiv_session::auth::PrincipalRights::expired_at(&self, std::time::SystemTime) -> bool
+pub fn krishiv_session::auth::PrincipalRights::has(&self, krishiv_session::auth::PrincipalPrivilege) -> bool
+pub fn krishiv_session::auth::PrincipalRights::may_impersonate(&self, &str, &[alloc::string::String]) -> bool
+impl core::clone::Clone for krishiv_session::auth::PrincipalRights
+pub fn krishiv_session::auth::PrincipalRights::clone(&self) -> krishiv_session::auth::PrincipalRights
+impl core::cmp::Eq for krishiv_session::auth::PrincipalRights
+impl core::cmp::PartialEq for krishiv_session::auth::PrincipalRights
+pub fn krishiv_session::auth::PrincipalRights::eq(&self, &krishiv_session::auth::PrincipalRights) -> bool
+impl core::default::Default for krishiv_session::auth::PrincipalRights
+pub fn krishiv_session::auth::PrincipalRights::default() -> krishiv_session::auth::PrincipalRights
+impl core::fmt::Debug for krishiv_session::auth::PrincipalRights
+pub fn krishiv_session::auth::PrincipalRights::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::PrincipalRights
+pub struct krishiv_session::auth::PrincipalTable
+impl krishiv_session::auth::PrincipalTable
+pub fn krishiv_session::auth::PrincipalTable::get(&self, &str) -> core::option::Option<&krishiv_session::auth::PrincipalRights>
+pub fn krishiv_session::auth::PrincipalTable::has(&self, &str, krishiv_session::auth::PrincipalPrivilege) -> bool
+pub fn krishiv_session::auth::PrincipalTable::is_empty(&self) -> bool
+pub fn krishiv_session::auth::PrincipalTable::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &krishiv_session::auth::PrincipalRights)>
+impl core::clone::Clone for krishiv_session::auth::PrincipalTable
+pub fn krishiv_session::auth::PrincipalTable::clone(&self) -> krishiv_session::auth::PrincipalTable
+impl core::cmp::Eq for krishiv_session::auth::PrincipalTable
+impl core::cmp::PartialEq for krishiv_session::auth::PrincipalTable
+pub fn krishiv_session::auth::PrincipalTable::eq(&self, &krishiv_session::auth::PrincipalTable) -> bool
+impl core::default::Default for krishiv_session::auth::PrincipalTable
+pub fn krishiv_session::auth::PrincipalTable::default() -> krishiv_session::auth::PrincipalTable
+impl core::fmt::Debug for krishiv_session::auth::PrincipalTable
+pub fn krishiv_session::auth::PrincipalTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::PrincipalTable
 pub struct krishiv_session::auth::RoleLists
 impl krishiv_session::auth::RoleLists
 pub fn krishiv_session::auth::RoleLists::role_of(&self, &str) -> core::option::Option<krishiv_session::auth::Role>
@@ -493,9 +656,13 @@ impl krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::authenticate_at(&self, &krishiv_session::auth::Credentials<'_>, std::time::Instant) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_session::auth::AuthFailure>
 pub fn krishiv_session::auth::ServerAuth::denials(&self) -> alloc::sync::Arc<krishiv_session::auth::DeniedCounts>
 pub fn krishiv_session::auth::ServerAuth::failure_counts(&self) -> alloc::vec::Vec<krishiv_session::auth::FailureCount>
+pub fn krishiv_session::auth::ServerAuth::impersonate(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &krishiv_session::auth::ActAs) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::auth::ServerAuth::impersonate_signed(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &str, &krishiv_session::auth::ActAsHint) -> core::result::Result<(krishiv_session::auth::ActAs, krishiv_session::auth::Authenticated), krishiv_common::error::KrishivError>
+pub fn krishiv_session::auth::ServerAuth::impersonation_counts(&self) -> krishiv_session::auth::ImpersonationCount
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
 pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::auth::ServerAuth::refuse_impersonation(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, krishiv_session::auth::Denial) -> krishiv_common::error::KrishivError
 impl core::fmt::Debug for krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::auth::Authenticator for krishiv_session::auth::ServerAuth
@@ -545,6 +712,7 @@ impl core::fmt::Debug for krishiv_session::auth::TlsConfig
 pub fn krishiv_session::auth::TlsConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::auth::TlsConfig
 #[non_exhaustive] pub struct krishiv_session::auth::TokenSpec
+pub krishiv_session::auth::TokenSpec::expires: core::option::Option<std::time::SystemTime>
 pub krishiv_session::auth::TokenSpec::kind: krishiv_common::principal::PrincipalKind
 pub krishiv_session::auth::TokenSpec::name: alloc::string::String
 pub krishiv_session::auth::TokenSpec::principal: alloc::string::String
@@ -565,6 +733,120 @@ pub fn krishiv_session::auth::ServerAuth::authenticate<'a>(&'a self, &'a krishiv
 pub fn krishiv_session::auth::bearer_token(&str) -> core::option::Option<&str>
 pub fn krishiv_session::auth::check_listener(core::net::socket_addr::SocketAddr, &krishiv_session::auth::AuthConfig, &krishiv_session::auth::TlsConfig) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::is_auth_key(&str) -> bool
+pub mod krishiv_session::catalog_decl
+pub enum krishiv_session::catalog_decl::CatalogAuth
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::audience: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::client_id: alloc::string::String
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::client_secret: krishiv_session::auth::SecretRef
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::scope: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::token_endpoint: alloc::string::String
+pub krishiv_session::catalog_decl::CatalogAuth::None
+pub krishiv_session::catalog_decl::CatalogAuth::Token(krishiv_session::auth::SecretRef)
+impl krishiv_session::catalog_decl::CatalogAuth
+pub fn krishiv_session::catalog_decl::CatalogAuth::name(&self) -> &'static str
+impl core::clone::Clone for krishiv_session::catalog_decl::CatalogAuth
+pub fn krishiv_session::catalog_decl::CatalogAuth::clone(&self) -> krishiv_session::catalog_decl::CatalogAuth
+impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogAuth
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::CatalogAuth
+pub fn krishiv_session::catalog_decl::CatalogAuth::eq(&self, &krishiv_session::catalog_decl::CatalogAuth) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::CatalogAuth
+pub fn krishiv_session::catalog_decl::CatalogAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::CatalogAuth
+pub enum krishiv_session::catalog_decl::CatalogStorage
+pub krishiv_session::catalog_decl::CatalogStorage::AllowedPrefixes
+pub krishiv_session::catalog_decl::CatalogStorage::Vended
+impl krishiv_session::catalog_decl::CatalogStorage
+pub fn krishiv_session::catalog_decl::CatalogStorage::name(self) -> &'static str
+impl core::clone::Clone for krishiv_session::catalog_decl::CatalogStorage
+pub fn krishiv_session::catalog_decl::CatalogStorage::clone(&self) -> krishiv_session::catalog_decl::CatalogStorage
+impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogStorage
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::CatalogStorage
+pub fn krishiv_session::catalog_decl::CatalogStorage::eq(&self, &krishiv_session::catalog_decl::CatalogStorage) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::CatalogStorage
+pub fn krishiv_session::catalog_decl::CatalogStorage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::catalog_decl::CatalogStorage
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::CatalogStorage
+pub enum krishiv_session::catalog_decl::CatalogType
+pub krishiv_session::catalog_decl::CatalogType::Glue
+pub krishiv_session::catalog_decl::CatalogType::Hive
+pub krishiv_session::catalog_decl::CatalogType::IcebergRest
+pub krishiv_session::catalog_decl::CatalogType::Memory
+pub krishiv_session::catalog_decl::CatalogType::Sqlite
+pub krishiv_session::catalog_decl::CatalogType::Unity
+impl krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::name(self) -> &'static str
+impl core::clone::Clone for krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::clone(&self) -> krishiv_session::catalog_decl::CatalogType
+impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogType
+impl core::cmp::Ord for krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::cmp(&self, &krishiv_session::catalog_decl::CatalogType) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::eq(&self, &krishiv_session::catalog_decl::CatalogType) -> bool
+impl core::cmp::PartialOrd for krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::partial_cmp(&self, &krishiv_session::catalog_decl::CatalogType) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_decl::CatalogType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::catalog_decl::CatalogType
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::CatalogType
+pub enum krishiv_session::catalog_decl::DeclMode
+pub krishiv_session::catalog_decl::DeclMode::Embedded
+pub krishiv_session::catalog_decl::DeclMode::Server
+impl core::clone::Clone for krishiv_session::catalog_decl::DeclMode
+pub fn krishiv_session::catalog_decl::DeclMode::clone(&self) -> krishiv_session::catalog_decl::DeclMode
+impl core::cmp::Eq for krishiv_session::catalog_decl::DeclMode
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::DeclMode
+pub fn krishiv_session::catalog_decl::DeclMode::eq(&self, &krishiv_session::catalog_decl::DeclMode) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::DeclMode
+pub fn krishiv_session::catalog_decl::DeclMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::catalog_decl::DeclMode
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::DeclMode
+#[non_exhaustive] pub struct krishiv_session::catalog_decl::CatalogDecl
+pub krishiv_session::catalog_decl::CatalogDecl::allow_config_keys: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogDecl::allow_insecure: bool
+pub krishiv_session::catalog_decl::CatalogDecl::auth: krishiv_session::catalog_decl::CatalogAuth
+pub krishiv_session::catalog_decl::CatalogDecl::kind: krishiv_session::catalog_decl::CatalogType
+pub krishiv_session::catalog_decl::CatalogDecl::name: alloc::string::String
+pub krishiv_session::catalog_decl::CatalogDecl::options: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogDecl::storage: krishiv_session::catalog_decl::CatalogStorage
+pub krishiv_session::catalog_decl::CatalogDecl::tenants: core::option::Option<alloc::collections::btree::set::BTreeSet<alloc::string::String>>
+pub krishiv_session::catalog_decl::CatalogDecl::uri: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogDecl::warehouse: core::option::Option<alloc::string::String>
+impl krishiv_session::catalog_decl::CatalogDecl
+pub fn krishiv_session::catalog_decl::CatalogDecl::declared_hosts(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn krishiv_session::catalog_decl::CatalogDecl::visible_to(&self, core::option::Option<&str>) -> bool
+impl core::clone::Clone for krishiv_session::catalog_decl::CatalogDecl
+pub fn krishiv_session::catalog_decl::CatalogDecl::clone(&self) -> krishiv_session::catalog_decl::CatalogDecl
+impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogDecl
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::CatalogDecl
+pub fn krishiv_session::catalog_decl::CatalogDecl::eq(&self, &krishiv_session::catalog_decl::CatalogDecl) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::CatalogDecl
+pub fn krishiv_session::catalog_decl::CatalogDecl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::CatalogDecl
+#[non_exhaustive] pub struct krishiv_session::catalog_decl::CatalogDeclarations
+pub krishiv_session::catalog_decl::CatalogDeclarations::catalogs: alloc::vec::Vec<krishiv_session::catalog_decl::CatalogDecl>
+pub krishiv_session::catalog_decl::CatalogDeclarations::default: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogDeclarations::warnings: alloc::vec::Vec<alloc::string::String>
+impl krishiv_session::catalog_decl::CatalogDeclarations
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::parse<'a>(impl core::iter::traits::collect::IntoIterator<Item = (&'a str, &'a str)>, krishiv_session::catalog_decl::DeclMode, &[krishiv_session::catalog_decl::CatalogType], core::option::Option<&krishiv_store::egress::EgressScope>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+impl core::clone::Clone for krishiv_session::catalog_decl::CatalogDeclarations
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::clone(&self) -> krishiv_session::catalog_decl::CatalogDeclarations
+impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogDeclarations
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::CatalogDeclarations
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::eq(&self, &krishiv_session::catalog_decl::CatalogDeclarations) -> bool
+impl core::default::Default for krishiv_session::catalog_decl::CatalogDeclarations
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::default() -> krishiv_session::catalog_decl::CatalogDeclarations
+impl core::fmt::Debug for krishiv_session::catalog_decl::CatalogDeclarations
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::CatalogDeclarations
+pub const krishiv_session::catalog_decl::CATALOG_PREFIX: &str
+pub const krishiv_session::catalog_decl::DEFAULT_CATALOG_KEY: &str
+pub const krishiv_session::catalog_decl::SPARK_CATALOG_PREFIX: &str
+pub fn krishiv_session::catalog_decl::is_catalog_key(&str) -> bool
+pub mod krishiv_session::egress
+pub fn krishiv_session::egress::egress_policy(&krishiv_common::config::Config, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::egress::egress_proxy(&krishiv_common::config::Config) -> core::option::Option<alloc::string::String>
+pub fn krishiv_session::egress::store_scope(&alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, &krishiv_common::config::Config) -> core::result::Result<krishiv_store::egress::EgressScope, krishiv_common::error::KrishivError>
 pub mod krishiv_session::functions
 pub trait krishiv_session::functions::IntoLiteral
 pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal
@@ -603,6 +885,98 @@ pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_sessi
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
+pub mod krishiv_session::grants
+#[non_exhaustive] pub enum krishiv_session::grants::AccessProvider
+pub krishiv_session::grants::AccessProvider::Grants
+pub krishiv_session::grants::AccessProvider::Roles
+impl core::clone::Clone for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::clone(&self) -> krishiv_session::grants::AccessProvider
+impl core::cmp::Eq for krishiv_session::grants::AccessProvider
+impl core::cmp::PartialEq for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::eq(&self, &krishiv_session::grants::AccessProvider) -> bool
+impl core::fmt::Debug for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::grants::AccessProvider
+impl core::marker::StructuralPartialEq for krishiv_session::grants::AccessProvider
+#[non_exhaustive] pub enum krishiv_session::grants::DecidedBy
+pub krishiv_session::grants::DecidedBy::Grants
+pub krishiv_session::grants::DecidedBy::Roles
+impl krishiv_session::grants::DecidedBy
+pub const fn krishiv_session::grants::DecidedBy::as_str(self) -> &'static str
+impl core::clone::Clone for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::clone(&self) -> krishiv_session::grants::DecidedBy
+impl core::cmp::Eq for krishiv_session::grants::DecidedBy
+impl core::cmp::PartialEq for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::eq(&self, &krishiv_session::grants::DecidedBy) -> bool
+impl core::fmt::Debug for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::grants::DecidedBy
+impl core::marker::StructuralPartialEq for krishiv_session::grants::DecidedBy
+#[non_exhaustive] pub struct krishiv_session::grants::DeniedCount
+pub krishiv_session::grants::DeniedCount::count: u64
+pub krishiv_session::grants::DeniedCount::privilege: krishiv_plan::analyzer::catalog::Privilege
+pub krishiv_session::grants::DeniedCount::provider: krishiv_session::grants::DecidedBy
+impl core::clone::Clone for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::clone(&self) -> krishiv_session::grants::DeniedCount
+impl core::cmp::Eq for krishiv_session::grants::DeniedCount
+impl core::cmp::PartialEq for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::eq(&self, &krishiv_session::grants::DeniedCount) -> bool
+impl core::fmt::Debug for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::grants::DeniedCount
+impl core::marker::StructuralPartialEq for krishiv_session::grants::DeniedCount
+pub struct krishiv_session::grants::FileGrantStore
+impl krishiv_session::grants::FileGrantStore
+pub fn krishiv_session::grants::FileGrantStore::open(impl core::convert::Into<std::path::PathBuf>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::grants::FileGrantStore::path(&self) -> &std::path::Path
+impl core::fmt::Debug for krishiv_session::grants::FileGrantStore
+pub fn krishiv_session::grants::FileGrantStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::FileGrantStore
+pub struct krishiv_session::grants::GrantStateHandle(_)
+impl core::clone::Clone for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::clone(&self) -> krishiv_session::grants::GrantStateHandle
+impl core::cmp::Eq for krishiv_session::grants::GrantStateHandle
+impl core::cmp::PartialEq for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::eq(&self, &krishiv_session::grants::GrantStateHandle) -> bool
+impl core::default::Default for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::default() -> krishiv_session::grants::GrantStateHandle
+impl core::fmt::Debug for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::grants::GrantStateHandle
+pub struct krishiv_session::grants::Grants
+impl krishiv_session::grants::Grants
+pub fn krishiv_session::grants::Grants::denied_counts(&self) -> alloc::vec::Vec<krishiv_session::grants::DeniedCount>
+pub fn krishiv_session::grants::Grants::epoch(&self) -> u64
+pub fn krishiv_session::grants::Grants::new(alloc::sync::Arc<dyn krishiv_session::grants::GrantStore>) -> alloc::sync::Arc<Self>
+impl core::fmt::Debug for krishiv_session::grants::Grants
+pub fn krishiv_session::grants::Grants::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::grants::GrantsPolicy
+impl krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::decided_by(&krishiv_plan::analyzer::catalog::Securable) -> krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::GrantsPolicy::grants(&self) -> &alloc::sync::Arc<krishiv_session::grants::Grants>
+pub fn krishiv_session::grants::GrantsPolicy::is_admin(&self) -> bool
+pub fn krishiv_session::grants::GrantsPolicy::new(alloc::sync::Arc<krishiv_session::grants::Grants>, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>, bool) -> Self
+impl core::fmt::Debug for krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> futures_core::future::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::grants::GrantsPolicy::column_level(&self) -> bool
+pub fn krishiv_session::grants::GrantsPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::grants::GrantsPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::grants::MemoryGrantStore
+impl krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::new() -> Self
+impl core::default::Default for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::default() -> krishiv_session::grants::MemoryGrantStore
+impl core::fmt::Debug for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::MemoryGrantStore
+pub trait krishiv_session::grants::GrantStore: core::marker::Send + core::marker::Sync
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::FileGrantStore
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::access_provider(&krishiv_common::config::Config, bool) -> core::result::Result<krishiv_session::grants::AccessProvider, krishiv_common::error::KrishivError>
 pub mod krishiv_session::resource_groups
 pub struct krishiv_session::resource_groups::GroupRow
 impl core::clone::Clone for krishiv_session::resource_groups::GroupRow
@@ -621,10 +995,19 @@ pub fn krishiv_session::resource_groups::GroupSlot::drop(&mut self)
 pub struct krishiv_session::resource_groups::ResourceGroups
 impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::counts(&self, &str) -> core::option::Option<(usize, usize)>
+pub fn krishiv_session::resource_groups::ResourceGroups::document(&self) -> alloc::string::String
+pub fn krishiv_session::resource_groups::ResourceGroups::etag(&self) -> alloc::string::String
 pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::loaded_at_ms(&self) -> u64
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_json(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
+pub fn krishiv_session::resource_groups::ResourceGroups::validate(&str, usize) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+impl krishiv_session::resource_groups::ResourceGroups
+pub fn krishiv_session::resource_groups::ResourceGroups::file_etag(&str) -> core::option::Option<alloc::string::String>
+pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
@@ -991,7 +1374,12 @@ pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_ses
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::estimate(&self) -> core::result::Result<krishiv_session::Estimate, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
+pub async fn krishiv_session::DataFrame::explain_for_metadata(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::schema_for_metadata(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::explain_with(&self, krishiv_session::ExplainMode, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
+pub fn krishiv_session::DataFrame::observe(&self, &krishiv_session::Observation, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::clone(&self) -> krishiv_session::DataFrame
 impl core::fmt::Debug for krishiv_session::DataFrame
@@ -1049,6 +1437,7 @@ impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &str, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
@@ -1102,6 +1491,19 @@ impl core::clone::Clone for krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::clone(&self) -> krishiv_session::GroupedData
 impl core::fmt::Debug for krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::Observation
+impl krishiv_session::Observation
+pub fn krishiv_session::Observation::get(&self) -> core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Observation::get_timeout(&self, core::time::Duration) -> core::result::Result<core::option::Option<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Observation::name(&self) -> &str
+pub fn krishiv_session::Observation::named(&str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Observation::new() -> Self
+impl core::clone::Clone for krishiv_session::Observation
+pub fn krishiv_session::Observation::clone(&self) -> krishiv_session::Observation
+impl core::default::Default for krishiv_session::Observation
+pub fn krishiv_session::Observation::default() -> Self
+impl core::fmt::Debug for krishiv_session::Observation
+pub fn krishiv_session::Observation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::OptimizerStep
 pub krishiv_session::OptimizerStep::batch: alloc::string::String
 pub krishiv_session::OptimizerStep::diff: alloc::string::String
@@ -1142,6 +1544,8 @@ impl core::fmt::Debug for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::PathPrefixPolicy::column_level(&self) -> bool
+pub fn krishiv_session::PathPrefixPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Permit
 impl krishiv_session::Permit
@@ -1247,6 +1651,8 @@ impl core::fmt::Debug for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::ReadOnlyPolicy::column_level(&self) -> bool
+pub fn krishiv_session::ReadOnlyPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
@@ -1262,9 +1668,11 @@ pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -
 pub struct krishiv_session::Session
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::analyze(&self, &str) -> core::result::Result<krishiv_session::Analysis, krishiv_common::error::KrishivError>
+impl krishiv_session::Session
 pub async fn krishiv_session::Session::authorize_privilege(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege, krishiv_sql::classify::StatementClass) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub async fn krishiv_session::Session::authorize_set_key(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::count_denials(&self, alloc::sync::Arc<krishiv_session::auth::DeniedCounts>, krishiv_session::auth::Surface) -> bool
+impl krishiv_session::Session
+pub async fn krishiv_session::Session::authorize_set_key(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::Session::clear_trace_context(&self)
@@ -1314,13 +1722,6 @@ pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::Qu
 impl krishiv_session::Session
 pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_catalog::Catalog<'_>
 impl krishiv_session::Session
-pub fn krishiv_session::Session::clear_trace_context(&self)
-pub fn krishiv_session::Session::remove_tag(&self, &str)
-pub fn krishiv_session::Session::set_tag(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub fn krishiv_session::Session::set_trace_context(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub fn krishiv_session::Session::tags(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
-pub fn krishiv_session::Session::trace_id(&self) -> core::option::Option<alloc::string::String>
-impl krishiv_session::Session
 pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
@@ -1339,6 +1740,7 @@ pub fn krishiv_session::SessionBuilder::build(self) -> core::result::Result<kris
 pub fn krishiv_session::SessionBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::SessionBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 pub fn krishiv_session::SessionBuilder::functions(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>) -> Self
+pub fn krishiv_session::SessionBuilder::grants(self, alloc::sync::Arc<krishiv_session::grants::GrantsPolicy>) -> Self
 pub fn krishiv_session::SessionBuilder::principal(self, krishiv_common::principal::Principal) -> Self
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 pub fn krishiv_session::SessionBuilder::runtime(self, alloc::sync::Arc<krishiv_session::EngineRuntime>) -> Self
@@ -1428,6 +1830,7 @@ impl core::fmt::Debug for krishiv_session::WindowSpec
 pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
 pub const krishiv_session::ANONYMOUS_VERSION_BIT: u32
+pub const krishiv_session::READ_ONLY_PRIVILEGES: [krishiv_plan::analyzer::catalog::Privilege; 2]
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
 pub trait krishiv_session::AdmissionController: core::marker::Send + core::marker::Sync + core::fmt::Debug
@@ -1439,9 +1842,11 @@ pub fn krishiv_session::Unlimited::uses_estimate(&self) -> bool
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub fn krishiv_session::capabilities() -> alloc::vec::Vec<[alloc::string::String; 4]>
 pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
+pub fn krishiv_session::register_surface(&str, &str, &str)
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

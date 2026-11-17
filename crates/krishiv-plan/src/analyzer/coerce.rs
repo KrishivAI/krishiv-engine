@@ -1385,7 +1385,15 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         {
             Some(Some(t.clone()))
         }
-        (Some(T::Timestamp), InputType::NumericOrTimestamp) => Some(Some(T::Double)),
+        (Some(T::Timestamp), InputType::NumericOrTimestamp)
+        | (None | Some(T::String), InputType::NumericOrTemporal) => Some(Some(T::Double)),
+        (Some(t), InputType::NumericOrTemporal)
+            if is_numeric(t)
+                || is_ansi_interval(t)
+                || matches!(t, T::Date | T::Timestamp | T::TimestampNtz | T::Time { .. }) =>
+        {
+            Some(Some(t.clone()))
+        }
         (
             None,
             InputType::Numeric { .. } | InputType::StrictNumeric | InputType::NumericOrTimestamp,

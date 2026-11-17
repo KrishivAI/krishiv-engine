@@ -224,6 +224,38 @@ fn spark_nested_columns() {
     }
 }
 
+/// PY-043: Spark's own `users.parquet` (parquet-mr 1.4.3 via Avro), whose
+/// `favorite_numbers` is the legacy two-level list (`repeated int32 array`
+/// directly in the `LIST` group), reads to Spark 4.2.0's rows
+/// (`legacy/README.md`); it used to panic in the schema walk.
+#[test]
+fn spark_users_two_level_list() {
+    let (rows, _, b) = read(&fixtures().join("legacy"), "users.parquet");
+    assert_eq!(rows, 2);
+    let name = b.column_by_name("name").unwrap();
+    let color = b.column_by_name("favorite_color").unwrap();
+    let text = |a: &ArrayRef, r: usize| match a.data_type() {
+        DataType::Utf8View => a.as_string_view().value(r).to_owned(),
+        _ => a.as_string::<i32>().value(r).to_owned(),
+    };
+    assert_eq!(
+        (text(name, 0), text(name, 1)),
+        ("Alyssa".into(), "Ben".into())
+    );
+    assert!(color.is_null(0));
+    assert_eq!(text(color, 1), "red");
+    let nums = b
+        .column_by_name("favorite_numbers")
+        .unwrap()
+        .as_list::<i32>();
+    assert!(!nums.is_null(0) && !nums.is_null(1));
+    assert_eq!(
+        nums.value(0).as_primitive::<Int32Type>().values(),
+        &[3, 9, 15, 20]
+    );
+    assert_eq!(nums.value(1).len(), 0, "an empty list is not null");
+}
+
 /// pyarrow's deeply nested columns, null by null (`nested/pyarrow_deep_nested.parquet`,
 /// written by `tests/scripts/gen_parquet_nested.py`): a list of structs holding
 /// lists, a struct in a struct, a map of lists; nulls at every level.

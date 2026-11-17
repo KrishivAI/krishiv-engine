@@ -24,9 +24,11 @@
 //! a side without rows for a key gets one zero-row frame.
 //! Rows are cut into frames of `maxRecordsPerBatch` rows (and, when set,
 //! closed by the row that brings the frame's columns to `maxBytesPerBatch`
-//! bytes as Spark's Arrow writer sizes them) or at the end of their group
-//! or side, as Spark cuts a group's Arrow stream; a group is never held
-//! whole.
+//! bytes as Spark's Arrow writer sizes them; the columns evaluated to size
+//! a frame are its columns) or at the end of their group or side, as Spark
+//! cuts a group's Arrow stream; a group is never held whole. A grouped
+//! aggregate's rows are not cut by either limit (Spark sends each group as
+//! one batch): they go as each input batch brings them.
 //!
 //! **Window.** The window bounds the frames queued per lane and is checked
 //! frame by frame: input rows cut but not framed yet wait in the driver's
@@ -37,9 +39,10 @@
 //! input batch.
 //!
 //! **Memory (I11).** Every byte the sink holds is reserved in the driver's
-//! consumer: input rows held or in the backlog, queued frames (the chunk's
-//! rows shared by the lanes' frames, released by the last lane's task to
-//! take it, and what a frame's columns hold beyond those rows: a computed
+//! consumer: input rows held or in the backlog, queued frames (an input
+//! batch's one reservation, shared by every cut and frame that slices it
+//! and released with the last of them, since a slice keeps the whole
+//! batch's buffers; and what a frame's columns hold beyond those rows: a computed
 //! argument's result, a client form's copy), the results a task
 //! yielded until they are stored (`lane.rs`: a refused result stops the
 //! task's reads until reserved), and an aggregate's pending group keys
@@ -51,6 +54,36 @@
 //! has frames to take (`lane.rs`, Peers). A stored result's bytes pass to the store's
 //! reservation through the consumer's credit, never counted twice.
 //!
+//! **Slots.** A runtime whose tasks are bounded (the worker pool) gives a
+//! capacity hint; a driver opens its lanes' tasks together once it holds a
+//! slot for each, or stays `Blocked` until slots free, and a driver needing
+//! more than the runtime ever has fails at once (`admit.rs`). A driver that
+//! combined still holds its tasks' slots until they end, so while a driver
+//! waits for slots its `Blocked` future also polls the combined drivers'
+//! pumps: their `End` frames go out and their results come in before
+//! `finalize`, and their slots free (design P3-T085 §3.3a). A combined
+//! result the pool refuses makes the waiting driver's next `sink` return
+//! `NeedMemory`, so the arbitrator spills or aborts rather than the query
+//! hanging. The registry of combined drivers is this operator's, while the
+//! slots are the session's: a driver waiting for slots held by another
+//! operator's combined driver relies on that operator's own waiting drivers
+//! or its `finalize` to move them (operators of one query run as separate
+//! pipelines, each with drivers of its own; no trace found where neither
+//! comes).
+//!
+//! **Wakers.** No poll here uses a waker nobody listens to (review round
+//! 4). Polls made by `sink` and `combine` (lanes, framing, slot requests)
+//! register the driver's own waker (`DriverWake`), which remembers an event
+//! and passes it to whichever future waits for the driver next (its
+//! `Blocked` future or `finalize`'s `wait`). A pump waiting for a frame or
+//! for its refused result to be reserved is woken by whoever queues the
+//! frame or moves the result (`lane.rs` `wake_pump`). A driver that combines
+//! gives up its place in a slot queue (`finalize` asks again), so no place is
+//! held by a driver nobody polls. A `Blocked` future that leaves a combined
+//! driver's result refused (the pool had no room for it) ends, so the next
+//! `sink` asks for the memory: memory freeing is no event a waker can wait
+//! for, the driver's memory request is.
+//!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
 //! which cancels it, and every reservation.
@@ -59,18 +92,18 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Wake, Waker};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::OwnedRow;
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
-use futures::task::noop_waker_ref;
 use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillScope};
 use krishiv_types::batch::Batch;
 
-use super::lane::{FrameMem, Lane};
+use super::admit::poll_admit;
+use super::lane::{FrameMem, Lane, SharedMem};
 use super::pair::{self, Pending};
 use super::{Frame, PreparedRelationUdf};
 use crate::context::TaskContext;
@@ -78,7 +111,7 @@ use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::operators::{KeyEncoder, ScalarExpr, SortKey, global_ref, local_mut};
 use crate::shared::SharedSink;
-use crate::sync::{Mutex, lock};
+use crate::sync::{AtomicBool, Mutex, Ordering, lock, register, wake_all};
 
 /// How a relation node's input reaches its tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,7 +312,10 @@ enum Cut {
     Rows {
         side: u8,
         rows: RecordBatch,
-        memory: Reservation,
+        memory: Vec<SharedMem>,
+        /// The frames' columns of every lane (in lane order) when they were
+        /// already evaluated to size the frame (`maxBytesPerBatch`).
+        columns: Option<Vec<ArrayRef>>,
     },
     EndGroup,
     End,
@@ -302,13 +338,13 @@ struct Driver {
     held_side: u8,
     /// The cogroup sides the open group has rows on.
     sides_seen: [bool; 2],
-    /// The reservation of the bytes of the input rows taken and not cut
-    /// yet: the held rows and the rest of the batch being fed.
-    held_bytes: Reservation,
-    /// The rows `held_bytes` covers: each cut takes its share by rows of
-    /// all of them, not of the held rows only (a batch's later groups keep
-    /// theirs while its first group is cut).
-    held_bytes_rows: usize,
+    /// Grows the reservation of each input batch (and of sized frame
+    /// columns); empty between calls.
+    input_bytes: Reservation,
+    /// The reservations of the input batches the held rows slice. A slice
+    /// keeps all of its batch's buffers alive, so every cut of a batch
+    /// shares the batch's one reservation, freed with its last slice.
+    held_mem: Vec<SharedMem>,
     /// Cut, waiting for room in the lanes' windows (shared with the
     /// driver's `Blocked` future, which frames it as the windows free).
     feed: Arc<Mutex<Feed>>,
@@ -319,6 +355,54 @@ struct Driver {
     wants: usize,
     /// An aggregate's groups waiting for their values.
     pending: Pending,
+    /// In `finalize`, the backlog waits for the runtime's slots.
+    awaiting_slots: bool,
+    /// The waker every poll of the driver's lanes, framing and slot requests
+    /// registers when no future of its own polls them (`sink`, `combine`,
+    /// `finalize`): an event it gets is remembered and passed to the future
+    /// that waits for the driver next (its `Blocked` future, `finalize`'s
+    /// `wait`). No poll in this operator uses a waker nobody listens to
+    /// (review round 4).
+    wake: Arc<DriverWake>,
+}
+
+/// The waker of one driver's polls outside its futures (see [`Driver::wake`]).
+struct DriverWake {
+    woken: AtomicBool,
+    /// The waker of the future waiting for the driver now.
+    waker: Mutex<Option<Waker>>,
+}
+
+impl DriverWake {
+    /// The waker its events go to from now on (the poll of a future that
+    /// waits for the driver); whether one came since the last call.
+    fn listen(&self, waker: &Waker) -> bool {
+        *lock(&self.waker) = Some(waker.clone());
+        self.woken.swap(false, Ordering::SeqCst)
+    }
+}
+
+impl DriverWake {
+    fn new() -> Self {
+        Self {
+            woken: AtomicBool::new(false),
+            waker: Mutex::new(None),
+        }
+    }
+}
+
+impl Wake for DriverWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::SeqCst);
+        let waker = lock(&self.waker).clone();
+        if let Some(w) = waker {
+            w.wake();
+        }
+    }
 }
 
 /// A driver's backlog, shared with its `Blocked` future.
@@ -327,6 +411,11 @@ struct Feed {
     backlog: VecDeque<Cut>,
     /// A failure of the `Blocked` future's framing: the next call's error.
     failed: Option<KrishivError>,
+    /// The driver's places in the runtimes' slot queues while it waits
+    /// for slots (`admit.rs`); dropped with the state.
+    tickets: Vec<Option<super::RelationTicket>>,
+    /// The driver's waker ([`Driver::wake`]), for its `Blocked` future.
+    wake: Arc<DriverWake>,
 }
 
 /// What [`flush_feed`] stopped at.
@@ -338,6 +427,9 @@ enum Flushed {
     Window,
     /// The next frame's copies need this many more bytes.
     Memory(usize),
+    /// The lanes' tasks wait for the runtime's slots (the context's waker
+    /// is woken when slots free).
+    Slots,
 }
 
 /// One driver's sink state.
@@ -352,7 +444,30 @@ struct RelLocal {
 struct RelGlobal {
     store: GlobalState,
     leftover: Mutex<Vec<Driver>>,
+    /// The lanes of the drivers that combined, polled by a driver waiting
+    /// for slots (their tasks hold them until they end).
+    combined: Arc<Mutex<Combined>>,
 }
+
+/// The drivers that combined, as the drivers waiting for slots see them.
+#[derive(Default)]
+struct Combined {
+    /// Their lanes.
+    lanes: Vec<Lane>,
+    /// Their backlogs (what `combine` could not frame: a window was full,
+    /// or the pool refused a frame's copies), with their lanes and
+    /// partitions. A driver waiting for slots frames them where their tasks
+    /// are open ([`frame_combined`]), so a combined driver's `End` reaches
+    /// its tasks, and their slots free, before `finalize` (which waits for
+    /// the waiting driver).
+    feeds: Vec<CombinedFeed>,
+    /// The `Blocked` futures waiting for slots, woken when a driver
+    /// combines (its lanes are theirs to poll from then on).
+    parked: Vec<Waker>,
+}
+
+/// A combined driver's backlog, its lanes and its partition.
+type CombinedFeed = (Arc<Mutex<Feed>>, Vec<Lane>, u32);
 
 /// A run of input rows within one group and side.
 struct Run {
@@ -418,11 +533,15 @@ impl RelationSink {
     /// The frame of `lane` over `rows` (one side): its columns evaluated,
     /// in their client forms; and the bytes they hold beyond the rows'
     /// buffers (a computed argument's result, a client form's copy).
+    ///
+    /// `sized` are the columns already evaluated (and reserved) to size the
+    /// frame: they are used as they are, and hold nothing more.
     fn frame(
         lane: &RelationLane,
         side: u8,
         rows: &RecordBatch,
         partition: u32,
+        sized: Option<&[ArrayRef]>,
     ) -> Result<(Frame, usize)> {
         let exprs = &lane.sides[usize::from(side)];
         let names = &lane.names[usize::from(side)];
@@ -430,12 +549,20 @@ impl RelationSink {
         let mut columns = Vec::with_capacity(exprs.len());
         let mut copied = 0;
         let mut input = Vec::new();
-        for c in rows.columns() {
-            buffer_ranges(&c.to_data(), &mut input);
+        if sized.is_none() {
+            for c in rows.columns() {
+                buffer_ranges(&c.to_data(), &mut input);
+            }
         }
-        for (e, name) in exprs.iter().zip(names) {
-            let a = client_column(e.as_ref(), rows, partition)?;
-            copied += fresh_bytes(&a.to_data(), &input);
+        for (i, (e, name)) in exprs.iter().zip(names).enumerate() {
+            let a = match sized.and_then(|s| s.get(i)) {
+                Some(a) => Arc::clone(a),
+                None => {
+                    let a = client_column(e.as_ref(), rows, partition)?;
+                    copied += fresh_bytes(&a.to_data(), &input);
+                    a
+                }
+            };
             fields.push(Field::new(name, a.data_type().clone(), e.nullable()));
             columns.push(a);
         }
@@ -448,29 +575,57 @@ impl RelationSink {
 
     /// Cuts the held rows into frames of at most `maxRecordsPerBatch` rows
     /// (and `maxBytesPerBatch` bytes); with `all` the rows left over too
-    /// (the end of a group or side).
+    /// (the end of a group or side). A grouped aggregate's rows are not
+    /// cut by either limit: Spark writes each group as one batch
+    /// (`ArrowAggregatePythonExec` runs a `BasicPythonArrowInput`,
+    /// ArrowPythonRunner.scala L78-91 and PythonArrowInput.scala L126-156
+    /// at v4.2.0), so its rows go as they come. A group that spans input
+    /// batches still reaches its task as several frames: the runtime must
+    /// concatenate an aggregate's frames up to `EndGroup` before it calls
+    /// the UDF (the worker pool does, `krishiv-udf-pool`).
     fn cut_held(&self, d: &mut Driver, all: bool) -> Result<()> {
         if d.held_rows == 0 {
             return Ok(());
         }
         let held = std::mem::take(&mut d.held);
         let rows = std::mem::take(&mut d.held_rows);
+        let mut memory = std::mem::take(&mut d.held_mem);
+        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
         let data = if held.len() == 1 {
             held.into_iter()
                 .next()
                 .ok_or_else(|| internal("no held rows".to_owned()))?
         } else {
-            arrow_select::concat::concat_batches(&self.input, &held)
-                .map_err(|e| internal(format!("held Python UDF rows: {e}")))?
+            let copy = arrow_select::concat::concat_batches(&self.input, &held)
+                .map_err(|e| internal(format!("held Python UDF rows: {e}")))?;
+            // A leftover joined with the rows that fill its frame (`feed`
+            // adds no more than that): at most `maxRecordsPerBatch` rows.
+            // Without that limit `feed` adds whole runs: with only
+            // `maxBytesPerBatch` the copy is the leftover plus the next
+            // run (up to a whole input batch), and with neither limit the
+            // rows of the group (or side) held across input batches. The copy holds them now: its slices
+            // share a reservation of its own, and the batches it was cut
+            // from are freed with their other slices (carried on, a long
+            // group would keep every batch it spans). If the pool refuses
+            // the copy's, the source batches' reservations stay with its
+            // slices instead: they cover at least its rows, so nothing the
+            // copy holds goes unreserved.
+            drop(held);
+            let bytes = copy.get_array_memory_size();
+            if d.input_bytes.try_grow(bytes).is_ok() {
+                memory.clear();
+                memory.push(Arc::new(Mutex::new(d.input_bytes.split(bytes))));
+            }
+            copy
         };
-        let step = if self.max_rows == 0 {
+        let step = if self.max_rows == 0 || aggregate {
             rows
         } else {
             self.max_rows
         };
         // The frames' columns as the tasks get them (computed arguments,
         // client forms), sized as Spark's Arrow writer sizes them.
-        let sized = if self.max_bytes > 0 {
+        let sized = if self.max_bytes > 0 && !aggregate {
             let mut columns = Vec::new();
             for lane in self.lanes.iter() {
                 for e in &lane.sides[usize::from(d.held_side)] {
@@ -481,6 +636,27 @@ impl RelationSink {
         } else {
             None
         };
+        // The sized columns are the frames' columns too, if what they hold
+        // beyond the rows can be reserved (else each frame evaluates its
+        // own, reserved as it is framed). One reservation for all their
+        // slices, as for the input's.
+        let mut kept: Option<(&[ArrayRef], Option<SharedMem>)> = None;
+        if let Some(columns) = &sized {
+            let mut input = Vec::new();
+            for c in data.columns() {
+                buffer_ranges(&c.to_data(), &mut input);
+            }
+            let copied: usize = columns
+                .iter()
+                .map(|a| fresh_bytes(&a.to_data(), &input))
+                .sum();
+            if copied == 0 {
+                kept = Some((columns, None));
+            } else if d.input_bytes.try_grow(copied).is_ok() {
+                let memory = Arc::new(Mutex::new(d.input_bytes.split(copied)));
+                kept = Some((columns, Some(memory)));
+            }
+        }
         // A map's rows travel as one struct column (its validity counts).
         let wrapped = if matches!(self.shape, RelationShape::Map) {
             self.lanes.len()
@@ -500,14 +676,20 @@ impl RelationSink {
                 // Too few for a full frame: held for the next input.
                 d.held.push(data.slice(offset, len));
                 d.held_rows = len;
+                d.held_mem = memory;
                 break;
             }
-            let share = d.held_bytes.size() * len / d.held_bytes_rows.max(len);
-            d.held_bytes_rows = d.held_bytes_rows.saturating_sub(len);
+            let mut shared = memory.clone();
+            if let Some((_, Some(m))) = &kept {
+                shared.push(Arc::clone(m));
+            }
             feed.backlog.push_back(Cut::Rows {
                 side: d.held_side,
                 rows: data.slice(offset, len),
-                memory: d.held_bytes.split(share),
+                memory: shared,
+                columns: kept
+                    .as_ref()
+                    .map(|(c, _)| c.iter().map(|a| a.slice(offset, len)).collect()),
             });
             offset += len;
         }
@@ -522,7 +704,8 @@ impl RelationSink {
         lock(&d.feed).backlog.push_back(Cut::Rows {
             side,
             rows: RecordBatch::new_empty(Arc::clone(&self.input)),
-            memory: d.held_bytes.split(0),
+            memory: Vec::new(),
+            columns: None,
         });
     }
 
@@ -541,9 +724,19 @@ impl RelationSink {
         Ok(())
     }
 
-    /// Cuts `batch` (reserved in `held_bytes`) into the backlog.
-    fn feed(&self, d: &mut Driver, batch: &RecordBatch, runs: Vec<Run>) -> Result<()> {
+    /// Cuts `batch` (reserved in `memory`) into the backlog.
+    fn feed(
+        &self,
+        d: &mut Driver,
+        batch: &RecordBatch,
+        runs: Vec<Run>,
+        memory: &SharedMem,
+    ) -> Result<()> {
         let grouped = self.encoder.is_some();
+        // The rows of a full frame, when frames are cut by count.
+        let frame_rows = (self.max_rows > 0
+            && !matches!(self.shape, RelationShape::Aggregate { .. }))
+        .then_some(self.max_rows);
         for run in runs {
             if run.new_group {
                 if d.group_open {
@@ -563,17 +756,34 @@ impl RelationSink {
                 self.empty_side(d, 0);
             }
             d.sides_seen[usize::from(run.side)] = true;
-            d.held.push(batch.slice(run.start, run.len));
-            d.held_rows += run.len;
-            self.cut_held(d, false)?;
+            // Behind a leftover, only the rows that fill its frame join it
+            // (the one copy, `cut_held`); the rest of the run is cut from
+            // the batch itself, without a copy.
+            let mut at = run.start;
+            let end = run.start + run.len;
+            while at < end {
+                let n = match frame_rows {
+                    Some(step) if d.held_rows > 0 => step.saturating_sub(d.held_rows).max(1),
+                    _ => end - at,
+                }
+                .min(end - at);
+                d.held.push(batch.slice(at, n));
+                d.held_rows += n;
+                if !d.held_mem.iter().any(|m| Arc::ptr_eq(m, memory)) {
+                    d.held_mem.push(Arc::clone(memory));
+                }
+                self.cut_held(d, false)?;
+                at += n;
+            }
         }
         Ok(())
     }
 
     /// Frames the driver's backlog as [`flush_feed`] does; the failure of
     /// a `Blocked` future's framing first.
-    fn flush(&self, d: &mut Driver) -> Result<Flushed> {
-        let mut feed = lock(&d.feed);
+    fn flush(&self, d: &mut Driver, cx: &mut Context<'_>) -> Result<Flushed> {
+        let mut guard = lock(&d.feed);
+        let feed = &mut *guard;
         if let Some(e) = feed.failed.take() {
             return Err(e);
         }
@@ -582,9 +792,26 @@ impl RelationSink {
             self.window,
             d.partition,
             &d.lanes,
-            &mut feed.backlog,
+            feed,
             &mut d.spare,
+            cx,
         )
+    }
+
+    /// [`Self::flush`] from `sink` or `combine`, with the driver's waker:
+    /// a backlog waiting for slots makes `sink` return `Blocked`, whose
+    /// future listens to that waker.
+    fn flush_now(&self, d: &mut Driver) -> Result<Flushed> {
+        let waker = Waker::from(Arc::clone(&d.wake));
+        self.flush(d, &mut Context::from_waker(&waker))
+    }
+
+    /// [`Self::flush`] in `finalize`, with the driver's waker (`wait`
+    /// listens to it).
+    fn flush_finalizing(&self, d: &mut Driver) -> Result<Flushed> {
+        let flushed = self.flush_now(d)?;
+        d.awaiting_slots = matches!(flushed, Flushed::Slots);
+        Ok(flushed)
     }
 
     /// A task's batch as an output batch: its columns checked against the
@@ -655,7 +882,14 @@ impl RelationSink {
         let lent = lend(memory, &l.consumer, batch.data().get_array_memory_size());
         match self.store.sink(batch.clone(), &mut l.store, &g.store)? {
             SinkStatus::NeedMemory { bytes } => {
-                let back = l.consumer.reservation_from_credit(lent);
+                // Taken back from the credit the store refunded, by a
+                // reservation with the consumer's handle: the retry lends it
+                // to the credit again, not to the pool (which another
+                // consumer could take it from in between).
+                let mut back = l.consumer.reservation();
+                if back.try_grow(lent).is_err() {
+                    back = l.consumer.reservation_from_credit(lent);
+                }
                 l.driver.ready = Some((batch, vec![back]));
                 Ok(Some(SinkStatus::NeedMemory {
                     bytes: bytes.saturating_sub(lent).max(1),
@@ -668,7 +902,8 @@ impl RelationSink {
     /// Moves each lane's frames and results without waiting; the first
     /// failure of a lane.
     fn progress(d: &Driver) -> Result<()> {
-        let mut cx = Context::from_waker(noop_waker_ref());
+        let waker = Waker::from(Arc::clone(&d.wake));
+        let mut cx = Context::from_waker(&waker);
         for lane in &d.lanes {
             if let Some(Err(e)) = lane.poll(&mut cx) {
                 return Err(e);
@@ -728,15 +963,15 @@ impl RelationSink {
         };
         let key_bytes = keys.as_ref().map_or(0, RecordBatch::get_array_memory_size);
         let bytes = data.get_array_memory_size() + key_bytes;
-        if d.held_bytes.try_grow(bytes).is_err() {
+        if d.input_bytes.try_grow(bytes).is_err() {
             return Ok(Some(SinkStatus::NeedMemory { bytes }));
         }
         if let Some(keys) = keys {
-            let memory = d.held_bytes.split(key_bytes);
+            let memory = d.input_bytes.split(key_bytes);
             d.pending.push(keys, memory);
         }
-        d.held_bytes_rows += data.num_rows();
-        self.feed(d, data, runs)?;
+        let memory = Arc::new(Mutex::new(d.input_bytes.split(bytes - key_bytes)));
+        self.feed(d, data, runs, &memory)?;
         d.current = last;
         Ok(None)
     }
@@ -786,17 +1021,22 @@ fn lend(parts: Vec<Reservation>, handle: &Arc<ConsumerHandle>, bytes: usize) -> 
     lent
 }
 
-/// Frames `backlog` into `lanes` while every lane's window has room, the
+/// Frames the `feed` backlog into `lanes` while every lane's window has room, the
 /// copies reserved in `spare`. Nothing changes for a frame whose copies the
-/// pool refuses.
+/// pool refuses, nor for one whose lanes' tasks wait for slots (`cx` is
+/// woken when slots free).
 fn flush_feed(
     specs: &[RelationLane],
     window: usize,
     partition: u32,
     lanes: &[Lane],
-    backlog: &mut VecDeque<Cut>,
+    feed: &mut Feed,
     spare: &mut Reservation,
+    cx: &mut Context<'_>,
 ) -> Result<Flushed> {
+    let Feed {
+        backlog, tickets, ..
+    } = feed;
     loop {
         if lanes.iter().any(|l| lock(&l.io).in_flight() >= window) {
             return Ok(Flushed::Window);
@@ -805,45 +1045,209 @@ fn flush_feed(
             return Ok(Flushed::All);
         };
         match cut {
-            Cut::Rows { side, rows, .. } => {
+            Cut::Rows {
+                side,
+                rows,
+                columns,
+                ..
+            } => {
                 let mut frames = Vec::with_capacity(specs.len());
+                let mut at = 0;
                 for lane in specs {
-                    frames.push(RelationSink::frame(lane, *side, rows, partition)?);
+                    let n = lane.sides[usize::from(*side)].len();
+                    let sized = columns.as_deref().and_then(|c| c.get(at..at + n));
+                    at += n;
+                    frames.push(RelationSink::frame(lane, *side, rows, partition, sized)?);
                 }
                 let copied: usize = frames.iter().map(|(_, c)| c).sum();
                 let more = copied.saturating_sub(spare.size());
                 if more > 0 && spare.try_grow(more).is_err() {
                     return Ok(Flushed::Memory(more));
                 }
+                let Some(mut slots) = admitted(specs, lanes, tickets, cx)? else {
+                    return Ok(Flushed::Slots);
+                };
                 let Some(Cut::Rows { memory, .. }) = backlog.pop_front() else {
                     return Err(internal("the Python UDF backlog changed".to_owned()));
                 };
-                let shared = Arc::new(Mutex::new(memory));
-                for ((lane, state), (frame, copied)) in specs.iter().zip(lanes).zip(frames) {
+                for (((lane, state), (frame, copied)), slot) in
+                    specs.iter().zip(lanes).zip(frames).zip(&mut slots)
+                {
                     let memory = FrameMem {
-                        _shared: Some(Arc::clone(&shared)),
+                        _shared: memory.clone(),
                         _own: spare.split(copied),
                     };
-                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                    state.queue(lane.udf.as_ref(), frame, memory, slot.take())?;
                 }
             }
             Cut::EndGroup | Cut::End => {
                 let end = matches!(cut, Cut::End);
+                // A task never opened (no rows) gets no `End`; an `EndGroup`
+                // opens one, as rows do.
+                let mut slots = if end {
+                    Vec::new()
+                } else {
+                    let Some(slots) = admitted(specs, lanes, tickets, cx)? else {
+                        return Ok(Flushed::Slots);
+                    };
+                    slots
+                };
                 backlog.pop_front();
-                for (lane, state) in specs.iter().zip(lanes) {
-                    // A task never opened (no rows) gets no `End`.
+                for (i, (lane, state)) in specs.iter().zip(lanes).enumerate() {
                     if end && !state.opened() {
                         continue;
                     }
                     let frame = if end { Frame::End } else { Frame::EndGroup };
                     let memory = FrameMem {
-                        _shared: None,
+                        _shared: Vec::new(),
                         _own: spare.split(0),
                     };
-                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                    let slot = slots.get_mut(i).and_then(Option::take);
+                    state.queue(lane.udf.as_ref(), frame, memory, slot)?;
                 }
             }
         }
+    }
+}
+
+/// Reserves each combined driver's refused result in a reservation of the
+/// waiting driver (`reserve`: its consumer, whose grant credit a
+/// `NeedMemory` adds to, so the retry uses what the driver was given;
+/// review R3-2), moves it to that lane's outputs and polls the lane again
+/// with `cx`, so its pump reads on in this poll rather than only when its
+/// stored waker runs (R3-1). The bytes still missing for the first one the
+/// pool refuses.
+fn reserve_combined(
+    lanes: &[Lane],
+    mut reserve: impl FnMut() -> Reservation,
+    cx: &mut Context<'_>,
+) -> Option<usize> {
+    for lane in lanes {
+        // The poll after a reservation may read the next result and meet
+        // another refusal (R4-2): on until none is left or one does not fit.
+        while lane.refused_bytes().is_some() {
+            if let Err(bytes) = lane.reserve_refused_with(reserve()) {
+                return Some(bytes);
+            }
+            let _ = lane.poll(cx);
+        }
+    }
+    None
+}
+
+/// Frames the combined drivers' backlogs (`feeds`) while their windows have
+/// room, the copies reserved in `spare`, only where their tasks are open:
+/// they hold slots, and a combined driver never queues for slots through
+/// another's poll (review R4-1). A lane whose task failed is not skipped
+/// here (its driver's other lanes would keep their slots, waiting for the
+/// `End` it holds back): [`drive_combined`]'s poll makes its failure the
+/// waiting driver's error first. Whether a cut moved, and the bytes the first frame whose copies
+/// the pool refuses still needs: nothing the waiting driver waits on frees
+/// them, so its caller asks for them (`Blocked` ends, the next `sink`
+/// returns `NeedMemory`) rather than leaving them to `finalize`, which
+/// waits for that driver.
+///
+/// The copies are charged to the waiting driver's consumer (`spare` is its
+/// reservation: the grant credit a `NeedMemory` adds to is what the retry
+/// uses), and in `blocked` its own frame's reserved copies are lent first
+/// (its frame grows them again on its next pass). They are freed when the
+/// combined task takes the frame; the arbitrator may ask that consumer to
+/// spill, which spills only the store.
+///
+/// A framing failure is the waiting driver's error (the combined driver's
+/// task, open and holding its slot, would wait for the frame forever, and
+/// `finalize` cannot start while the waiting driver waits); a copy stays in
+/// the combined feed.
+fn frame_combined(
+    specs: &[RelationLane],
+    window: usize,
+    feeds: &[CombinedFeed],
+    spare: &mut Reservation,
+    cx: &mut Context<'_>,
+) -> Result<(bool, Option<usize>)> {
+    let mut moved = false;
+    for (feed, lanes, partition) in feeds {
+        if !lanes.iter().all(Lane::opened) {
+            continue;
+        }
+        let mut theirs = lock(feed);
+        if theirs.backlog.is_empty() || theirs.failed.is_some() {
+            continue;
+        }
+        let before = theirs.backlog.len();
+        let flushed = flush_feed(specs, window, *partition, lanes, &mut theirs, spare, cx);
+        moved |= theirs.backlog.len() < before;
+        match flushed {
+            Ok(Flushed::Memory(bytes)) => return Ok((moved, Some(bytes))),
+            Ok(Flushed::All | Flushed::Window | Flushed::Slots) => {}
+            Err(e) => {
+                theirs.failed = Some(e.clone());
+                return Err(e);
+            }
+        }
+    }
+    Ok((moved, None))
+}
+
+/// Moves the combined drivers on for a driver waiting for their slots, in
+/// passes: their lanes polled with `cx`, their refused results reserved
+/// ([`reserve_combined`], in reservations split from `spare`), then their
+/// backlogs framed ([`frame_combined`]); again while a cut moved. A pump
+/// that takes a frame inside a poll can empty its window with no event to
+/// come (no result follows a frame mid-group), so the framing comes after
+/// the poll in every pass, as for the driver's own backlog (review R7-1,
+/// R7b-1): a pass that frames nothing saw each backlog's windows as the
+/// latest poll left them, so the loop ends only with a window still full
+/// after that poll (its pump's send pending, which wakes `cx`) or with
+/// nothing left to frame. A combined lane's failure is the waiting
+/// driver's error (R7b-2: the query fails, and `finalize`, which would
+/// report it, cannot start while this driver waits). The bytes the pool
+/// refuses (a result or a frame's copies), for the caller to ask for.
+fn drive_combined(
+    specs: &[RelationLane],
+    window: usize,
+    others: &[Lane],
+    feeds: &[CombinedFeed],
+    spare: &mut Reservation,
+    cx: &mut Context<'_>,
+) -> Result<Option<usize>> {
+    loop {
+        for lane in others {
+            if let Some(Err(e)) = lane.poll(cx) {
+                return Err(e);
+            }
+        }
+        // A combined driver's result the pool refused stops its task, which
+        // then never frees its slot: reserved here if the pool has room
+        // (its lane polled again), else the caller asks for the memory
+        // (R2-2).
+        if let Some(bytes) = reserve_combined(others, || spare.split(0), cx) {
+            return Ok(Some(bytes));
+        }
+        let (moved, missing) = frame_combined(specs, window, feeds, spare, cx)?;
+        if missing.is_some() {
+            return Ok(missing);
+        }
+        if !moved {
+            return Ok(None);
+        }
+    }
+}
+
+/// One slot per lane when a lane's task is not open yet (all of them at
+/// once, `admit.rs`), else none per lane; `None` while they wait for slots.
+fn admitted(
+    specs: &[RelationLane],
+    lanes: &[Lane],
+    tickets: &mut Vec<Option<super::RelationTicket>>,
+    cx: &mut Context<'_>,
+) -> Result<Option<Vec<Option<super::RelationSlot>>>> {
+    if lanes.iter().all(Lane::opened) {
+        return Ok(Some(specs.iter().map(|_| None).collect()));
+    }
+    match poll_admit(specs, tickets, cx) {
+        Poll::Ready(slots) => slots.map(Some),
+        Poll::Pending => Ok(None),
     }
 }
 
@@ -1023,7 +1427,10 @@ fn fresh_bytes(data: &arrow_data::ArrayData, input: &[(usize, usize)]) -> usize 
 /// backlog is empty and every lane's window has room; or early when a
 /// lane ended (its failure is the next call's), a result waits for memory,
 /// a frame's copies need memory or framing failed (the next call asks for
-/// the memory or returns the failure).
+/// the memory or returns the failure). While the lanes' tasks wait for
+/// slots it frames the `combined` drivers' backlogs ([`frame_combined`];
+/// ready early when such a frame's copies need memory) and polls their
+/// lanes, whose tasks hold slots until they end.
 fn blocked(
     specs: Arc<[RelationLane]>,
     lanes: Vec<Lane>,
@@ -1031,8 +1438,13 @@ fn blocked(
     mut spare: Reservation,
     window: usize,
     partition: u32,
+    combined: Arc<Mutex<Combined>>,
 ) -> BoxFuture<'static, ()> {
+    let wake = Arc::clone(&lock(&feed).wake);
     Box::pin(poll_fn(move |cx| {
+        // The driver's own polls (in `sink`) registered its waker: their
+        // events come here from now on.
+        let _ = wake.listen(cx.waker());
         loop {
             for lane in &lanes {
                 if lane.poll(cx).is_some() || lock(&lane.io).refused.is_some() {
@@ -1044,19 +1456,34 @@ fn blocked(
                 return Poll::Ready(());
             }
             let before = f.backlog.len();
-            match flush_feed(
-                &specs,
-                window,
-                partition,
-                &lanes,
-                &mut f.backlog,
-                &mut spare,
-            ) {
+            let flushed = flush_feed(&specs, window, partition, &lanes, &mut f, &mut spare, cx);
+            match flushed {
                 Err(e) => {
                     f.failed = Some(e);
                     return Poll::Ready(());
                 }
                 Ok(Flushed::Memory(_)) => return Poll::Ready(()),
+                Ok(Flushed::Slots) => {
+                    drop(f);
+                    // Their `End` frames out and results in, so their tasks
+                    // end and free the slots this driver waits for.
+                    let (others, feeds) = {
+                        let mut c = lock(&combined);
+                        register(&mut c.parked, cx.waker());
+                        (c.lanes.clone(), c.feeds.clone())
+                    };
+                    // Memory the pool refuses ends this future: the next
+                    // `sink` asks for it; a failure of their framing or of
+                    // a lane is its error.
+                    return match drive_combined(&specs, window, &others, &feeds, &mut spare, cx) {
+                        Ok(None) => Poll::Pending,
+                        Ok(Some(_)) => Poll::Ready(()),
+                        Err(e) => {
+                            lock(&feed).failed.get_or_insert(e);
+                            Poll::Ready(())
+                        }
+                    };
+                }
                 Ok(Flushed::All | Flushed::Window) => {
                     let (moved, empty) = (f.backlog.len() < before, f.backlog.is_empty());
                     drop(f);
@@ -1085,12 +1512,14 @@ impl Sink for RelationSink {
         Ok(Arc::new(RelGlobal {
             store: self.store.global_state(ctx)?,
             leftover: Mutex::new(Vec::new()),
+            combined: Arc::new(Mutex::new(Combined::default())),
         }))
     }
 
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<RelGlobal>(global, "PythonRelation")?;
         let consumer = ctx.consumer().consumer();
+        let wake = Arc::new(DriverWake::new());
         Ok(Box::new(RelLocal {
             consumer: Arc::clone(consumer),
             store: self.store.local_state(ctx, &g.store)?,
@@ -1107,15 +1536,19 @@ impl Sink for RelationSink {
                 held_rows: 0,
                 held_side: 0,
                 sides_seen: [false; 2],
-                held_bytes: consumer.reservation(),
-                held_bytes_rows: 0,
+                input_bytes: consumer.reservation(),
+                held_mem: Vec::new(),
                 feed: Arc::new(Mutex::new(Feed {
                     backlog: VecDeque::new(),
                     failed: None,
+                    tickets: Vec::new(),
+                    wake: Arc::clone(&wake),
                 })),
                 spare: consumer.reservation(),
                 wants: 0,
                 pending: Pending::default(),
+                awaiting_slots: false,
+                wake,
             },
         }))
     }
@@ -1133,15 +1566,42 @@ impl Sink for RelationSink {
         if let Some(status) = self.store_results(l, g)? {
             return Ok(status);
         }
-        if let Flushed::Memory(bytes) = self.flush(&mut l.driver)? {
-            return Ok(SinkStatus::NeedMemory { bytes });
+        match self.flush_now(&mut l.driver)? {
+            Flushed::Memory(bytes) => return Ok(SinkStatus::NeedMemory { bytes }),
+            Flushed::Slots => {
+                // The slots wait for a combined driver whose result the pool
+                // refused: the arbitrator decides (a spill, or the query's
+                // abort), never a hang. The input is not taken yet.
+                // So do the slots of a combined driver whose backlog's frame
+                // the pool refused its copies.
+                let (others, feeds) = {
+                    let c = lock(&g.combined);
+                    (c.lanes.clone(), c.feeds.clone())
+                };
+                // A fresh reservation of the driver's consumer: what a
+                // `NeedMemory` grant credits is what the retry draws.
+                let mut spare = l.consumer.reservation();
+                let waker = Waker::from(Arc::clone(&l.driver.wake));
+                let mut cx = Context::from_waker(&waker);
+                if let Some(bytes) = drive_combined(
+                    &self.lanes,
+                    self.window,
+                    &others,
+                    &feeds,
+                    &mut spare,
+                    &mut cx,
+                )? {
+                    return Ok(SinkStatus::NeedMemory { bytes });
+                }
+            }
+            Flushed::All | Flushed::Window => {}
         }
         if input.num_rows() > 0 {
             if let Some(status) = self.take_input(&mut l.driver, input)? {
                 return Ok(status);
             }
             // A refusal here waits for the next call, which asks for it.
-            self.flush(&mut l.driver)?;
+            self.flush_now(&mut l.driver)?;
             Self::progress(&l.driver)?;
         }
         // Blocked while cuts wait or a window is full: the future frames
@@ -1159,6 +1619,7 @@ impl Sink for RelationSink {
                 d.spare.split(0),
                 self.window,
                 d.partition,
+                Arc::clone(&g.combined),
             )));
         }
         Ok(SinkStatus::NeedMoreInput)
@@ -1180,8 +1641,24 @@ impl Sink for RelationSink {
             self.cut_held(&mut driver, true)?;
         }
         lock(&driver.feed).backlog.push_back(Cut::End);
-        self.flush(&mut driver)?;
+        self.flush_now(&mut driver)?;
         Self::progress(&driver)?;
+        // Its place in a slot queue would be polled again only in
+        // `finalize`, after every driver combined, and it holds back the
+        // siblings asking after it (review R4-1): it leaves the queue, and
+        // `finalize` asks again.
+        lock(&driver.feed).tickets.clear();
+        let parked = {
+            let mut c = lock(&g.combined);
+            c.lanes.extend(driver.lanes.iter().cloned());
+            c.feeds.push((
+                Arc::clone(&driver.feed),
+                driver.lanes.clone(),
+                driver.partition,
+            ));
+            std::mem::take(&mut c.parked)
+        };
+        wake_all(parked);
         lock(&g.leftover).push(driver);
         self.store.combine(store, &g.store)
     }
@@ -1251,7 +1728,7 @@ impl RelationSink {
     /// is done: no backlog, every task ended, every result stored (an
     /// aggregate's values left over are `check_complete`'s error).
     async fn finish_step(&self, d: &mut Driver, g: &RelGlobal, ctx: &TaskContext) -> Result<bool> {
-        d.wants = wanted(self.flush(d)?);
+        d.wants = wanted(self.flush_finalizing(d)?);
         let mut batches = Vec::new();
         let mut held = Vec::new();
         if let Some((batch, memory)) = d.ready.take() {
@@ -1285,12 +1762,21 @@ impl RelationSink {
             if !free && reservation.try_grow(bytes).is_ok() {
                 self.store.add_part(&g.store, batches, reservation)?;
             } else {
-                drop((reservation, handle.reservation_from_credit(lent)));
-                self.store.add_spilled_part(&g.store, batches, ctx).await?;
+                // The results' bytes stay lent to the consumer's credit
+                // until they are written out, and the writer's scratch (a
+                // reservation of the same consumer) draws them first, when
+                // the pool may have nothing else. So the spill write's
+                // working memory is not counted on top of the batches: the
+                // pool counts max(lent, scratch) during the write, not
+                // their sum. What is left goes back after.
+                drop(reservation);
+                let written = self.store.add_spilled_part(&g.store, batches, ctx).await;
+                drop(handle.reservation_from_credit(lent));
+                written?;
             }
         }
         if d.wants > 0 {
-            d.wants = wanted(self.flush(d)?);
+            d.wants = wanted(self.flush_finalizing(d)?);
         }
         if aggregate {
             // The stored results' memory is free again; a value still
@@ -1308,8 +1794,8 @@ impl RelationSink {
 
     /// Waits until a driver can move: a lane yielded (for an aggregate:
     /// every lane, as `pair::joined` needs, or a refused value got its
-    /// memory), failed, ended or freed room in its window for a backlog; or
-    /// the query was cancelled.
+    /// memory), failed, ended or freed room in its window for a backlog, or
+    /// the slots its backlog waits for freed; or the query was cancelled.
     async fn wait(&self, drivers: &[Driver], ctx: &TaskContext) -> Result<()> {
         let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
         let mut reserving: Vec<BoxFuture<'static, Result<()>>> = if aggregate {
@@ -1333,6 +1819,9 @@ impl RelationSink {
             let mut ready = false;
             let mut all_done = true;
             for d in drivers {
+                if d.wake.listen(cx.waker()) {
+                    ready = true;
+                }
                 let mut room = true;
                 let mut joinable = aggregate;
                 for lane in &d.lanes {
@@ -1351,7 +1840,7 @@ impl RelationSink {
                     room &= q.in_flight() < self.window;
                 }
                 let backlog = !lock(&d.feed).backlog.is_empty();
-                ready |= joinable || (room && backlog);
+                ready |= joinable || (room && backlog && !d.awaiting_slots);
                 all_done &= !backlog && d.ready.is_none();
             }
             if ready || all_done {
@@ -1368,7 +1857,7 @@ impl RelationSink {
 fn wanted(flushed: Flushed) -> usize {
     match flushed {
         Flushed::Memory(bytes) => bytes,
-        Flushed::All | Flushed::Window => 0,
+        Flushed::All | Flushed::Window | Flushed::Slots => 0,
     }
 }
 

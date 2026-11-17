@@ -34,7 +34,7 @@ fn field(id: i32, name: &str, ty: IcebergType) -> SchemaField {
 }
 
 /// A data file with `rows` rows and nothing else known.
-pub(super) fn file(rows: u64) -> ContentFile {
+pub(crate) fn file(rows: u64) -> ContentFile {
     ContentFile {
         content: ContentKind::Data,
         path: "f.parquet".to_owned(),
@@ -1153,4 +1153,333 @@ fn uuid_bounds_are_not_used() {
         S::Utf8("ffffffff-ffff-ffff-ffff-ffffffffffff".to_owned()),
     );
     assert!(keeps(&fields, &unpartitioned(), &f, &e));
+}
+
+/// Review N4: an equality delete is never offered to a data file whose
+/// partition tuple it cannot be compared with; one of an equal tuple applies,
+/// one of another tuple does not.
+#[test]
+fn equality_deletes_with_unreadable_partitions_are_refused() {
+    use std::sync::Arc;
+
+    use super::deletes::DeleteIndex;
+    use super::entry::{DataFileEntry, DeleteFileEntry};
+    use krishiv_common::error::ErrorClass;
+
+    let specs = spec(vec![pfield(1000, 1, Transform::Identity, IcebergType::Int)]);
+    let entry = |path: &str, p: PartitionValue, seq: i64| {
+        let mut f = partitioned(vec![p]);
+        f.path = path.to_owned();
+        DataFileEntry {
+            file: f,
+            status: EntryStatus::Added,
+            snapshot_id: 1,
+            data_sequence_number: Some(seq),
+            file_sequence_number: Some(seq),
+        }
+    };
+    let one = value(&ScalarValue::Int32(1), &IcebergType::Int);
+    let two = value(&ScalarValue::Int32(2), &IcebergType::Int);
+    let eq = |p: PartitionValue| {
+        let mut e = entry("eq.parquet", p, 2);
+        e.file.content = ContentKind::EqualityDeletes;
+        e.file.equality_ids = Some(vec![1]);
+        Arc::new(DeleteFileEntry {
+            entry: e,
+            kind: DeleteKind::EqualityDelete,
+        })
+    };
+    let index = DeleteIndex::new(&[eq(one.clone())], &specs).unwrap();
+    let same = index.for_data_file(&entry("a", one.clone(), 1)).unwrap();
+    assert_eq!(same.equality_deletes.len(), 1);
+    let other = index.for_data_file(&entry("b", two, 1)).unwrap();
+    assert!(other.equality_deletes.is_empty());
+    let e = index
+        .for_data_file(&entry("c", PartitionValue::Unreadable, 1))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    let index = DeleteIndex::new(&[eq(PartitionValue::Unreadable)], &specs).unwrap();
+    let e = index
+        .for_data_file(&entry("a", one.clone(), 1))
+        .unwrap_err();
+    assert!(e.message().contains("eq.parquet"), "{e}");
+    // Not newer than the data: never compared, so no error.
+    assert!(
+        index
+            .for_data_file(&entry("a", one, 2))
+            .unwrap()
+            .equality_deletes
+            .is_empty()
+    );
+}
+
+/// The spec's appendix B hash vectors (apache-iceberg 1.12.0 `format/spec.md`,
+/// "32-bit Hash Requirements"), and `bucket[N]` = `(hash & i32::MAX) % N` over
+/// them: Krishiv computes the partition values of what it writes (design note
+/// §6.1), so these must be bit-exact with Java's.
+#[test]
+fn bucket_transform_vectors() {
+    use IcebergType as T;
+    use ScalarValue as S;
+    // 2017-11-16 and 2017-11-16T22:31:08 from the epoch.
+    let day = 17_486;
+    let micros: i64 = (17_486 * 86_400 + 22 * 3_600 + 31 * 60 + 8) * 1_000_000;
+    let cases: Vec<(T, S, i32)> = vec![
+        (T::Int, S::Int32(34), 2_017_239_379),
+        (T::Long, S::Int64(34), 2_017_239_379),
+        (
+            T::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            S::Decimal128 {
+                unscaled: 1420,
+                precision: 9,
+                scale: 2,
+            },
+            -500_754_589,
+        ),
+        (T::Date, S::Date32(day), -653_330_422),
+        (T::Timestamp, S::TimestampMicros(micros), -2_047_944_441),
+        (T::Timestamp, S::TimestampMicros(micros + 1), -1_207_196_810),
+        (T::Timestamptz, S::TimestampMicros(micros), -2_047_944_441),
+        (T::String, S::Utf8("iceberg".to_owned()), 1_210_000_089),
+        (
+            T::Uuid,
+            S::Utf8("f79c3e09-677c-4bbd-a479-3f349cb785e7".to_owned()),
+            1_488_055_340,
+        ),
+        (T::Fixed(4), S::Binary(vec![0, 1, 2, 3]), -188_683_207),
+        (T::Binary, S::Binary(vec![0, 1, 2, 3]), -188_683_207),
+    ];
+    for (ty, v, hash) in &cases {
+        assert_eq!(transform::bucket_hash(ty, v), Some(*hash), "{ty:?} {v:?}");
+        for n in [1u32, 16, 1000] {
+            let n_i32 = i32::try_from(n).unwrap();
+            assert_eq!(
+                transform::apply(Transform::Bucket(n), ty, v),
+                Some(S::Int32((hash & i32::MAX) % n_i32)),
+                "bucket[{n}] {ty:?} {v:?}"
+            );
+        }
+    }
+    // Appendix B's `time` and `timestamp_ns` rows are not here: Krishiv has no
+    // value of either type yet (no `ScalarValue` for them), so it cannot bucket
+    // them, and a write of one fails (`partition_value`).
+    assert_eq!(
+        transform::bucket_hash(&T::Time, &S::Int64(81_068_000_000)),
+        None
+    );
+    assert_eq!(
+        transform::bucket_hash(&T::TimestampNs, &S::TimestampMicros(micros)),
+        None
+    );
+    // Types the spec does not bucket.
+    assert_eq!(transform::bucket_hash(&T::Boolean, &S::Boolean(true)), None);
+    assert_eq!(transform::bucket_hash(&T::Double, &S::Float64(1.0)), None);
+}
+
+/// A write's partition values: `void` and a null source are null; a
+/// transform Krishiv cannot compute fails instead of writing the null
+/// partition (review 36a S5).
+#[test]
+fn partition_values_for_writes() {
+    use IcebergType as T;
+    use ScalarValue as S;
+    use transform::partition_value as pv;
+    assert_eq!(
+        pv(Transform::Void, &T::Long, Some(&S::Int64(1))).unwrap(),
+        None
+    );
+    assert_eq!(pv(Transform::Day, &T::Date, None).unwrap(), None);
+    assert_eq!(
+        pv(Transform::Day, &T::Date, Some(&S::Date32(17_486))).unwrap(),
+        Some(S::Date32(17_486))
+    );
+    assert_eq!(
+        pv(Transform::Bucket(16), &T::Int, Some(&S::Int32(34))).unwrap(),
+        Some(S::Int32(2_017_239_379 % 16))
+    );
+    for (t, ty, v) in [
+        (Transform::Bucket(4), T::Double, S::Float64(1.0)),
+        (Transform::Unknown, T::Long, S::Int64(1)),
+        // A literal of another type than the source.
+        (Transform::Identity, T::Long, S::Int32(1)),
+    ] {
+        let e = pv(t, &ty, Some(&v)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+    }
+}
+
+/// Java's assignment refusals and the path a position delete names through
+/// equal `file_path` bounds (`ContentFileUtil.referencedDataFile`).
+#[test]
+fn delete_index_refusals_and_bound_scoped_position_deletes() {
+    use std::sync::Arc;
+
+    use super::deletes::{DELETE_FILE_PATH_ID, DeleteIndex};
+    use super::entry::{DataFileEntry, DeleteFileEntry};
+    use krishiv_common::error::ErrorClass;
+
+    let specs = unpartitioned();
+    let data = |path: &str, spec_id: i32, p: Vec<PartitionValue>, seq: Option<i64>| {
+        let mut f = file(3);
+        f.path = path.to_owned();
+        f.spec_id = spec_id;
+        f.partition = p;
+        DataFileEntry {
+            file: f,
+            status: EntryStatus::Added,
+            snapshot_id: 1,
+            data_sequence_number: seq,
+            file_sequence_number: seq,
+        }
+    };
+    let del = |kind: DeleteKind, mut e: DataFileEntry| {
+        e.file.content = match kind {
+            DeleteKind::EqualityDelete => ContentKind::EqualityDeletes,
+            _ => ContentKind::PositionDeletes,
+        };
+        Arc::new(DeleteFileEntry { entry: e, kind })
+    };
+    let invalid = |e: krishiv_common::error::KrishivError| {
+        assert_eq!(e.error_class(), ErrorClass::KrishivIcebergInvalidDeletes);
+        e.message().to_owned()
+    };
+
+    // A delete file without a data sequence number.
+    let no_seq = del(
+        DeleteKind::PositionDelete,
+        data("d.parquet", 0, vec![], None),
+    );
+    let m = invalid(DeleteIndex::new(&[no_seq], &specs).unwrap_err());
+    assert_eq!(
+        m,
+        "Delete file d.parquet has no data sequence number: the table metadata is corrupted"
+    );
+    // A DV that names no data file.
+    let dv = del(
+        DeleteKind::DeletionVector,
+        data("v.puffin", 0, vec![], Some(2)),
+    );
+    let m = invalid(DeleteIndex::new(&[dv], &specs).unwrap_err());
+    assert_eq!(m, "Deletion vector v.puffin has no referenced data file");
+    // An equality delete of a spec the table does not have.
+    let eq = del(
+        DeleteKind::EqualityDelete,
+        data("e.parquet", 7, vec![], Some(2)),
+    );
+    let m = invalid(DeleteIndex::new(&[eq], &specs).unwrap_err());
+    assert_eq!(m, "Delete file e.parquet has the unknown partition spec 7");
+
+    // No deletes at all: nothing is assigned, whatever the data file.
+    let none = DeleteIndex::new(&[], &specs).unwrap();
+    assert!(none.is_empty());
+    assert!(
+        none.for_data_file(&data("a", 0, vec![], None))
+            .unwrap()
+            .is_empty()
+    );
+
+    // Equal path bounds scope a position delete file to one data file.
+    let mut scoped = data("pd.parquet", 0, vec![], Some(2));
+    scoped
+        .file
+        .lower_bounds
+        .insert(DELETE_FILE_PATH_ID, b"a".to_vec());
+    scoped
+        .file
+        .upper_bounds
+        .insert(DELETE_FILE_PATH_ID, b"a".to_vec());
+    let scoped = del(DeleteKind::PositionDelete, scoped);
+    let index = DeleteIndex::new(&[Arc::clone(&scoped)], &specs).unwrap();
+    assert_eq!(
+        index
+            .for_data_file(&data("a", 0, vec![], Some(1)))
+            .unwrap()
+            .position_deletes
+            .len(),
+        1
+    );
+    assert!(
+        index
+            .for_data_file(&data("b", 0, vec![], Some(1)))
+            .unwrap()
+            .is_empty()
+    );
+    // Different bounds, or bounds that are not UTF-8, scope nothing.
+    for (lo, hi) in [(b"a".to_vec(), b"b".to_vec()), (vec![0xFF], vec![0xFF])] {
+        let mut e = data("pd2.parquet", 0, vec![], Some(2));
+        e.file.lower_bounds.insert(DELETE_FILE_PATH_ID, lo);
+        e.file.upper_bounds.insert(DELETE_FILE_PATH_ID, hi);
+        let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, e)], &specs).unwrap();
+        // Partition-wide: it applies to a file of its spec and partition.
+        assert_eq!(
+            index
+                .for_data_file(&data("a", 0, vec![], Some(1)))
+                .unwrap()
+                .position_deletes
+                .len(),
+            1
+        );
+    }
+
+    // A data file without a sequence number in a snapshot with deletes.
+    let m = invalid(
+        DeleteIndex::new(&[Arc::clone(&scoped)], &specs)
+            .unwrap()
+            .for_data_file(&data("a", 0, vec![], None))
+            .unwrap_err(),
+    );
+    assert_eq!(
+        m,
+        "Data file a has no data sequence number: deletes cannot be assigned to it"
+    );
+
+    // A file-scoped delete of another spec or another partition tuple.
+    let mut other_spec = data("pd3.parquet", 1, vec![], Some(2));
+    other_spec.file.referenced_data_file = Some("a".to_owned());
+    let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, other_spec)], &specs).unwrap();
+    let m = invalid(
+        index
+            .for_data_file(&data("a", 0, vec![], Some(1)))
+            .unwrap_err(),
+    );
+    assert_eq!(
+        m,
+        "Mismatched partition specs (1, 0) for delete file pd3.parquet and data file a: \
+         metadata is corrupted"
+    );
+    let one = value(&ScalarValue::Int32(1), &IcebergType::Int);
+    let two = value(&ScalarValue::Int32(2), &IcebergType::Int);
+    let mut other_tuple = data("pd4.parquet", 1, vec![one.clone()], Some(2));
+    other_tuple.file.referenced_data_file = Some("a".to_owned());
+    let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, other_tuple)], &specs).unwrap();
+    let m = invalid(
+        index
+            .for_data_file(&data("a", 1, vec![two], Some(1)))
+            .unwrap_err(),
+    );
+    assert!(
+        m.starts_with("Mismatched partition tuples (")
+            && m.ends_with("for delete file pd4.parquet and data file a: metadata is corrupted"),
+        "{m}"
+    );
+    // The same tuple is fine.
+    assert_eq!(
+        index
+            .for_data_file(&data("a", 1, vec![one], Some(1)))
+            .unwrap()
+            .position_deletes
+            .len(),
+        1
+    );
 }

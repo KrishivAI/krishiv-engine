@@ -9,8 +9,6 @@ on:
   schedule:
     # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
     - cron: "23 22 * * *"
-    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
-    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:
@@ -202,8 +200,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes --no-deps \
+            -r tests/udf-worker/requirements.txt
       - run: cargo xtask coverage --all-features --html --no-branch
         env:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python

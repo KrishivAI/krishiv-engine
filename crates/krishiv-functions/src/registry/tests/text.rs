@@ -281,3 +281,23 @@ fn to_char_of_a_binary_refuses_a_null_format() {
         );
     }
 }
+
+#[test]
+fn from_avro_refuses_options_that_are_not_a_constant_map_of_strings() {
+    // `from_avro(bytes, '"int"', 1)`: the third argument must be a constant map of strings to strings.
+    let args = [
+        ty(DataType::Binary),
+        ty(DataType::String),
+        ty(DataType::Integer),
+    ];
+    let err = result(
+        "from_avro",
+        &args,
+        &[None, Some(Constant::String("\"int\"".to_owned())), None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchTypeCheckFailureWithHint
+    );
+}

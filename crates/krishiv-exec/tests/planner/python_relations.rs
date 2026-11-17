@@ -15,7 +15,9 @@ use futures::future::BoxFuture;
 use futures::task::AtomicWaker;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
-use krishiv_exec::python_relation::{Frame, PreparedRelationUdf, RelationCallSpec, UdfTask};
+use krishiv_exec::python_relation::{
+    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, UdfTask,
+};
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, FunctionKind, GeneratorKind, Grouping, LogicalPlan, Plan,
     PlanNode, PythonEvalType, PythonUdfRef, ResolvedExpr, ResolvedFunction,
@@ -122,7 +124,7 @@ struct Prepared {
 }
 
 impl PreparedRelationUdf for Prepared {
-    fn open(&self) -> Result<Box<dyn UdfTask>, KrishivError> {
+    fn open(&self, _slot: Option<RelationSlot>) -> Result<Box<dyn UdfTask>, KrishivError> {
         let own: Log = Arc::default();
         self.per_task.lock().unwrap().push(Arc::clone(&own));
         Ok(Box::new(Task {
@@ -818,9 +820,11 @@ fn a_scalar_python_call_over_a_python_aggregate_runs_above_it() {
 }
 
 /// A keyless Python aggregate over no rows yields no row: Spark's
-/// `ArrowAggregatePythonExec` (L156-157 at v4.2.0) returns an empty
-/// partition as it is, without calling the UDF, unlike a built-in global
-/// aggregate's one row.
+/// `ArrowAggregatePythonExec` (ArrowAggregatePythonExec.scala L156-157 at
+/// v4.2.0: `mapPartitionsInternal { iter => if (iter.isEmpty) iter else
+/// ...`) returns an empty partition as it is, without calling the UDF,
+/// unlike a built-in global aggregate's one row. Pinned from the source
+/// only: a Spark-run golden awaits a lane with Spark.
 #[test]
 fn a_keyless_python_aggregate_over_no_rows_yields_no_row() {
     let env = env();
@@ -859,6 +863,77 @@ fn two_python_aggregates_pair_their_values_per_key() {
     }
     assert!(rows.contains(&"NULL|2|2".to_owned()), "{rows:?}");
     assert!(rows.contains(&"5|1|1".to_owned()), "{rows:?}");
+}
+
+/// A grouped or cogrouped map over a nondeterministic UDF is refused with
+/// `INVALID_NON_DETERMINISTIC_EXPRESSIONS`: Spark's `CheckAnalysis` allows
+/// a nondeterministic expression on a few operators only, of the Python
+/// ones `MapInPandas` and `MapInArrow` (CheckAnalysis.scala L1032-1052 at
+/// v4.2.0), and a node's `functionExpr` is a `PythonUDF` whose
+/// `deterministic` is `udfDeterministic`. A map stays allowed.
+#[test]
+fn a_nondeterministic_grouped_or_cogrouped_map_udf_is_refused() {
+    let env = env();
+    let random = |name: &str, eval_type| PythonUdfRef {
+        deterministic: false,
+        ..udf(name, eval_type)
+    };
+    let refused = |node: LogicalPlan| {
+        let plan = krishiv_optimizer::optimize(&Plan::try_new(node).unwrap()).unwrap();
+        krishiv_exec::planner::PhysicalPlanner::plan(
+            &krishiv_exec::planner::DefaultPlanner,
+            &plan,
+            &env.cx(),
+        )
+        .unwrap_err()
+    };
+    let (input_, cols) = input(&env, "SELECT a, b FROM t");
+    let err = refused(LogicalPlan::new(PlanNode::GroupMap {
+        input: input_,
+        keys: vec![col(&cols[0])],
+        udf: random("count", PythonEvalType::GroupedMapPandas),
+        output: counted(),
+    }));
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::InvalidNonDeterministicExpressions,
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains(r#""a", "count(a, b)", "n""#),
+        "{err}"
+    );
+    let (left, lc) = input(&env, "SELECT a, b FROM t");
+    let (right, rc) = input(&env, "SELECT a AS c, s FROM t WHERE a < 2");
+    let err = refused(LogicalPlan::new(PlanNode::CoGroupMap {
+        left,
+        right,
+        left_keys: vec![col(&lc[0])],
+        right_keys: vec![col(&rc[0])],
+        udf: random("count", PythonEvalType::CogroupedMapArrow),
+        output: counted(),
+    }));
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::InvalidNonDeterministicExpressions,
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains(r#""count(a, b, c, s)", "n""#),
+        "{err}"
+    );
+    let (input_, cols) = input(&env, "SELECT a, b FROM t");
+    let node = LogicalPlan::new(PlanNode::MapPartitions {
+        input: input_,
+        udf: random("echo", PythonEvalType::MapArrowIter),
+        output: vec![
+            bound(900, "x", cols[0].data_type.clone()),
+            bound(901, "y", cols[1].data_type.clone()),
+        ],
+        barrier: false,
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    assert_eq!(lines(&out).len(), 10);
 }
 
 #[test]

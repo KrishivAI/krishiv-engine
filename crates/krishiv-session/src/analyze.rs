@@ -5,12 +5,21 @@
 //! [`Session::analyze`] and [`Session::analyze_plan`] stop at the analyzed plan: nothing is optimized or
 //! planned physically (the step that evaluates a recursive CTE's `UnionLoop`), no row is read, no UDF is
 //! invoked, nothing spills. Reads go through the session's access policy as on a run (a denied read fails
-//! with the same 42501); targets are listed, not authorized.
+//! with the same 42501); targets are listed, not authorized: their checks run only quietly (no audit record, no
+//! denial count), to decide whether to list a target's directories.
 //!
-//! Not listed: the directory of a managed table. A run of `DROP TABLE`, `TRUNCATE TABLE` or `INSERT` on a
-//! managed table also checks `MODIFY` (and for `INSERT`, `CREATE`) on the table's directory, but only when
-//! the directory exists and on its resolved path; listing it would take file-system I/O and would not be
-//! deterministic. The integration test `securables_equal_what_a_run_authorizes` pins these cases.
+//! Directories: a run of `DROP TABLE` or `TRUNCATE TABLE` on a managed table also asks `MODIFY` on the
+//! table's directory when it exists, a run of `INSERT` asks `MODIFY` and `CREATE` on the table's
+//! location, and `CREATE TABLE`, CTAS, `ALTER TABLE ... RENAME TO` and `DROP NAMESPACE ... CASCADE` ask
+//! about the directories they make, move or delete; analyze lists them after the targets, only where the
+//! run asks ([`dirs`]), as the qualified path the run's 42501 names (`file:` for a local one, the store URL
+//! for an object store; the policy gets a local path with its links resolved). They are listed only when a
+//! quiet trial of the run's own target check passes: a caller denied a target learns nothing about it from
+//! analyze (whether it exists, its kind, its location), as from a run. Listing them reads the file system
+//! (whether the directory exists), so the list is the directory's state at analysis. Not listed yet: the
+//! partition directories of `ADD`, `DROP` and `RENAME PARTITION` and `MSCK REPAIR TABLE` ([`dirs`]). The
+//! integration test `securables_equal_what_a_run_authorizes` checks the list against the run's questions
+//! and pins those differences.
 //!
 //! [`Analysis::to_json`] writes the `krishiv.analyze.v1` document
 //! (`docs/reference/analyze/krishiv.analyze.v1.schema.json`, described by
@@ -18,19 +27,32 @@
 //! by ordinal, sources, filters, columns and warnings sorted, and no process-local value (attribute ids)
 //! in it. Securables print through `Securable`'s `Display`, the 42501 text (ADR 0038 redaction, reused).
 //!
-//! Known gaps, owned by N3: a statement whose reads are not whole queries (a multi-table `INSERT` with a
-//! shared `FROM`, `UPDATE`, `DELETE` with a subquery predicate, `EXECUTE IMMEDIATE`, scripts, variable
-//! expressions) is `partial` with only its targets and the warning `UNSUPPORTED_READ_SHAPE`; `MERGE`
-//! reports what `statement_queries` gives today (its source query), not the subqueries of its `ON`,
-//! clause conditions or `SET` values; `EXECUTE IMMEDIATE` is always `SESSION`.
+//! Reads (N3, design §3.2): a statement's reads are the queries `krishiv_sql::statement_reads` gives,
+//! whole `SELECT`s or built from its own expressions (`UPDATE`, `DELETE`, a multi-table `INSERT` with a
+//! shared `FROM`). A statement whose reads are not known from its text is `partial`, with only its targets
+//! and the warning `UNSUPPORTED_READ_SHAPE`: a `MERGE` or `INSERT ... REPLACE` with a subquery in an
+//! expression (fail closed), `EXECUTE IMMEDIATE` with `USING` arguments (the targets of its text are
+//! listed) or of non-literal text (`ADMIN`, with no `MANAGE`: dynamic SQL), scripts and variable
+//! expressions. `EXECUTE IMMEDIATE` of literal text is analyzed as the statement it holds.
 //!
-//! Output schema and lineage are a query's (`Statement::Query`). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or
-//! `RESET` command has the result columns the session returns for it ([`command_schema`]; `RESET` and
-//! `SET PATH` have none) and no lineage. Any other statement (writes, DDL) has neither, but its reads are
-//! listed.
+//! Output schema and lineage are a query's (`Statement::Query`). A write of one query (`INSERT INTO|OVERWRITE
+//! ... SELECT|VALUES` with one clause, `CREATE [OR REPLACE] TABLE ... AS SELECT`) has that query's output
+//! schema and lineage: the columns as the query returns them (its names, types and nullability), not mapped
+//! onto the target table's columns (the design note defines no such mapping; T063 N1b item 3): ordinal `i`
+//! is the query's `i`-th column, which with a column list, `BY NAME`, static partition values or defaults
+//! is not the target's `i`-th column. A
+//! multi-table `INSERT` has neither (several queries). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET`
+//! command has the result columns the session returns for it ([`command_schema`]; `RESET` and `SET PATH`
+//! have none) and no lineage; an `EXPLAIN` of a write keeps the `plan` column and no lineage, since Spark
+//! gives `EXPLAIN` no data schema of the statement it explains. Any other statement (DDL) has neither, but
+//! its reads are listed.
 //!
-//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]). The frames the commands return
-//! are built from literal rows and do not carry it yet (a follow-up).
+//! Each securable carries `display`, the securable as the 42501 denial text prints it: a Krishiv addition
+//! to the design's v1 shape (an additive member), so a caller can show a requirement exactly as a denial
+//! would name it.
+//!
+//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]); the frames the commands return
+//! are built from the same column tables, so they carry the same nullability.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -50,7 +72,8 @@ use krishiv_types::DataType;
 use crate::access::StatementInfo;
 use crate::session::{Session, internal};
 
-mod command_schema;
+pub(crate) mod command_schema;
+mod dirs;
 #[cfg(test)]
 mod tests;
 
@@ -65,10 +88,12 @@ pub struct Analysis {
     pub info: StatementInfo,
     /// Whether its reads are not fully known: then it is not provably read-only.
     pub partial: bool,
-    /// The result columns: a query's, or a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` command's (see
-    /// the module doc); else empty.
+    /// The result columns: a query's; for a write of one query, the columns that query produces (the
+    /// statement itself returns none); or a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` command's
+    /// (see the module doc); else empty.
     pub output_schema: Vec<OutputColumn>,
-    /// Per output ordinal of a query, its sources and transform (else empty).
+    /// Per output ordinal of a query (a write's of one query too: the query's ordinal, not the target
+    /// column it lands in), its sources and transform (else empty).
     pub lineage: Vec<ColumnLineage>,
     /// The columns that decide which rows or groups (a query's), sorted.
     pub filters: BTreeSet<(FilterKind, Leaf)>,
@@ -204,8 +229,54 @@ impl Session {
 
     async fn analyze_here(&self, sql: &str) -> Result<Analysis, KrishivError> {
         let parts = self.statement_parts(sql).await?;
+        Analysis::of_parts(self.with_directories(parts).await)
+    }
+
+    /// `parts` with the directory securables a run of its statement also asks ([`dirs`]), after its
+    /// targets; none for a `partial` statement (its run is not known).
+    ///
+    /// Gated (T063 N1b review B2): a run checks the statement's targets before it looks up any table
+    /// or directory, so a caller denied a target learns nothing about it, not even whether it exists.
+    /// The directories are listed only when a quiet trial of that same check passes
+    /// ([`Session::targets_allowed_quietly`]: no audit record, no denial count); otherwise nothing more
+    /// is listed, and the output is the one a missing table gives. A statement whose list names
+    /// what a listing shows (`DROP NAMESPACE ... CASCADE`: its tables) also needs that listing's
+    /// right, asked as quietly ([`Session::listing_allowed_quietly`], review D1).
+    async fn with_directories(
+        &self,
+        mut parts: crate::access::StatementParts,
+    ) -> crate::access::StatementParts {
+        if parts.partial || !dirs::may_list(&parts.statement) {
+            return parts;
+        }
+        let env = self.query_env();
+        if self.targets_allowed_quietly(&parts.statement, &env).await
+            && self.listing_allowed_quietly(&parts.statement, &env).await
+        {
+            let dirs = self.directory_securables(&parts, &env);
+            crate::access::merge_reads(&mut parts.info.securables, &dirs);
+        }
+        parts
+    }
+
+    /// The analysis of the parsed `statement`, whose spans index `text` (redacted: `redacted`): what
+    /// `EXPLAIN FORMAT JSON <statement>` returns. Nothing runs.
+    pub(crate) async fn analyze_statement(
+        &self,
+        statement: Statement,
+        text: &str,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<Analysis, KrishivError> {
+        let parts = self.parts_of_statement(statement, text, redacted).await?;
+        Analysis::of_parts(self.with_directories(parts).await)
+    }
+}
+
+impl Analysis {
+    /// The analysis of a statement from its parts.
+    fn of_parts(parts: crate::access::StatementParts) -> Result<Self, KrishivError> {
         if parts.partial {
-            return Ok(Analysis {
+            return Ok(Self {
                 info: parts.info,
                 partial: true,
                 output_schema: Vec::new(),
@@ -215,8 +286,15 @@ impl Session {
             });
         }
         match (&parts.statement, &parts.analyzed[..]) {
-            (Statement::Query(_), [analyzed]) => Analysis::of_query(parts.info, analyzed),
-            (statement, _) => Ok(Analysis {
+            (Statement::Query(_), [analyzed]) => Self::of_query(parts.info, analyzed),
+            // A write of one query: that query's own columns and lineage (see the module doc).
+            (Statement::Insert(i), [analyzed]) if i.clauses.len() == 1 => {
+                Self::of_query(parts.info, analyzed)
+            }
+            (Statement::CreateTable(t), [analyzed]) if t.as_query.is_some() => {
+                Self::of_query(parts.info, analyzed)
+            }
+            (statement, _) => Ok(Self {
                 info: parts.info,
                 partial: false,
                 output_schema: command_schema(statement).unwrap_or_default(),
@@ -226,9 +304,7 @@ impl Session {
             }),
         }
     }
-}
 
-impl Analysis {
     /// The analysis of a query: its output schema and lineage.
     fn of_query(info: StatementInfo, analyzed: &AnalyzedPlan) -> Result<Self, KrishivError> {
         let l = lineage(analyzed)?;

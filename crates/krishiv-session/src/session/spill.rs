@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Per-query spill scopes and the target of a write.
+//! Per-query spill scopes, the worker context a query's plans run with, and the target of a write.
 
 use super::*;
 
@@ -28,7 +28,9 @@ impl SpillScopes for QuerySpill {
             .unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             let manager = SpillManager::open(&SpillConfig::from_config(&self.state.runtime.config))
-                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
+                .map_err(|e| internal(format!(
+                    "cannot set up the spill directory (set `krishiv.spill.dir` to a writable local directory): {e}"
+                )))?;
             *slot = Some(manager);
         }
         slot.as_ref().map_or_else(

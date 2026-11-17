@@ -36,6 +36,7 @@ mod error;
 mod format;
 pub mod io;
 pub mod json;
+mod name_mapping;
 mod options;
 pub mod parquet;
 mod registry;
@@ -75,6 +76,11 @@ pub use io::{
     query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
+/// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
+pub use krishiv_store::egress;
+/// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
+#[cfg(feature = "cloud")]
+pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
@@ -83,6 +89,7 @@ pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 pub use take::{RowFile, TakeRequest, TakeStream, take};
 
 pub use constants::{FileConstants, scalar_column};
+pub use name_mapping::{MappedField, NameMapping};
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},

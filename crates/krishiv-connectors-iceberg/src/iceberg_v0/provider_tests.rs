@@ -2,7 +2,7 @@
 //! Tests of [`IcebergTableProvider`] through SQL (analyzer, optimizer, planner
 //! and executor) over tables written by iceberg-rust's in-memory catalog with
 //! Parquet files written here: identity partitions from the manifest, files
-//! without field ids, delete files refused, time travel, and the 22 TPC-H
+//! without field ids, a missing delete file, time travel, and the 22 TPC-H
 //! queries against the same Parquet files read as a plain file table.
 
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ use krishiv_types::StructType;
 use super::provider::IcebergTableProvider;
 use super::storage::{KrishivStorageFactory, StorageRegistration};
 use super::table::IcebergTable;
-use super::tests::local;
+use super::tests::local_on;
 use crate::plan::VersionSpec;
 
 /// A runtime for the I/O side, a registration over the local file system and
@@ -56,6 +56,16 @@ pub(super) struct Env {
 }
 
 pub(super) fn env() -> Env {
+    let store = Arc::new(object_store::local::LocalFileSystem::new());
+    env_on(store, krishiv_io::IoConfig::default())
+}
+
+/// [`env`] over `store` (a wrapper of the local file system) with the
+/// scheduler's settings `config`.
+pub(super) fn env_on(
+    store: Arc<dyn object_store::ObjectStore>,
+    config: krishiv_io::IoConfig,
+) -> Env {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -64,7 +74,7 @@ pub(super) fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = {
         let _entered = rt.enter();
-        local(dir.path())
+        local_on(dir.path(), store, config)
     };
     let factory = Arc::new(KrishivStorageFactory {
         name: reg.name().to_owned(),
@@ -265,6 +275,23 @@ impl Session {
         })
     }
 
+    /// The physical plan of `sql` as `EXPLAIN` prints it.
+    pub(super) fn explain(&self, sql: &str) -> String {
+        let plan =
+            krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .unwrap();
+        let plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))
+            .unwrap()
+            .plan;
+        let plan = krishiv_optimizer::optimize(&plan).unwrap();
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner
+            .plan(&plan, &cx)
+            .unwrap()
+            .explain_all()
+            .to_string()
+    }
+
     /// [`Self::run`]'s rows rendered as `a|b|c`.
     pub(super) fn rows(&self, sql: &str) -> Vec<String> {
         render(&self.run(sql).unwrap_or_else(|e| panic!("{sql}: {e}")))
@@ -455,8 +482,9 @@ fn identity_partitions_come_from_the_manifest() {
 }
 
 /// FC S4: a file with no field ids reads its top-level columns as ids 1..n by
-/// position (names do not matter); with a name mapping it is refused until
-/// PR-25c reads the mapping.
+/// position (names do not matter); with a name mapping (PR-25c) by the
+/// mapping's names, an unmapped column reading NULL; a mapping that does not
+/// parse fails the open.
 #[test]
 fn a_file_without_field_ids_reads_by_position() {
     let env = env();
@@ -482,28 +510,43 @@ fn a_file_without_field_ids_reads_by_position() {
     let s = provider_session(p);
     assert_eq!(s.rows("SELECT name, id, x FROM t"), ["thirty|10|20"]);
 
-    // The same table with a name mapping: refused, naming the file.
-    let t = env.rt.block_on(async {
-        let tx = Transaction::new(&t);
-        let tx = tx
-            .update_table_properties()
-            .set(
-                "schema.name-mapping.default".to_owned(),
-                r#"[{"field-id": 1, "names": ["c0"]}]"#.to_owned(),
-            )
-            .apply(tx)
-            .unwrap();
-        tx.commit(&env.catalog).await.unwrap()
-    });
-    let table = env.load(&t);
-    let s = provider_session(env.provider(&table, &VersionSpec::Current).unwrap());
-    let e = s.run("SELECT id FROM t").unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
+    let with_mapping = |text: &str| {
+        let t = env.rt.block_on(async {
+            let tx = Transaction::new(&t);
+            let tx = tx
+                .update_table_properties()
+                .set("schema.name-mapping.default".to_owned(), text.to_owned())
+                .apply(tx)
+                .unwrap();
+            tx.commit(&env.catalog).await.unwrap()
+        });
+        env.load(&t)
+    };
+    // By the mapping's names: `c0` is id 1 (`id`), `c2` id 3 (`name`); `c1`
+    // is not mapped, so `x` (id 2) reads NULL rather than by position.
+    let table = with_mapping(
+        r#"[{"field-id": 1, "names": ["id", "c0"]}, {"names": ["c1"]},
+            {"field-id": 3, "names": ["c2"]}]"#,
     );
-    assert!(e.message().contains("plain.parquet"), "{e}");
+    let s = provider_session(env.provider(&table, &VersionSpec::Current).unwrap());
+    assert_eq!(s.rows("SELECT name, id, x FROM t"), ["thirty|10|NULL"]);
+    assert_eq!(s.rows("SELECT id FROM t WHERE name = 'thirty'"), ["10"]);
+    // Text that is not a name mapping: not a list, a field without names,
+    // one name mapped twice at a level.
+    for text in [
+        r#"{"field-id": 1}"#,
+        r#"[{"field-id": 1}]"#,
+        r#"[{"field-id": 1, "names": ["c0"]}, {"field-id": 2, "names": ["c0"]}]"#,
+    ] {
+        let table = with_mapping(text);
+        let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        assert!(e.message().contains("schema.name-mapping.default"), "{e}");
+    }
 }
 
 /// Time travel through the provider reads the older snapshot's files with its
@@ -581,7 +624,7 @@ fn time_travel_reads_the_older_snapshot_and_schema() {
 /// a data manifest, a position-delete manifest and a manifest list, added to
 /// the metadata as a new current snapshot.
 #[test]
-fn a_snapshot_with_delete_files_is_refused() {
+fn a_snapshot_whose_delete_file_is_missing_fails() {
     use iceberg::spec::{ManifestListWriter, ManifestWriterBuilder};
     let env = env();
     let schema = ixn_schema();
@@ -687,12 +730,11 @@ fn a_snapshot_with_delete_files_is_refused() {
         .rt
         .block_on(IcebergTable::load(&env.reg, &edited, "db", "t"))
         .unwrap();
-    let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
+    // The delete file was never written: the read fails naming it, never
+    // returns the rows it deletes.
+    let p = env.provider(&table, &VersionSpec::Current).unwrap();
+    let e = provider_session(p).run("SELECT name FROM t").unwrap_err();
+    assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
     assert!(e.message().contains("deletes.parquet"), "{e}");
     // The snapshot before it has no deletes and reads.
     let p = env

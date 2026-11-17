@@ -337,6 +337,8 @@ pub struct FileScanTask {
     pub file: Arc<DataFileEntry>,
     /// The predicate evaluated on the rows (pruning keeps a superset).
     pub residual: Option<PushdownExpr>,
+    /// The delete files that apply to it (design note §3.2).
+    pub deletes: Arc<super::deletes::TaskDeletes>,
 }
 
 /// The files of a snapshot that may hold matching rows.
@@ -347,8 +349,8 @@ pub struct ScanPlan {
     pub snapshot_id: Option<i64>,
     /// The data files to read, in manifest-list then manifest order.
     pub tasks: Vec<FileScanTask>,
-    /// The live delete files of the surviving delete manifests (assigned to tasks
-    /// by PR-25b).
+    /// The live delete files of the surviving delete manifests (each task
+    /// holds the ones that apply to it).
     pub delete_files: Vec<Arc<DeleteFileEntry>>,
     /// Manifests in the list.
     pub manifests_total: usize,
