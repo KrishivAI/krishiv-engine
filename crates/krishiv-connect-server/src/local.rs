@@ -52,6 +52,10 @@ impl LocalServer {
     /// # Errors
     /// `INTERNAL_ERROR` when no random source, port or thread is available.
     pub fn start(base: Session) -> Result<Self, KrishivError> {
+        Self::start_with(base, true)
+    }
+
+    fn start_with(base: Session, want_v6: bool) -> Result<Self, KrishivError> {
         let token = new_token()?;
         // No failure throttle: every local client shares the peer address 127.0.0.1, so another
         // process sending wrong tokens would lock the owner out. The token is 256 random bits, so
@@ -61,7 +65,7 @@ impl LocalServer {
             ("krishiv.auth.failureThrottle.maxFailures", "0"),
         ])?;
         let auth = Arc::new(ServerAuth::new(&config)?);
-        let (std_listener, v6_listener) = bind_loopback()?;
+        let (std_listener, v6_listener) = bind_loopback(want_v6)?;
         let addr = std_listener
             .local_addr()
             .map_err(|e| internal(format!("cannot read the listener address: {e}")))?;
@@ -155,7 +159,7 @@ impl Drop for LocalServer {
 
 /// Binds `127.0.0.1:0`, then `[::1]` on the same port (another port is tried when `::1` has that
 /// one taken). A host with no IPv6 loopback gets the IPv4 listener only. Both are non-blocking.
-fn bind_loopback() -> Result<(StdListener, Option<StdListener>), KrishivError> {
+fn bind_loopback(want_v6: bool) -> Result<(StdListener, Option<StdListener>), KrishivError> {
     let fail = |what: &str, e: std::io::Error| internal(format!("{what}: {e}"));
     for _ in 0..32 {
         let v4 = StdListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -164,7 +168,11 @@ fn bind_loopback() -> Result<(StdListener, Option<StdListener>), KrishivError> {
             .local_addr()
             .map_err(|e| fail("cannot read the listener address", e))?
             .port();
-        let v6 = match StdListener::bind((Ipv6Addr::LOCALHOST, port)) {
+        let v6 = match if want_v6 {
+            StdListener::bind((Ipv6Addr::LOCALHOST, port))
+        } else {
+            Err(std::io::ErrorKind::Unsupported.into())
+        } {
             Ok(l) => Some(l),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
             // No IPv6 loopback on this host: `localhost` cannot reach `::1` either.
@@ -273,4 +281,55 @@ fn run(
     // Connection tasks that still hold on end with the runtime.
     drop(runtime);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::*;
+
+    #[test]
+    fn a_host_without_ipv6_loopback_is_told_apart_from_a_real_bind_failure() {
+        assert!(ipv6_unavailable(&Error::from(ErrorKind::AddrNotAvailable)));
+        assert!(ipv6_unavailable(&Error::from(ErrorKind::Unsupported)));
+        assert!(ipv6_unavailable(&Error::from_raw_os_error(97)));
+        assert!(!ipv6_unavailable(&Error::from(ErrorKind::PermissionDenied)));
+        assert!(!ipv6_unavailable(&Error::from(ErrorKind::AddrInUse)));
+    }
+
+    #[test]
+    fn internal_errors_carry_their_message() {
+        assert!(internal("boom".to_owned()).to_string().contains("boom"));
+    }
+
+    #[test]
+    fn tokens_are_64_hex_digits_and_differ() {
+        let (a, b) = (new_token().expect("a"), new_token().expect("b"));
+        assert_eq!(a.expose_secret().len(), 64);
+        assert!(a.expose_secret().bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a.expose_secret(), b.expose_secret());
+    }
+
+    #[test]
+    fn a_server_without_the_ipv6_listener_serves_on_ipv4_only_and_stops() {
+        let mut server =
+            LocalServer::start_with(Session::new().expect("session"), false).expect("start");
+        assert_eq!(server.addrs(), vec![server.addr()]);
+        assert!(server.is_running());
+        server.stop().expect("stop");
+        assert!(!server.is_running());
+        server.stop().expect("a second stop is a no-op");
+    }
+
+    #[test]
+    fn the_listeners_share_one_port_and_are_non_blocking() {
+        let (v4, v6) = bind_loopback(true).expect("bind");
+        if let Some(v6) = v6 {
+            assert_eq!(
+                v4.local_addr().expect("v4").port(),
+                v6.local_addr().expect("v6").port()
+            );
+        }
+    }
 }
