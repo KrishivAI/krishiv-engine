@@ -80,6 +80,7 @@
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
+//! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -185,7 +186,7 @@ pub use plan::{
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,
-    python_relation_is_deterministic,
+    plan_is_deterministic, python_relation_is_deterministic,
 };
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

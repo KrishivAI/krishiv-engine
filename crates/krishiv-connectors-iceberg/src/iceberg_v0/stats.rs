@@ -4,7 +4,7 @@
 //!
 //! - **Rows**: the live data files' `record_count`s, less the `record_count`
 //!   of each position delete file and DV that applies to one of them (each
-//!   counted once; an upper bound on what they remove, which is fine for an
+//!   counted once, a DV by its Puffin path and blob offset; an upper bound on what they remove, which is fine for an
 //!   estimate). Equality deletes are not subtracted: what they remove is
 //!   unknown without reading the files.
 //! - **Columns** (top-level primitives): null counts when every file has
@@ -40,16 +40,15 @@ pub(super) fn table_stats(
         .iter()
         .map(|e| e.file.record_count)
         .fold(0, u64::saturating_add);
-    let mut counted: HashSet<&str> = HashSet::new();
+    // A delete file is its path plus, for a DV, its blob's offset: several
+    // DVs can share one Puffin file (position delete files have no offset).
+    let mut counted: HashSet<(String, Option<i64>)> = HashSet::new();
     let mut deleted = 0_u64;
-    let assigned: Vec<_> = entries
-        .iter()
-        .filter_map(|e| index.for_data_file(e).ok())
-        .collect();
-    for d in &assigned {
+    for d in entries.iter().filter_map(|e| index.for_data_file(e).ok()) {
         for f in d.deletion_vector.iter().chain(&d.position_deletes) {
-            if counted.insert(f.entry.file.path.as_str()) {
-                deleted = deleted.saturating_add(f.entry.file.record_count);
+            let file = &f.entry.file;
+            if counted.insert((file.path.clone(), file.content_offset)) {
+                deleted = deleted.saturating_add(file.record_count);
             }
         }
     }
@@ -197,7 +196,8 @@ mod tests {
     use crate::plan::deletes::DeleteIndex;
     use crate::plan::tests::file;
     use crate::plan::{
-        DataFileEntry, EntryStatus, IcebergType, SchemaField, WriterMetrics, encode,
+        ContentKind, DataFileEntry, DeleteFileEntry, DeleteKind, EntryStatus, IcebergType,
+        PartitionSpecInfo, PartitionSpecs, SchemaField, WriterMetrics, encode,
     };
 
     fn entry(f: crate::plan::ContentFile) -> Arc<DataFileEntry> {
@@ -269,5 +269,42 @@ mod tests {
             &WriterMetrics::default(),
         );
         assert_eq!(s.columns["x"].min, Some(Literal::Double(0.5)));
+    }
+
+    /// Two DVs in one Puffin file (different blob offsets) both count; a
+    /// position delete file applying to two data files counts once.
+    #[test]
+    fn dvs_sharing_a_puffin_file_count_separately() {
+        let data = |path: &str| {
+            let mut f = file(100);
+            path.clone_into(&mut f.path);
+            entry(f)
+        };
+        let dv = |target: &str, offset: i64| {
+            let mut f = file(10);
+            f.content = ContentKind::PositionDeletes;
+            "dvs.puffin".clone_into(&mut f.path);
+            f.referenced_data_file = Some(target.to_owned());
+            f.content_offset = Some(offset);
+            Arc::new(DeleteFileEntry {
+                entry: (*entry(f)).clone(),
+                kind: DeleteKind::DeletionVector,
+            })
+        };
+        let mut p = file(7);
+        p.content = ContentKind::PositionDeletes;
+        "pos.parquet".clone_into(&mut p.path);
+        let pos = Arc::new(DeleteFileEntry {
+            entry: (*entry(p)).clone(),
+            kind: DeleteKind::PositionDelete,
+        });
+        let specs: PartitionSpecs = [(0, PartitionSpecInfo::default())].into();
+        let index = DeleteIndex::new(&[dv("a", 4), dv("b", 40)], &specs).unwrap();
+        let entries = [data("a"), data("b")];
+        let s = table_stats(&entries, &index, &[], &WriterMetrics::default());
+        assert_eq!(s.rows, 180);
+        let index = DeleteIndex::new(&[pos], &specs).unwrap();
+        let s = table_stats(&entries, &index, &[], &WriterMetrics::default());
+        assert_eq!(s.rows, 193);
     }
 }

@@ -49,6 +49,9 @@ struct Faults {
     injected: u64,
     /// The file names of the GETs failed in the middle of their body.
     mid_body: HashSet<String>,
+    /// The case's temporary directory (as an object path), left out of what
+    /// selects a fault so a seed replays in another directory.
+    root: String,
 }
 
 /// What one GET attempt does.
@@ -96,6 +99,23 @@ fn splitmix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// `path` without what changes between runs of one case: the random UUID
+/// the catalog puts in a metadata file's name (`00000-<uuid>.metadata.json`).
+fn stable(path: &str) -> &str {
+    const UUID: usize = 36;
+    const SUFFIX: &str = ".metadata.json";
+    match path.rsplit_once('/') {
+        Some((dir, name))
+            if name.len() == 6 + UUID + SUFFIX.len()
+                && name.ends_with(SUFFIX)
+                && name.as_bytes().get(5) == Some(&b'-') =>
+        {
+            &path[..dir.len() + 1 + 5]
+        }
+        _ => path,
+    }
+}
+
 fn transient() -> object_store::Error {
     object_store::Error::Generic {
         store: "Flaky",
@@ -123,6 +143,13 @@ impl Flaky {
         f.seed = seed;
         f.fail_first = fail_first;
         f.permille = permille;
+    }
+
+    /// Faults are selected by paths relative to `root` (the case's
+    /// temporary directory).
+    pub(super) fn set_root(&self, root: &std::path::Path) {
+        self.lock().get_or_insert_with(Faults::default).root =
+            root.to_string_lossy().trim_start_matches('/').to_owned();
     }
 
     /// GETs of the file named `name` answer "not found" from now on.
@@ -163,7 +190,8 @@ impl Flaky {
             *a += 1;
             *a - 1
         };
-        let text = format!("{}|{}|{}|{n}", key.0, key.1, key.2);
+        let path = stable(key.0.strip_prefix(f.root.as_str()).unwrap_or(&key.0));
+        let text = format!("{path}|{}|{}|{n}", key.1, key.2);
         let r = splitmix(f.seed ^ fnv(text.as_bytes()));
         if n >= f.fail_first && r % 1000 >= f.permille {
             return Fault::None;
@@ -263,6 +291,7 @@ fn flaky_table(files: &[super::delete_tests::File], partitioned: bool) -> (Table
         ..IoConfig::default()
     };
     let env = env_on(Arc::clone(&flaky) as Arc<dyn ObjectStore>, config);
+    flaky.set_root(env.dir.path());
     (build_in(env, files, partitioned), flaky)
 }
 
@@ -335,8 +364,12 @@ fn random_faults_are_retried_to_the_right_rows() {
             false,
         );
         flaky.arm(seed, 0, 300);
-        if ids_after(&t, || ()).as_deref() == Ok(&[0][..]) && flaky.injected() > 0 {
-            retried += 1;
+        // A failed query is allowed; a successful one with wrong rows never.
+        if let Ok(ids) = ids_after(&t, || ()) {
+            assert_eq!(ids, [0], "seed {seed}");
+            if flaky.injected() > 0 {
+                retried += 1;
+            }
         }
     }
     assert!(retried >= 12, "{retried} of 16 seeds");
