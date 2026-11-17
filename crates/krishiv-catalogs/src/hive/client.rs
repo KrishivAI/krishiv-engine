@@ -46,6 +46,11 @@ pub struct HmsConfig {
     pub max_string_bytes: usize,
     /// Deepest nesting accepted.
     pub max_depth: usize,
+    /// The egress rule (design P3-T067 §5.2, S10): Thrift speaks plain TCP, so no HTTP resolver
+    /// sees it. The declared host is resolved here, every address the rule refuses is dropped
+    /// (the scope exempts the declared host by name) and only a checked address is dialled.
+    /// `None`: no rule (embedded mode).
+    pub egress: Option<krishiv_store::egress::EgressScope>,
 }
 
 impl HmsConfig {
@@ -61,6 +66,7 @@ impl HmsConfig {
             max_elements: 1_000_000,
             max_string_bytes: 16 << 20,
             max_depth: 64,
+            egress: None,
         }
     }
 }
@@ -199,6 +205,7 @@ impl HmsClient {
         let addresses = resolve_within(config.address.clone(), deadline, resolver_gate(), |a| {
             a.to_socket_addrs().map(Iterator::collect)
         })?;
+        let addresses = checked_addresses(config, addresses)?;
         let stream = connect_any(&addresses, deadline)?;
         stream
             .set_nodelay(true)
@@ -509,6 +516,26 @@ fn resolve_within(
 
 /// Connects to the first of `addresses` that answers, all within `deadline`: each attempt gets an equal share of
 /// what is left, so a dead first address (`localhost` resolving to `::1` before `127.0.0.1`) leaves time for the next.
+/// The resolved `addresses` the egress rule allows for the declared host (all of them without a
+/// rule). The refusal names no address.
+fn checked_addresses(config: &HmsConfig, addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>> {
+    let Some(scope) = &config.egress else {
+        return Ok(addresses);
+    };
+    let host = krishiv_store::egress::host_of(&config.address).unwrap_or_default();
+    let literal = krishiv_store::egress::literal_ip(&host).is_some();
+    let kept: Vec<SocketAddr> = addresses
+        .into_iter()
+        .filter(|a| scope.permits((!literal).then_some(host.as_str()), a.ip()))
+        .collect();
+    if kept.is_empty() {
+        return Err(HmsError::Failed(
+            "the metastore address is refused by the egress policy (private address)".to_owned(),
+        ));
+    }
+    Ok(kept)
+}
+
 fn connect_any(addresses: &[SocketAddr], deadline: Instant) -> Result<TcpStream> {
     let mut last = None;
     for (i, address) in addresses.iter().enumerate() {
@@ -566,6 +593,45 @@ mod tests {
         assert_eq!(client.get_all_databases().unwrap(), ["default", "web"]);
         assert_eq!(client.get_all_tables("web").unwrap(), ["events", "users"]);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn hms_connect_checked_address() {
+        use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+        let policy = EgressPolicy::new(
+            PrivateAddresses::Deny,
+            Vec::new(),
+            ProviderEndpoints::default(),
+        );
+        // Not exempt: the loopback metastore is refused before any connection.
+        let (address, _server) = serve(1, |method, seq, o| {
+            reply_with(o, method, seq, |o| strings_field(o, 0, &["default"]))
+        });
+        let refused = HmsConfig {
+            egress: Some(policy.scope::<_, &str>([])),
+            ..cfg(&address)
+        };
+        let err = HmsClient::connect(&refused).err().unwrap();
+        let text = format!("{err:?}");
+        assert!(text.contains("egress policy"), "{text}");
+        assert!(!text.contains("127.0.0.1"), "{text}");
+        // The declared host, exempt by name: connected and served.
+        let host = address.rsplit_once(':').unwrap().0.to_owned();
+        let allowed = HmsConfig {
+            egress: Some(policy.scope([host.as_str()])),
+            ..cfg(&address)
+        };
+        let mut client = HmsClient::connect(&allowed).unwrap();
+        assert_eq!(client.get_all_databases().unwrap(), ["default"]);
+        // A name the policy pins elsewhere is refused even when it resolves to loopback.
+        let name = HmsConfig {
+            egress: Some(policy.scope::<_, &str>([])),
+            ..cfg(&format!(
+                "localhost:{}",
+                address.rsplit_once(':').unwrap().1
+            ))
+        };
+        assert!(HmsClient::connect(&name).is_err());
     }
 
     #[test]

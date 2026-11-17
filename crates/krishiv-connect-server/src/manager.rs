@@ -8,8 +8,10 @@
 //! Spark keys by `(UserContext.user_id, session_id)`. Krishiv keys by the
 //! authenticated caller instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
-//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
-//! and name, without groups). A session id another owner holds is refused as
+//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant,
+//! name and delegator; groups only for an impersonated principal, whose
+//! act-as identity they pin, P3-T061). `maxSessionsPerPrincipal` counts
+//! without those groups (`SessionOwner::cap_key`). A session id another owner holds is refused as
 //! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
 //! unknown id gets, and writes a `krishiv::audit` denial record (ADR 0046
 //! §3b: no existence oracle, but the denial is recorded); so does a release
@@ -30,7 +32,10 @@
 //! replace each other's session on every request (each keeps its own role).
 //!
 //! No lock is held across an `await`, nor while a session is built or
-//! closed: the map lock guards lookups and inserts only.
+//! closed: the map lock guards lookups and inserts only. The one exception
+//! is each session's statement gate ([`SessionEntry::shared`]), a tokio
+//! `RwLock` built to be held across an `await`: `CloneSession` takes it
+//! exclusively around the copy (`clone`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,9 +51,11 @@ use krishiv_common::error::{
     KrishivError, KrishivSessionLimit,
 };
 use krishiv_session::auth::{Authenticated, Role, Surface};
-use krishiv_session::{QueryId, Session};
+use krishiv_session::{DataFrame, QueryId, Session};
 
+use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
+use crate::errors::SessionErrors;
 use crate::operation::{Operation, Operations};
 use crate::udf::{SessionPython, UdfHost};
 
@@ -129,15 +136,57 @@ pub struct SessionEntry {
     session: Session,
     caller: Authenticated,
     client_user_id: String,
+    /// The session id the client sent: what Spark's own messages name (`SessionHolder.sessionId`).
+    client_session_id: String,
     operations: Arc<Operations>,
+    /// The errors sent on the session, for `FetchErrorDetails`.
+    errors: Arc<SessionErrors>,
+    /// The session's artifacts (`AddArtifacts`).
+    artifacts: Arc<SessionArtifacts>,
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
     python: SessionPython,
+    /// The DataFrames the session holds for the client (`checkpoint_command`, Spark's
+    /// `SessionHolder.dataFrameCache`): id to frame, ended by
+    /// `remove_cached_remote_relation_command` or with the session. A frame's rows and files end
+    /// when the last frame that reads them is dropped.
+    cached_frames: Mutex<HashMap<String, DataFrame>>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
+    /// Held shared by the RPCs that change the session's state while they
+    /// do, exclusively by `CloneSession` around its copy.
+    gate: tokio::sync::RwLock<()>,
 }
 
 impl SessionEntry {
+    /// Holds `frame` under `id` (a checkpoint's result).
+    pub(crate) fn cache_frame(&self, id: String, frame: DataFrame) {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, frame);
+    }
+
+    /// The frame held under `id`.
+    pub(crate) fn cached_frame(&self, id: &str) -> Option<DataFrame> {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    /// Lets go of the frame held under `id`; an id that is not held is not an error (Spark's
+    /// `removeCachedDataFrame`). The frame is dropped outside the lock.
+    pub(crate) fn remove_cached_frame(&self, id: &str) {
+        let removed = self
+            .cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        drop(removed);
+    }
+
     /// The engine session.
     #[must_use]
     pub fn session(&self) -> &Session {
@@ -158,6 +207,12 @@ impl SessionEntry {
         &self.caller
     }
 
+    /// The session id the client sent (Spark's `sessionId`, as opposed to the server-side one).
+    #[must_use]
+    pub fn client_session_id(&self) -> &str {
+        &self.client_session_id
+    }
+
     /// The `UserContext.user_id` the client sent when it created the
     /// session: recorded, never trusted.
     #[must_use]
@@ -171,18 +226,56 @@ impl SessionEntry {
         &self.operations
     }
 
+    /// The errors sent on the session: [`SessionErrors::status`] turns an
+    /// error into the status with its `errorId`.
+    #[must_use]
+    pub fn errors(&self) -> &Arc<SessionErrors> {
+        &self.errors
+    }
+
+    /// The session's artifacts.
+    #[must_use]
+    pub fn artifacts(&self) -> &Arc<SessionArtifacts> {
+        &self.artifacts
+    }
+
+    /// The statement gate, shared: the RPCs that change the session's state
+    /// (`ExecutePlan` until its query is started, `AnalyzePlan`, `Config`;
+    /// the commands of T012) hold it while they do, so a `CloneSession` of
+    /// this session copies it between two of them, never in the middle of
+    /// one. Each RPC holds the gate of its own session only and takes no
+    /// other lock while it waits for it, so it cannot deadlock.
+    pub async fn shared(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.gate.read().await
+    }
+
+    /// The statement gate, exclusively (`CloneSession` around its copy).
+    pub(crate) async fn exclusive(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.gate.write().await
+    }
+
     /// The session's Python UDFs.
     pub(crate) fn python(&self) -> &SessionPython {
         &self.python
     }
 
     /// Closes the session's operations, then the session (its queries
-    /// cancelled), then stops its Python UDF workers. Returns the operations
-    /// it closed.
+    /// cancelled), then its artifacts (their directory removed), then stops
+    /// its Python UDF workers. Returns the operations it closed.
     fn close(&self) -> Vec<Arc<Operation>> {
         let ops = self.operations.close_all();
         self.session.close();
+        self.artifacts.close();
         self.python.release();
+        // The held DataFrames go with the session, whoever still holds the entry; dropped
+        // outside the lock.
+        let held = std::mem::take(
+            &mut *self
+                .cached_frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        drop(held);
         ops
     }
 }
@@ -338,6 +431,37 @@ impl SessionManager {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
+    /// A new entry for `session`, built for `caller`, not yet in the map.
+    /// `system.sessions` shows the client's `user_id` as reported (ADR 0046
+    /// §5: recorded, unverified, never the identity).
+    fn new_entry(
+        &self,
+        caller: &Authenticated,
+        session: Session,
+        (client_user_id, client_session_id): (&str, &str),
+        python: SessionPython,
+    ) -> Arc<SessionEntry> {
+        session.set_client_info(
+            krishiv_session::Transport::Connect,
+            None,
+            Some(client_user_id),
+            Some(session.id()),
+        );
+        Arc::new(SessionEntry {
+            errors: Arc::new(SessionErrors::new(session.conf())),
+            artifacts: Arc::default(),
+            session,
+            caller: caller.clone(),
+            client_user_id: client_user_id.to_owned(),
+            client_session_id: client_session_id.to_owned(),
+            operations: Arc::default(),
+            python,
+            cached_frames: Mutex::default(),
+            last_access: AtomicU64::new(self.now_ms()),
+            gate: tokio::sync::RwLock::new(()),
+        })
+    }
+
     fn key(caller: &Authenticated, session_id: &str) -> Key {
         Key {
             owner: SessionOwner::of(caller),
@@ -408,23 +532,8 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller)?;
-        // `system.sessions` shows the client's `user_id` as reported (ADR 0046 §5: recorded,
-        // unverified, never the identity).
-        session.set_client_info(
-            krishiv_session::Transport::Connect,
-            None,
-            Some(client_user_id),
-            Some(session.id()),
-        );
         let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
-        let entry = Arc::new(SessionEntry {
-            session,
-            caller: caller.clone(),
-            client_user_id: client_user_id.to_owned(),
-            operations: Arc::default(),
-            python,
-            last_access: AtomicU64::new(self.now_ms()),
-        });
+        let entry = self.new_entry(caller, session, (client_user_id, session_id), python);
         let mut retired = None;
         let raced = {
             let mut inner = self.lock();
@@ -438,7 +547,7 @@ impl SessionManager {
                         inner
                             .owners
                             .insert(key.session_id.clone(), key.owner.clone());
-                        *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
+                        *inner.per_principal.entry(key.owner.cap_key()).or_insert(0) += 1;
                         Ok(None)
                     }
                 }
@@ -594,37 +703,79 @@ impl SessionManager {
         for (key, entry) in sessions {
             for op in entry.operations().all() {
                 op.replay().expire_sender(std::time::Instant::now());
-                let expired = op
-                    .replay()
-                    .detached_since()
-                    .is_some_and(|since| since.elapsed() >= timeout);
-                if !expired {
-                    continue;
-                }
-                // Tombstoned before it leaves the map, so a racing reattach
-                // finds it abandoned rather than unknown (lines 158-166).
-                // A reattach between the check above and the close below
-                // is closed with it (its retry sees OPERATION_ABANDONED):
-                // Spark's `periodicMaintenance` has the same window.
-                self.lock().abandoned.insert(
-                    OpKey {
-                        session: key.clone(),
-                        operation: op.id().clone(),
-                    },
-                    self.limits.abandoned_tombstones,
-                );
-                if entry.operations().remove(&op) {
-                    tracing::info!(
-                        target: "krishiv::connect",
-                        operation = op.id().as_str(),
-                        "abandoned a detached Connect operation"
-                    );
+                if self.abandon(&key, &entry, &op, timeout) {
                     abandoned += 1;
                 }
-                op.close();
             }
         }
         abandoned
+    }
+
+    /// Abandons `op` of session `key` if it has had no stream attached for
+    /// `timeout` and is still registered: under the manager's lock it is
+    /// interrupted (its final state decided), removed (which records that
+    /// state) and tombstoned; it is closed after the lock is released, so
+    /// its buffered responses are not freed under it. One a release removed first
+    /// is left alone (Spark's `removeExecuteHolder` returns before the
+    /// tombstone for a holder no longer in `executions`), so its reattach
+    /// answers `OPERATION_NOT_FOUND`. Whether it was abandoned.
+    fn abandon(
+        &self,
+        key: &Key,
+        entry: &SessionEntry,
+        op: &Arc<Operation>,
+        timeout: Duration,
+    ) -> bool {
+        let expired = op
+            .replay()
+            .detached_since()
+            .is_some_and(|since| since.elapsed() >= timeout);
+        if !expired {
+            return false;
+        }
+        {
+            // The close, the removal (under the operations' lock, as a
+            // release takes it) and the tombstone are one step under the
+            // manager's lock: a racing reattach that no longer finds the
+            // operation reads `is_abandoned` after it, so it finds it
+            // abandoned rather than unknown (Spark's lines 158-166). One a
+            // release removed first is left alone. Interrupted before it is
+            // removed, so the state it is remembered with is the one the
+            // compare-and-swap left (a query that finished just before stays
+            // `SUCCEEDED`). Lock order: manager, then operations (as
+            // `sweep`).
+            let mut inner = self.lock();
+            let registered = entry
+                .operations()
+                .get(op.id().as_str())
+                .is_some_and(|o| Arc::ptr_eq(&o, op));
+            if !registered {
+                return false;
+            }
+            op.cancel();
+            if !entry.operations().remove(op) {
+                return false;
+            }
+            #[cfg(test)]
+            crate::execute::hooks::abandon_recorded(op);
+            inner.abandoned.insert(
+                OpKey {
+                    session: key.clone(),
+                    operation: op.id().clone(),
+                },
+                self.limits.abandoned_tombstones,
+            );
+        }
+        // A reattach between the expiry check and this close is closed with
+        // it (its retry sees OPERATION_ABANDONED): Spark's
+        // `periodicMaintenance` has the same window.
+        op.close();
+        tracing::info!(
+            target: "krishiv::connect",
+            operation = op.id().as_str(),
+            "abandoned a detached Connect operation"
+        );
+        true
     }
 
     /// Releases every session idle past the timeout, running no query and
@@ -841,7 +992,11 @@ impl SessionManager {
             }
             .into());
         }
-        if inner.per_principal.get(&key.owner).copied().unwrap_or(0)
+        if inner
+            .per_principal
+            .get(&key.owner.cap_key())
+            .copied()
+            .unwrap_or(0)
             >= limits.max_sessions_per_principal
         {
             return Err(KrishivSessionLimit {
@@ -856,15 +1011,18 @@ impl SessionManager {
     fn remove_locked(inner: &mut Inner, key: &Key) -> Option<Arc<SessionEntry>> {
         let entry = inner.live.remove(key)?;
         inner.owners.remove(&key.session_id);
-        if let Some(n) = inner.per_principal.get_mut(&key.owner) {
+        let cap = key.owner.cap_key();
+        if let Some(n) = inner.per_principal.get_mut(&cap) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                inner.per_principal.remove(&key.owner);
+                inner.per_principal.remove(&cap);
             }
         }
         Some(entry)
     }
 }
+
+mod clone;
 
 /// `error` unchanged, after the ADR 0046 §3b denial record when it is the
 /// `INVALID_HANDLE.SESSION_NOT_FOUND` of an id another owner holds (the only
@@ -888,6 +1046,7 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
         principal = %caller.principal.name,
         method = caller.method.as_str(),
         role = caller.role.map_or("none", Role::as_str),
+        delegated_by = caller.principal.delegated_by.as_deref(),
         surface = Surface::Connect.as_str(),
         handle,
         "refused a Connect id another principal holds, answered as unknown"

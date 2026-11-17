@@ -458,7 +458,8 @@ impl<'a> Planner<'a> {
                         self.window_group_limit_threshold(),
                     );
                     let below = self.plan(below)?;
-                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    let window =
+                        self.window_relation(below, exprs, partition_by, order_by, limit)?;
                     return self.filter(window, predicate);
                 }
                 let mut input = self.plan(input)?;
@@ -661,16 +662,8 @@ impl<'a> Planner<'a> {
                 partition_by,
                 order_by,
             } => {
-                if exprs
-                    .iter()
-                    .any(|e| super::python_udf::has_python_aggregate_udf(e))
-                {
-                    return Err(super::python_relation::later_kind(
-                        "a Python aggregate UDF over a window",
-                    ));
-                }
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by, None)
+                self.window_relation(input, exprs, partition_by, order_by, None)
             }
             PlanNode::UnionLoop {
                 id,
@@ -1310,13 +1303,18 @@ impl<'a> Planner<'a> {
                 exact,
             });
         }
-        let schema = factory.output_schema(&ScanPushdowns {
+        let pushdowns = ScanPushdowns {
             projection: Some(projection.clone()),
             filters: pushed,
             row_id,
             metadata,
             ..ScanPushdowns::default()
-        })?;
+        };
+        if let Some(more) = factory.explain(&pushdowns) {
+            detail.push_str(", ");
+            detail.push_str(&more);
+        }
+        let schema = factory.output_schema(&pushdowns)?;
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);

@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, UI_ENABLED,
+    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -104,6 +104,15 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
         builder = builder.config(k, v);
+    }
+    // The egress policy (design P3-T067 §5.1): a server allows only globally routable
+    // destinations unless the admin chose otherwise.
+    if !args
+        .conf
+        .iter()
+        .any(|(k, _)| k == IO_EGRESS_PRIVATE_ADDRESSES.key)
+    {
+        builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
     let host = match args.host {
         Some(h) => h,
@@ -248,7 +257,11 @@ async fn run_listeners(
         ConnectServerConfig::from_config(config),
     );
     if authenticated {
-        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
+        connect = connect.with_auth(
+            ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
+                .with_denials(denials)
+                .with_impersonation(auth),
+        );
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
@@ -346,6 +359,11 @@ fn admin_router(
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
     let public = metrics_on && !authenticated && !metrics_need_token(config, bound);
+    // Denials of the admin API count into the same counters as every other surface.
+    let admin_denials = auth.as_ref().map_or_else(
+        || Arc::new(krishiv_session::auth::DeniedCounts::default()),
+        |a| a.denials(),
+    );
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
@@ -374,7 +392,10 @@ fn admin_router(
         .unwrap_or_default();
     let alias_guard = Arc::clone(&guard);
     let admin_v1 = krishiv_server::admin_v1::router(
-        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::new(
+            krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
+                .with_denials(admin_denials),
+        ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );

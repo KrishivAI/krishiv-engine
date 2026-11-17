@@ -92,6 +92,17 @@ pub(crate) const SHOW_PARTITIONS: &[CommandColumn] = &[c("partition")];
 pub(crate) const SHOW_CATALOGS: &[CommandColumn] = &[c("catalog")];
 /// `SHOW CURRENT NAMESPACE`.
 pub(crate) const SHOW_CURRENT_NAMESPACE: &[CommandColumn] = &[c("catalog"), c("namespace")];
+
+/// `SHOW GRANTS` (the `grants` provider, `grants/exec.rs`): an ownership row has no grantor or time.
+pub(crate) const SHOW_GRANTS: &[CommandColumn] = &[
+    c("principal"),
+    c("privilege"),
+    c("object_type"),
+    c("object_key"),
+    c("grant_option"),
+    CommandColumn::nullable("granted_by"),
+    CommandColumn::nullable("granted_at"),
+];
 /// `DESCRIBE TABLE` (no column) and `DESCRIBE QUERY`: `comment` is nullable.
 pub(crate) const DESCRIBE_TABLE: &[CommandColumn] = &[
     c("col_name"),

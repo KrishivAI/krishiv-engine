@@ -2933,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-alloc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "libmimalloc-sys",
@@ -2955,7 +2955,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-arrow-bridge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 58.4.1",
  "arrow-array 60.1.0",
@@ -2967,7 +2967,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-bench-runner"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-row",
@@ -2989,11 +2989,12 @@ dependencies = [
 
 [[package]]
 name = "krishiv-catalogs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-store",
  "krishiv-types",
  "reqwest 0.13.5",
  "rusqlite",
@@ -3007,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "clap",
@@ -3034,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "codspeed-criterion-compat",
  "serde_json",
@@ -3044,13 +3045,14 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
  "insta",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "prost",
  "prost-reflect",
@@ -3060,11 +3062,12 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
+ "aws-lc-rs",
  "bytes",
  "futures",
  "getrandom 0.4.3",
@@ -3095,15 +3098,15 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connector-sdk"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-connectors-cdc"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-connectors-delta"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-arith 60.1.0",
  "arrow-array 60.1.0",
@@ -3134,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connectors-iceberg"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3143,7 +3146,9 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "foldhash",
  "futures",
+ "hashbrown 0.17.1",
  "iceberg",
  "krishiv-arrow-bridge",
  "krishiv-common",
@@ -3167,11 +3172,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connectors-kafka"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-exec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3210,11 +3215,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-flight-sql"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-functions"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.11.1",
@@ -3226,6 +3231,7 @@ dependencies = [
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",
@@ -3236,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "apache-avro 0.22.0",
  "arrow-array 60.1.0",
@@ -3273,7 +3279,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3300,7 +3306,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "futures",
  "krishiv-common",
@@ -3317,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-memory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3338,7 +3344,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -3357,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -3379,7 +3385,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan-codec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
@@ -3399,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-python"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3418,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-scheduler"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -3440,7 +3446,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -3453,6 +3459,7 @@ dependencies = [
  "krishiv-ui-assets",
  "prost",
  "prost-reflect",
+ "prost-types",
  "serde_json",
  "tempfile",
  "tokio",
@@ -3465,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-session"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3514,7 +3521,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-shuffle"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-ipc 60.1.0",
@@ -3529,7 +3536,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sim"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
@@ -3554,7 +3561,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sql"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "codspeed-criterion-compat",
  "insta",
@@ -3569,28 +3576,31 @@ dependencies = [
 
 [[package]]
 name = "krishiv-state"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
  "http",
+ "humantime",
  "krishiv-common",
  "object_store",
+ "reqwest 0.13.5",
  "tokio",
+ "url",
 ]
 
 [[package]]
 name = "krishiv-stream"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "krishiv-testkit"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3624,7 +3634,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3638,7 +3648,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-pool"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
@@ -3658,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sandbox"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "landlock",
@@ -3671,7 +3681,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "krishiv-types",
@@ -3679,7 +3689,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-ui-assets"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rust-embed",
 ]
@@ -6760,7 +6770,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",

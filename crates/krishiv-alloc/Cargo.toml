@@ -1,18 +1,21 @@
 [package]
 name = "krishiv-alloc"
 description = "mimalloc settings and memory release for Krishiv binaries (never linked by libraries)"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
 workspace = true
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
 [features]

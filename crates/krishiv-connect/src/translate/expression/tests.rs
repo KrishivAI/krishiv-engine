@@ -498,25 +498,6 @@ fn stars() {
 }
 
 #[test]
-fn sql_expression_strings_are_unsupported_for_now() {
-    let sql = expr(ExprType::ExpressionString(expression::ExpressionString {
-        expression: "a > 1".into(),
-    }));
-    let e = err(&sql);
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
-    );
-    assert!(
-        e.message().contains("EXPRESSION_STRING(4)"),
-        "{}",
-        e.message()
-    );
-    // The expression text is not echoed into the error.
-    assert!(!e.message().contains("a > 1"));
-}
-
-#[test]
 fn unsupported_expression_kinds_are_named() {
     for (kind, name) in [
         (
@@ -670,4 +651,56 @@ fn on_small_stack(stack: usize, f: impl FnOnce() + Send + 'static) {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn an_expression_string_is_parsed_like_select_expr() {
+    let e = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "a + 1 AS b".to_owned(),
+    }));
+    assert_eq!(text(&e), text_of_sql("a + 1 AS b"));
+    // The parser's own error, with its class, and no echo of the text.
+    let bad = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "CANARY +".to_owned(),
+    }));
+    let e = err(&bad);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::from_name("PARSE_SYNTAX_ERROR").unwrap()
+    );
+}
+
+#[test]
+fn an_expression_string_is_parsed_with_the_conf_parser_options() {
+    // `"x"` is a string literal by default and an identifier under `doubleQuotedIdentifiers`:
+    // the options are the conf's.
+    let e = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "\"x\"".to_owned(),
+    }));
+    let default = translate_expression(&e, &TranslateConf::default()).unwrap();
+    let conf = TranslateConf {
+        parser: krishiv_sql::ParserOptions {
+            double_quoted_identifiers: true,
+            ..krishiv_sql::ParserOptions::default()
+        },
+        ..TranslateConf::default()
+    };
+    let quoted = translate_expression(&e, &conf).unwrap();
+    assert_ne!(default, quoted);
+    // The control: the default options give the same answer as the default conf.
+    let control = TranslateConf {
+        parser: krishiv_sql::ParserOptions::default(),
+        ..TranslateConf::default()
+    };
+    assert_eq!(translate_expression(&e, &control).unwrap(), default);
+}
+
+fn text_of_sql(sql: &str) -> String {
+    krishiv_sql::parse_and_lower_named_expression(
+        sql,
+        &krishiv_sql::ParserOptions::default(),
+        krishiv_plan::SourceId(u32::MAX),
+    )
+    .unwrap()
+    .to_string()
 }
