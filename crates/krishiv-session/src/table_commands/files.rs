@@ -40,32 +40,44 @@ impl Session {
         })
     }
 
-    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
-    /// external local location) as [`Self::authorize_path`] does, a relative external location after
-    /// qualifying it against the working directory as its writes do, and an object-store location in its
-    /// qualified form. Returns the canonical local path checked (`None` for an object store).
+    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: where [`Self::location_asked`]
+    /// places it. Returns the canonical local path checked (`None` for an object store).
     pub(super) async fn authorize_location(
         &self,
         location: &Path,
         managed: bool,
     ) -> Result<Option<CheckedDir>, KrishivError> {
         let (create, class) = (&[Privilege::Create], StatementClass::Ddl);
+        match self.location_asked(location, managed)? {
+            LocationAsked::Local(local) => {
+                self.authorize_path(&local, create, class).await.map(Some)
+            }
+            LocationAsked::Store(qualified) => {
+                let securable = Securable::Path(OptionValue::from_user("path", qualified));
+                self.authorize_securable(&securable, create, class).await?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Where CREATE TABLE asks `CREATE` on a table's `location` ([`Self::authorize_location`]): a managed
+    /// table's directory (and an external local location) as [`Self::authorize_path`] asks it, a relative
+    /// external location after qualifying it against the working directory as its writes do, and an
+    /// object-store location in its qualified form. The analyze API lists the same (`questions.rs`).
+    pub(super) fn location_asked(
+        &self,
+        location: &Path,
+        managed: bool,
+    ) -> Result<LocationAsked, KrishivError> {
         match location.to_str() {
             Some(text) if !managed && !location.is_absolute() => {
                 let qualified = self.qualify_path(text)?;
-                match qualified.strip_prefix("file:") {
-                    Some(local) => self
-                        .authorize_path(Path::new(local), create, class)
-                        .await
-                        .map(Some),
-                    None => {
-                        let securable = Securable::Path(OptionValue::from_user("path", qualified));
-                        self.authorize_securable(&securable, create, class).await?;
-                        Ok(None)
-                    }
-                }
+                Ok(match qualified.strip_prefix("file:") {
+                    Some(local) => LocationAsked::Local(PathBuf::from(local)),
+                    None => LocationAsked::Store(qualified),
+                })
             }
-            _ => self.authorize_path(location, create, class).await.map(Some),
+            _ => Ok(LocationAsked::Local(location.to_path_buf())),
         }
     }
 
@@ -323,6 +335,14 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
         let _ = path;
         None
     }
+}
+
+/// Where a CREATE TABLE asks about a table's location ([`Session::location_asked`]).
+pub(super) enum LocationAsked {
+    /// A local path, asked as [`Session::authorize_path`] asks it.
+    Local(PathBuf),
+    /// An object-store location, in its qualified form.
+    Store(String),
 }
 
 /// A local directory as [`Session::authorize_path`] checked it: `path`, canonical, is the one to act on;

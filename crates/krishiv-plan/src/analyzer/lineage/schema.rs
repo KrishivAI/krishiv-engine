@@ -20,9 +20,12 @@
 //! Directories: a run of `DROP TABLE` or `TRUNCATE TABLE` on a managed table also checks `MODIFY` on the
 //! table's directory when it exists, and `INSERT` checks `MODIFY` and `CREATE` on the table's location;
 //! the session lists them after the targets, as the qualified path a denial names (`file:` for a local
-//! one), and only when the statement's targets are allowed (a denied target lists no directory). The
-//! directories a run of `CREATE TABLE`, CTAS, `REPLACE TABLE`, `ALTER TABLE ... RENAME TO`,
-//! `DROP NAMESPACE ... CASCADE` and partition DDL checks are not listed yet.
+//! one), and only when the statement's targets are allowed (a denied target lists no directory). So are
+//! the directories of DDL: `CREATE` on a new table's location (`CREATE TABLE`; a managed CTAS asks `MODIFY`
+//! and `CREATE` first, then its write asks about the location), `MODIFY` on the directory an `ALTER TABLE
+//! ... RENAME TO` moves and `CREATE` on the new one, `MODIFY` on each managed table's directory of a `DROP
+//! NAMESPACE ... CASCADE` (`REPLACE TABLE` is refused before it asks). The partition directories of `ADD`,
+//! `DROP` and `RENAME PARTITION` and `MSCK REPAIR TABLE` are not listed yet.
 //!
 //! `display` (a securable as the 42501 denial text prints it) is a Krishiv addition to the design's v1
 //! shape.
@@ -375,9 +378,13 @@ pub fn analyze_v1() -> Shape {
              directories a run also checks: MODIFY on a managed table's directory for DROP TABLE and \
              TRUNCATE TABLE when it exists, MODIFY and CREATE on the table's location for INSERT (the \
              qualified path as a denial names it, `file:` for a local one; the policy gets a local path \
-             with its links resolved), listed only when the statement's targets are allowed. Not listed \
-             yet: the directories of CREATE TABLE, CREATE TABLE AS SELECT, REPLACE TABLE, ALTER TABLE \
-             RENAME TO, DROP NAMESPACE CASCADE and partition DDL.",
+             with its links resolved), for CREATE TABLE MANAGE on the cluster when its OPTIONS hold a \
+             server-scoped store key, then CREATE on the new table's location (a managed CREATE TABLE AS \
+             SELECT: MODIFY and CREATE on it, each once, its write asking the same), MODIFY on the \
+             directory of a managed table ALTER TABLE RENAME TO moves and CREATE on the new one, MODIFY on \
+             the directory of each managed table DROP NAMESPACE CASCADE drops (only when BROWSE on the \
+             namespace is allowed too); listed only when the statement's targets are allowed. Not listed yet: the partition directories of ADD, \
+             DROP and RENAME PARTITION and MSCK REPAIR TABLE.",
             array(securable),
         ),
         field(
