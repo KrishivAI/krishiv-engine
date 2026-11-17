@@ -90,9 +90,18 @@ impl QueryRunner {
     ) -> Result<BoxStream<'static, Result<Batch>>> {
         let capacity = query.config().result_buffer_per_slot * self.executor.parallelism();
         let channel = Channel::new(capacity);
+        // Under `krishiv.deterministicOrder` every pipeline runs one driver
+        // (lanes aside, `start_members`), and a plan chosen from this value
+        // must not make its output order follow thread timing: one.
+        let parallelism = if query.config().deterministic_order {
+            1
+        } else {
+            self.executor.parallelism()
+        };
         let mut b = PipelineBuilder::new(Arc::new(ResultSink {
             channel: Arc::clone(&channel),
-        }));
+        }))
+        .with_parallelism(parallelism);
         plan.build_pipelines(&mut b)?;
         let (pipelines, names) = b.finish()?;
         let mut member: HashMap<OperatorId, Vec<u32>> = HashMap::new();
@@ -472,7 +481,15 @@ fn start_group(
         return Err(internal("a pipeline group without pipelines".to_owned()));
     };
     let (sink_id, sink) = &first.sink;
-    let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
+    // A sink sees the breaker its pipeline's source reads, as the source
+    // does (for a fan-in, the first member's): a sink that continues that
+    // breaker's state adopts it (`aggregate/distinct.rs` `KeyFeed`); every
+    // other sink ignores it.
+    let mut sink_ctx = ctx((*sink_id, sink.name()));
+    if let Some(input) = &first.input {
+        sink_ctx = sink_ctx.with_dependency(read(input)?);
+    }
+    let sink_global = sink.global_state(&sink_ctx)?;
     let sink = Arc::clone(sink);
     let mut started = Vec::with_capacity(members.len());
     // Scheduler-assigned globally unique partition ids: the drivers of

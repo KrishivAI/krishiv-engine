@@ -40,6 +40,30 @@ pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
     }
 }
 
+/// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is
+/// deterministic: the optimizer's test for inlining a `WITH` definition at each reference (`InlineCTE`), shared
+/// with the analyzer's binding of `input_file_name()`, which instantiates a definition the same way.
+#[must_use]
+pub fn plan_is_deterministic(plan: &crate::LogicalPlan) -> bool {
+    use crate::walk::{Node, visit_distinct};
+    let mut ok = true;
+    let _ = visit_distinct(Node::Plan(plan), |n| {
+        ok &= match n {
+            Node::Plan(p) => python_relation_is_deterministic(&p.node),
+            Node::Expr(e) => !matches!(
+                &e.node,
+                crate::ExprNode::Resolved(crate::ResolvedExpr::Function(f)) if !f.deterministic
+            ),
+        };
+        if ok {
+            std::ops::ControlFlow::Continue(())
+        } else {
+            std::ops::ControlFlow::Break(())
+        }
+    });
+    ok
+}
+
 /// Refuses a grouped or cogrouped map whose UDF is nondeterministic:
 /// Spark's `CheckAnalysis` allows nondeterministic expressions only on some
 /// operators, of the Python relations `MapInPandas` and `MapInArrow`
@@ -50,10 +74,9 @@ pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
 /// over the input's columns (`PrettyPythonUDF`: `name(a, b)`) and its
 /// output attributes; a cogroup's UDF call and output (its key counts are
 /// not expressions). Spark raises it at analysis (`df.schema`, `explain`
-/// and SQL fail); no front end builds these nodes yet (Connect's
-/// `GroupMap`/`CoGroupMap` are not lowered, P3-T014), so for now only the
-/// physical planner calls it, at a DataFrame's first action. The front end
-/// that builds them must call it where it resolves the node.
+/// and SQL fail): the analyzer calls it where it resolves the node
+/// (`analyzer/python_relations.rs`). The physical planner calls it too, for
+/// plans built resolved that never went through the analyzer.
 ///
 /// Known differences: the UDF's name is the canonical lower-case one (a
 /// [`crate::PythonUdfRef`] keeps no other), and a

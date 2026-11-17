@@ -2994,6 +2994,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-store",
  "krishiv-types",
  "reqwest 0.13.5",
  "rusqlite",
@@ -3144,7 +3145,9 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "foldhash",
  "futures",
+ "hashbrown 0.17.1",
  "iceberg",
  "krishiv-arrow-bridge",
  "krishiv-common",
@@ -3227,6 +3230,7 @@ dependencies = [
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",
@@ -3581,9 +3585,12 @@ dependencies = [
  "bytes",
  "futures",
  "http",
+ "humantime",
  "krishiv-common",
  "object_store",
+ "reqwest 0.13.5",
  "tokio",
+ "url",
 ]
 
 [[package]]

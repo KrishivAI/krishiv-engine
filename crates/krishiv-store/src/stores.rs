@@ -266,6 +266,32 @@ pub struct ParsedUrl {
     pub display: String,
 }
 
+impl ParsedUrl {
+    /// The root Spark prints the store's files under (`_metadata.file_path`): the scheme as
+    /// written, lower-cased, and the authority as written, an Azure host lower-cased (Hadoop
+    /// qualifies a path with its file system's URI; Spark 4.2.0 run: `S3A://b/k` prints
+    /// `s3a://b/...`, `abfss://c@Acct.DFS.core.windows.net` prints `abfss://c@acct.dfs...`).
+    /// `None` for `hf://`, which Spark does not read.
+    #[must_use]
+    pub fn spark_root(&self) -> Option<String> {
+        if self.scheme == ObjectScheme::HuggingFace {
+            return None;
+        }
+        let (_, rest) = self.display.split_once("://")?;
+        let authority = rest.split_once('/').map_or(rest, |(a, _)| a);
+        let authority = match (self.scheme, authority.split_once('@')) {
+            (ObjectScheme::Azure, Some((container, host))) => {
+                format!("{container}@{}", host.to_ascii_lowercase())
+            }
+            _ => authority.to_owned(),
+        };
+        Some(format!(
+            "{}://{authority}",
+            self.scheme_text.to_ascii_lowercase()
+        ))
+    }
+}
+
 /// Splits `text` into its cloud store and key.
 ///
 /// # Errors
@@ -959,6 +985,29 @@ fn build(
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
     // builder below).
+    // Every configured endpoint, from the startup settings or per read, passes the egress rule
+    // with no provider exemption before a store is built (design P3-T067 §5.2; review 58a1 B2):
+    // the clients of S3, GCS and Azure admit the provider literals for their ambient credential
+    // calls, so no data request may target one.
+    if let Some(clients) = clients {
+        for key in [
+            S3_ENDPOINT,
+            GCS_STORAGE_ROOT_URL,
+            GCS_ENDPOINT,
+            AZURE_ENDPOINT,
+            HF_ENDPOINT,
+        ] {
+            if let Some(endpoint) = text(config, options, key)?
+                && clients.check_endpoint(&endpoint).is_err()
+            {
+                return Err(invalid_option(
+                    key,
+                    "the egress policy refuses this endpoint's address (private address)",
+                )
+                .into());
+            }
+        }
+    }
     let path_style = match url.scheme {
         ObjectScheme::S3 => path_style_access(config, options)?,
         _ => None,
@@ -969,8 +1018,14 @@ fn build(
         ObjectScheme::Azure => azure::azure_store(config, options, url, scope, clients),
         ObjectScheme::Http => http_store(url, clients),
         // The token is a default header, which the shared clients' fingerprint does not see:
-        // this store always builds its own client.
-        ObjectScheme::HuggingFace => hf_store(config, options, url),
+        // this store builds its own client, a policy client when the cache enforces the egress
+        // policy (built uncached: default headers are never shared).
+        ObjectScheme::HuggingFace => hf_store(
+            config,
+            options,
+            url,
+            clients.filter(|c| c.enforces_egress()),
+        ),
     }
 }
 
@@ -985,6 +1040,7 @@ fn hf_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    egress: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let endpoint =
@@ -1034,9 +1090,13 @@ fn hf_store(
         headers.insert(http::header::AUTHORIZATION, value);
         client = client.with_default_headers(headers);
     }
-    HttpBuilder::new()
+    let mut builder = HttpBuilder::new()
         .with_url(base)
-        .with_client_options(client)
+        .with_client_options(client);
+    if let Some(clients) = egress {
+        builder = builder.with_http_connector(clients.data_only());
+    }
+    builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
@@ -1083,8 +1143,9 @@ fn http_store(
     let mut builder = HttpBuilder::new()
         .with_url(url.store_id.key())
         .with_client_options(object_store::ClientOptions::new().with_allow_http(plain));
+    // No ambient credential providers here: the data-only clients (review 58a1 B2).
     if let Some(clients) = clients {
-        builder = builder.with_http_connector(clients.clone());
+        builder = builder.with_http_connector(clients.data_only());
     }
     builder
         .build()

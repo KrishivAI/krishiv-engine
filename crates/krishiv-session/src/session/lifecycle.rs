@@ -137,6 +137,7 @@ impl Session {
                 profile: parts.profile,
                 principal: parts.principal,
                 policy: parts.policy,
+                grants: parts.grants,
                 functions,
                 base_functions,
                 udfs,
@@ -166,6 +167,9 @@ impl Session {
                 denials: std::sync::OnceLock::new(),
             }),
         };
+        if let Some(grants) = &session.state.grants {
+            grants.bind_catalog(&session.state.catalog.store);
+        }
         session
             .state
             .runtime
@@ -199,6 +203,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -224,6 +229,10 @@ impl Session {
             profile: state.profile,
             principal: Arc::new(principal),
             policy,
+            // The base session's grants policy is its own principal's: never the caller's. Without
+            // one, the grant statements are refused and nothing created gets an owner (the admins'
+            // until granted), which fails closed.
+            grants: None,
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -273,6 +282,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };

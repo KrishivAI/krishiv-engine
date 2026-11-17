@@ -21,14 +21,15 @@ use krishiv_common::error::{
 };
 use krishiv_io::{ColumnPath, PushdownExpr};
 
+use super::manifest_cache::{Cached, CachedEntry, ManifestCache, ManifestKey};
 use super::storage::from_iceberg;
 use super::types::spark_schema;
 use crate::plan::bounds::min_be_bytes;
 use crate::plan::deletes::DeleteIndex;
 use crate::plan::entry::{
-    ContentFile, ContentKind, EntryStatus, FileFormatKind, FileScanTask, LiveEntry,
-    ManifestContent, ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary,
-    PartitionValue, ScanPlan, inherit,
+    ContentFile, ContentKind, EntryStatus, FileFormatKind, FileScanTask, ManifestContent,
+    ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary, PartitionValue,
+    ScanPlan, inherit,
 };
 use crate::plan::metrics::WriterMetrics;
 use crate::plan::prune::{PruneOptions, Pruner};
@@ -499,12 +500,26 @@ pub(crate) fn parse_manifest(bytes: &[u8], spec_id: i32) -> Result<Vec<ParsedEnt
         .collect())
 }
 
-/// The live entries of one manifest, read, parsed and inherited.
+/// The live entries of one manifest, read, parsed and inherited, or from the
+/// manifest cache of `env`.
 async fn manifest_entries(
     io: &FileIO,
     manifest: &ManifestFileEntry,
-    max_bytes: u64,
-) -> Result<Vec<LiveEntry>, KrishivError> {
+    env: PlanEnv<'_>,
+) -> Result<Arc<[CachedEntry]>, KrishivError> {
+    let cache = env.cache.filter(|(_, limit)| *limit > 0);
+    let key = cache.map(|_| ManifestKey::of(manifest));
+    if let (Some((c, _)), Some(k)) = (cache, &key)
+        && let Some(hit) = c.get(k)
+    {
+        check_size(
+            "manifest",
+            &manifest.path,
+            hit.read_bytes,
+            env.max_metadata_bytes,
+        )?;
+        return Ok(hit.entries);
+    }
     if manifest.encrypted {
         return Err(KrishivUnsupportedFeature {
             feature: "encrypted Iceberg manifests".to_owned(),
@@ -512,17 +527,37 @@ async fn manifest_entries(
         .into());
     }
     let declared = u64::try_from(manifest.length).ok().filter(|n| *n > 0);
-    let bytes = read_capped(io, "manifest", &manifest.path, declared, max_bytes).await?;
-    inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)
+    let bytes = read_capped(
+        io,
+        "manifest",
+        &manifest.path,
+        declared,
+        env.max_metadata_bytes,
+    )
+    .await?;
+    let entries: Arc<[CachedEntry]> = inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)?
+        .into_iter()
+        .map(CachedEntry::from)
+        .collect();
+    if let (Some((c, limit)), Some(k)) = (cache, key) {
+        let cached = Cached {
+            entries: Arc::clone(&entries),
+            read_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        };
+        c.insert(k, cached, limit);
+    }
+    Ok(entries)
 }
 
 /// What a plan reads under: the catalog parse limit on each manifest list and
 /// manifest (compressed bytes; the decoded entries are not charged to a memory
-/// reservation until PR-25d) and the writers' metrics modes.
+/// reservation) and the writers' metrics modes, with the decoded-manifest
+/// cache and its byte limit (`None`: no cache).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlanEnv<'a> {
     pub(crate) max_metadata_bytes: u64,
     pub(crate) metrics: &'a WriterMetrics,
+    pub(crate) cache: Option<(&'a ManifestCache, u64)>,
 }
 
 /// The files of `snapshot` that may hold rows matching `predicate`.
@@ -541,9 +576,31 @@ pub(crate) async fn plan(
     options: PruneOptions,
     env: PlanEnv<'_>,
 ) -> Result<ScanPlan, KrishivError> {
+    let (mut out, index) = plan_files(io, snapshot, predicate, filter, options, env).await?;
+    if !index.is_empty() {
+        for t in &mut out.tasks {
+            t.deletes = Arc::new(index.for_data_file(&t.file)?);
+        }
+    }
+    Ok(out)
+}
+
+/// [`plan`] without assigning deletes to the tasks: the index assigns them
+/// to the files a scan reads (the provider, after filter pruning).
+///
+/// # Errors
+/// As [`plan`], except the errors of assigning deletes to one data file.
+pub(crate) async fn plan_files(
+    io: &FileIO,
+    snapshot: &TableSnapshot,
+    predicate: Option<&PushdownExpr>,
+    filter: ManifestFilter,
+    options: PruneOptions,
+    env: PlanEnv<'_>,
+) -> Result<(ScanPlan, DeleteIndex), KrishivError> {
     let ManifestFilter::All = filter;
     let Some(list) = &snapshot.manifest_list else {
-        return Ok(ScanPlan::default());
+        return Ok((ScanPlan::default(), DeleteIndex::default()));
     };
     let always = PushdownExpr::Constant(true);
     let pruner = Pruner::new(
@@ -574,19 +631,19 @@ pub(crate) async fn plan(
         ..ScanPlan::default()
     };
     // Each manifest's entries are pruned as its read completes (in manifest
-    // order), so only the files kept stay in memory, not every entry read.
+    // order), so only the files kept are listed, not every entry read.
     let mut per_manifest = std::pin::pin!(
         futures::stream::iter(kept.iter())
-            .map(|m| manifest_entries(io, m, env.max_metadata_bytes))
+            .map(|m| manifest_entries(io, m, env))
             .buffered(MANIFEST_CONCURRENCY)
     );
     while let Some(entries) = per_manifest.try_next().await? {
-        for entry in entries {
+        for entry in entries.iter().cloned() {
             match entry {
-                LiveEntry::Data(d) => {
+                CachedEntry::Data(d) => {
                     if pruner.file_may_match(&d.file) {
                         out.tasks.push(FileScanTask {
-                            file: Arc::new(d),
+                            file: d,
                             residual: predicate.cloned(),
                             deletes: Arc::default(),
                         });
@@ -594,15 +651,11 @@ pub(crate) async fn plan(
                         out.files_pruned += 1;
                     }
                 }
-                LiveEntry::Delete(d) => out.delete_files.push(Arc::new(d)),
+                CachedEntry::Delete(d) => out.delete_files.push(d),
             }
         }
     }
-    let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?;
-    if !index.is_empty() {
-        for t in &mut out.tasks {
-            t.deletes = Arc::new(index.for_data_file(&t.file)?);
-        }
-    }
-    Ok(out)
+    let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?
+        .with_fields(&snapshot.fields, env.metrics);
+    Ok((out, index))
 }

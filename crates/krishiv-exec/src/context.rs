@@ -895,6 +895,9 @@ impl TaskContext {
     /// For a breaker's source side (in `Source::global_state`): the
     /// finalized global state of its sink side (see
     /// [`PipelineBuilder::set_breaker_source`](crate::PipelineBuilder::set_breaker_source)).
+    /// A pipeline's sink sees the same state in `Sink::global_state` (from
+    /// its group's first member, for a fan-in): a sink that continues the
+    /// breaker's state adopts it (`aggregate/distinct.rs` `KeyFeed`).
     pub fn dependency(&self) -> Option<&GlobalState> {
         self.dependency.as_ref()
     }

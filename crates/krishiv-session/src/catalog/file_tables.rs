@@ -125,7 +125,8 @@ impl QueryCatalog {
                 listing.options.clone(),
             )
             .await?
-            .with_partition_columns(listing.partition_columns.to_vec());
+            .with_partition_columns(listing.partition_columns.to_vec())
+            .with_path_roots(listing.path_roots.clone());
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
