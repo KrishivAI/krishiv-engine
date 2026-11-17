@@ -624,3 +624,50 @@ fn eliminate_expr_body(
     memo.put_expr(e, &out);
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::{Cte, Expr, LogicalPlan, PlanNode, ReadSource};
+
+    /// The table names `plan` reads, and whether a `WITH` is left in it.
+    fn reads(plan: &LogicalPlan, names: &mut Vec<String>, with: &mut bool) {
+        match &plan.node {
+            PlanNode::Read(ReadSource::Table { name, .. }) => names.push(name.join(".")),
+            PlanNode::WithCte { .. } => *with = true,
+            _ => {}
+        }
+        plan.for_each_child(&mut |c| reads(c, names, with));
+    }
+
+    /// Review r3 N3: a plan without definitions comes back as the same node (a definer view's
+    /// query keeps its trust by identity), and a plan with them has them inlined.
+    #[test]
+    fn inline_legacy_ctes_keeps_a_plan_without_definitions_and_inlines_one_with() {
+        let plain = Arc::new(LogicalPlan::table(["t"]).project(vec![Expr::column(["a"])]));
+        let same = super::inline_legacy_ctes(&plain, false).unwrap();
+        assert!(Arc::ptr_eq(&plain, &same));
+
+        // `WITH c AS (SELECT a FROM t) SELECT a FROM C`, case-insensitively.
+        let with = Arc::new(LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["C"]).project(vec![Expr::column(["a"])])),
+            ctes: vec![Cte {
+                name: "c".to_owned(),
+                plan: Arc::clone(&plain),
+            }],
+        }));
+        let inlined = super::inline_legacy_ctes(&with, false).unwrap();
+        let (mut names, mut left) = (Vec::new(), false);
+        reads(&inlined, &mut names, &mut left);
+        assert!(!left, "{inlined:?}");
+        assert_eq!(names, ["t"], "{inlined:?}");
+
+        // Case-sensitively `C` is not `c`: the definition is dropped, the read stays a table's.
+        let kept = super::inline_legacy_ctes(&with, true).unwrap();
+        let (mut names, mut left) = (Vec::new(), false);
+        reads(&kept, &mut names, &mut left);
+        assert!(!left, "{kept:?}");
+        assert_eq!(names, ["C"], "{kept:?}");
+    }
+}
