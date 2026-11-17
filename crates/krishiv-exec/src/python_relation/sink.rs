@@ -143,6 +143,19 @@ pub enum RelationShape {
         /// The key columns the output shows, as many as `keys`.
         key_values: Vec<usize>,
     },
+    /// Each lane's task yields one value per input row, in input order, in
+    /// batches of any size: the output is every input column, then one
+    /// column per lane (Spark's window aggregate and scalar iterator kinds,
+    /// whose JVM side queues the input rows and joins each with its result:
+    /// `ArrowWindowPythonEvaluatorFactory.scala` L235-390,
+    /// `EvalPythonEvaluatorFactory` at v4.2.0). With `keys`, groups of equal
+    /// keys each ended by [`Frame::EndGroup`] (a window's partitions; no keys
+    /// is one group); without, the partition's batches then [`Frame::End`]
+    /// (a scalar iterator).
+    Aligned {
+        /// The group key columns, if the rows come in groups.
+        keys: Option<Vec<usize>>,
+    },
 }
 
 impl RelationShape {
@@ -152,6 +165,22 @@ impl RelationShape {
             Self::Grouped { keys }
             | Self::CoGrouped { keys, .. }
             | Self::Aggregate { keys, .. } => Some(keys),
+            Self::Aligned { keys } => keys.as_deref(),
+        }
+    }
+
+    /// Whether each lane yields values the sink joins with rows it keeps
+    /// (`pair.rs`): one per group, or one per row.
+    fn paired(&self) -> bool {
+        matches!(self, Self::Aggregate { .. } | Self::Aligned { .. })
+    }
+
+    /// What one value of a paired lane stands for, in errors.
+    fn unit(&self) -> &'static str {
+        if matches!(self, Self::Aligned { .. }) {
+            "row"
+        } else {
+            "group"
         }
     }
 }
@@ -282,6 +311,8 @@ impl RelationSink {
                     .collect::<Result<_>>()?;
                 Some(Arc::new(Schema::new(fields)))
             }
+            // The rows are kept whole.
+            RelationShape::Aligned { .. } => Some(Arc::clone(&input)),
             _ => None,
         };
         Ok(Arc::new(Self {
@@ -848,14 +879,14 @@ impl RelationSink {
     /// results it came from: a lane's next result (map and grouped shapes)
     /// or the groups every lane has a value for (aggregate).
     fn next_output(&self, d: &mut Driver) -> Result<Option<(Batch, Vec<Reservation>)>> {
-        if let (RelationShape::Aggregate { .. }, Some(key_schema)) = (&self.shape, &self.key_schema)
-        {
+        if let (true, Some(key_schema)) = (self.shape.paired(), &self.key_schema) {
             return pair::joined(
                 &mut d.pending,
                 key_schema,
                 &self.schema,
                 &self.lanes,
                 &d.lanes,
+                self.shape.unit(),
             );
         }
         for (lane, state) in self.lanes.iter().zip(&d.lanes) {
@@ -949,6 +980,20 @@ impl RelationSink {
         let input = crate::operators::owned_rows(input)?;
         let data = input.data();
         let (runs, last) = self.runs(data, d.current.as_ref())?;
+        if matches!(self.shape, RelationShape::Aligned { .. }) {
+            // Every row waits for its values. The kept rows and the frames
+            // cut from them share the batch's buffers, so they share its one
+            // reservation, freed with the last of them.
+            let bytes = data.get_array_memory_size();
+            if d.input_bytes.try_grow(bytes).is_err() {
+                return Ok(Some(SinkStatus::NeedMemory { bytes }));
+            }
+            let memory = Arc::new(Mutex::new(d.input_bytes.split(bytes)));
+            d.pending.push_shared(data.clone(), Arc::clone(&memory));
+            self.feed(d, data, runs, &memory)?;
+            d.current = last;
+            return Ok(None);
+        }
         let keys = match (&self.shape, &self.key_schema) {
             (RelationShape::Aggregate { key_values, .. }, Some(schema)) => {
                 let starts: Vec<u32> = runs
@@ -1116,23 +1161,26 @@ fn flush_feed(
 /// review R3-2), moves it to that lane's outputs and polls the lane again
 /// with `cx`, so its pump reads on in this poll rather than only when its
 /// stored waker runs (R3-1). The bytes still missing for the first one the
-/// pool refuses.
+/// pool refuses; a failure that poll meets is the waiting driver's error at
+/// once (review R7e-1), as [`drive_combined`]'s own poll makes it.
 fn reserve_combined(
     lanes: &[Lane],
     mut reserve: impl FnMut() -> Reservation,
     cx: &mut Context<'_>,
-) -> Option<usize> {
+) -> Result<Option<usize>> {
     for lane in lanes {
         // The poll after a reservation may read the next result and meet
         // another refusal (R4-2): on until none is left or one does not fit.
         while lane.refused_bytes().is_some() {
             if let Err(bytes) = lane.reserve_refused_with(reserve()) {
-                return Some(bytes);
+                return Ok(Some(bytes));
             }
-            let _ = lane.poll(cx);
+            if let Some(Err(e)) = lane.poll(cx) {
+                return Err(e);
+            }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Frames the combined drivers' backlogs (`feeds`) while their windows have
@@ -1221,7 +1269,7 @@ fn drive_combined(
         // then never frees its slot: reserved here if the pool has room
         // (its lane polled again), else the caller asks for the memory
         // (R2-2).
-        if let Some(bytes) = reserve_combined(others, || spare.split(0), cx) {
+        if let Some(bytes) = reserve_combined(others, || spare.split(0), cx)? {
             return Ok(Some(bytes));
         }
         let (moved, missing) = frame_combined(specs, window, feeds, spare, cx)?;
@@ -1526,7 +1574,7 @@ impl Sink for RelationSink {
             driver: Driver {
                 lanes: Lane::group(
                     self.lanes.iter().map(|_| consumer.reservation()),
-                    matches!(self.shape, RelationShape::Aggregate { .. }),
+                    self.shape.paired(),
                 ),
                 ready: None,
                 partition: ctx.partition(),
@@ -1693,9 +1741,9 @@ impl Sink for RelationSink {
                 }
                 self.wait(&drivers, ctx).await?;
             }
-            if matches!(self.shape, RelationShape::Aggregate { .. }) {
+            if self.shape.paired() {
                 for d in &drivers {
-                    pair::check_complete(&d.pending, &self.lanes, &d.lanes)?;
+                    pair::check_complete(&d.pending, &self.lanes, &d.lanes, self.shape.unit())?;
                 }
             }
             drop(drivers);
@@ -1739,7 +1787,7 @@ impl RelationSink {
             batches.push(batch);
             held.extend(memory);
         }
-        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
+        let aggregate = self.shape.paired();
         if !aggregate {
             // After the lane's reserved results, in its order.
             for (lane, state) in self.lanes.iter().zip(&d.lanes) {
@@ -1797,7 +1845,7 @@ impl RelationSink {
     /// memory), failed, ended or freed room in its window for a backlog, or
     /// the slots its backlog waits for freed; or the query was cancelled.
     async fn wait(&self, drivers: &[Driver], ctx: &TaskContext) -> Result<()> {
-        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
+        let aggregate = self.shape.paired();
         let mut reserving: Vec<BoxFuture<'static, Result<()>>> = if aggregate {
             drivers
                 .iter()

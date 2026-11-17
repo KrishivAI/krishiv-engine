@@ -421,7 +421,8 @@ impl<'a> Planner<'a> {
                         self.window_group_limit_threshold(),
                     );
                     let below = self.plan(below)?;
-                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    let window =
+                        self.window_relation(below, exprs, partition_by, order_by, limit)?;
                     return self.filter(window, predicate);
                 }
                 let mut input = self.plan(input)?;
@@ -627,16 +628,8 @@ impl<'a> Planner<'a> {
                 partition_by,
                 order_by,
             } => {
-                if exprs
-                    .iter()
-                    .any(|e| super::python_udf::has_python_aggregate_udf(e))
-                {
-                    return Err(super::python_relation::later_kind(
-                        "a Python aggregate UDF over a window",
-                    ));
-                }
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by, None)
+                self.window_relation(input, exprs, partition_by, order_by, None)
             }
             PlanNode::UnionLoop {
                 id,

@@ -43,6 +43,8 @@ pub(crate) struct Started {
     pub(crate) private_dir: tempfile::TempDir,
     /// Started through the sandbox trampoline, whose reserved exit status means it could not enter the sandbox.
     pub(crate) sandboxed: bool,
+    /// The session's artifacts the worker reads, kept while it lives.
+    pub(crate) artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 /// A worker that greeted the server.
@@ -66,6 +68,9 @@ pub(crate) struct Worker {
     sandboxed: bool,
     /// True once the worker greeted the server: the trampoline is gone, so an exit status is the worker's own.
     greeted: bool,
+    /// The session's artifacts the worker reads (`Started::artifacts`): their directory is removed only once
+    /// no worker reads it.
+    _artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -110,6 +115,7 @@ impl Worker {
             control,
             private_dir,
             sandboxed,
+            artifacts,
         } = started;
         let pid = Pid::from_child(&child);
         // The child is not reaped yet, so `pid` is still its own.
@@ -141,6 +147,7 @@ impl Worker {
             healthy: false,
             sandboxed,
             greeted: false,
+            _artifacts: artifacts,
         };
         if !watch.starting(&worker.pidfd) {
             // Dropping the worker kills and reaps it.
@@ -270,12 +277,14 @@ impl Worker {
         decode_result(bytes, return_type, args.num_rows()).inspect_err(|_| self.healthy = false)
     }
 
-    /// Starts a relation task over loaded payload `id` (wire `task`): `key_count` key columns lead each frame,
-    /// `arity` data columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an
-    /// aggregate keeps before it sends them.
+    /// Starts a relation task over loaded payload `id` (wire `task`) run as `eval_type` (the payload's own, or
+    /// the window kind of a grouped-aggregate payload): `key_count` key columns lead each frame, `arity` data
+    /// columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an aggregate keeps
+    /// before it sends them.
     pub(crate) fn start_task(
         &mut self,
         id: u64,
+        eval_type: i32,
         key_count: usize,
         arity: usize,
         max_rows: usize,
@@ -284,6 +293,7 @@ impl Worker {
         let header = json!({
             "t": "task",
             "udf": id,
+            "eval_type": eval_type,
             "key_count": key_count,
             "arity": arity,
             "max_rows": max_rows,
