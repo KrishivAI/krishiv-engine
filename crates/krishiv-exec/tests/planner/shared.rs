@@ -254,6 +254,25 @@ fn an_inner_group_read_once_counts_a_copy_per_outer_copy() {
     assert_eq!(shared, 2);
 }
 
+/// A filter that reaches a top-level reference of `d`, whose first copy sits inside `x`'s body, reaches that
+/// reference's own copy, not `x`'s: `x` is still shared (a reused reference's scans are its own).
+#[test]
+fn a_filter_reaching_a_reused_reference_does_not_reach_the_body_holding_the_first_copy() {
+    let env = env();
+    let sql = "WITH d AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a), \
+                    x AS (SELECT k, sum(n) AS n FROM d GROUP BY k) \
+               SELECT k, n FROM x UNION ALL SELECT k, n FROM x \
+               UNION ALL SELECT d1.k, d1.n FROM d d1 LEFT SEMI JOIN (SELECT a FROM t WHERE b > 50) s ON s.a = d1.k";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (_, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(rows, same);
+    assert_eq!(shared, 1, "x is shared; d is reached and keeps its copies");
+}
+
 /// Groups nested in another group's body are found too.
 #[test]
 fn nested_groups_are_shared_inside_the_outer_definition() {

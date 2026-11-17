@@ -117,11 +117,17 @@ fn plan_once(
     let planned = planner.plan(root)?;
     let mut planned = select(planned, output, "Project")?;
     // A group is shareable when no copy's scan receives a filter from outside the copy: a join inside the body
-    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1). A reused body's sites
-    // name its first copy's scans, so a filter that reaches any reference lands on that copy.
-    let reached = |copy: &Copy| {
+    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1). A reused reference's
+    // scans stand for its definition's first copy's (`Bodies::aliases`): a scan is in the copy of every body
+    // planned around the reference, and of the definitions planned within that first copy (the reused
+    // definition's included), never of the bodies around the first copy.
+    let bodies = planner.bodies.as_ref();
+    let covers = |key: &Vec<AttrId>, copy: &Copy, scan: u64| {
+        copy.scans.contains(&scan) || bodies.is_some_and(|b| b.covers(key, &copy.scans, scan))
+    };
+    let reached = |key: &Vec<AttrId>, copy: &Copy| {
         planner.scan_filters.iter().any(|(scan, filters)| {
-            copy.scans.contains(&scan.0) && filters.iter().any(|f| !copy.filters.contains(&f.id.0))
+            covers(key, copy, scan.0) && filters.iter().any(|f| !copy.filters.contains(&f.id.0))
         })
     };
     let counts = planner.bodies.as_ref().map(Bodies::copies);
@@ -133,7 +139,7 @@ fn plan_once(
                 c.get(*key)
                     .map_or(0, |&n| usize::try_from(n).unwrap_or(usize::MAX))
             });
-            n >= 2 && !copies.iter().any(reached)
+            n >= 2 && !copies.iter().any(|c| reached(key, c))
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -825,8 +831,10 @@ impl<'a> Planner<'a> {
     }
 
     /// An unshared copy of `r`'s deterministic definition `def`, its scans and filters recorded. In the deciding
-    /// pass only the first reference plans the body; a later one gets its shape ([`Bodies`]).
+    /// pass only the first reference plans the body (once live and once under a `LIMIT 0`, which plans no
+    /// observed node); a later one gets its shape over scans of its own ([`Bodies`]).
     fn copy(&mut self, r: &krishiv_plan::CteRef, def: &Arc<LogicalPlan>) -> Result<Planned> {
+        let key = (r.source.clone(), self.unobserved > 0);
         if let Some(bodies) = self.bodies.as_mut() {
             let enclosing = bodies.enclosing.last().cloned().flatten();
             bodies
@@ -834,10 +842,13 @@ impl<'a> Planner<'a> {
                 .entry(r.source.clone())
                 .or_default()
                 .push(enclosing);
-            if let Some(shape) = bodies.shapes.get(&r.source) {
+            if let Some(shape) = bodies.shapes.get(&key) {
+                let planned = shape.shape(&r.name);
                 bodies.reused = true;
-                return Ok(shape.shape(&r.name));
+                return Ok(bodies.reuse(planned, &r.source, &mut self.next_scan));
             }
+            let within = bodies.enclosing.iter().flatten().cloned().collect();
+            bodies.within.entry(r.source.clone()).or_insert(within);
             bodies.enclosing.push(Some(r.source.clone()));
         }
         let (scans_from, filters_from) = (self.next_scan, self.next_filter);
@@ -851,9 +862,7 @@ impl<'a> Planner<'a> {
             filters: filters_from..self.next_filter,
         });
         if let Some(bodies) = self.bodies.as_mut() {
-            bodies
-                .shapes
-                .insert(r.source.clone(), planned.shape(&r.name));
+            bodies.shapes.insert(key, planned.shape(&r.name));
         }
         Ok(planned)
     }
@@ -902,9 +911,15 @@ impl<'a> Planner<'a> {
         let output = def
             .resolved_output()
             .ok_or_else(|| internal("a CTE without output"))?;
-        // A shared plan is planned once: a reference inside it makes one copy.
+        // A live shared plan is planned once: a reference inside it makes one copy. Under a `LIMIT 0` it is
+        // planned again at each reference (it is not kept), so its references count with the enclosing body's.
         if let Some(bodies) = self.bodies.as_mut() {
-            bodies.enclosing.push(None);
+            let enclosing = if self.unobserved == 0 {
+                None
+            } else {
+                bodies.enclosing.last().cloned().flatten()
+            };
+            bodies.enclosing.push(enclosing);
         }
         let planned = self.plan(&def);
         if let Some(bodies) = self.bodies.as_mut() {
