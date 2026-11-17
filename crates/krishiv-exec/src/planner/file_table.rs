@@ -314,8 +314,7 @@ where
 /// A metadata read error as the scan reports it. Schema inference read the
 /// first file (every file under `mergeSchema`) before the table opens, so a
 /// footer that fails here is one Spark meets only in its scan, which wraps
-/// it as `FAILED_READ_FILE.NO_HINT` (the footer class is its cause there,
-/// printed by the reader; here the cause is logged).
+/// it as `FAILED_READ_FILE.NO_HINT` with the footer error as its cause.
 fn scan_failure(e: KrishivError) -> KrishivError {
     if e.error_class() != ErrorClass::FailedReadFileCannotReadFileFooter {
         return e;
@@ -323,8 +322,7 @@ fn scan_failure(e: KrishivError) -> KrishivError {
     let Some((_, path)) = e.message_parameters().iter().find(|(k, _)| *k == "path") else {
         return e;
     };
-    tracing::warn!(error = %e, "a file's footer cannot be read in the scan");
-    FailedReadFileNoHint { path: path.clone() }.into()
+    KrishivError::from(FailedReadFileNoHint { path: path.clone() }).with_cause(e)
 }
 
 /// The statistics of two files together.
