@@ -205,7 +205,8 @@
       "Query": {
         "properties": {
           "ended": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "errorClass": {
             "type": "string"
@@ -223,7 +224,8 @@
             "type": "string"
           },
           "started": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "state": {
             "type": "string"
@@ -232,7 +234,8 @@
             "type": "string"
           },
           "submitted": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "tags": {
             "additionalProperties": {
@@ -255,16 +258,19 @@
             "type": "string"
           },
           "closed": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "created": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "delegatedBy": {
             "type": "string"
           },
           "lastActive": {
-            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+            "format": "date-time",
+            "type": "string"
           },
           "principal": {
             "type": "string"
@@ -334,6 +340,61 @@
     "/api/admin/v1/queries": {
       "get": {
         "operationId": "ListQueries",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -362,6 +423,16 @@
     "/api/admin/v1/queries/{query_id}:cancel": {
       "post": {
         "operationId": "CancelQuery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -438,6 +509,24 @@
     "/api/admin/v1/sessions": {
       "get": {
         "operationId": "ListSessions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -466,6 +555,16 @@
     "/api/admin/v1/sessions/{session_id}:kill": {
       "post": {
         "operationId": "KillSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

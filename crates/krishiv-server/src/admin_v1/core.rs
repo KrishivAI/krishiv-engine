@@ -50,23 +50,44 @@ impl Core {
         if !Self::is_mutating(rpc) {
             return self.invoke(rpc, &call, request).await;
         }
-        let message_id = request_id_in(rpc, request)?;
+        let refuse = |call: &Call, error: AdminError| {
+            // A refused mutation still leaves its action record.
+            action::record(&Action {
+                principal: &call.caller.principal,
+                role: call.caller.role.as_deref().unwrap_or("none"),
+                auth_method: &call.caller.method,
+                rpc,
+                transport: call.transport,
+                target: "",
+                own: false,
+                request_id: &call.request_id,
+                result: "failed",
+                error_class: &error.error_class,
+                replay: false,
+            });
+            error
+        };
+        let message_id = request_id_in(rpc, request).map_err(|e| refuse(&call, e))?;
         let sent = if message_id.is_empty() {
             header_id.unwrap_or_default().to_owned()
         } else {
             message_id
         };
         if sent.len() > MAX_ID_LEN || !sent.is_ascii() {
-            return Err(AdminError::invalid_argument(format!(
-                "the request id must be ASCII and at most {MAX_ID_LEN} bytes"
-            )));
+            return Err(refuse(
+                &call,
+                AdminError::invalid_argument(format!(
+                    "the request id must be ASCII and at most {MAX_ID_LEN} bytes"
+                )),
+            ));
         }
         if !sent.is_empty() {
             sent.clone_into(&mut call.request_id);
         }
         // What makes two calls "the same request": the RPC and the message without its id.
         let mut fingerprint = rpc.as_bytes().to_vec();
-        fingerprint.extend_from_slice(&without_request_id(rpc, request)?);
+        fingerprint
+            .extend_from_slice(&without_request_id(rpc, request).map_err(|e| refuse(&call, e))?);
         let (result, how) = self
             .idempotency
             .run(

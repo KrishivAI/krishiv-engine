@@ -307,6 +307,32 @@ async fn an_own_cancel_records_user() {
     assert_eq!(f.cancel_reason(1).await, "user");
 }
 
+/// Two sessions may use one operation id: a cancel ends the query of the row the caller was
+/// checked against, never the other owner's.
+#[tokio::test]
+async fn a_cancel_leaves_the_same_operation_id_of_another_session_running() {
+    let f = fixture();
+    let (a, b) = (f.session("alice"), f.session("bob"));
+    let ta = f.start(&a, 1, &[]);
+    let tb = f.start(&b, 1, &[]);
+    f.gate.queued(2).await;
+    let (status, body) = f
+        .call(
+            "alice:viewer",
+            "POST",
+            &format!("/queries/{}:cancel", qid(1)),
+            Some("{}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(ta.await.unwrap().is_err());
+    assert!(
+        !tb.is_finished(),
+        "bob's query with the same id must keep running"
+    );
+    tb.abort();
+}
+
 #[tokio::test]
 async fn cancel_by_tag_answers_the_same_whether_or_not_others_queries_match() {
     let f = fixture();
@@ -432,7 +458,11 @@ async fn a_repeated_request_id_replays_and_a_reused_one_is_refused() {
     // The same id for a different request is not a replay.
     let other = format!("/queries/{}:cancel", qid(2));
     let (third, body) = f.call("alice:viewer", "POST", &other, Some(body)).await;
-    assert_ne!(third, StatusCode::OK, "{body}");
+    assert_eq!(third, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body.to_string().contains("KRISHIV_IDEMPOTENCY_KEY_REUSED"),
+        "{body}"
+    );
 }
 
 /// Collects the `krishiv::admin_action` records of the current thread as `field=value` strings.

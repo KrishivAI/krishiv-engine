@@ -366,11 +366,6 @@ mod tests {
         assert!(!same_secret(b"abcd", b"abc"));
         assert!(same_secret(b"", b""));
     }
-}
-
-#[cfg(test)]
-mod caller_tests {
-    use super::*;
 
     #[test]
     fn the_local_admin_holds_a_role_and_an_identity_and_an_anonymous_caller_neither() {
@@ -381,5 +376,42 @@ mod caller_tests {
         let n = Caller::anonymous();
         assert_eq!(n.principal, "unknown");
         assert!(n.role.is_none() && n.identity.is_none());
+    }
+
+    #[test]
+    fn a_caller_prints_without_its_identity() {
+        let text = format!("{:?}", Caller::local_admin());
+        assert!(text.contains("local") && text.contains("admin"), "{text}");
+        assert!(!text.contains("LocalAdmin"), "{text}");
+    }
+
+    fn auth_request(token: Option<&str>) -> GuardRequest<'_> {
+        GuardRequest::new(GuardSurface::Ui, Access::Operate).with_token(token)
+    }
+
+    #[tokio::test]
+    async fn the_token_guard_names_the_local_admin_for_the_right_token_only() {
+        let g = TokenGuard::new("s3cret");
+        let caller = g.authenticate(auth_request(Some("s3cret"))).await;
+        assert_eq!(caller.map(|c| c.principal), Ok("local".to_owned()));
+        assert!(g.authenticate(auth_request(Some("nope"))).await.is_err());
+        assert!(g.authenticate(auth_request(None)).await.is_err());
+        let empty = TokenGuard::new("");
+        assert!(empty.authenticate(auth_request(Some(""))).await.is_err());
+    }
+
+    struct AllowAll;
+    impl Guard for AllowAll {
+        fn check<'a>(&'a self, _: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guard_that_cannot_say_who_gets_an_anonymous_caller_with_no_rights() {
+        let caller = AllowAll.authenticate(auth_request(None)).await;
+        let caller = caller.unwrap_or_else(|_| Caller::local_admin());
+        assert_eq!(caller.principal, "unknown");
+        assert!(caller.role.is_none() && caller.identity.is_none());
     }
 }

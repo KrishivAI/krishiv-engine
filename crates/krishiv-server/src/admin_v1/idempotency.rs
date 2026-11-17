@@ -118,13 +118,14 @@ impl Idempotency {
             let total: usize = map.values().map(|q| q.len().max(1)).sum();
             if total >= self.max_total {
                 map.retain(|_, q| {
-                    q.retain(|e| now.duration_since(e.stored) < self.ttl);
+                    q.retain(|e| !e.cell.initialized() || now.duration_since(e.stored) < self.ttl);
                     !q.is_empty()
                 });
             }
             let digest = digest(request);
             let queue = map.entry(principal.to_owned()).or_default();
-            queue.retain(|e| now.duration_since(e.stored) < self.ttl);
+            // A call still running stays findable, so a retry waits for it instead of running again.
+            queue.retain(|e| !e.cell.initialized() || now.duration_since(e.stored) < self.ttl);
             let found = queue
                 .iter()
                 .find(|e| e.id == id)
@@ -135,9 +136,7 @@ impl Idempotency {
                 }
                 cell
             } else {
-                while queue.len() >= self.per_principal {
-                    queue.pop_front();
-                }
+                while queue.len() >= self.per_principal && evict_oldest(queue) {}
                 let cell = Arc::new(OnceCell::new());
                 queue.push_back(Entry {
                     id: id.to_owned(),
@@ -147,13 +146,19 @@ impl Idempotency {
                 });
                 cell
             };
-            let total: usize = map.values().map(VecDeque::len).sum();
-            if total > self.max_total {
-                if let Some(q) = map.get_mut(principal) {
-                    if q.len() > 1 {
-                        q.pop_front();
-                    }
-                }
+            // Over the global bound: the principal with the most entries loses its oldest finished
+            // one (the new principal's single entry is the last to go).
+            let mut total: usize = map.values().map(VecDeque::len).sum();
+            while total > self.max_total {
+                let Some(queue) = map
+                    .values_mut()
+                    .filter(|q| q.iter().any(|e| e.cell.initialized()))
+                    .max_by_key(|q| q.len())
+                else {
+                    break;
+                };
+                evict_oldest(queue);
+                total -= 1;
             }
             cell
         };
@@ -166,6 +171,17 @@ impl Idempotency {
             .await
             .clone();
         (result, if ran { Run::Ran } else { Run::Replayed })
+    }
+}
+
+/// Drops the oldest entry whose call has finished; false when every entry is still running.
+fn evict_oldest(queue: &mut VecDeque<Entry>) -> bool {
+    match queue.iter().position(|e| e.cell.initialized()) {
+        Some(i) => {
+            queue.remove(i);
+            true
+        }
+        None => false,
     }
 }
 
@@ -330,5 +346,64 @@ mod tests {
             .unwrap_or_default();
         let map = store.entries.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(map.len(), 1, "the expired principals' queues are gone");
+    }
+
+    #[tokio::test]
+    async fn a_running_call_stays_findable_past_the_principal_bound() {
+        let store = Arc::new(Idempotency::with_limit(Duration::from_secs(60), 1));
+        let n = Arc::new(AtomicUsize::new(0));
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let first = {
+            let (store, n) = (Arc::clone(&store), Arc::clone(&n));
+            tokio::spawn(async move {
+                store
+                    .run("p", "a", b"r", || async {
+                        wait.await.unwrap_or_default();
+                        count(&n).await
+                    })
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Another key arrives while "a" runs: "a" is not evicted, and a retry of "a" waits.
+        store
+            .run("p", "b", b"r", || count(&n))
+            .await
+            .0
+            .unwrap_or_default();
+        let retry = {
+            let (store, n) = (Arc::clone(&store), Arc::clone(&n));
+            tokio::spawn(async move { store.run("p", "a", b"r", || count(&n)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release.send(()).unwrap_or_default();
+        let (_, how) = retry.await.unwrap_or_else(|e| panic!("{e}"));
+        let (first_result, _) = first.await.unwrap_or_else(|e| panic!("{e}"));
+        assert!(first_result.is_ok());
+        assert_eq!(how, Run::Replayed);
+        // "b" ran once, "a" once.
+        assert_eq!(n.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn new_principals_cannot_grow_the_store_past_the_total_bound() {
+        let mut store = Idempotency::with_limit(Duration::from_secs(60), 10);
+        store.max_total = 3;
+        let n = AtomicUsize::new(0);
+        for i in 0..8 {
+            store
+                .run(&format!("p{i}"), "k", b"r", || count(&n))
+                .await
+                .0
+                .unwrap_or_default();
+        }
+        let total: usize = store
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(VecDeque::len)
+            .sum();
+        assert!(total <= 3, "{total}");
     }
 }

@@ -694,6 +694,23 @@ impl EngineRuntime {
             .is_empty()
     }
 
+    /// [`Self::cancel`] limited to the query `id` of session `session_id`: the same id in another
+    /// session is left running (an operator who was checked against one session's row must not
+    /// end another owner's query).
+    pub fn cancel_in_session(
+        &self,
+        session_id: &str,
+        id: &crate::QueryId,
+        reason: CancelReason,
+    ) -> bool {
+        let Some((session, _)) = self.sessions.find(session_id) else {
+            return false;
+        };
+        !self
+            .cancel_where(reason, |s, q| s == session && q == id.as_str())
+            .is_empty()
+    }
+
     /// Closes session `session`: cancels its running queries and the
     /// statements it is still analyzing with `reason` and refuses any query it
     /// attaches later; the number of both it ended.

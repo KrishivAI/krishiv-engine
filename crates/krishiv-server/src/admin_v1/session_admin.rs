@@ -71,6 +71,9 @@ impl SessionAdmin {
     }
 }
 
+/// The owner name of a caller with no identity: a control character, so no real principal has it.
+const ANONYMOUS_OWNER: &str = "\u{0}anonymous";
+
 /// What a caller may do, resolved from what the guard authenticated.
 struct Who {
     principal: Principal,
@@ -102,8 +105,15 @@ impl Who {
             .identity
             .as_ref()
             .is_some_and(|i| i.is::<crate::guard::LocalAdmin>());
+        // A caller with no identity owns nothing: its audit name ("unknown") must not match a real
+        // user of that name, so it runs as a name no token or login can carry.
+        let name = if call.caller.identity.is_none() {
+            ANONYMOUS_OWNER
+        } else {
+            call.caller.principal.as_str()
+        };
         Self {
-            principal: Principal::new(&call.caller.principal, PrincipalKind::User),
+            principal: Principal::new(name, PrincipalKind::User),
             monitor: admin,
             operate_sessions: admin,
             operate_queries: admin,
@@ -157,12 +167,10 @@ fn query_message(q: &QueryInfo) -> Query {
     }
 }
 
-/// A tag selector `k` (a pair with key `k`) or `k=v` (the exact pair).
+/// The runtime's tag-selector rule, so a listing and a cancel by tag see the same queries.
 fn tag_matches(selector: &str, tags: &[(String, String)]) -> bool {
-    tags.iter().any(|(k, v)| match selector.split_once('=') {
-        Some((sk, sv)) => k == sk && v == sv,
-        None => k == selector,
-    })
+    tags.iter()
+        .any(|(k, v)| krishiv_session::resource_groups::tag_matches(selector, k, v))
 }
 
 fn not_found(class: &str, what: &str, id: &str) -> AdminError {
@@ -189,6 +197,7 @@ impl SessionAdmin {
         call: &Call,
         privilege: Privilege,
         rpc: &str,
+        securable: &str,
         target: &str,
         error: AdminError,
     ) -> AdminError {
@@ -197,7 +206,7 @@ impl SessionAdmin {
             principal = %call.caller.principal,
             role = call.caller.role.as_deref().unwrap_or("none"),
             surface = "admin",
-            securable = %Securable::System("sessions".to_owned()),
+            securable = %Securable::System(securable.to_owned()),
             privilege = %privilege,
             error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
             "access denied"
@@ -312,7 +321,14 @@ impl AdminApi for SessionAdmin {
                     self.log(&call, "KillSession", &id, false, "failed", class);
                     return Err(error);
                 }
-                return Err(self.denied(&call, Privilege::Operate, "KillSession", &id, error));
+                return Err(self.denied(
+                    &call,
+                    Privilege::Operate,
+                    "KillSession",
+                    "sessions",
+                    &id,
+                    error,
+                ));
             }
             let reason = if own {
                 CancelReason::ClientGone
@@ -344,12 +360,15 @@ impl AdminApi for SessionAdmin {
             } else {
                 request.states.clone()
             };
+            // Debug text quotes and escapes each field, so no two requests share a filter string.
             let filter = format!(
-                "queries|{}|{}|{}|{}",
-                states.join(","),
-                request.session_id,
-                request.principal,
-                request.tag
+                "queries{:?}",
+                (
+                    &states,
+                    &request.session_id,
+                    &request.principal,
+                    &request.tag
+                )
             );
             let page = Page::parse(request.page_size, &request.page_token, &filter)?;
             let rows: Vec<QueryInfo> = self
@@ -362,7 +381,11 @@ impl AdminApi for SessionAdmin {
                 .filter(|q| request.principal.is_empty() || q.principal == request.principal)
                 .filter(|q| request.tag.is_empty() || tag_matches(&request.tag, &q.tags))
                 .collect();
-            let (rows, next) = page.apply(rows, |q| (q.submitted_ms, q.id.clone()), &filter);
+            let (rows, next) = page.apply(
+                rows,
+                |q| (q.submitted_ms, format!("{}/{}", q.session_id, q.id)),
+                &filter,
+            );
             Ok(ListQueriesResponse {
                 queries: rows.iter().map(query_message).collect(),
                 next_page_token: next,
@@ -382,11 +405,23 @@ impl AdminApi for SessionAdmin {
             let id = request.query_id;
             let class = "INVALID_HANDLE.OPERATION_NOT_FOUND";
             let parsed = QueryId::parse(&id).ok();
+            // The same id may be live in several sessions: the caller's own row first.
             let found = parsed.as_ref().and_then(|p| {
-                self.runtime
+                let key = p.to_string();
+                let mut rows = self
+                    .runtime
                     .query_infos()
                     .into_iter()
-                    .find(|q| q.id == p.to_string())
+                    .filter(|q| q.id == key)
+                    .peekable();
+                let mut first = None;
+                for q in rows.by_ref() {
+                    if q.is_owned_by(&who.principal) {
+                        return Some(q);
+                    }
+                    first.get_or_insert(q);
+                }
+                first
             });
             let own = found
                 .as_ref()
@@ -397,14 +432,27 @@ impl AdminApi for SessionAdmin {
                     self.log(&call, "CancelQuery", &id, false, "failed", class);
                     return Err(error);
                 }
-                return Err(self.denied(&call, Privilege::Operate, "CancelQuery", &id, error));
+                return Err(self.denied(
+                    &call,
+                    Privilege::Operate,
+                    "CancelQuery",
+                    "queries",
+                    &id,
+                    error,
+                ));
             }
             let reason = if own {
                 CancelReason::User
             } else {
                 CancelReason::Admin
             };
-            let cancelled = parsed.is_some_and(|p| self.runtime.cancel(&p, reason));
+            // Only the row that passed the ownership check: the same id in another session stays.
+            let session_id = found
+                .as_ref()
+                .map(|q| q.session_id.clone())
+                .unwrap_or_default();
+            let cancelled =
+                parsed.is_some_and(|p| self.runtime.cancel_in_session(&session_id, &p, reason));
             if !cancelled {
                 // Already finished: as an unknown id (design §5.3).
                 self.log(&call, "CancelQuery", &id, own, "failed", class);
@@ -425,14 +473,24 @@ impl AdminApi for SessionAdmin {
         let call = call.clone();
         async move {
             if request.selector.is_empty() {
-                return Err(AdminError::invalid_argument("the selector is empty"));
+                let error = AdminError::invalid_argument("the selector is empty");
+                self.log(
+                    &call,
+                    "CancelQueriesByTag",
+                    "",
+                    false,
+                    "failed",
+                    &error.error_class,
+                );
+                return Err(error);
             }
             // Without `Operate` only the caller's own queries match, so the answer never depends
             // on other principals' queries.
             let ids =
                 self.runtime
                     .cancel_by_tag(&request.selector, &who.principal, who.operate_queries);
-            let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+            let mut ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+            ids.sort();
             let target = format!("{} -> [{}]", request.selector, ids.join(","));
             self.log(
                 &call,

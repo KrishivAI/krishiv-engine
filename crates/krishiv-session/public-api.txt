@@ -1416,6 +1416,7 @@ impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::EngineRuntime::cancel_in_session(&self, &str, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
