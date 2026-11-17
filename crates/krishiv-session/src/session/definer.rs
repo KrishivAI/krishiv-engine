@@ -35,6 +35,14 @@ impl Session {
         let mut ctx = env.analysis.clone();
         ctx.principal = definer;
         ctx.definer_texts = texts.without(query);
+        // Bound where the view was created, never where the reader is (review r4 Y1b): its own `WITH`s
+        // were resolved under its captured policy before it was inlined, so none is left to the reader's.
+        ctx.catalogs = Arc::new(ViewCatalogs::new(
+            Arc::clone(&env.analysis.catalogs),
+            d.namespace.clone(),
+            d.path.clone(),
+        ));
+        ctx.conf.cte_precedence = krishiv_plan::analyzer::CtePrecedencePolicy::Corrected;
         let plan = Plan::try_new(Arc::clone(query))?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &ctx)
@@ -118,5 +126,118 @@ impl Session {
             renames.extend(check.rename);
         }
         Ok((synced, renames))
+    }
+}
+
+/// The query's catalogs as a stored view's text sees them (Spark's `viewCatalogAndNamespace` and
+/// the frozen SQL path): the view's catalog and namespace are current, and unqualified routines
+/// and relations resolve through its frozen path. The catalogs themselves are the query's.
+pub(crate) struct ViewCatalogs {
+    inner: Arc<dyn krishiv_plan::analyzer::CatalogResolver>,
+    namespace: Vec<String>,
+    path: Vec<Vec<String>>,
+}
+
+impl ViewCatalogs {
+    /// `inner` seen from a view created in `namespace` of the session catalog under `path` (empty
+    /// when the view was stored without one: the built-ins, then its namespace).
+    pub(crate) fn new(
+        inner: Arc<dyn krishiv_plan::analyzer::CatalogResolver>,
+        namespace: String,
+        path: Vec<Vec<String>>,
+    ) -> Self {
+        Self {
+            inner,
+            namespace: vec![namespace],
+            path,
+        }
+    }
+}
+
+impl krishiv_plan::analyzer::CatalogResolver for ViewCatalogs {
+    fn current_catalog(&self) -> &str {
+        crate::catalog::CATALOG
+    }
+
+    fn current_namespace(&self) -> &[String] {
+        &self.namespace
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn krishiv_plan::analyzer::Catalog>> {
+        self.inner.catalog(name)
+    }
+
+    fn epoch(&self) -> u64 {
+        self.inner.epoch()
+    }
+
+    fn sql_path(&self) -> Vec<Vec<String>> {
+        if !self.path.is_empty() {
+            return self.path.clone();
+        }
+        let mut current = vec![crate::catalog::CATALOG.to_owned()];
+        current.extend(self.namespace.iter().cloned());
+        vec![vec!["system".to_owned(), "builtin".to_owned()], current]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_plan::analyzer::{CatalogResolver, MemoryCatalog};
+
+    use super::ViewCatalogs;
+
+    /// The reader's catalogs, current in `ns2`.
+    struct Reader;
+
+    impl CatalogResolver for Reader {
+        fn current_catalog(&self) -> &str {
+            "spark_catalog"
+        }
+        fn current_namespace(&self) -> &[String] {
+            const NS: &[String] = &[];
+            NS
+        }
+        fn catalog(&self, name: &str) -> Option<Arc<dyn krishiv_plan::analyzer::Catalog>> {
+            (name == "spark_catalog").then(|| {
+                Arc::new(MemoryCatalog::new("spark_catalog"))
+                    as Arc<dyn krishiv_plan::analyzer::Catalog>
+            })
+        }
+        fn epoch(&self) -> u64 {
+            7
+        }
+        fn sql_path(&self) -> Vec<Vec<String>> {
+            vec![vec!["spark_catalog".to_owned(), "ns2".to_owned()]]
+        }
+    }
+
+    /// Review r4 Y1b: the definer's text is analyzed in the view's own catalog, namespace and
+    /// frozen path (Spark's `viewCatalogAndNamespace`), never the reader's current ones; the
+    /// catalogs themselves are the reader's query snapshot.
+    #[test]
+    fn a_definer_text_binds_in_the_views_namespace() {
+        let parts = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let frozen = vec![
+            parts(&["system", "builtin"]),
+            parts(&["spark_catalog", "vns"]),
+        ];
+        let view = ViewCatalogs::new(Arc::new(Reader), "vns".to_owned(), frozen.clone());
+        assert_eq!(view.current_catalog(), "spark_catalog");
+        assert_eq!(view.current_namespace(), ["vns"]);
+        assert_eq!(view.sql_path(), frozen);
+        assert_eq!(view.epoch(), 7);
+        assert!(view.catalog("spark_catalog").is_some());
+        // A view stored without a path resolves through the built-ins and its namespace only.
+        let bare = ViewCatalogs::new(Arc::new(Reader), "vns".to_owned(), Vec::new());
+        assert_eq!(
+            bare.sql_path(),
+            vec![
+                parts(&["system", "builtin"]),
+                parts(&["spark_catalog", "vns"])
+            ]
+        );
     }
 }

@@ -342,6 +342,8 @@ impl Expander<'_> {
                 query: None,
                 reads: Vec::new(),
                 view: 0,
+                namespace: view.namespace.clone(),
+                path: view.path.clone(),
             });
             self.definers.len() - 1
         });

@@ -1504,6 +1504,10 @@ pub(crate) struct DefinerRead {
     pub(crate) reads: Vec<ReadCandidate>,
     /// Its entry among [`Expansion::views`].
     pub(crate) view: usize,
+    /// The namespace current when it was created (`ViewDef::namespace`): its text is analyzed there.
+    pub(crate) namespace: String,
+    /// The SQL path frozen with it (`ViewDef::path`).
+    pub(crate) path: Vec<Vec<String>>,
 }
 
 /// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
