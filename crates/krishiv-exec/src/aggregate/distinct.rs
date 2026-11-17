@@ -562,7 +562,15 @@ impl DistinctCount {
     /// # Errors
     /// `INTERNAL_ERROR` for a spec [`covers`] refuses; typing errors.
     pub(crate) fn new(spec: &AggregateSpec, distinct: &[bool]) -> Result<Arc<Self>> {
-        Self::with_pairs(spec, distinct, HashAggregate::new)
+        let k = spec.group_by.len();
+        let route = std::env::var_os("KRISHIV_PROTO_ROUTE").is_some();
+        Self::with_pairs(spec, distinct, |s| {
+            if route {
+                HashAggregate::routed(s, k)
+            } else {
+                HashAggregate::new(s)
+            }
+        })
     }
 
     /// [`new`](Self::new) whose pairs aggregate `make` builds (tests force

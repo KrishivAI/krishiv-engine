@@ -227,6 +227,25 @@ impl HashAggregate {
         }))
     }
 
+    /// [`new`](Self::new) whose row layout routes rows by their first
+    /// `prefix` grouping columns ([`RowLayout::with_route`]).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub(crate) fn routed(spec: AggregateSpec, prefix: usize) -> Result<Arc<Self>> {
+        let mut core = AggCore::new(spec)?;
+        core.rows = core.rows.map(|l| l.with_route(prefix));
+        let mut agg = Self::new(AggregateSpec {
+            group_by: Vec::new(),
+            aggregates: Vec::new(),
+            ..core.spec.clone()
+        })?;
+        if let Some(a) = Arc::get_mut(&mut agg) {
+            a.core = Arc::new(core);
+        }
+        Ok(agg)
+    }
+
     /// [`new`](Self::new) for a partial and a final phase around an exchange
     /// run as one breaker: it also records the exchange's statistics
     /// ([`exchange_stats`](Self::exchange_stats)).

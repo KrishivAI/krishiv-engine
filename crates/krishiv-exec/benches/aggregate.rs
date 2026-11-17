@@ -546,6 +546,25 @@ fn distinct_q14_input() -> Vec<Batch> {
         .collect()
 }
 
+/// `k` one of `keys` values, `v` a user in `0..2^18` (a `count(DISTINCT)`
+/// with few groups: the routed pairs fall in at most `keys` partitions).
+fn distinct_few_input(keys: u64) -> Vec<Batch> {
+    let s = distinct_schema(DataType::Int64);
+    (0..ROWS)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let r = start as u64..(start + DEFAULT_BATCH_SIZE).min(ROWS) as u64;
+            let k =
+                Int64Array::from_iter_values(r.clone().map(|i| (scramble(i ^ 0x77) % keys) as i64));
+            let v =
+                Int64Array::from_iter_values(r.clone().map(|i| (scramble(i) % (1 << 18)) as i64));
+            let w = Int64Array::from_iter_values(r.map(|i| (i % 7) as i64));
+            let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v), Arc::new(w)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&s), cols).expect("batch"))
+        })
+        .collect()
+}
+
 /// Which part of a distinct shape runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pairs {
@@ -558,6 +577,44 @@ enum Pairs {
     States,
     /// `group by k, v` with no aggregates (the pairs table's floor).
     Bare,
+}
+
+/// `select count(DISTINCT <col>)` with no `GROUP BY` (ClickBench q05/q06's
+/// shape) through `distinct_plan`, or with `bare` its first phase alone:
+/// `group by <col>` with no aggregates (the distinct set's floor).
+fn distinct_global_plan(
+    batches: &[Batch],
+    key: DataType,
+    col: usize,
+    bare: bool,
+) -> Arc<dyn ExecNode> {
+    let s = distinct_schema(key);
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: Vec::new(),
+        aggregates: vec![AggregateExpr::new(
+            AggregateFunction::Count,
+            col,
+            DataType::Int64,
+            "u",
+        )],
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    if bare {
+        let spec = AggregateSpec {
+            group_by: vec![col],
+            aggregates: Vec::new(),
+            ..spec
+        };
+        return AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"));
+    }
+    distinct_plan_with(scan, spec, &[true], true).expect("distinct plan")
 }
 
 /// `select k, [sum(w), count(*), avg(w),] count(DISTINCT v) group by k` through
@@ -861,6 +918,32 @@ fn bench(c: &mut Criterion) {
             g.bench_function(format!("{name}{suffix}"), |b| {
                 b.iter(|| {
                     let p = distinct_shape_plan(batches, key.clone(), plain, pairs);
+                    black_box(run(&runner, &caller, p, 1 << 30, mode))
+                });
+            });
+        }
+    }
+    for keys in [1u64, 16, 256, 1024, 4096] {
+        let batches = distinct_few_input(keys);
+        let mode = Mode { rows: true, seeded };
+        for (suffix, pairs) in [("", Pairs::Full), ("_new", Pairs::AtMerge)] {
+            g.bench_function(format!("distinct_few_{keys}_keys{suffix}"), |b| {
+                b.iter(|| {
+                    let p = distinct_shape_plan(&batches, DataType::Int64, false, pairs);
+                    black_box(run(&runner, &caller, p, 1 << 30, mode))
+                });
+            });
+        }
+    }
+    for (name, batches, key, col) in [
+        ("distinct_q05_shape", &q10, DataType::Int64, 1),
+        ("distinct_q06_shape", &q14, DataType::Utf8View, 0),
+    ] {
+        let mode = Mode { rows: true, seeded };
+        for (suffix, bare) in [("", false), ("_bare", true)] {
+            g.bench_function(format!("{name}{suffix}"), |b| {
+                b.iter(|| {
+                    let p = distinct_global_plan(batches, key.clone(), col, bare);
                     black_box(run(&runner, &caller, p, 1 << 30, mode))
                 });
             });

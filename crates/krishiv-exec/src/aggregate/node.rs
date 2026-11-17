@@ -147,7 +147,10 @@ pub fn distinct_plan_with(
     // a merge task's partition counts, the key table) against two in series
     // (ClickBench q14 shape 1.10x at the merge, q10 shape 0.68x; design
     // `P3-cb-distinct-in-group`, addendum 2026-11-16).
-    let at_merge = if count_at_merge && spec.aggregates.len() > 1 && covers(&spec, distinct) {
+    let at_merge = if count_at_merge
+        && (spec.aggregates.len() > 1 || std::env::var_os("KRISHIV_PROTO_ALONE").is_some())
+        && covers(&spec, distinct)
+    {
         Some(DistinctCountNode::new(
             Arc::clone(&input),
             DistinctCount::new(&spec, distinct)?,
