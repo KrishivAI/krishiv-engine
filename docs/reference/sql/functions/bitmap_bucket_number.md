@@ -33,13 +33,13 @@ bitmap_bucket_number(child)
 ```sql
 -- bitmap_bucket_number, example 1
 > SELECT bitmap_bucket_number(123);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+1
 ```
 
 ```sql
 -- bitmap_bucket_number, example 2
 > SELECT bitmap_bucket_number(0);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+0
 ```
 
 ## Version history

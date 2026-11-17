@@ -33,13 +33,13 @@ bitmap_bit_position(child)
 ```sql
 -- bitmap_bit_position, example 1
 > SELECT bitmap_bit_position(1);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+0
 ```
 
 ```sql
 -- bitmap_bit_position, example 2
 > SELECT bitmap_bit_position(123);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+122
 ```
 
 ## Version history

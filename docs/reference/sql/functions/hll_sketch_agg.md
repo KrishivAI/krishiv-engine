@@ -35,7 +35,7 @@ hll_sketch_agg(expr, lgConfigK)
 ```sql
 -- hll_sketch_agg, example 1
 > SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3
 ```
 
 ## Version history

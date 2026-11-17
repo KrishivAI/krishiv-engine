@@ -34,13 +34,13 @@ bitmap_or_agg(child)
 ```sql
 -- bitmap_or_agg, example 1
 > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+700000
 ```
 
 ```sql
 -- bitmap_or_agg, example 2
 > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+100000
 ```
 
 ## Version history

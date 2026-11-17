@@ -36,7 +36,7 @@ hll_union(first, second, allowDifferentLgConfigK)
 ```sql
 -- hll_union, example 1
 > SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history

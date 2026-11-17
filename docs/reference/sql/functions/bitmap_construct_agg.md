@@ -34,13 +34,13 @@ bitmap_construct_agg(child)
 ```sql
 -- bitmap_construct_agg, example 1
 > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+070000
 ```
 
 ```sql
 -- bitmap_construct_agg, example 2
 > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+010000
 ```
 
 ## Version history

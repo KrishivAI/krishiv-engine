@@ -33,19 +33,19 @@ bitmap_count(child)
 ```sql
 -- bitmap_count, example 1
 > SELECT bitmap_count(X '1010');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2
 ```
 
 ```sql
 -- bitmap_count, example 2
 > SELECT bitmap_count(X 'FFFF');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+16
 ```
 
 ```sql
 -- bitmap_count, example 3
 > SELECT bitmap_count(X '0');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+0
 ```
 
 ## Version history
