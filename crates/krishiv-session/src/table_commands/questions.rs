@@ -4,8 +4,9 @@
 //! (`analyze/dirs.rs`). Each follows the run's own steps up to its questions, through the same helpers, and
 //! stops where the run would fail before it asks; the questions a run asks before a later failure stay.
 //!
-//! Nothing here changes anything: no catalog entry, no directory (the session's own warehouse directory is
-//! made on first use, as by any statement that needs it). What needs more than the catalog and whether a
+//! Nothing here changes anything: no catalog entry, no directory (the runtime's own warehouse directory is
+//! looked up without being made, `Session::warehouse_path`: its name is chosen then, so the run makes the
+//! directory listed; review D3). What needs more than the catalog and whether a
 //! path exists is not foreseen, and the questions are listed as if it succeeds: the schema a `CREATE TABLE`
 //! without columns reads from its files, and the run's later refusals (a write the format refuses).
 
@@ -13,8 +14,9 @@ use super::create::{NewTable, check_inferable, layout_of, new_table_location};
 use super::files::LocationAsked;
 use super::*;
 
-/// One question: the path as the run's denial names it, and the privilege asked.
-pub(crate) type DirQuestion = (String, Privilege);
+/// One question: the securable (a path as the run's denial names it, or the cluster) and the privilege
+/// asked.
+pub(crate) type DirQuestion = (Securable, Privilege);
 
 impl Session {
     /// The directory questions of a run of the `CREATE TABLE` `t` (not `TEMPORARY`), in its order; `query` is
@@ -41,7 +43,7 @@ impl Session {
         env: &QueryEnv,
         out: &mut Vec<DirQuestion>,
     ) -> Result<(), KrishivError> {
-        let warehouse = self.warehouse_dir()?;
+        let warehouse = self.warehouse_path();
         let Some(NewTable {
             name,
             partition_names,
@@ -54,6 +56,10 @@ impl Session {
             return Ok(());
         };
         let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
+        // `authorize_store_options`: `MANAGE` on the cluster before the location (review D2).
+        if self.store_options_asked(options.keys().map(String::as_str)) {
+            out.push((Securable::System("cluster".to_owned()), Privilege::Manage));
+        }
         let (external, location) = new_table_location(t, &mut options, &warehouse, &name)?;
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -112,7 +118,7 @@ impl Session {
             .collect();
         let at = self.locate_write_text(&location.display().to_string(), &options, env)?;
         for privilege in [Privilege::Modify, Privilege::Create] {
-            out.push((at.display.clone(), privilege));
+            out.push((path_securable(&at.display), privilege));
         }
         // `add_table` of the written table.
         self.push_create(&location, !external, out)
@@ -127,7 +133,9 @@ impl Session {
     ) -> Result<(), KrishivError> {
         match self.location_asked(location, managed)? {
             LocationAsked::Local(local) => push_lexical(out, &local, &[Privilege::Create]),
-            LocationAsked::Store(qualified) => out.push((qualified, Privilege::Create)),
+            LocationAsked::Store(qualified) => {
+                out.push((path_securable(&qualified), Privilege::Create));
+            }
         }
         Ok(())
     }
@@ -158,7 +166,7 @@ impl Session {
         if !table.managed {
             return Ok(());
         }
-        let warehouse = self.warehouse_dir()?;
+        let warehouse = self.warehouse_path();
         if let Some((source, _)) = self.deletable_location(&table)? {
             push_lexical(out, &source, &[Privilege::Modify]);
         }
@@ -169,6 +177,7 @@ impl Session {
 
     /// The directory questions of a run of `DROP NAMESPACE n CASCADE`: `MODIFY` on the directory of each
     /// managed table in it that exists, in the run's order, up to one the run cannot delete (it stops there).
+    /// Asked only once the caller may list the namespace's tables (`analyze/dirs.rs`, review D1).
     pub(crate) fn drop_namespace_questions(
         &self,
         n: &DropNamespace,
@@ -197,7 +206,12 @@ impl Session {
 pub(crate) fn push_lexical(out: &mut Vec<DirQuestion>, path: &Path, privileges: &[Privilege]) {
     if let Ok(at) = crate::access::lexical_dir(path) {
         for privilege in privileges {
-            out.push((at.display.clone(), *privilege));
+            out.push((path_securable(&at.display), *privilege));
         }
     }
+}
+
+/// The path securable of `display`, the text the run's denial names.
+fn path_securable(display: &str) -> Securable {
+    Securable::Path(OptionValue::from_user("path", display.to_owned()))
 }

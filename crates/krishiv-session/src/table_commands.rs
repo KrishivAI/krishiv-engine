@@ -249,6 +249,13 @@ impl Session {
             .map_err(|e| internal(format!("cannot create the warehouse directory: {e}")))
     }
 
+    /// The path [`Self::warehouse_dir`] gives, without making the runtime's own directory (the
+    /// analyze API's lookup, review D3: an analysis changes nothing on disk).
+    pub(crate) fn warehouse_path(&self) -> PathBuf {
+        let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
+        self.state.catalog.warehouse.path(configured.as_deref())
+    }
+
     /// Whether `name` is a temporary view (or table) that a bare table name
     /// resolves to before any permanent table.
     pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {

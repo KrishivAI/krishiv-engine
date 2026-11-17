@@ -407,6 +407,33 @@ impl Session {
         self.check_targets(statement, env, None).await.is_ok()
     }
 
+    /// Whether `privilege` on `object` would be allowed, asked as [`Self::targets_allowed_quietly`]
+    /// asks (through `authorize`, with its `Browse`-to-`Select` fallback), quietly: no audit record,
+    /// no denial count. An object that cannot be placed is not allowed.
+    pub(crate) async fn allowed_quietly(
+        &self,
+        object: TargetObject<'_>,
+        privilege: Privilege,
+        env: &QueryEnv,
+    ) -> bool {
+        let Ok(securables) = self.securables_of(object, env) else {
+            return false;
+        };
+        for securable in &securables {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                securable,
+                privilege,
+            )
+            .await;
+            if r.is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The checks of [`Self::authorize_statement`]; each denial is logged under `class`, or not at all
     /// when `class` is `None` (a quiet trial).
     async fn check_targets(

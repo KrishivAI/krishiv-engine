@@ -896,6 +896,9 @@ fn warehouse_free(s: &str) -> String {
 /// trial requires nothing (a denial only lists no directory), so analyze of the `EXPLAIN` does not list
 /// them; the snapshot pins those two questions.
 ///
+/// Analyze of a `DROP NAMESPACE ... CASCADE` asks `BROWSE` on the namespace before it lists the
+/// directories of its tables (review D1); the run does not ask it, so that one question is left out.
+///
 /// The event stream is not every policy question: `system.*` tables' `Monitor` row filter
 /// (`monitor.rs`) calls the policy's `check` directly, bypassing `authorize()`. It filters rows, it is
 /// not a requirement, so analyze does not list it and this test does not see it.
@@ -931,7 +934,13 @@ fn securables_equal_what_a_run_authorizes() {
         let Ok(a) = block_on(s.analyze(&sql)) else {
             continue;
         };
-        let analyze_asked = asked_by(&principal);
+        let mut analyze_asked = asked_by(&principal);
+        // Review D1: before it lists a `CASCADE`'s table directories, analyze asks `BROWSE` on the
+        // namespace (the right to list its tables), which the run does not ask and analyze does not
+        // list: the one question it may ask beyond the run's.
+        if a_cascade(&sql) {
+            analyze_asked.retain(|(p, s)| !(p == "BROWSE" && s.starts_with("namespace ")));
+        }
         if a.partial {
             continue;
         }
@@ -990,6 +999,14 @@ fn securables_equal_what_a_run_authorizes() {
     insta::assert_snapshot!(differences);
 }
 
+/// Whether `sql` is a `DROP NAMESPACE ... CASCADE`, whose analysis asks `BROWSE` on the namespace (D1).
+fn a_cascade(sql: &str) -> bool {
+    let sql = sql.to_ascii_uppercase();
+    sql.starts_with("DROP NAMESPACE")
+        || sql.starts_with("DROP SCHEMA")
+        || sql.starts_with("DROP DATABASE")
+}
+
 /// Statements of DDL whose run asks about a directory (T063 N1b review M1): (label, setup, statement), each of
 /// which succeeds on the corpus session after its setup (`{dir}` is a new temporary directory), so the
 /// property test compares what analyze lists with what the run asks for each. `REPLACE TABLE` of the
@@ -1012,6 +1029,11 @@ const DIRECTORY_CASES: &[(&str, &[&str], &str)] = &[
         "DirCreatePathOption",
         &[],
         "CREATE TABLE c_opt (a INT) USING parquet OPTIONS (path '{dir}/o')",
+    ),
+    (
+        "DirCreateStoreOptions",
+        &[],
+        "CREATE TABLE c_so (a INT) USING parquet OPTIONS ('fs.s3a.region' = 'eu-west-1')",
     ),
     ("DirCtas", &[], "CREATE TABLE c_ctas AS SELECT * FROM t"),
     (
@@ -1525,6 +1547,37 @@ fn ddl_lists_the_directories_a_run_asks() {
             format!("CREATE path 'file:{ext}'")
         ]
     );
+    // A relative location is qualified against the working directory, as the run's 42501 names it
+    // (review N3); an object store's location is its URL.
+    let cwd = std::env::current_dir().unwrap();
+    let listed = dirs("CREATE TABLE c_rel (a INT) USING parquet LOCATION 'rel-q3/d'");
+    assert_eq!(
+        listed.last().map(String::as_str),
+        Some(format!("CREATE path 'file:{}/rel-q3/d'", cwd.display()).as_str()),
+        "{listed:?}"
+    );
+    assert_eq!(
+        dirs("CREATE TABLE c_s3 (a INT) USING parquet LOCATION 's3a://lake/tables/c_s3'"),
+        [
+            "MODIFY path 's3a://lake/tables/c_s3'",
+            "CREATE path 's3a://lake/tables/c_s3'"
+        ]
+    );
+    // Server-scoped store options (review D2): the run asks `MANAGE` on the cluster after the targets,
+    // before the location.
+    let a = block_on(s.analyze(
+        "CREATE TABLE c_so (a INT) USING parquet OPTIONS ('fs.s3a.region' = 'eu-west-1')",
+    ))
+    .unwrap();
+    let listed: Vec<String> = uses(&a).iter().map(|u| warehouse_free(u)).collect();
+    assert_eq!(
+        listed,
+        [
+            "CREATE namespace `spark_catalog`.`default` []",
+            "MANAGE system `cluster` []",
+            "CREATE path 'file:<warehouse>/c_so' []"
+        ]
+    );
     // A rename moves a managed table's directory: `MODIFY` on it, then `CREATE` on the new one.
     assert_eq!(
         dirs("ALTER TABLE u RENAME TO u_renamed"),
@@ -1559,6 +1612,39 @@ fn ddl_lists_the_directories_a_run_asks() {
         )),
         [format!("MODIFY path 'file:{ext}'")]
     );
+}
+
+/// Review D3: analyze never makes the runtime's own warehouse directory; it lists the path a run then
+/// makes and asks about.
+#[test]
+fn analyze_makes_no_warehouse_directory() {
+    let s = Session::new().unwrap();
+    let a = block_on(s.analyze("CREATE TABLE w_new (a INT)")).unwrap();
+    let listed: Vec<String> = a
+        .info
+        .securables
+        .iter()
+        .filter_map(|u| match &u.securable {
+            Securable::Path(p) => p.as_plain().map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    let dir = std::path::PathBuf::from(listed[0].strip_prefix("file:").unwrap());
+    let warehouse = dir.parent().unwrap();
+    assert!(
+        warehouse
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("krishiv-warehouse-"),
+        "{listed:?}"
+    );
+    assert!(!warehouse.exists(), "analyze made {}", warehouse.display());
+    // The run makes the same directory.
+    block_on(s.sql("CREATE TABLE w_new (a INT)")).unwrap();
+    assert!(dir.is_dir(), "{}", dir.display());
 }
 
 /// T063 N1b item 3: a write of one query has that query's output schema and lineage (the query's own
@@ -1696,7 +1782,21 @@ fn a_denied_target_reveals_nothing() {
         "CREATE OR REPLACE TABLE x (a INT, b INT, k INT)",
         "ALTER TABLE x RENAME TO x_renamed",
         "DROP NAMESPACE default CASCADE",
-    ];
+    ]
+    .map(str::to_owned);
+    // Review N2: a location the caller supplies is not echoed under a denied namespace `CREATE`.
+    let elsewhere = external.path().join("distinctive-elsewhere-q8");
+    let elsewhere = elsewhere.display();
+    let statements: Vec<String> = statements
+        .into_iter()
+        .chain([
+            format!("CREATE TABLE x (a INT, b INT, k INT) USING parquet LOCATION '{elsewhere}'"),
+            format!("CREATE TABLE x (a INT, b INT, k INT) USING parquet OPTIONS (path '{elsewhere}')"),
+            format!(
+                "CREATE TABLE x USING parquet LOCATION '{elsewhere}' AS SELECT 1 AS a, 2 AS b, 3 AS k"
+            ),
+        ])
+        .collect();
     for all in [false, true] {
         let mut seen: Vec<Option<(String, String)>> = vec![None; statements.len()];
         for (scenario, setup) in &setups {
@@ -1744,12 +1844,31 @@ fn a_denied_target_reveals_nothing() {
             let counts = Arc::new(DeniedCounts::new());
             assert!(s.count_denials(Arc::clone(&counts), Surface::Connect));
             for (i, sql) in statements.iter().enumerate() {
-                let analyzed = block_on(s.analyze(sql)).unwrap().to_json();
+                let analysis = block_on(s.analyze(sql)).unwrap();
+                let analyzed = analysis.to_json();
                 let explained = explain_json(&s, &format!("EXPLAIN FORMAT JSON {sql}"));
+                // A `LOCATION` is a target (`MODIFY`, the caller's own text): listed, nothing more.
+                let own = sql.contains("distinctive-elsewhere");
                 for json in [&analyzed, &explained] {
-                    assert!(!json.contains("\"path\""), "{scenario} {sql}: {json}");
-                    assert!(!json.contains("distinctive"), "{scenario} {sql}: {json}");
+                    assert!(
+                        own || !json.contains("\"path\""),
+                        "{scenario} {sql}: {json}"
+                    );
+                    assert!(
+                        !json.contains("distinctive-location"),
+                        "{scenario} {sql}: {json}"
+                    );
                 }
+                assert!(
+                    analysis
+                        .info
+                        .securables
+                        .iter()
+                        .filter(|u| matches!(u.securable, Securable::Path(_)))
+                        .all(|u| u.privilege == Privilege::Modify && sql.contains("LOCATION")),
+                    "{scenario} {sql}: {:?}",
+                    uses(&analysis)
+                );
                 match &seen[i] {
                     None => seen[i] = Some((analyzed, explained)),
                     Some((a, e)) => {
@@ -1764,6 +1883,87 @@ fn a_denied_target_reveals_nothing() {
                 counts.counts()
             );
         }
+    }
+}
+
+/// Allows everything but `BROWSE` on a namespace (and `SELECT`, its fallback): `DROP` without listing.
+struct NoBrowse;
+
+impl AccessPolicy for NoBrowse {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let d = if matches!(securable, Securable::Namespace(_))
+            && matches!(privilege, Privilege::Browse | Privilege::Select)
+        {
+            AccessDecision::Deny {
+                reason: "private".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// Review D1: `DROP NAMESPACE ... CASCADE` lists its tables' directories only to a caller who may list
+/// the namespace's tables (`BROWSE`, as `SHOW TABLES IN` asks): under a policy that grants `DROP` but
+/// not `BROWSE`, the output is the same whether the namespace holds tables or not, and the trial
+/// counts no denial.
+#[test]
+fn cascade_lists_no_directory_without_browse() {
+    use krishiv_session::auth::{DeniedCounts, Surface};
+    let sql = "DROP NAMESPACE d CASCADE";
+    let mut seen: Option<(String, String)> = None;
+    for tables in [false, true] {
+        let warehouse = tempfile::tempdir().unwrap();
+        let s = Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(Arc::new(NoBrowse))
+            .config(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .build()
+            .unwrap();
+        block_on(s.sql("CREATE NAMESPACE d")).unwrap();
+        if tables {
+            block_on(s.sql("CREATE TABLE d.a1 (a INT)")).unwrap();
+            block_on(s.sql("CREATE TABLE d.b2 (a INT)")).unwrap();
+        }
+        // The policy does refuse the listing.
+        let listed = block_on(async { s.sql("SHOW TABLES IN d").await?.collect().await });
+        assert!(listed.is_err(), "tables={tables}");
+        let counts = Arc::new(DeniedCounts::new());
+        assert!(s.count_denials(Arc::clone(&counts), Surface::Connect));
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert!(
+            directories(&a).is_empty(),
+            "tables={tables}: {:?}",
+            uses(&a)
+        );
+        let analyzed = a.to_json();
+        let explained = explain_json(&s, &format!("EXPLAIN FORMAT JSON {sql}"));
+        assert!(!analyzed.contains("\"path\""), "{analyzed}");
+        match &seen {
+            None => seen = Some((analyzed, explained)),
+            Some((a, e)) => {
+                assert_eq!(&analyzed, a);
+                assert_eq!(&explained, e);
+            }
+        }
+        assert!(
+            counts.counts().iter().all(|c| c.count == 0),
+            "tables={tables}: analyze counted a denial: {:?}",
+            counts.counts()
+        );
     }
 }
 

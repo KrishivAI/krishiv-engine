@@ -12,8 +12,9 @@
 //!   clause the run refuses before it writes (`REPLACE`, `OVERWRITE ... PARTITION`, a bucketed table). A
 //!   multi-table insert with a table that cannot be found lists none: the run resolves every target before
 //!   any clause writes, so it fails before it asks;
-//! - `CREATE TABLE` (`table_commands/questions.rs`): `CREATE` on the new table's location as `add_table`
-//!   asks it (`location_asked`: a managed table's directory, a `LOCATION` or `path` option, a relative one
+//! - `CREATE TABLE` (`table_commands/questions.rs`): `MANAGE` on the cluster first when its `OPTIONS` hold
+//!   a server-scoped store key or the session changed one (`Session::authorize_store_options`, review D2),
+//!   then `CREATE` on the new table's location as `add_table` asks it (`location_asked`: a managed table's directory, a `LOCATION` or `path` option, a relative one
 //!   qualified against the working directory, an object store's URL); a managed CTAS asks `MODIFY` and
 //!   `CREATE` on its directory first, then its write asks both on the location as the writer locates it
 //!   (not for a bucketed table, which the writer refuses); nothing when the table exists (`IF NOT EXISTS`
@@ -22,7 +23,12 @@
 //! - `ALTER TABLE ... RENAME TO` of a managed table: `MODIFY` on its directory (when it exists) and `CREATE`
 //!   on the new one; nothing for an external table, a taken name or another namespace;
 //! - `DROP NAMESPACE ... CASCADE`: `MODIFY` on the directory of each managed table in it that exists, in
-//!   the run's order (up to one the run cannot delete, where it stops); nothing without `CASCADE`.
+//!   the run's order (up to one the run cannot delete, where it stops); nothing without `CASCADE`. The
+//!   list names the namespace's tables, so it is given only to a caller who may list them: `BROWSE` on
+//!   the namespace, as `SHOW TABLES IN` asks it, tried as quietly as the targets
+//!   (`Session::listing_allowed_quietly`, review D1); without it nothing is listed, whatever the
+//!   namespace holds. The run asks only `DROP`, so a policy that grants `DROP` without `BROWSE` sees a
+//!   run's 42501 name at most the first directory it refuses.
 //!
 //! A partition's `SET LOCATION` changes the catalog only: its run asks no directory beyond its target.
 //!
@@ -41,9 +47,9 @@
 //! as written, qualified (`file:` for a local one, the store URL for an object-store table), with `.` and
 //! `..` folded in the text. The policy itself is asked about a local path with the links of its existing
 //! part resolved; without a link on it, the two are the same text. Listing it takes file-system I/O
-//! (whether the directory exists), so the list reflects the directory as it is at analysis; a `CREATE` of
-//! a managed table makes the session's own warehouse directory if it is not there yet, as any statement
-//! that needs it does.
+//! (whether the directory exists), so the list reflects the directory as it is at analysis. Analysis makes
+//! no directory: the runtime's own warehouse directory (no `spark.sql.warehouse.dir` set) is looked up by
+//! the name it will have (`Session::warehouse_path`, review D3), not made.
 //!
 //! A table that cannot be found lists nothing here: the run fails before it asks.
 //!
@@ -72,9 +78,9 @@ impl Session {
         env: &QueryEnv,
     ) -> Vec<SecurableUse> {
         let mut out = Vec::new();
-        let asked = |out: &mut Vec<SecurableUse>, questions: Vec<(String, Privilege)>| {
-            for (display, privilege) in questions {
-                push(out, &display, &[privilege]);
+        let asked = |out: &mut Vec<SecurableUse>, questions: Vec<(Securable, Privilege)>| {
+            for (securable, privilege) in questions {
+                push_securable(out, &securable, &[privilege]);
             }
         };
         match &parts.statement {
@@ -169,6 +175,30 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Whether the caller may see what a listing shows, when `statement`'s directory list names it
+    /// (review D1): `BROWSE` on the namespace of a `DROP NAMESPACE ... CASCADE` (whose list names the
+    /// namespace's tables), asked as `SHOW TABLES IN` asks it, without an audit record or a denial
+    /// count. Every other statement lists only what its targets already allow.
+    pub(super) async fn listing_allowed_quietly(
+        &self,
+        statement: &Statement,
+        env: &QueryEnv,
+    ) -> bool {
+        match statement {
+            Statement::DropNamespace(n) => {
+                self.allowed_quietly(
+                    krishiv_sql::TargetObject::Namespace(&n.name),
+                    Privilege::Browse,
+                    env,
+                )
+                .await
+            }
+            _ => true,
+        }
+    }
+}
+
 /// Whether `statement` is one whose run may ask about a directory ([`Session::directory_securables`]):
 /// only these get the quiet trial of their targets.
 pub(super) const fn may_list(statement: &Statement) -> bool {
@@ -184,10 +214,15 @@ pub(super) const fn may_list(statement: &Statement) -> bool {
 /// Adds each of `privileges` on the path `display` to `out`, once.
 fn push(out: &mut Vec<SecurableUse>, display: &str, privileges: &[Privilege]) {
     let securable = Securable::Path(OptionValue::from_user("path", display.to_owned()));
+    push_securable(out, &securable, privileges);
+}
+
+/// Adds each of `privileges` on `securable` to `out`, once.
+fn push_securable(out: &mut Vec<SecurableUse>, securable: &Securable, privileges: &[Privilege]) {
     for privilege in privileges {
         if !out
             .iter()
-            .any(|u| u.securable == securable && u.privilege == *privilege)
+            .any(|u| u.securable == *securable && u.privilege == *privilege)
         {
             out.push(SecurableUse {
                 securable: securable.clone(),

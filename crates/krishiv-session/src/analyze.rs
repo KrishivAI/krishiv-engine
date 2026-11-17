@@ -239,7 +239,9 @@ impl Session {
     /// or directory, so a caller denied a target learns nothing about it, not even whether it exists.
     /// The directories are listed only when a quiet trial of that same check passes
     /// ([`Session::targets_allowed_quietly`]: no audit record, no denial count); otherwise nothing more
-    /// is listed, and the output is the one a missing table gives.
+    /// is listed, and the output is the one a missing table gives. A statement whose list names
+    /// what a listing shows (`DROP NAMESPACE ... CASCADE`: its tables) also needs that listing's
+    /// right, asked as quietly ([`Session::listing_allowed_quietly`], review D1).
     async fn with_directories(
         &self,
         mut parts: crate::access::StatementParts,
@@ -248,7 +250,9 @@ impl Session {
             return parts;
         }
         let env = self.query_env();
-        if self.targets_allowed_quietly(&parts.statement, &env).await {
+        if self.targets_allowed_quietly(&parts.statement, &env).await
+            && self.listing_allowed_quietly(&parts.statement, &env).await
+        {
             let dirs = self.directory_securables(&parts, &env);
             crate::access::merge_reads(&mut parts.info.securables, &dirs);
         }
