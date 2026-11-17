@@ -702,6 +702,12 @@ impl ProbeOp {
 }
 
 impl Operator for ProbeOp {
+    // The same pairs whatever the batches; only a left outer join's
+    // unmatched rows move with them, an order Spark leaves open (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     // A hash probe always needs a flush barrier (`needs_flush`), which already keeps its
     // pipeline at one driver; the grace join's state is not lane-ordered, so it says no.
     fn lane_safe(&self) -> bool {

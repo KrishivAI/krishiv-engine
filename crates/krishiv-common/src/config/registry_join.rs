@@ -52,3 +52,25 @@ pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
     version_added: "0.1.0",
     spark_alias: None,
 };
+
+/// Small batches joined before a hash join's build, an aggregation and the
+/// operators of their pipelines (Polars item 2, J1).
+pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.coalesceInput",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: in a pipeline that ends in a hash join's build or an aggregation, the \
+          driver joins small batches (fewer than a quarter of `krishiv.exec.batchSize` rows, and \
+          of 4,096, as a selective filter or join leaves them) into batches of about \
+          `krishiv.exec.batchSize` \
+          rows before the build, the aggregation, a hash join's probe and a projection, so \
+          each pays its per-batch cost once per batch of that size. Rows keep their order, \
+          and only rows of one scan split are joined. The rows held are not charged to the \
+          query's memory, like any batch between two operators: each driver holds at most \
+          about one batch, and 1 MiB, for each operator that joins its input. Results are the \
+          same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};

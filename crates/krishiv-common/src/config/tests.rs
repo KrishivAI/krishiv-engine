@@ -1949,3 +1949,16 @@ fn arrow_validate_schema_defaults_off_and_takes_spark_s_key() {
         .is_err()
     );
 }
+
+/// Polars item 2, J1: the driver's input coalescing is on by default and
+/// takes a boolean.
+#[test]
+fn exec_coalesce_input_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&EXEC_COALESCE_INPUT).and_then(ConfigValue::as_bool);
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.coalesceInput", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
+    assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
+}

@@ -51,6 +51,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.exec.coalesceInput", &EXEC_COALESCE_INPUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),

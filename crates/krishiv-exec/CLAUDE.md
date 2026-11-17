@@ -8,7 +8,12 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 
 ## Layout (P2-T050)
 `operator.rs` Source/Operator/Sink traits · `pipeline.rs` ExecNode + PipelineBuilder · `driver.rs` the pipeline
-driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
+driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `input_coalesce.rs` (Polars item 2, J1)
+the driver's `InputCoalesce`: in a pipeline whose sink allows it (`Sink::coalesce_input`: hash join build, hash
+aggregate), small batches (under a quarter of `min(batchSize, 4096)` rows, unweighted, one split) are joined into batches of
+about `krishiv.exec.batchSize` rows before the sink and each operator that asks (`Operator::coalesce_input`: hash
+probe, project), uncharged like a batch in flight but held to one batch and 1 MiB (`HELD_MAX_BYTES`), and handed on before the operator's `finish` / the sink's `combine`
+(`krishiv.exec.coalesceInput`) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
 `testing.rs` test operators (also used by benches) · `numbering.rs` the partition index each operator of a `UNION ALL` group sees (`Pipeline::origins`/`fans`: a branch numbers its own partitions from 0, above a plain union the union's, above a union of Spark `SinglePartition` inputs (`Source::single_partition`: a range asking for one slice, a global aggregate; through `Operator::keeps_partitioning`: project, filter, sample, generate, replicate rows, limit, union align; not Expand, which Spark shuffles after; known gaps from Spark 4.2.0 runs: a LIMIT or a sort over several partitions, a grouped aggregate over a one-partition input (EXCEPT ALL), an AQE-coalesced shuffle and equal hash partitionings are one partition in Spark, not here) index 0 for every branch, run in turn, under `krishiv.sql.unionOutputPartitioning`; only in a group whose members run in turn: under a shared flush, e.g. a hash-join probe above the union, the plain numbering stays, a known gap); `PartitionState::index` gives an expression-evaluating operator its index · `output_spill.rs` spill hook of finished breaker output · `cohort.rs` `reserve_in_cohort`: a request the pool refuses waits while another member of a query cohort holds memory it frees on its own (nested-loop chunks; sort merge budgets, `operators/sort/budget.rs` `MERGE_COHORT`; grace joins' partition loads and tables, `join/grace.rs` `TABLE_COHORT`, holding seats only) · `loom_model.rs`.
