@@ -25,7 +25,8 @@ use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
-    SecurableUse, TableIdent, authorize, insufficient_permissions, namespace_parts, table_ident,
+    SecurableUse, TableIdent, authorize, authorize_reported, insufficient_permissions,
+    namespace_parts, table_ident,
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
@@ -109,20 +110,21 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(sql);
         let statement = krishiv_sql::parse_statement(sql, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        self.parts_of_statement(statement, &redacted).await
+        self.parts_of_statement(statement, sql, &redacted).await
     }
 
-    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `redacted`'s text
-    /// (`EXPLAIN FORMAT JSON` analyzes its explained statement here).
+    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `text` (redacted:
+    /// `redacted`; `EXPLAIN FORMAT JSON` analyzes its explained statement here).
     pub(crate) async fn parts_of_statement(
         &self,
         statement: Statement,
+        text: &str,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let class = krishiv_sql::classify_with(&statement, &env.parser);
         if let Statement::ExecuteImmediate(e) = &statement {
-            return Box::pin(self.immediate_parts(e, class, statement.clone())).await;
+            return Box::pin(self.immediate_parts(e, class, statement.clone(), text)).await;
         }
         let explain = krishiv_sql::explain_kind(&statement);
         let queries = krishiv_sql::statement_reads(&statement);
@@ -149,6 +151,7 @@ impl Session {
             partial,
             analyzed,
             statement,
+            text: text.to_owned(),
         })
     }
 }
@@ -197,6 +200,7 @@ impl Session {
         e: &krishiv_sql::ast::ExecuteImmediate,
         class: StatementClass,
         statement: Statement,
+        text: &str,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: nothing to list.
@@ -219,12 +223,15 @@ impl Session {
                     partial: true,
                     analyzed: Vec::new(),
                     statement,
+                    text: text.to_owned(),
                 });
             }
         };
-        let inner_redacted =
-            krishiv_sql::redact_sql(krishiv_sql::immediate_text(e).unwrap_or_default());
-        let mut parts = self.parts_of_statement(inner, &inner_redacted).await?;
+        let inner_text = krishiv_sql::immediate_text(e).unwrap_or_default();
+        let inner_redacted = krishiv_sql::redact_sql(inner_text);
+        let mut parts = self
+            .parts_of_statement(inner, inner_text, &inner_redacted)
+            .await?;
         parts.info.class = class;
         if !e.into.is_empty() {
             // The row goes to variables: no result columns or lineage.
@@ -244,6 +251,9 @@ pub(crate) struct StatementParts {
     pub(crate) analyzed: Vec<Arc<krishiv_plan::analyzer::AnalyzedPlan>>,
     /// The parsed statement.
     pub(crate) statement: Statement,
+    /// The text the statement's spans index, as the run reads it (not redacted: never shown; the
+    /// directories of a `CREATE TABLE` read its option values from it, `analyze/dirs.rs`).
+    pub(crate) text: String,
 }
 
 /// Adds the reads `used` to `securables`: one entry per (securable, privilege), with the union of
@@ -320,6 +330,12 @@ pub(crate) fn audit_read<T>(
 /// The audit record of the denial `e` (see [`audit`]): also written when
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
+///
+/// It is the one record of a refusal (review M4): a provider only counts it. `provider` is the
+/// `krishiv_access_denied_total` label of who decided: with the grants provider `grants` or
+/// `roles` (the role matrix decides `System(..)` and the `system` catalog), without it `roles`;
+/// `policy_epoch` is the policy's version (the grants epoch mixed in); the query id is the
+/// enclosing span's.
 fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     if e.error_class() == ErrorClass::KrishivInsufficientPermissions
         && let Some((counts, surface)) = session.state.denials.get()
@@ -332,6 +348,12 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     }
     // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
     let client_user_id = session.state.activity.client_user_id();
+    let provider = if session.state.grants.is_some() {
+        crate::grants::denial_provider(e)
+    } else {
+        crate::grants::DecidedBy::Roles
+    }
+    .as_str();
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
@@ -339,6 +361,9 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
         statement_class = class.name(),
         error_class = e.error_class().name(),
         denial = %e,
+        decision = "deny",
+        provider,
+        policy_epoch = session.state.policy.version().0,
         "access denied"
     );
 }
@@ -366,28 +391,85 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        if let Err(e) = reject_system_namespace(statement) {
-            log_denial(self, class, &e);
-            return Err(e);
+        self.check_targets(statement, env, Some(class)).await
+    }
+
+    /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
+    /// questions in the same order, stopping at the first denial) but quietly: no `krishiv::audit`
+    /// record, no denial count. The analyze API asks it before it reads any catalog or file-system
+    /// state about a write target (T063 N1b review B2), so analysis reveals nothing about a target the
+    /// caller may not write.
+    pub(crate) async fn targets_allowed_quietly(
+        &self,
+        statement: &Statement,
+        env: &QueryEnv,
+    ) -> bool {
+        self.check_targets(statement, env, None).await.is_ok()
+    }
+
+    /// Whether `privilege` on `object` would be allowed, asked as [`Self::targets_allowed_quietly`]
+    /// asks (through `authorize`, with its `Browse`-to-`Select` fallback), quietly: no audit record,
+    /// no denial count. An object that cannot be placed is not allowed.
+    pub(crate) async fn allowed_quietly(
+        &self,
+        object: TargetObject<'_>,
+        privilege: Privilege,
+        env: &QueryEnv,
+    ) -> bool {
+        let Ok(securables) = self.securables_of(object, env) else {
+            return false;
+        };
+        for securable in &securables {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                securable,
+                privilege,
+            )
+            .await;
+            if r.is_err() {
+                return false;
+            }
         }
+        true
+    }
+
+    /// The checks of [`Self::authorize_statement`]; each denial is logged under `class`, or not at all
+    /// when `class` is `None` (a quiet trial).
+    async fn check_targets(
+        &self,
+        statement: &Statement,
+        env: &QueryEnv,
+        class: Option<StatementClass>,
+    ) -> Result<(), KrishivError> {
+        let denied = |e: KrishivError| {
+            if let Some(class) = class {
+                log_denial(self, class, &e);
+            }
+            e
+        };
+        reject_system_namespace(statement).map_err(denied)?;
         let targets = required_targets(statement, &env.parser);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
-            let securables = match self.securables_of(target.object, env) {
-                Ok(s) => s,
-                Err(e) => {
-                    log_denial(self, class, &e);
-                    return Err(e);
-                }
-            };
+            let securables = self.securables_of(target.object, env).map_err(denied)?;
             for securable in securables {
-                if let Err(e) = reject_system_write(&securable, target.privilege) {
-                    log_denial(self, class, &e);
-                    return Err(e);
-                }
+                reject_system_write(&securable, target.privilege).map_err(denied)?;
                 if checked
                     .iter()
                     .any(|(s, p)| *s == securable && *p == target.privilege)
+                {
+                    continue;
+                }
+                if self
+                    .first_write_of_new_table(
+                        statement,
+                        &securable,
+                        target.privilege,
+                        &checked,
+                        env,
+                    )
+                    .await
                 {
                     continue;
                 }
@@ -398,11 +480,53 @@ impl Session {
                     target.privilege,
                 )
                 .await;
-                audit(self, class, r)?;
+                match class {
+                    Some(class) => audit(self, class, r)?,
+                    None => r?,
+                }
                 checked.push((securable, target.privilege));
             }
         }
         Ok(())
+    }
+
+    /// Whether `privilege` on `securable` is the first write of the table a `CREATE TABLE .. AS`
+    /// is creating, under the grants provider (review open point 2): `Create` on its namespace,
+    /// already asked and allowed in `checked`, covers it, because the creator will own the
+    /// table. Only when the table does not exist (the ownership bookkeeping records the creator
+    /// only if this statement really creates it, and a create of an existing table fails or
+    /// writes nothing).
+    async fn first_write_of_new_table(
+        &self,
+        statement: &Statement,
+        securable: &Securable,
+        privilege: Privilege,
+        checked: &[(Securable, Privilege)],
+        env: &QueryEnv,
+    ) -> bool {
+        let Statement::CreateTable(c) = statement else {
+            return false;
+        };
+        let Securable::Table(t) = securable else {
+            return false;
+        };
+        if self.state.grants.is_none()
+            || privilege != Privilege::Modify
+            || c.as_query.is_none()
+            || c.temporary
+            || c.location.is_some()
+        {
+            return false;
+        }
+        let parent: Vec<String> = std::iter::once(t.catalog.clone())
+            .chain(t.namespace.iter().cloned())
+            .collect();
+        let created_in_parent = checked.iter().any(|(s, p)| {
+            *p == Privilege::Create
+                && matches!(s, Securable::Namespace(n) if n.len() == parent.len()
+                    && n.iter().zip(&parent).all(|(a, b)| a.eq_ignore_ascii_case(b)))
+        });
+        created_in_parent && self.object_exists(securable, env).await == Some(false)
     }
 
     /// Asks the policy about the catalog-store lookups of a query, in plan order, before any of
@@ -447,11 +571,25 @@ impl Session {
                 if checked.contains(&securable) {
                     continue;
                 }
-                let r = authorize(
+                // The analysis' read privilege (`Select`, or `Browse` for a metadata analysis). A
+                // policy that decides columns is asked here only whether the name may be seen; the
+                // table's rows are asked per column after analysis. A stored view is still asked
+                // `Select` as a whole (column grants on views are not supported).
+                let wanted = env.analysis.mode.read_privilege();
+                let privilege = if wanted == Privilege::Select
+                    && self.state.policy.column_level()
+                    && matches!(securable, Securable::Table(_))
+                {
+                    Privilege::Browse
+                } else {
+                    wanted
+                };
+                let r = authorize_reported(
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
-                    env.analysis.mode.read_privilege(),
+                    privilege,
+                    wanted,
                 )
                 .await;
                 audit_read(self, env, r)?;
@@ -615,7 +753,7 @@ impl Session {
     }
 
     /// The securables `object` stands for: as written, then folded.
-    fn securables_of(
+    pub(crate) fn securables_of(
         &self,
         object: TargetObject<'_>,
         env: &QueryEnv,
@@ -1250,7 +1388,7 @@ fn parse_object_prefix(text: &str) -> Option<ObjectPrefix> {
 
 /// `path` with the symbolic links of its longest existing prefix resolved
 /// (the rest does not exist yet, so it holds no links).
-fn resolve_links(path: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_links(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();
     loop {
@@ -1299,6 +1437,14 @@ impl AccessPolicy for PathPrefixPolicy {
             })));
         }
         self.inner.check(principal, securable, privilege)
+    }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        self.inner.denied(principal, securable, privilege);
     }
 }
 
@@ -1359,6 +1505,14 @@ impl AccessPolicy for ReadOnlyPolicy {
             })));
         }
         self.inner.check(principal, securable, privilege)
+    }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        self.inner.denied(principal, securable, privilege);
     }
 }
 

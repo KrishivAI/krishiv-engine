@@ -15,6 +15,7 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod access;
 mod case;
 mod ddl;
 mod expr;

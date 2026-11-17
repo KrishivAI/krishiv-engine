@@ -18,6 +18,15 @@ crosses the socket: an Arrow IPC stream in a memfd does.
   (cloudpickled ``(func, return_type)``); answered by ``ready`` or ``error``.
 - server → worker: ``batch`` ``{udf, len, conf}`` + a sealed memfd holding one record batch, one column per
   argument; answered by ``result`` ``{len}`` + a memfd holding one record batch with one column, or ``error``.
+- server → worker: ``task`` ``{udf, eval_type, key_count, arity, max_rows, conf}`` (no descriptor): a relation
+  kind's task (design ``P3-T085-embedded-python-udf-kinds.md`` §3.2) over loaded UDF ``udf``, run as
+  ``eval_type`` (the UDF's own, or the window kind of a grouped-aggregate UDF: 202 as 203, 252 as 253, as Spark
+  runs one over a window; a scalar iterator, 204 and 251, is a task too). The worker then asks
+  for each frame with ``want``, and the server answers with exactly one of ``frame`` ``{side, len}`` + a sealed
+  memfd holding one record batch, ``end_group`` or ``end``. The worker sends ``result`` ``{len}`` + a memfd
+  holding one record batch of the declared columns whenever it has rows, and ``done`` when the UDF finished
+  (also before ``end``, when the UDF stopped reading: the server drops the frames left), or ``error``. The
+  server writes only after a ``want``, so neither side ever blocks on a full socket while the other writes.
 - EOF on the socket: the worker exits 0.
 
 ``error`` is ``{kind, message}``: ``kind`` ``python`` is an exception raised while loading or running the UDF
@@ -106,6 +115,137 @@ def _check_python_version(python_ver: str) -> None:
         )
 
 
+class _ProtocolError(Exception):
+    """A message this worker cannot read in its state: reported as a ``protocol`` error, then the worker exits."""
+
+
+def _read_batch(fd: int, length: int) -> Any:
+    """The one record batch of the Arrow stream in memfd ``fd``."""
+    import pyarrow as pa
+
+    return pa.ipc.open_stream(_read_memfd(fd, length)).read_next_batch()
+
+
+def _write_batch(batch: Any) -> tuple[int, int]:
+    """``batch`` as an Arrow stream (uncompressed) in a new memfd, and its length."""
+    import pyarrow as pa
+
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+    data = memoryview(sink.getvalue())
+    result_fd = os.memfd_create("krishiv-udf-result", os.MFD_CLOEXEC)
+    try:
+        written = 0
+        while written < len(data):
+            written += os.write(result_fd, data[written:])
+    except BaseException:
+        os.close(result_fd)
+        raise
+    return result_fd, len(data)
+
+
+class _Relation:
+    """A loaded relation UDF: the function, its return type and eval type, and its runners by the eval type a
+    task runs it as (``relations.make_relation``)."""
+
+    def __init__(self, func: Any, return_type: Any, eval_type: int) -> None:
+        from krishiv._udf.relations import make_relation
+
+        self.func = func
+        self.return_type = return_type
+        self.eval_type = eval_type
+        self.runners = {eval_type: make_relation(func, eval_type, return_type)}
+
+    def runner(self, eval_type: int) -> Any:
+        """The runner of a task run as ``eval_type``: the UDF's own kind, or the window kind of a
+        grouped-aggregate UDF."""
+        from krishiv._udf.relations import WINDOW_OF, make_relation
+
+        if eval_type not in self.runners:
+            if WINDOW_OF.get(self.eval_type) != eval_type:
+                raise _ProtocolError(f"a task of eval type {eval_type} for a UDF of eval type {self.eval_type}")
+            self.runners[eval_type] = make_relation(self.func, eval_type, self.return_type)
+        return self.runners[eval_type]
+
+
+#: The most rows of an aggregate's values kept before they are sent, when the task gives no ``max_rows``
+#: (Spark's default ``spark.sql.execution.arrow.maxRecordsPerBatch``).
+DEFAULT_MAX_ROWS = 10_000
+
+
+class _Results:
+    """A task's results on their way to the server. A grouped aggregate yields one row per group, so its rows
+    are kept and sent together before the worker next asks for a frame (or ends); other kinds' batches go at
+    once, so a map's output streams while its input does.
+
+    ``max_rows`` is only an upper bound: the values are flushed before every ``want`` anyway (one group's
+    value per frame request, in practice), so it caps the rows of one result only when a frame yields
+    more values than that."""
+
+    def __init__(self, sock: socket.socket, max_rows: int, aggregate: bool) -> None:
+        self.sock = sock
+        self.max_rows = max_rows if max_rows > 0 else DEFAULT_MAX_ROWS
+        self.aggregate = aggregate
+        self.pending: list[Any] = []
+        self.rows = 0
+
+    def add(self, batch: Any) -> None:
+        self.pending.append(batch)
+        self.rows += batch.num_rows
+        if not self.aggregate or self.rows >= self.max_rows:
+            self.flush()
+
+    def flush(self) -> None:
+        import pyarrow as pa
+
+        if not self.pending:
+            return
+        batch = self.pending[0] if len(self.pending) == 1 else pa.concat_batches(self.pending)
+        self.pending = []
+        self.rows = 0
+        result_fd, length = _write_batch(batch)
+        try:
+            _send(self.sock, {"t": "result", "len": length}, [result_fd])
+        finally:
+            os.close(result_fd)
+
+
+class _Frames:
+    """A task's input, asked for frame by frame (``relations.FrameSource``)."""
+
+    def __init__(self, sock: socket.socket, results: _Results) -> None:
+        self.sock = sock
+        self.results = results
+        self.ended = False
+
+    def next(self) -> tuple[Any, ...]:
+        if self.ended:
+            raise _ProtocolError("a frame asked for after the end")
+        self.results.flush()
+        _send(self.sock, {"t": "want"})
+        data, fds, flags, _addr = socket.recv_fds(self.sock, MAX_MESSAGE, 2)
+        try:
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
+                raise _ProtocolError("a frame or its descriptor was truncated")
+            if not data:
+                raise _ProtocolError("the server closed the socket inside a task")
+            try:
+                msg = json.loads(data)
+                kind = msg["t"]
+            except (ValueError, KeyError, TypeError) as e:
+                raise _ProtocolError(f"unreadable frame: {e}") from None
+            if kind == "frame" and len(fds) == 1:
+                return ("batch", int(msg["side"]), _read_batch(fds[0], int(msg["len"])))
+            if kind in ("end_group", "end") and not fds:
+                self.ended = kind == "end"
+                return (kind,)
+            raise _ProtocolError(f"unexpected frame {kind!r} with {len(fds)} descriptors")
+        finally:
+            for fd in fds:
+                os.close(fd)
+
+
 class _Worker:
     def __init__(self, sock: socket.socket) -> None:
         self.sock = sock
@@ -114,12 +254,17 @@ class _Worker:
     def load_udf(self, msg: dict[str, Any], fd: int) -> None:
         from pyspark import cloudpickle  # ty: ignore[unresolved-import]  # pool workers only
 
+        from krishiv._udf.relations import RELATION_EVAL_TYPES
         from krishiv._udf.worker import make_wrapper
 
         _check_python_version(str(msg["python_ver"]))
         command = _read_memfd(fd, int(msg["len"])).to_pybytes()
         func, return_type = cloudpickle.loads(command)
-        self.udfs[int(msg["id"])] = make_wrapper(func, int(msg["eval_type"]), return_type)
+        eval_type = int(msg["eval_type"])
+        if eval_type in RELATION_EVAL_TYPES:
+            self.udfs[int(msg["id"])] = _Relation(func, return_type, eval_type)
+        else:
+            self.udfs[int(msg["id"])] = make_wrapper(func, eval_type, return_type)
 
     def run_batch(self, msg: dict[str, Any], fd: int) -> tuple[int, int]:
         """Runs one batch; returns a memfd holding the result stream and its length."""
@@ -128,24 +273,31 @@ class _Worker:
         from krishiv._udf._host import set_runner_conf
 
         wrapper = self.udfs[int(msg["udf"])]
-        reader = pa.ipc.open_stream(_read_memfd(fd, int(msg["len"])))
-        batch = reader.read_next_batch()
+        if isinstance(wrapper, _Relation):
+            raise _ProtocolError("a batch for a relation UDF")
+        batch = _read_batch(fd, int(msg["len"]))
         set_runner_conf(dict(msg.get("conf") or {}))
         result = wrapper(*batch.columns)
-        out = pa.RecordBatch.from_arrays([result], names=["_0"])
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, out.schema) as writer:
-            writer.write_batch(out)
-        data = memoryview(sink.getvalue())
-        result_fd = os.memfd_create("krishiv-udf-result", os.MFD_CLOEXEC)
-        try:
-            written = 0
-            while written < len(data):
-                written += os.write(result_fd, data[written:])
-        except BaseException:
-            os.close(result_fd)
-            raise
-        return result_fd, len(data)
+        return _write_batch(pa.RecordBatch.from_arrays([result], names=["_0"]))
+
+    def run_task(self, msg: dict[str, Any]) -> None:
+        """Runs one relation task to its ``done`` (see the module doc); a UDF error propagates, with the
+        worker still in step (it sends nothing until the server's next message)."""
+        from krishiv._udf._host import set_runner_conf
+        from krishiv._udf.relations import AGGREGATE_EVAL_TYPES
+
+        relation = self.udfs[int(msg["udf"])]
+        if not isinstance(relation, _Relation):
+            raise _ProtocolError("a task for a scalar UDF")
+        eval_type = int(msg.get("eval_type") or relation.eval_type)
+        runner = relation.runner(eval_type)
+        set_runner_conf(dict(msg.get("conf") or {}))
+        results = _Results(self.sock, int(msg.get("max_rows") or 0), eval_type in AGGREGATE_EVAL_TYPES)
+        frames = _Frames(self.sock, results)
+        for batch in runner(frames, int(msg["key_count"]), int(msg["arity"])):
+            results.add(batch)
+        results.flush()
+        _send(self.sock, {"t": "done"})
 
     def serve(self) -> None:
         while True:
@@ -160,7 +312,8 @@ class _Worker:
             try:
                 msg = json.loads(data)
                 kind = msg["t"]
-                if kind not in ("udf", "batch") or len(fds) != 1:
+                wanted = 0 if kind == "task" else 1
+                if kind not in ("udf", "batch", "task") or len(fds) != wanted:
                     _error(self.sock, "protocol", f"unexpected message {kind!r} with {len(fds)} descriptors")
                     return
             except (ValueError, KeyError, TypeError) as e:
@@ -170,6 +323,20 @@ class _Worker:
                 extra = fds[1:] if len(fds) > 1 else []
                 for fd in extra:
                     os.close(fd)
+            if kind == "task":
+                try:
+                    self.run_task(msg)
+                except _ProtocolError as e:
+                    _error(self.sock, "protocol", str(e))
+                    return
+                except Exception as e:
+                    from krishiv._udf.relations import FrameError
+
+                    if isinstance(e, FrameError):
+                        _error(self.sock, "protocol", str(e))
+                        return
+                    _error(self.sock, "python", _traceback(e))
+                continue
             fd = fds[0]
             try:
                 if kind == "udf":
@@ -187,19 +354,36 @@ class _Worker:
                 os.close(fd)
 
 
-def main(sock: socket.socket | None = None) -> None:
+def _add_paths(paths: list[str]) -> None:
+    """The session's artifact paths on ``sys.path``: each at index 1, in order, once (``worker_util.py:59-65``
+    ``add_path`` and ``setup_spark_files``, v4.2.0), after the worker's own modules are imported, as Spark adds
+    them after its worker started."""
+    import importlib
+
+    changed = False
+    for path in paths:
+        if path not in sys.path:
+            sys.path.insert(1, path)
+            changed = True
+    if changed:
+        importlib.invalidate_caches()
+
+
+def main(sock: socket.socket | None = None, paths: list[str] | None = None) -> None:
     """The worker's entry: greets the server over ``sock`` (the worker's stdin when not given), then serves
-    ``udf`` and ``batch`` messages until EOF."""
+    ``udf`` and ``batch`` messages until EOF. ``paths`` are the session's artifact paths."""
     if sock is None:
         sock = socket.socket(fileno=0)
     try:
         import pyarrow
         import pyspark  # ty: ignore[unresolved-import]  # pool workers only
 
+        import krishiv._udf.relations  # fail at start, not at the first task
         import krishiv._udf.worker  # noqa: F401  # fail at start, not at the first batch
     except Exception as e:  # a missing package is reported to the server, then the worker exits
         _error(sock, "python", _traceback(e))
         sys.exit(1)
+    _add_paths(list(paths or []))
     _send(
         sock,
         {

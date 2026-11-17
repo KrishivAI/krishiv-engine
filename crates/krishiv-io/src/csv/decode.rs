@@ -19,7 +19,7 @@ use super::tokenizer::{Token, TokenizeError, Tokenizer};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::io::ByteRange;
-use crate::request::{ROW_INDEX_COLUMN, ScanRequest};
+use crate::request::{FieldMapping, ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::reader::{LineReader, ReadChunk, WholeReader};
 use crate::text::{BATCH_ROWS, Datetimes, TextMetadata};
 
@@ -60,6 +60,9 @@ pub(crate) struct CsvDecoder {
     schema: SchemaRef,
     /// Names of the data columns, for the header check.
     data_names: Vec<String>,
+    /// `spark.sql.caseSensitive` (from the request's by-name mapping), for
+    /// the header check.
+    case_sensitive: bool,
     /// More than the requested columns can be dropped from tokens.
     pruned: bool,
     header_pending: bool,
@@ -71,6 +74,8 @@ pub(crate) struct CsvDecoder {
     rows: usize,
     held_text: usize,
     done: bool,
+    /// A reader error held back while the rows read before it are returned.
+    failed: Option<FormatError>,
     metrics: ScanUnitMetrics,
 }
 
@@ -182,8 +187,15 @@ impl CsvDecoder {
             prefix,
             row_no: 0,
             done: units.units.is_empty(),
+            failed: None,
             source,
             data_names: data.iter().map(|s| (*s).to_owned()).collect(),
+            case_sensitive: matches!(
+                req.mapping,
+                FieldMapping::ByName {
+                    case_sensitive: true
+                }
+            ),
             o: opts,
             dt,
             outs,
@@ -257,24 +269,63 @@ impl CsvDecoder {
         }
     }
 
-    /// Checks the header line against the schema (`enforceSchema=false`).
+    /// Checks the header line against the schema (`enforceSchema=false`),
+    /// as Spark 4.2's `CSVHeaderChecker`: names compare exactly under
+    /// `spark.sql.caseSensitive`, else after lower-casing (Unicode, as
+    /// Java's `toLowerCase`). With column pruning only the read columns
+    /// are checked, each against the header token at its own position, and
+    /// the header's length is not; without it the whole header is.
     fn check_header(&self, tokens: &[Token]) -> FormatResult<()> {
         if self.o.enforce_schema {
             return Ok(());
         }
-        let names: Vec<&str> = tokens.iter().map(|t| t.as_deref().unwrap_or("")).collect();
-        let same = names.len() == self.data_names.len()
-            && names
+        let header: Vec<&str> = tokens.iter().map(|t| t.as_deref().unwrap_or("")).collect();
+        // (header names, schema names) in the order Spark compares them.
+        let (found, wanted): (Vec<&str>, Vec<&str>) = if self.pruned {
+            // The read columns in file order, as Spark's required schema.
+            let mut read: Vec<usize> = self
+                .outs
                 .iter()
-                .zip(&self.data_names)
-                .all(|(a, b)| a.eq_ignore_ascii_case(b));
-        if same {
-            Ok(())
+                .filter_map(|o| match o {
+                    Out::Data { index, .. } => Some(*index),
+                    _ => None,
+                })
+                .collect();
+            read.sort_unstable();
+            read.dedup();
+            read.iter()
+                .map(|&i| {
+                    (
+                        header.get(i).copied().unwrap_or(""),
+                        self.data_names.get(i).map_or("", String::as_str),
+                    )
+                })
+                .unzip()
         } else {
-            Err(FormatError::Corrupt(format!(
-                "the CSV header {names:?} does not match the schema {:?}",
-                self.data_names
-            )))
+            if header.len() != self.data_names.len() {
+                return Err(FormatError::Corrupt(format!(
+                    "Number of column in CSV header is not equal to number of fields in the schema:\n \
+                     Header length: {}, schema size: {}",
+                    header.len(),
+                    self.data_names.len()
+                )));
+            }
+            (header, self.data_names.iter().map(String::as_str).collect())
+        };
+        let same = |a: &str, b: &str| {
+            if self.case_sensitive {
+                a == b
+            } else {
+                a == b || a.to_lowercase() == b.to_lowercase()
+            }
+        };
+        match found.iter().zip(&wanted).find(|(h, s)| !same(h, s)) {
+            None => Ok(()),
+            Some((h, s)) => Err(FormatError::Corrupt(format!(
+                "CSV header does not conform to the schema.\n Header: {}\n Schema: {}\nExpected: {s} but found: {h}",
+                found.join(", "),
+                wanted.join(", ")
+            ))),
         }
     }
 
@@ -361,11 +412,26 @@ impl CsvDecoder {
 
 impl Decoder for CsvDecoder {
     fn step(&mut self) -> FormatResult<Step> {
+        if let Some(e) = self.failed.take() {
+            self.done = true;
+            return Err(e);
+        }
         if self.done {
             return Ok(Step::Done);
         }
         loop {
-            match self.next()? {
+            let next = match self.next() {
+                Ok(next) => next,
+                // The rows read before a reader error (a compressed stream
+                // that breaks) are returned first, as Spark's scan has handed
+                // them on before the error reaches it.
+                Err(e) if self.rows > 0 => {
+                    self.failed = Some(e);
+                    return Ok(Step::Batch(self.batch()?));
+                }
+                Err(e) => return Err(e),
+            };
+            match next {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Record(raw, tokens) => {
                     self.add(&raw, &tokens)?;

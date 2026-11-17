@@ -34,7 +34,7 @@ fn field(id: i32, name: &str, ty: IcebergType) -> SchemaField {
 }
 
 /// A data file with `rows` rows and nothing else known.
-pub(super) fn file(rows: u64) -> ContentFile {
+pub(crate) fn file(rows: u64) -> ContentFile {
     ContentFile {
         content: ContentKind::Data,
         path: "f.parquet".to_owned(),
@@ -1215,6 +1215,108 @@ fn equality_deletes_with_unreadable_partitions_are_refused() {
             .equality_deletes
             .is_empty()
     );
+}
+
+/// The spec's appendix B hash vectors (apache-iceberg 1.12.0 `format/spec.md`,
+/// "32-bit Hash Requirements"), and `bucket[N]` = `(hash & i32::MAX) % N` over
+/// them: Krishiv computes the partition values of what it writes (design note
+/// §6.1), so these must be bit-exact with Java's.
+#[test]
+fn bucket_transform_vectors() {
+    use IcebergType as T;
+    use ScalarValue as S;
+    // 2017-11-16 and 2017-11-16T22:31:08 from the epoch.
+    let day = 17_486;
+    let micros: i64 = (17_486 * 86_400 + 22 * 3_600 + 31 * 60 + 8) * 1_000_000;
+    let cases: Vec<(T, S, i32)> = vec![
+        (T::Int, S::Int32(34), 2_017_239_379),
+        (T::Long, S::Int64(34), 2_017_239_379),
+        (
+            T::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            S::Decimal128 {
+                unscaled: 1420,
+                precision: 9,
+                scale: 2,
+            },
+            -500_754_589,
+        ),
+        (T::Date, S::Date32(day), -653_330_422),
+        (T::Timestamp, S::TimestampMicros(micros), -2_047_944_441),
+        (T::Timestamp, S::TimestampMicros(micros + 1), -1_207_196_810),
+        (T::Timestamptz, S::TimestampMicros(micros), -2_047_944_441),
+        (T::String, S::Utf8("iceberg".to_owned()), 1_210_000_089),
+        (
+            T::Uuid,
+            S::Utf8("f79c3e09-677c-4bbd-a479-3f349cb785e7".to_owned()),
+            1_488_055_340,
+        ),
+        (T::Fixed(4), S::Binary(vec![0, 1, 2, 3]), -188_683_207),
+        (T::Binary, S::Binary(vec![0, 1, 2, 3]), -188_683_207),
+    ];
+    for (ty, v, hash) in &cases {
+        assert_eq!(transform::bucket_hash(ty, v), Some(*hash), "{ty:?} {v:?}");
+        for n in [1u32, 16, 1000] {
+            let n_i32 = i32::try_from(n).unwrap();
+            assert_eq!(
+                transform::apply(Transform::Bucket(n), ty, v),
+                Some(S::Int32((hash & i32::MAX) % n_i32)),
+                "bucket[{n}] {ty:?} {v:?}"
+            );
+        }
+    }
+    // Appendix B's `time` and `timestamp_ns` rows are not here: Krishiv has no
+    // value of either type yet (no `ScalarValue` for them), so it cannot bucket
+    // them, and a write of one fails (`partition_value`).
+    assert_eq!(
+        transform::bucket_hash(&T::Time, &S::Int64(81_068_000_000)),
+        None
+    );
+    assert_eq!(
+        transform::bucket_hash(&T::TimestampNs, &S::TimestampMicros(micros)),
+        None
+    );
+    // Types the spec does not bucket.
+    assert_eq!(transform::bucket_hash(&T::Boolean, &S::Boolean(true)), None);
+    assert_eq!(transform::bucket_hash(&T::Double, &S::Float64(1.0)), None);
+}
+
+/// A write's partition values: `void` and a null source are null; a
+/// transform Krishiv cannot compute fails instead of writing the null
+/// partition (review 36a S5).
+#[test]
+fn partition_values_for_writes() {
+    use IcebergType as T;
+    use ScalarValue as S;
+    use transform::partition_value as pv;
+    assert_eq!(
+        pv(Transform::Void, &T::Long, Some(&S::Int64(1))).unwrap(),
+        None
+    );
+    assert_eq!(pv(Transform::Day, &T::Date, None).unwrap(), None);
+    assert_eq!(
+        pv(Transform::Day, &T::Date, Some(&S::Date32(17_486))).unwrap(),
+        Some(S::Date32(17_486))
+    );
+    assert_eq!(
+        pv(Transform::Bucket(16), &T::Int, Some(&S::Int32(34))).unwrap(),
+        Some(S::Int32(2_017_239_379 % 16))
+    );
+    for (t, ty, v) in [
+        (Transform::Bucket(4), T::Double, S::Float64(1.0)),
+        (Transform::Unknown, T::Long, S::Int64(1)),
+        // A literal of another type than the source.
+        (Transform::Identity, T::Long, S::Int32(1)),
+    ] {
+        let e = pv(t, &ty, Some(&v)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+    }
 }
 
 /// Java's assignment refusals and the path a position delete names through

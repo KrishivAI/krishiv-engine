@@ -36,9 +36,10 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
+use super::distinct::PairCounts;
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
-use super::{AggregateSpec, is_order_sensitive, unsupported};
+use super::{AggregateSpec, observes_order, unsupported};
 use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
@@ -47,9 +48,11 @@ use crate::hash::{HashSeed, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
+pub(super) use counting::set_pair_counter;
 use held::{charged_to_writer, lend_headroom, regrow, reserve_to, shrink_to, take_bytes};
 
 mod combined;
+mod counting;
 mod disk;
 mod held;
 mod parallel;
@@ -696,8 +699,9 @@ struct Run {
     /// ([`u32::MAX`] for runs of many partitions, which keep their
     /// insertion order). Runs merge grouped by hash partition, runs of
     /// one partition in this order, so order-sensitive aggregates
-    /// (`collect_*`, the vector ones) merge partitions in partition-index
-    /// order whatever thread spilled first.
+    /// ([`observes_order`]: `collect_*`, the vector ones, `first`,
+    /// `last`, the ties of `max_by`/`min_by`, float `max`/`min`) merge partitions in
+    /// partition-index order whatever thread spilled first.
     partition: u32,
 }
 
@@ -1106,6 +1110,10 @@ struct Global {
     changed: Event,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
+    /// The pairs table of a `count(DISTINCT)` counted at the merge
+    /// ([`super::distinct`]): each in-memory final-phase task counts its
+    /// finished table here instead of publishing it.
+    counter: OnceLock<Arc<PairCounts>>,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -1249,14 +1257,9 @@ impl HashAggregate {
             return self.must_free(inner, ctx, 0);
         }
         let tables = &mut inner.tables;
-        // Order-sensitive aggregates merge in driver-partition order (see
-        // [`Run::partition`]), not biggest-first.
-        let ordered = self
-            .core
-            .spec
-            .aggregates
-            .iter()
-            .any(|a| is_order_sensitive(&a.function));
+        // Aggregates that observe order ([`observes_order`]) merge in
+        // driver-partition order (see [`Run::partition`]), not biggest-first.
+        let ordered = self.core.spec.aggregates.iter().any(observes_order);
         if !ordered
             && inner.merged == 0
             && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len())
@@ -1442,6 +1445,7 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
+            counter: OnceLock::new(),
         }))
     }
 

@@ -5,7 +5,8 @@
 //! The suggestion comes from the class's simple name (`org.apache.hadoop.hive.ql.udf.generic.
 //! GenericUDFNvl` is `nvl`) or, failing that, from the name the statement gives the function, matched
 //! against the built-in functions that Hive and Spark-community UDFs most often stand for. The
-//! list leaves out functions whose results differ from Hive's (`hash` is Murmur3 here); a test checks that each name has a reference page.
+//! list leaves out functions whose results differ from Hive's (`hash` is Murmur3 here); a test
+//! checks that each name has a reference page.
 
 /// The built-in functions a JVM UDF is most often a copy of.
 const BUILT_INS: &[&str] = &[

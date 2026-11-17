@@ -105,7 +105,7 @@ fn main() -> std::process::ExitCode {
     // `krishiv __udf-worker ...`: the Python UDF worker's sandbox trampoline (P3-T014b). Before
     // anything starts a thread: it confines this thread and replaces the process, returning only
     // on failure.
-    #[cfg(feature = "connect")]
+    #[cfg(any(feature = "connect", feature = "server"))]
     if let Some(code) = krishiv_udf_pool::run_trampoline_if_requested() {
         return code;
     }

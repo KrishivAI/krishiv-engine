@@ -34,6 +34,12 @@
     "sqlState" : "08004",
     "audience" : "operator"
   },
+  "KRISHIV_ARTIFACT_LIMIT" : {
+    "message" : [
+      "Cannot add the artifact <name>: <limitName> allows at most <limit> bytes. Release the session's artifacts (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
     "message" : [
       "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
@@ -86,11 +92,46 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_GRANTS_STORE_FAILURE" : {
+    "message" : [
+      "The grants store cannot be <operation>: <reason>. No grant was changed and access is denied until an administrator restores the store."
+    ],
+    "sqlState" : "58030",
+    "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_COMMIT_CONFLICT" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> to the Iceberg table <table> conflicts with the table at snapshot <conflictingSnapshotId> (<check>): <message> The write is not committed; <files>."
+    ],
+    "sqlState" : "40001"
+  },
+  "KRISHIV_ICEBERG_COMMIT_FAILED" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> was not applied in any of <attempts> requests, the last answered with: <reason>. The write is not committed; <files>. Raising \"commit.retry.num-retries\" or \"commit.retry.total-timeout-ms\" on the table allows more attempts."
+    ],
+    "sqlState" : "40001"
+  },
+  "KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> may or may not have been applied: <reason>. Look for the snapshot id or the \"krishiv.write-id\" summary value in the table's snapshots before writing the data again.",
+      "Cannot determine whether the commit was successful or not, the underlying data files may or may not be needed. Manual intervention via the Remove Orphan Files Action can remove these files when a connection to the Catalog can be re-established if the commit was actually unsuccessful.",
+      "Please check to see whether or not your commit was successful before retrying this commit. Retrying an already successful operation will result in duplicate records or unintentional modifications.",
+      "At this time no files will be deleted including possibly unused manifest lists."
+    ],
+    "sqlState" : "40003"
+  },
   "KRISHIV_ICEBERG_INVALID_DELETES" : {
     "message" : [
       "<message>"
     ],
     "sqlState" : "KD001",
+    "audience" : "operator"
+  },
+  "KRISHIV_IDEMPOTENCY_KEY_REUSED" : {
+    "message" : [
+      "The request id <requestId> was already used for another request. Send a new request id for a different request."
+    ],
+    "sqlState" : "22023",
     "audience" : "operator"
   },
   "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
@@ -104,6 +145,12 @@
       "The Arrow data passed to Krishiv is invalid: <reason>."
     ],
     "sqlState" : "22000"
+  },
+  "KRISHIV_INVALID_ARTIFACT_TRANSFER" : {
+    "message" : [
+      "The transfer of the artifact <name> is invalid: <reason>. The artifact was discarded."
+    ],
+    "sqlState" : "22023"
   },
   "KRISHIV_INVALID_BASE64_INPUT" : {
     "message" : [
@@ -196,6 +243,18 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_ARTIFACT_REFUSED" : {
+    "message" : [
+      "The Python artifact <name> cannot be used by UDF workers: <reason>. Add a smaller or a well-formed artifact (zip, jar, tar, tar.gz or tgz archives), or raise the server's artifact limit."
+    ],
+    "sqlState" : "22023"
+  },
+  "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name>@<version> is registered with eval type <registered> but the plan calls it as <called> (eval type <evalType>): register the function on the executing session as the kind of call the query makes."
+    ],
+    "sqlState" : "39000"
+  },
   "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
     "message" : [
       "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."
@@ -207,6 +266,12 @@
       "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
     ],
     "sqlState" : "38000"
+  },
+  "KRISHIV_PYTHON_WORKER_LIMIT" : {
+    "message" : [
+      "<operation> needs <needed> Python UDF workers at once, and at most <available> can serve it: \"<setting>\" is <value>, and one of those workers is kept for scalar Python UDFs when there are 2 or more. Raise \"<setting>\", or call fewer Python UDFs in one operator."
+    ],
+    "sqlState" : "54000"
   },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
@@ -269,6 +334,24 @@
       "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
     ],
     "sqlState" : "53400"
+  },
+  "KRISHIV_ROLE_ALREADY_EXISTS" : {
+    "message" : [
+      "The role <role> already exists. Choose another name, or drop the role first."
+    ],
+    "sqlState" : "42710"
+  },
+  "KRISHIV_ROLE_CYCLE" : {
+    "message" : [
+      "Granting role <role> to <grantee> would make a role a member of itself. Roles cannot be granted in a cycle."
+    ],
+    "sqlState" : "42P17"
+  },
+  "KRISHIV_ROLE_NOT_FOUND" : {
+    "message" : [
+      "The role <role> does not exist. Create it with CREATE ROLE first."
+    ],
+    "sqlState" : "42704"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [

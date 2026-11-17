@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, UI_ENABLED,
+    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -193,6 +193,15 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     for (k, v) in args.conf.iter().filter(|(k, _)| !is_listener_key(k)) {
         builder = builder.config(k, v);
     }
+    // The egress policy (design P3-T067 §5.1): a server allows only globally routable
+    // destinations unless the admin chose otherwise.
+    if !args
+        .conf
+        .iter()
+        .any(|(k, _)| k == IO_EGRESS_PRIVATE_ADDRESSES.key)
+    {
+        builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
+    }
     let host = resolve_host(args.host, &settings.config)?;
     check_host(host, &settings)?;
     let Settings {
@@ -274,14 +283,27 @@ async fn run_listeners(
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
     let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
-    let manager = Arc::new(if authenticated {
+    let manager = if authenticated {
         SessionManager::new(
             role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
             limits,
         )
     } else {
         SessionManager::from_base(base, limits)
-    });
+    };
+    // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
+    // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
+    // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
+    #[cfg(target_os = "linux")]
+    let manager = {
+        let pool_config = krishiv_udf_pool::PoolConfig::from_config(config);
+        let pool = tokio::task::spawn_blocking(move || krishiv_udf_pool::Pool::new(pool_config))
+            .await
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
+        manager.with_udf_host(Arc::new(pool))
+    };
+    let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;
@@ -313,7 +335,11 @@ async fn run_listeners(
         ConnectServerConfig::from_config(config),
     );
     if authenticated {
-        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
+        connect = connect.with_auth(
+            ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
+                .with_denials(denials)
+                .with_impersonation(auth),
+        );
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
@@ -411,6 +437,11 @@ fn admin_router(
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
     let public = metrics_on && !authenticated && !metrics_need_token(config, bound);
+    // Denials of the admin API count into the same counters as every other surface.
+    let admin_denials = auth.as_ref().map_or_else(
+        || Arc::new(krishiv_session::auth::DeniedCounts::default()),
+        |a| a.denials(),
+    );
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
@@ -439,7 +470,10 @@ fn admin_router(
         .unwrap_or_default();
     let alias_guard = Arc::clone(&guard);
     let admin_v1 = krishiv_server::admin_v1::router(
-        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::new(
+            krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
+                .with_denials(admin_denials),
+        ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );

@@ -29,6 +29,11 @@
 
 #![forbid(unsafe_code)]
 
+// The crate README is a doc test: its example is compiled and run by `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 pub use krishiv_common::error::KrishivError as Error;
 pub use krishiv_session::{
     AggregateProperties, AggregateUdf, ArgField, CancelReason, Column, CounterSample, DataFrame,

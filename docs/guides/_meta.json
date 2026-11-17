@@ -5,11 +5,13 @@
   "check-compat": "Check a project with check-compat",
   "run-sql-from-the-command-line": "Run SQL from the command line",
   "tokio-console": "Task diagnostics with tokio-console",
+  "data-sources": "Data sources: files, S3, GCS and Azure",
   "notebooks-and-datasets": "Notebooks and sample data",
   "resource-groups": "Resource groups and request tags",
   "python-udf-sandbox": "Python UDFs in the server: the sandbox",
   "single-node-server-security": "Securing a single-node server",
   "collations-and-icu": "Collations and ICU",
   "krishiv-doctor": "Check a server configuration with krishiv doctor",
-  "python-udf-profiler": "Profile a Python UDF"
+  "python-udf-profiler": "Profile a Python UDF",
+  "observability": "Observability from Rust"
 }
