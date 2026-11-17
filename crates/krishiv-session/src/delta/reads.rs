@@ -64,7 +64,10 @@ pub(crate) struct DeltaReads {
     /// Scans do not use it: their engine is bound to the running query's cancellation
     /// (`DeltaEngine::for_query`). Reads built inside an action are also cancelled with it
     /// (`action::cancelled`), so an interrupt during analysis ends their kernel calls even while
-    /// a frame still holds the reads.
+    /// a frame still holds the reads. Limits: the watcher task starts with the reads, even
+    /// when the query opens no Delta table; it watches only the innermost action that built
+    /// them, so reads a cached analysis hands to a later action still follow the first one,
+    /// and cancelling only an outer action reaches them through the dropped work alone.
     cancel: Arc<CancellationToken>,
     opened: Mutex<Vec<(String, Arc<DeltaTable>)>>,
 }
