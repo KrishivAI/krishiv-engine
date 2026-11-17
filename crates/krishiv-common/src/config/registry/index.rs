@@ -385,6 +385,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
     (
+        "krishiv.runtimeFilter.bloom.memoryTier",
+        &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
+    ),
+    (
         "krishiv.runtimeFilter.inList.maxValues",
         &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
     ),
@@ -463,6 +467,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.closedTombstones",
         &CONNECT_SESSION_TOMBSTONES,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.atScaleRatio",
+        &RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",

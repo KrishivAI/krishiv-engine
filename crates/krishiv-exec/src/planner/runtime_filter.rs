@@ -42,7 +42,11 @@
 //! `spark.sql.optimizer.runtime.bloomFilter.enabled`, the build is
 //! estimated at most `krishiv.runtimeFilter.bloom.maxItems` rows, and the
 //! scan at least four times the build and at least
-//! `krishiv.runtimeFilter.bloom.minApplicationRows`. The build decides with
+//! `krishiv.runtimeFilter.bloom.minApplicationRows`. A scan at least
+//! `krishiv.runtimeFilter.bloom.atScaleRatio` times its build (8, Polars'
+//! admission ratio) raises both caps (`bloom.atScale`: 20 M keys, 32 MiB;
+//! `bloom.memoryTier`: 1/64 of the query memory limit and the keys that
+//! holds, DuckDB's share; study 36 §4.4, the L3 tier). The build decides with
 //! the actual key count at finalize. A build whose estimate is a selectivity
 //! guess over an aggregate's output (a `HAVING`, or a filter on a grouped
 //! subquery: `filtered_aggregate`) counts as at most `bloom.maxItems`
@@ -55,11 +59,13 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use krishiv_common::config::{
-    Config, ConfigValue, RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
-    RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_ENABLED,
+    Config, ConfigValue, MEMORY_LIMIT, RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, RUNTIME_FILTER_BLOOM_AT_SCALE,
+    RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO, RUNTIME_FILTER_BLOOM_ENABLED,
     RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
-    RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, RUNTIME_FILTER_ENABLED,
-    RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    SESSION_MEMORY_LIMIT,
 };
 use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -101,12 +107,18 @@ pub(crate) struct Settings {
     /// set that cap (an explicit cap is a limit the default does not lift).
     at_scale_items: bool,
     at_scale_bytes: bool,
+    /// `krishiv.runtimeFilter.bloom.atScaleRatio`: the probe-to-build row
+    /// ratio from which the at-scale caps apply.
+    at_scale_ratio: f64,
+    /// `krishiv.runtimeFilter.bloom.memoryTier`: the at-scale caps taken
+    /// from the query memory limit (keys, bytes), when larger.
+    memory_tier: Option<(u64, usize)>,
     row: RowStageSettings,
 }
 
-/// The probe-to-build row ratio from which
-/// `krishiv.runtimeFilter.bloom.atScale` raises the Bloom caps.
-const BLOOM_AT_SCALE_RATIO: f64 = 20.0;
+/// The share of the query memory limit one Bloom filter may take under
+/// `krishiv.runtimeFilter.bloom.memoryTier` (DuckDB's limit / 64).
+const BLOOM_MEMORY_TIER_SHARE: usize = 64;
 /// The Bloom key cap `krishiv.runtimeFilter.bloom.atScale` raises to.
 const BLOOM_AT_SCALE_MAX_ITEMS: u64 = 20_000_000;
 /// The Bloom size cap `krishiv.runtimeFilter.bloom.atScale` raises to.
@@ -153,6 +165,11 @@ impl Settings {
                 && (at_scale_explicit || !config.is_set(&RUNTIME_FILTER_BLOOM_MAX_ITEMS)),
             at_scale_bytes: at_scale
                 && (at_scale_explicit || !config.is_set(&RUNTIME_FILTER_BLOOM_MAX_BYTES)),
+            #[expect(clippy::cast_precision_loss, reason = "a small ratio")]
+            at_scale_ratio: count(&RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO, 8).max(1) as f64,
+            memory_tier: flag(&RUNTIME_FILTER_BLOOM_MEMORY_TIER)
+                .then(|| memory_tier(query_memory_limit(config)))
+                .flatten(),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -169,6 +186,35 @@ impl Settings {
     pub(crate) fn row_stage(&self) -> RowStageSettings {
         self.row
     }
+}
+
+/// The memory a query may use: `krishiv.memory.limit` (else the root pool's
+/// default, `krishiv_memory::default_limit`), or `krishiv.session.memoryLimit`
+/// when lower. Read where the plan is made; a worker with a smaller pool
+/// still charges the Bloom to the build's reservation.
+fn query_memory_limit(config: &Config) -> Option<usize> {
+    let size = |e| {
+        config
+            .get(e)
+            .and_then(ConfigValue::as_size)
+            .map(|v| usize::try_from(v).unwrap_or(usize::MAX))
+    };
+    // The default reads `/proc` and `/sys`: once per process.
+    static DEFAULT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let root =
+        size(&MEMORY_LIMIT).or_else(|| *DEFAULT.get_or_init(krishiv_memory::default_limit))?;
+    Some(size(&SESSION_MEMORY_LIMIT).map_or(root, |s| s.min(root)))
+}
+
+/// The memory tier's caps for a query memory limit: 1/64 of it in bytes,
+/// and the keys a Bloom of that size holds at the producers' false-positive
+/// rate.
+fn memory_tier(limit: Option<usize>) -> Option<(u64, usize)> {
+    let bytes = limit? / BLOOM_MEMORY_TIER_SHARE;
+    let fpp = KeyFilterOptions::default().bloom_fpp;
+    let per_key = RuntimeBloom::bytes_for(1 << 20, fpp) as u64;
+    let items = (bytes as u64).saturating_mul(1 << 20) / per_key.max(1);
+    (bytes > 0).then_some((items, bytes))
 }
 
 /// The attribute `e` reads when it is a column or a widening cast of one
@@ -237,16 +283,26 @@ impl Planner<'_> {
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
                 // `krishiv.runtimeFilter.bloom.atScale` (ledger
-                // §4 item 13): a scan estimated at least 20x the build
-                // plans its Bloom with the larger caps; with R4's prefetching
-                // probe a Bloom past the caches still pays there.
+                // §4 item 13): a scan estimated at least `atScaleRatio`
+                // times the build (8x, Polars' admission) plans its Bloom
+                // with the larger caps; with R4's prefetching probe a Bloom
+                // past the caches still pays there. `memoryTier` (L3, study
+                // 36 §4.4) raises them further, from the memory limit.
+                let base_items = s.bloom_max_items;
                 let mut s = s;
-                if site.scan_rows >= BLOOM_AT_SCALE_RATIO * build_rows {
+                if site.scan_rows >= s.at_scale_ratio * build_rows {
+                    let (tier_items, tier_bytes) = s.memory_tier.unwrap_or((0, 0));
                     if s.at_scale_items {
-                        s.bloom_max_items = s.bloom_max_items.max(BLOOM_AT_SCALE_MAX_ITEMS);
+                        s.bloom_max_items = s
+                            .bloom_max_items
+                            .max(BLOOM_AT_SCALE_MAX_ITEMS)
+                            .max(tier_items);
                     }
                     if s.at_scale_bytes {
-                        s.bloom_max_bytes = s.bloom_max_bytes.max(BLOOM_AT_SCALE_MAX_BYTES);
+                        s.bloom_max_bytes = s
+                            .bloom_max_bytes
+                            .max(BLOOM_AT_SCALE_MAX_BYTES)
+                            .max(tier_bytes);
                     }
                 }
                 // A build whose estimate is a guess over an aggregate's
@@ -254,10 +310,12 @@ impl Planner<'_> {
                 // decides from the keys it holds, as it does for any planned
                 // Bloom (TPC-H q18: estimated 150M, holds 6,398 at SF100).
                 // Past `bloom.maxItems` it publishes none, so the guess is
-                // capped there for the scan-size test and the planned size.
+                // capped there for the scan-size test and the planned size:
+                // at the base cap, so that a raised cap does not turn the
+                // guess into a build too large for its scan.
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
                 let rows = if s.bloom_max_items > 0 && filtered_aggregate(build) {
-                    build_rows.min(s.bloom_max_items as f64)
+                    build_rows.min(base_items.max(1) as f64)
                 } else {
                     build_rows
                 };
@@ -385,7 +443,9 @@ mod tests {
     use krishiv_common::secret::OptionValue;
     use krishiv_plan::{ReadSource, Scan};
 
-    use super::{PhysNode, reads_source, scan_waits};
+    use krishiv_common::config::Config;
+
+    use super::{PhysNode, Settings, memory_tier, query_memory_limit, reads_source, scan_waits};
     use crate::physical::{ScanId, ScanNode};
 
     fn files(path: &str) -> ReadSource {
@@ -429,5 +489,35 @@ mod tests {
         assert!(!scan_waits(999.0, 1.0, true));
         // An estimate of less than one row counts as one.
         assert!(!scan_waits(500.0, 0.0, true));
+    }
+
+    /// The L3 tier (study 36 §4.4): 1/64 of the limit, and the keys a
+    /// Bloom of that size holds at 1% (about 9.7 bits a key).
+    #[test]
+    fn the_memory_tier_is_a_64th_of_the_limit() {
+        let (items, bytes) = memory_tier(Some(20 << 30)).unwrap();
+        assert_eq!(bytes, 320 << 20);
+        assert!((250_000_000..=290_000_000).contains(&items), "{items}");
+        // What it holds fits it.
+        assert!(krishiv_io::runtime_filter::RuntimeBloom::bytes_for(items, 0.01) <= bytes + 4096);
+        assert_eq!(memory_tier(None), None);
+        assert_eq!(memory_tier(Some(10)), None);
+    }
+
+    /// The session limit binds when lower; the key turns the tier off.
+    #[test]
+    fn the_memory_tier_follows_the_session_limit_and_its_key() {
+        let mut c = Config::new();
+        c.set("krishiv.memory.limit", "20g").unwrap();
+        assert_eq!(query_memory_limit(&c), Some(20 << 30));
+        c.set("krishiv.session.memoryLimit", "4g").unwrap();
+        assert_eq!(query_memory_limit(&c), Some(4 << 30));
+        assert_eq!(Settings::new(&c).memory_tier.map(|t| t.1), Some(64 << 20));
+        c.set("krishiv.runtimeFilter.bloom.memoryTier", "false")
+            .unwrap();
+        assert_eq!(Settings::new(&c).memory_tier, None);
+        c.set("krishiv.runtimeFilter.bloom.atScaleRatio", "20")
+            .unwrap();
+        assert!((Settings::new(&c).at_scale_ratio - 20.0).abs() < f64::EPSILON);
     }
 }

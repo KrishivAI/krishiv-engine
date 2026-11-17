@@ -1097,3 +1097,59 @@ fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
     let plan = t.plan_sql(q).unwrap();
     assert!(!plan.to_string().contains("(bloom)"), "{plan}");
 }
+
+/// `krishiv.runtimeFilter.bloom.atScaleRatio` (Polars item 2): a build a
+/// tenth of its probe (400 of 4,000 rows) gets the at-scale caps at the
+/// default ratio of 8, not at 20; results never change. Caps scaled down as
+/// above: a 100-key cap.
+#[test]
+fn the_at_scale_ratio_admits_a_build_a_tenth_of_its_probe() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 37;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 40_000, 0));
+    write(
+        dir.path(),
+        "tenth.parquet",
+        &table(&mut rng, 400, 40_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("tenth", vec!["tenth.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v FROM big b JOIN tenth s ON b.k64 = s.k64";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    let base = [
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.bloom.maxItems", "100"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+        ("krishiv.runtimeFilter.bloom.atScale", "true"),
+    ];
+    let mut dropped = Vec::new();
+    for (ratio, bloom) in [(None, true), (Some("20"), false), (Some("8"), true)] {
+        let mut mode = base.to_vec();
+        if let Some(r) = ratio {
+            mode.push(("krishiv.runtimeFilter.bloom.atScaleRatio", r));
+        }
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(q).unwrap();
+        assert_eq!(
+            plan.to_string().contains("(bloom)"),
+            bloom,
+            "{ratio:?}\n{plan}"
+        );
+        let (got, c) = run(&plan);
+        assert_eq!(sorted(&got), want, "{ratio:?}");
+        dropped.push(c.rows_dropped);
+    }
+    // The Bloom holds the build's keys: it drops rows the range keeps.
+    assert!(dropped[0] > dropped[1], "{dropped:?}");
+    assert_eq!(dropped[0], dropped[2]);
+}

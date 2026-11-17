@@ -25,6 +25,7 @@ mod access;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
+mod runtime_filter_bloom;
 mod server;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
@@ -38,6 +39,10 @@ pub use optimizer::{
     SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+pub use runtime_filter_bloom::{
+    RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO,
+    RUNTIME_FILTER_BLOOM_MEMORY_TIER,
+};
 pub use server::{
     CONNECT_ADDRESS, CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
     CONNECT_ARTIFACTS_MAX_TOTAL_BYTES, CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
@@ -124,6 +129,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO,
+    &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -980,21 +987,6 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
-pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.atScale",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
-          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
-          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. A cap set explicitly still binds unless \
-          this key is also set explicitly to true. Results do not change.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.3.0",
     spark_alias: None,
 };
 
