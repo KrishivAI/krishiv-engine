@@ -42,6 +42,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../worker/krishiv/_udf/pool_worker.py"),
     ),
     (
+        "krishiv/_udf/relations.py",
+        include_str!("../worker/krishiv/_udf/relations.py"),
+    ),
+    (
         "krishiv/_udf/types.py",
         include_str!("../worker/krishiv/_udf/types.py"),
     ),
