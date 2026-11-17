@@ -587,3 +587,31 @@ fn column_names_are_bounded_and_a_non_string_page_token_is_a_fault() {
     });
     assert!(catalog_of(&server).list_schemas().is_err());
 }
+
+#[test]
+fn every_request_goes_through_the_egress_policy_client() {
+    use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+    let server = serve(|_| Reply::Json(200, r#"{"catalogs": []}"#.into()));
+    let policy = EgressPolicy::new(
+        PrivateAddresses::Deny,
+        Vec::new(),
+        ProviderEndpoints::default(),
+    );
+    let deny = |exempt: &[&str]| {
+        krishiv_store::PolicyConnector::new(
+            policy.scope(exempt.iter().copied()),
+            krishiv_store::Redirects::None,
+            None,
+        )
+        .without_provider_literals()
+    };
+    // Not exempt: the loopback server is refused before anything is sent, and the address is never named.
+    let mut config = config_for(&server);
+    config.egress = Some(deny(&[]));
+    let e = catalog_with(config)
+        .load("default", "marksheet")
+        .unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    assert!(!e.to_string().contains("127.0.0.1"), "{e}");
+    assert!(server.seen().is_empty());
+}

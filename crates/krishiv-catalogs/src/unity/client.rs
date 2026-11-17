@@ -113,6 +113,7 @@ impl UnityClient {
         let name = name.into();
         config.validate()?;
         let transport = Transport::start(
+            &config.connector(),
             config.allow_http,
             config.limits.request_timeout,
             config.limits.max_response_bytes,

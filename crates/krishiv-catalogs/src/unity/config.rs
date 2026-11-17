@@ -87,9 +87,31 @@ pub struct UnityConfig {
     pub allow_http: bool,
     /// The limits.
     pub limits: UnityLimits,
+    /// The egress policy connector every request goes out on (design P3-T067 §5.2): the server's policy scoped to
+    /// this catalog's declared hosts, no redirects. `None` is a connector under no rule (embedded use, tests), still
+    /// with no redirect followed and no ambient proxy.
+    pub egress: Option<krishiv_store::PolicyConnector>,
 }
 
 impl UnityConfig {
+    /// The connector requests go out on: [`Self::egress`], or one under no rule.
+    pub(crate) fn connector(&self) -> krishiv_store::PolicyConnector {
+        self.egress.clone().unwrap_or_else(|| {
+            use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+            let policy = EgressPolicy::new(
+                PrivateAddresses::Allow,
+                Vec::new(),
+                ProviderEndpoints::default(),
+            );
+            krishiv_store::PolicyConnector::new(
+                policy.scope(Vec::<String>::new()),
+                krishiv_store::Redirects::None,
+                None,
+            )
+            .without_provider_literals()
+        })
+    }
+
     /// A declaration for the UC catalog `catalog` at `uri`, no token, default limits.
     ///
     /// # Errors
@@ -105,6 +127,7 @@ impl UnityConfig {
             token: None,
             allow_http: false,
             limits: UnityLimits::default(),
+            egress: None,
         })
     }
 

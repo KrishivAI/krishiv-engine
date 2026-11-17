@@ -518,6 +518,10 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("celeborn", cfg!(feature = "celeborn")),
         ("tokio-console", cfg!(feature = "tokio-console")),
         ("telemetry-logs", cfg!(feature = "telemetry-logs")),
+        (
+            "catalog-iceberg-rest",
+            cfg!(feature = "catalog-iceberg-rest"),
+        ),
         ("telemetry-otlp", cfg!(feature = "telemetry-otlp")),
         ("full", cfg!(feature = "full")),
     ]

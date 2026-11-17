@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use krishiv_common::secret::{SecretString, wipe};
+use krishiv_store::PolicyConnector;
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_ENCODING, HeaderValue};
 use url::Url;
 
@@ -51,10 +52,20 @@ const REPLY_GRACE: Duration = Duration::from_millis(500);
 impl Transport {
     /// Starts the client thread.
     pub(crate) fn start(
+        connector: &PolicyConnector,
         allow_http: bool,
         timeout: Duration,
         max_bytes: usize,
     ) -> Result<Self, UnityError> {
+        // Built here, outside any runtime: the policy client needs none to be built, and an error is the caller's.
+        let client = connector
+            .catalog_client(
+                timeout,
+                allow_http,
+                concat!("krishiv/", env!("CARGO_PKG_VERSION")),
+            )
+            .map_err(|e| UnityError::Transport(format!("HTTP client: {e}")))?;
+        let connector = connector.clone();
         let (jobs, mut rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), UnityError>>(1);
         thread::Builder::new()
@@ -70,36 +81,16 @@ impl Transport {
                         return;
                     }
                 };
-                let client = match reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .no_proxy()
-                    // Never decode a body, even if another crate turns these `reqwest` features on.
-                    .no_gzip()
-                    .no_brotli()
-                    .no_deflate()
-                    .no_zstd()
-                    .https_only(!allow_http)
-                    .connect_timeout(timeout)
-                    .timeout(timeout)
-                    .user_agent(concat!("krishiv/", env!("CARGO_PKG_VERSION")))
-                    .build()
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let _ =
-                            ready_tx.send(Err(UnityError::Transport(format!("HTTP client: {e}"))));
-                        return;
-                    }
-                };
                 let _ = ready_tx.send(Ok(()));
                 runtime.block_on(async move {
                     while let Some(job) = rx.recv().await {
                         let client = client.clone();
+                        let connector = connector.clone();
                         tokio::spawn(async move {
                             let deadline = tokio::time::Instant::from_std(job.deadline);
                             let result = tokio::time::timeout_at(
                                 deadline,
-                                send(&client, job.request, max_bytes),
+                                send(&client, &connector, job.request, max_bytes),
                             )
                             .await
                             .unwrap_or(Err(UnityError::Timeout));
@@ -157,10 +148,15 @@ fn transport_error(e: reqwest::Error) -> UnityError {
 
 async fn send(
     client: &reqwest::Client,
+    connector: &PolicyConnector,
     request: Request,
     max_bytes: usize,
 ) -> Result<Response, UnityError> {
     let Request { url, bearer } = request;
+    // An address literal never reaches the egress resolver: checked here, before anything is sent.
+    connector
+        .check_request_host(url.host_str().unwrap_or_default())
+        .map_err(|refusal| UnityError::Transport(format!("egress policy: {refusal}")))?;
     let mut builder = client
         .get(url)
         .header(ACCEPT, "application/json")
