@@ -43,9 +43,10 @@
 //!   an index filled, it grows to the estimate's capacity (at least 2x)
 //!   once the partial duplicates outweigh [`GROW_DUPLICATE_FACTOR`] times
 //!   the larger index (DuckDB 2.0's `RadixHTAdaptivity::TryGrow`), if the
-//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. Every
-//!   [`ADAPT_ROWS`] input rows, it switches to **append** (no lookups)
-//!   when over 95% of the keys are unique. This is DuckDB's thread-local
+//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. After
+//!   [`FIRST_ADAPT_ROWS`] input rows and then every [`ADAPT_ROWS`], it
+//!   switches to **append** (no lookups) when over 95% of the keys are
+//!   unique. This is DuckDB's thread-local
 //!   abandon (fixed-size thread-local tables,
 //!   <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
 //!   `radix_partitioned_hashtable.cpp`) with its capacities: 2^15 slots
@@ -180,6 +181,11 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 const MAX_SINK_SLOTS: usize = 1 << 19;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
+/// Input rows before a fixed index's first append decision. A driver of a
+/// mid-sized aggregate (TPC-H q13 at SF100: 148M rows, keys repeating ~15
+/// times far apart) otherwise clears its index thousands of times before
+/// 2^20 rows (perf-4, `research/perf-parity/q16-split/`: q13 0.922x cycles).
+pub(crate) const FIRST_ADAPT_ROWS: usize = 1 << 17;
 /// Bytes of partial duplicates per byte of the grown index from which a
 /// full fixed index grows (DuckDB 2.0's `GROWTH_DUPLICATE_BYTES_FACTOR`).
 const GROW_DUPLICATE_FACTOR: usize = 4;
@@ -466,7 +472,7 @@ impl RowTable {
                 sketch: Hll::new(ADAPT_HLL_BITS),
                 rows: 0,
                 pushed: 0,
-                next: ADAPT_ROWS,
+                next: FIRST_ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
                 filled: false,
@@ -808,7 +814,8 @@ impl RowTable {
     }
 
     /// The mode the next apply runs in: a fixed index turns append-only
-    /// every [`ADAPT_ROWS`] input rows if nearly every key is unique, and
+    /// after [`FIRST_ADAPT_ROWS`] input rows, then every [`ADAPT_ROWS`], if
+    /// nearly every key is unique, and
     /// grows after it filled ([`grown_limit`](Self::grown_limit)).
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {

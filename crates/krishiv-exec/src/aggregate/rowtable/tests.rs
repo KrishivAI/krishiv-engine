@@ -448,6 +448,47 @@ fn fixed_index_adapts() {
     assert_eq!(repeat.groups, groups);
 }
 
+/// The first append decision comes after `FIRST_ADAPT_ROWS` input rows,
+/// not `ADAPT_ROWS`; keys that repeat by then keep the index, and a table
+/// that turned append-only still counts every key once the final phase
+/// merges its rows (append is permanent, so later repeats become rows).
+#[test]
+fn the_first_append_decision_comes_early() {
+    let core = core();
+    let seed = HashSeed::new(Some(2));
+    let fixed =
+        || RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let (mut unique, mut repeat) = (fixed(), fixed());
+    let step = 8192;
+    let mut decided_at = None;
+    for start in (0..FIRST_ADAPT_ROWS + step).step_by(step) {
+        let s = i64::try_from(start).unwrap();
+        apply(&mut unique, &batch(&core, s..s + 8192));
+        apply(
+            &mut repeat,
+            &batch(&core, (s..s + 8192).map(|i| i % 50_000)),
+        );
+        if decided_at.is_none() && unique.mode == Mode::Append {
+            decided_at = Some(start + step);
+        }
+    }
+    assert_eq!(decided_at, Some(FIRST_ADAPT_ROWS + step));
+    assert_ne!(repeat.mode, Mode::Append);
+    // Unique for the first rows, then the same keys again: the final
+    // phase's merge still makes one group per key.
+    let n = i64::try_from(FIRST_ADAPT_ROWS + step).unwrap();
+    for s in (0..n).step_by(step) {
+        apply(&mut unique, &batch(&core, s..s + 8192));
+    }
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    let parts = unique.parts.len();
+    for p in 0..parts {
+        let c = unique.merge_chunk(p, 0..unique.part_len(p)).unwrap();
+        merged.apply_merge(&unique, &c).unwrap();
+    }
+    assert_eq!(merged.groups, FIRST_ADAPT_ROWS + step);
+}
+
 /// A full fixed index grows (DuckDB 2.0's rule) only once its partial
 /// duplicates take `GROW_DUPLICATE_FACTOR` times the grown index's
 /// bytes, at least 2x and at most to `MAX_SINK_SLOTS`; and it decides
