@@ -1,16 +1,19 @@
 [package]
 name = "krishiv-udf-sdk"
 description = "UDF SDK"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [dependencies]
 arrow-array.workspace = true
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 
 [lints]
 workspace = true

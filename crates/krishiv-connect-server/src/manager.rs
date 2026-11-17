@@ -8,8 +8,10 @@
 //! Spark keys by `(UserContext.user_id, session_id)`. Krishiv keys by the
 //! authenticated caller instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
-//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
-//! and name, without groups). A session id another owner holds is refused as
+//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant,
+//! name and delegator; groups only for an impersonated principal, whose
+//! act-as identity they pin, P3-T061). `maxSessionsPerPrincipal` counts
+//! without those groups (`SessionOwner::cap_key`). A session id another owner holds is refused as
 //! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
 //! unknown id gets, and writes a `krishiv::audit` denial record (ADR 0046
 //! §3b: no existence oracle, but the denial is recorded); so does a release
@@ -49,7 +51,7 @@ use krishiv_common::error::{
     KrishivError, KrishivSessionLimit,
 };
 use krishiv_session::auth::{Authenticated, Role, Surface};
-use krishiv_session::{QueryId, Session};
+use krishiv_session::{DataFrame, QueryId, Session};
 
 use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
@@ -134,6 +136,8 @@ pub struct SessionEntry {
     session: Session,
     caller: Authenticated,
     client_user_id: String,
+    /// The session id the client sent: what Spark's own messages name (`SessionHolder.sessionId`).
+    client_session_id: String,
     operations: Arc<Operations>,
     /// The errors sent on the session, for `FetchErrorDetails`.
     errors: Arc<SessionErrors>,
@@ -142,6 +146,11 @@ pub struct SessionEntry {
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
     python: SessionPython,
+    /// The DataFrames the session holds for the client (`checkpoint_command`, Spark's
+    /// `SessionHolder.dataFrameCache`): id to frame, ended by
+    /// `remove_cached_remote_relation_command` or with the session. A frame's rows and files end
+    /// when the last frame that reads them is dropped.
+    cached_frames: Mutex<HashMap<String, DataFrame>>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
     /// Held shared by the RPCs that change the session's state while they
@@ -150,6 +159,34 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    /// Holds `frame` under `id` (a checkpoint's result).
+    pub(crate) fn cache_frame(&self, id: String, frame: DataFrame) {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, frame);
+    }
+
+    /// The frame held under `id`.
+    pub(crate) fn cached_frame(&self, id: &str) -> Option<DataFrame> {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    /// Lets go of the frame held under `id`; an id that is not held is not an error (Spark's
+    /// `removeCachedDataFrame`). The frame is dropped outside the lock.
+    pub(crate) fn remove_cached_frame(&self, id: &str) {
+        let removed = self
+            .cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        drop(removed);
+    }
+
     /// The engine session.
     #[must_use]
     pub fn session(&self) -> &Session {
@@ -168,6 +205,12 @@ impl SessionEntry {
     #[must_use]
     pub fn caller(&self) -> &Authenticated {
         &self.caller
+    }
+
+    /// The session id the client sent (Spark's `sessionId`, as opposed to the server-side one).
+    #[must_use]
+    pub fn client_session_id(&self) -> &str {
+        &self.client_session_id
     }
 
     /// The `UserContext.user_id` the client sent when it created the
@@ -224,6 +267,15 @@ impl SessionEntry {
         self.session.close();
         self.artifacts.close();
         self.python.release();
+        // The held DataFrames go with the session, whoever still holds the entry; dropped
+        // outside the lock.
+        let held = std::mem::take(
+            &mut *self
+                .cached_frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        drop(held);
         ops
     }
 }
@@ -386,7 +438,7 @@ impl SessionManager {
         &self,
         caller: &Authenticated,
         session: Session,
-        client_user_id: &str,
+        (client_user_id, client_session_id): (&str, &str),
         python: SessionPython,
     ) -> Arc<SessionEntry> {
         session.set_client_info(
@@ -401,8 +453,10 @@ impl SessionManager {
             session,
             caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
+            client_session_id: client_session_id.to_owned(),
             operations: Arc::default(),
             python,
+            cached_frames: Mutex::default(),
             last_access: AtomicU64::new(self.now_ms()),
             gate: tokio::sync::RwLock::new(()),
         })
@@ -479,7 +533,7 @@ impl SessionManager {
         // this one is closed unused.
         let session = (self.factory)(caller)?;
         let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
-        let entry = self.new_entry(caller, session, client_user_id, python);
+        let entry = self.new_entry(caller, session, (client_user_id, session_id), python);
         let mut retired = None;
         let raced = {
             let mut inner = self.lock();
@@ -493,7 +547,7 @@ impl SessionManager {
                         inner
                             .owners
                             .insert(key.session_id.clone(), key.owner.clone());
-                        *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
+                        *inner.per_principal.entry(key.owner.cap_key()).or_insert(0) += 1;
                         Ok(None)
                     }
                 }
@@ -938,7 +992,11 @@ impl SessionManager {
             }
             .into());
         }
-        if inner.per_principal.get(&key.owner).copied().unwrap_or(0)
+        if inner
+            .per_principal
+            .get(&key.owner.cap_key())
+            .copied()
+            .unwrap_or(0)
             >= limits.max_sessions_per_principal
         {
             return Err(KrishivSessionLimit {
@@ -953,10 +1011,11 @@ impl SessionManager {
     fn remove_locked(inner: &mut Inner, key: &Key) -> Option<Arc<SessionEntry>> {
         let entry = inner.live.remove(key)?;
         inner.owners.remove(&key.session_id);
-        if let Some(n) = inner.per_principal.get_mut(&key.owner) {
+        let cap = key.owner.cap_key();
+        if let Some(n) = inner.per_principal.get_mut(&cap) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                inner.per_principal.remove(&key.owner);
+                inner.per_principal.remove(&cap);
             }
         }
         Some(entry)
@@ -987,6 +1046,7 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
         principal = %caller.principal.name,
         method = caller.method.as_str(),
         role = caller.role.map_or("none", Role::as_str),
+        delegated_by = caller.principal.delegated_by.as_deref(),
         surface = Surface::Connect.as_str(),
         handle,
         "refused a Connect id another principal holds, answered as unknown"

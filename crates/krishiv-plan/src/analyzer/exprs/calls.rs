@@ -25,7 +25,7 @@ pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZ
 /// The position of the options argument of the CSV and JSON functions.
 pub(super) fn options_index(name: &str) -> Option<usize> {
     match name {
-        "from_csv" | "from_json" | "from_xml" => Some(2),
+        "from_csv" | "from_json" | "from_xml" | "from_avro" => Some(2),
         "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
             Some(1)
         }

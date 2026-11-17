@@ -82,6 +82,7 @@ mod coerce;
 pub mod contract;
 mod exprs;
 mod table_change;
+mod time_window;
 
 /// Spark's `toPrettySQL` name of a resolved expression (timestamp literals
 /// in UTC): for errors raised outside the analyzer.
@@ -1090,6 +1091,19 @@ async fn analyze_with(
         &owned
     } else {
         plan
+    };
+    // `window(..)` and `session_window(..)` calls of a plan that is not SQL text (SQL text is rewritten as
+    // Bind lowers it).
+    let windowed;
+    let plan = {
+        let root = time_window::rewrite(Arc::clone(plan.root()))?;
+        if Arc::ptr_eq(&root, plan.root()) {
+            plan
+        } else {
+            windowed =
+                Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+            &windowed
+        }
     };
     let bindings = bind::bind(plan, ctx).await?;
     let metadata = started.elapsed();

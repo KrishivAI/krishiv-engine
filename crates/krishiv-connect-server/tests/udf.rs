@@ -4,7 +4,8 @@
 //! server's worker pool, in workers of the session's own owner; client code needs `Usage` on
 //! `System("udf")` (admin only in server mode until the plan says otherwise) before anything is
 //! registered or any worker starts; a UDF that raises is Spark's `PYTHON_EXCEPTION`; releasing the session
-//! stops its workers.
+//! stops its workers. Relation UDFs (`mapInPandas`, `applyInPandas`, a cogroup's, PR-26d part 2) run on the
+//! same workers under the same check.
 //!
 //! Workers need `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`, `pandas`), as in
 //! `krishiv-udf-pool`'s own tests: without it the tests that run a UDF pass after a note on standard error,
@@ -740,9 +741,10 @@ async fn a_refused_caller_registers_nothing_and_gets_no_runtime() {
     );
 }
 
-/// `range(end).mapInPandas(f, "x bigint")`: a `MapPartitions` over a Python UDF of eval type 205 (never
-/// unpickled: the pool runs no relation yet).
-fn map_in_pandas(end: i64) -> pb::Plan {
+/// `range(end).mapInPandas(f, "x bigint")`: a `MapPartitions` over a Python UDF of eval type 205, `f` being
+/// `body` pickled by `python`'s cloudpickle (none: a payload that is never unpickled).
+fn map_in_pandas(python: Option<&Path>, body: &str, end: i64) -> pb::Plan {
+    let (command, python_ver) = pickle(python, body, "StructType([StructField('x', LongType())])");
     let schema = pb::DataType {
         kind: Some(Kind::Struct(pb::data_type::Struct {
             fields: vec![pb::data_type::StructField {
@@ -761,8 +763,8 @@ fn map_in_pandas(end: i64) -> pb::Plan {
         function: Some(Function::PythonUdf(pb::PythonUdf {
             output_type: Some(schema),
             eval_type: 205,
-            command: b"not a pickle: a map".to_vec(),
-            python_ver: "3.12".to_owned(),
+            command,
+            python_ver,
             additional_includes: Vec::new(),
         })),
         is_distinct: false,
@@ -778,18 +780,18 @@ fn map_in_pandas(end: i64) -> pb::Plan {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_relation_udf_is_client_code_and_does_not_run_yet() {
+async fn a_relation_udf_is_client_code_and_is_typed_without_a_privilege() {
     let spy = Spy::default();
     let log = Arc::clone(&spy.0);
     let run = start_with(None, Some(Arc::new(spy))).await;
     for token in [VIEWER, OPERATOR] {
-        let s = execute(&run.channel, map_in_pandas(3), token)
+        let s = execute(&run.channel, map_in_pandas(None, TIMES_TEN, 3), token)
             .await
             .expect_err("a relation UDF is client code (ADR 0046 N1)");
         assert_eq!(s.code(), Code::PermissionDenied);
         assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
         // Typing it runs no client code: the schema needs no privilege.
-        let schema = analyze_schema(&run.channel, map_in_pandas(3), token)
+        let schema = analyze_schema(&run.channel, map_in_pandas(None, TIMES_TEN, 3), token)
             .await
             .expect("a relation UDF is typed without running it");
         assert!(schema.result.is_some());
@@ -800,16 +802,283 @@ async fn a_relation_udf_is_client_code_and_does_not_run_yet() {
         "nothing registered or prepared for a refused caller: {:?}",
         log.lock().expect("spy")
     );
-    // The admin passes the check; the pool cannot run a relation yet (no `prepare_relation`, PR-26c-2).
-    let s = execute(&run.channel, map_in_pandas(3), ADMIN)
+    // The admin passes the check and registers the payload; the spy prepares nothing, so the plan fails
+    // when it is planned (the real pool runs it: `admin_runs_map_in_pandas_on_the_pool`).
+    let s = execute(&run.channel, map_in_pandas(None, TIMES_TEN, 3), ADMIN)
         .await
-        .expect_err("relations do not run yet");
+        .expect_err("the spy runs no relation");
     assert_eq!(error_class(&s), "KRISHIV_UDF_NOT_AVAILABLE", "{s:?}");
     let seen = log.lock().expect("spy").clone();
     assert!(
         seen.iter().any(|e| e.starts_with("register f@")),
         "{seen:?}"
     );
+}
+
+const TIMES_TEN: &str =
+    "def f(it):\n    for pdf in it:\n        yield pdf.assign(x=pdf.id * 10)[['x']]";
+const MAP_BOOM: &str = "def f(it):\n    for pdf in it:\n        raise ValueError('boom from the map')\n        yield pdf";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_runs_map_in_pandas_on_the_pool() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    // A viewer is refused before any worker starts (ADR 0046 N1).
+    let s = execute(&run.channel, map_in_pandas(Some(&py), TIMES_TEN, 4), VIEWER)
+        .await
+        .expect_err("client code");
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    assert_eq!(run.pool.live_workers(), 0, "no worker for a refused caller");
+    // The id is the viewer's session until released (sessions are keyed by their owner).
+    release(&run.channel, VIEWER).await;
+    let responses = execute(&run.channel, map_in_pandas(Some(&py), TIMES_TEN, 4), ADMIN)
+        .await
+        .expect("mapInPandas runs on the session's workers");
+    let mut got = longs(&responses);
+    got.sort_unstable();
+    assert_eq!(got, [Some(0), Some(10), Some(20), Some(30)]);
+    assert!(run.pool.live_workers() > 0);
+    // The same DataFrame again keeps its version and runs again.
+    let again = execute(&run.channel, map_in_pandas(Some(&py), TIMES_TEN, 4), ADMIN)
+        .await
+        .expect("re-run");
+    assert_eq!(longs(&again).len(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_raising_map_in_pandas_is_sparks_python_exception() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    let s = execute(&run.channel, map_in_pandas(Some(&py), MAP_BOOM, 3), ADMIN)
+        .await
+        .expect_err("the map raises");
+    assert_eq!(error_class(&s), "PYTHON_EXCEPTION", "{s:?}");
+    assert!(s.message().contains("boom from the map"), "{s:?}");
+    // The session still runs relations afterwards.
+    let responses = execute(&run.channel, map_in_pandas(Some(&py), TIMES_TEN, 2), ADMIN)
+        .await
+        .expect("a later map runs");
+    assert_eq!(longs(&responses).len(), 2);
+}
+
+/// An unresolved column reference.
+fn col(name: &str) -> pb::Expression {
+    expr(ExprType::UnresolvedAttribute(
+        pb::expression::UnresolvedAttribute {
+            unparsed_identifier: name.to_owned(),
+            ..Default::default()
+        },
+    ))
+}
+
+/// A Python function of `eval_type` returning the struct of long columns `fields`, pickled by `python`.
+fn relation_udf(
+    python: &Path,
+    body: &str,
+    eval_type: i32,
+    fields: &[&str],
+    args: Vec<pb::Expression>,
+) -> pb::CommonInlineUserDefinedFunction {
+    let struct_type = format!(
+        "StructType([{}])",
+        fields
+            .iter()
+            .map(|f| format!("StructField('{f}', LongType())"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let (command, python_ver) = pickle(Some(python), body, &struct_type);
+    let schema = pb::DataType {
+        kind: Some(Kind::Struct(pb::data_type::Struct {
+            fields: fields
+                .iter()
+                .map(|f| pb::data_type::StructField {
+                    name: (*f).to_owned(),
+                    data_type: Some(pb::DataType { kind: Some(long()) }),
+                    nullable: true,
+                    metadata: None,
+                })
+                .collect(),
+            type_variation_reference: 0,
+        })),
+    };
+    pb::CommonInlineUserDefinedFunction {
+        function_name: "f".to_owned(),
+        deterministic: true,
+        arguments: args,
+        function: Some(Function::PythonUdf(pb::PythonUdf {
+            output_type: Some(schema),
+            eval_type,
+            command,
+            python_ver,
+            additional_includes: Vec::new(),
+        })),
+        is_distinct: false,
+    }
+}
+
+fn sql_relation(query: &str) -> pb::Relation {
+    relation(RelType::Sql(pb::Sql {
+        query: query.to_owned(),
+        ..Default::default()
+    }))
+}
+
+/// Every row of the result's first two (long) columns, sorted.
+fn long_pairs(responses: &[pb::ExecutePlanResponse]) -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    for r in responses {
+        let Some(ResponseType::ArrowBatch(b)) = &r.response_type else {
+            continue;
+        };
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(b.data.to_vec()), None)
+                .expect("ipc");
+        for batch in reader {
+            let batch: RecordBatch = batch.expect("batch");
+            let column = |i: usize| {
+                batch
+                    .column(i)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("a long column")
+                    .clone()
+            };
+            let (a, b) = (column(0), column(1));
+            out.extend((0..batch.num_rows()).map(|i| (a.value(i), b.value(i))));
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+const LEFT: &str = "SELECT id % 2 AS k, id AS v FROM range(6)";
+const RIGHT: &str = "SELECT id % 2 AS k, id * 100 AS w FROM range(3)";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_runs_map_in_arrow() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    // range(4).mapInArrow(f, "x long"): eval type 207, pyarrow RecordBatches in and out.
+    let f = relation_udf(
+        &py,
+        "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(it):\n    for b in it:\n        \
+         yield pa.RecordBatch.from_arrays([pc.multiply(b.column('id'), 10)], ['x'])",
+        207,
+        &["x"],
+        vec![id()],
+    );
+    let plan = root(relation(RelType::MapPartitions(Box::new(
+        pb::MapPartitions {
+            input: Some(Box::new(range(4))),
+            func: Some(f),
+            is_barrier: None,
+            profile_id: None,
+        },
+    ))));
+    let responses = execute(&run.channel, plan, ADMIN)
+        .await
+        .expect("mapInArrow runs on the session's workers");
+    let mut got = longs(&responses);
+    got.sort_unstable();
+    assert_eq!(got, [Some(0), Some(10), Some(20), Some(30)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_runs_each_grouped_map_kind_per_group() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    // df.groupBy("k").applyInPandas / applyInArrow (f, "k long, s long"), plain and iterator forms.
+    let cases = [
+        (
+            201,
+            "import pandas as pd\ndef f(pdf):\n    \
+             return pd.DataFrame({'k': [pdf.k.iloc[0]], 's': [pdf.v.sum()]})",
+        ),
+        (
+            201,
+            "import pandas as pd\ndef f(key, pdf):\n    \
+             return pd.DataFrame({'k': [key[0]], 's': [pdf.v.sum()]})",
+        ),
+        (
+            209,
+            "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(key, t):\n    \
+             return pa.table({'k': [key[0].as_py()], 's': [pc.sum(t.column('v')).as_py()]})",
+        ),
+        (
+            216,
+            "import pandas as pd\ndef f(key, it):\n    s = sum(int(p.v.sum()) for p in it)\n    \
+             yield pd.DataFrame({'k': [key[0]], 's': [s]})",
+        ),
+        (
+            215,
+            "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(it):\n    batches = list(it)\n    \
+             s = sum(pc.sum(b.column('v')).as_py() for b in batches)\n    \
+             yield pa.RecordBatch.from_pydict({'k': [batches[0].column('k')[0].as_py()], 's': [s]})",
+        ),
+    ];
+    for (eval_type, body) in cases {
+        let f = relation_udf(&py, body, eval_type, &["k", "s"], vec![col("k"), col("v")]);
+        let plan = root(relation(RelType::GroupMap(Box::new(pb::GroupMap {
+            input: Some(Box::new(sql_relation(LEFT))),
+            grouping_expressions: vec![col("k")],
+            func: Some(f),
+            ..Default::default()
+        }))));
+        let responses = execute(&run.channel, plan, ADMIN)
+            .await
+            .unwrap_or_else(|s| panic!("{eval_type} runs on the session's workers: {s:?}"));
+        assert_eq!(
+            long_pairs(&responses),
+            [(0, 6), (1, 9)],
+            "{eval_type}: {body}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_runs_each_cogrouped_map_kind() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    // l.groupBy("k").cogroup(r.groupBy("k")).applyInPandas / applyInArrow (f, "k long, n long").
+    let cases = [
+        (
+            206,
+            "import pandas as pd\ndef f(l, r):\n    \
+             return pd.DataFrame({'k': [l.k.iloc[0]], 'n': [len(l) * 10 + len(r)]})",
+        ),
+        (
+            210,
+            "import pyarrow as pa\ndef f(l, r):\n    \
+             return pa.table({'k': [l.column('k')[0].as_py()], 'n': [l.num_rows * 10 + r.num_rows]})",
+        ),
+    ];
+    for (eval_type, body) in cases {
+        let f = relation_udf(
+            &py,
+            body,
+            eval_type,
+            &["k", "n"],
+            vec![col("k"), col("v"), col("k"), col("w")],
+        );
+        let plan = root(relation(RelType::CoGroupMap(Box::new(pb::CoGroupMap {
+            input: Some(Box::new(sql_relation(LEFT))),
+            input_grouping_expressions: vec![col("k")],
+            other: Some(Box::new(sql_relation(RIGHT))),
+            other_grouping_expressions: vec![col("k")],
+            func: Some(f),
+            ..Default::default()
+        }))));
+        let responses = execute(&run.channel, plan, ADMIN)
+            .await
+            .unwrap_or_else(|s| panic!("{eval_type} runs on the session's workers: {s:?}"));
+        // Key 0: three left rows (0, 2, 4) and two right (0, 2); key 1: three left and one right.
+        assert_eq!(
+            long_pairs(&responses),
+            [(0, 32), (1, 31)],
+            "{eval_type}: {body}"
+        );
+    }
 }
 
 async fn semantic_hash(channel: &Channel, plan: pb::Plan) -> i32 {

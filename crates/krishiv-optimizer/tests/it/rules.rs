@@ -397,15 +397,18 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
     ),
     (
-        // The NOT EXISTS twin of `restrict_below_semi`: sorting may put the
-        // restriction's semi join below the anti join, and the next round
-        // must still see it.
+        // The NOT EXISTS twin of `restrict_below_semi`. Restriction does not
+        // fire here under `AllDistinct` (no restriction semi join in the
+        // plan), so this pins the plan and its fixed point only; the walk of
+        // `restrict::restricted` through anti joins is not reached.
         "restrict_below_anti",
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) AND NOT EXISTS (SELECT * FROM t t2 WHERE t2.c = u.d) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
     ),
     (
-        // A FROM-subquery's projection stands between two semi/anti joins
-        // until pruning removes it; the final plan's stack is already sorted.
+        // A FROM subquery's projection between a semi and an anti join: the
+        // plan was not a fixed point before the stacks were sorted after the
+        // final pruning (a `Project` still stands between the two joins in
+        // the result, so no merged stack is sorted here).
         "semi_order_through_subquery",
         "SELECT s.a FROM (SELECT a, b FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)) s WHERE NOT EXISTS (SELECT * FROM u WHERE u.d = s.b)",
     ),

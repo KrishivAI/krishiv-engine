@@ -19,11 +19,13 @@ Paths are relative to this crate.
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
   that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result readers `decode_result` (scalar) and `decode_batch` (a relation task's result, given the declared schema)
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
-- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; its runner conf read at each `prepare` and `prepare_relation` from a `ConfSource` (`with_conf_source`, the session's live conf) or set with `set_runner_conf`; a call of another kind than the payload's eval type (the store finds payloads by name and version only) is `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` before any worker starts (`check_eval_type`; a scalar call takes any scalar payload, 100/101/200/250, since Connect registers a plain `@udf` as 100 and plans it as 101; a relation call needs its exact code); each call
+- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; its runner conf read at each `prepare` and `prepare_relation` from a `ConfSource` (`with_conf_source`, the session's live conf) or set with `set_runner_conf`; a call of another kind than the payload's eval type (the store finds payloads by name and version only) is `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` before any worker starts (`check_eval_type`; a scalar call takes any scalar payload, `runs_as_scalar`: 100 or a `PythonEvalType::is_scalar` code, pinned to `worker.py`'s wrappers by a test, and the worker runs the payload's own eval type on purpose, since Connect registers a plain `@udf` as 100 and plans it as 101; a relation call needs its exact code, but for a grouped aggregate over a window, 202 as 203 and 252 as 253, `relation.rs` `runs_as`); each call
   runs on a pool call thread and is cancelled (worker killed, even one still starting) when its future is dropped
   (`with_worker`, shared with the relation tasks)
 - `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,
-  grouped aggregate 202/217/252/254): `prepare_relation` checks the payload's eval type, `open` starts one task per
+  grouped aggregate 202/217/252/254; PR-26c-3: window aggregate 203/253, run over a 202/252 payload as Spark runs
+  one over a window, and scalar iterator 204/251): `prepare_relation` checks the payload's eval type (the task
+  message carries the kind it runs as), `open` starts one task per
   driver on a call thread that holds one worker for the task (wire `task`: frames on the worker's `want`, results
   as they come, `done`); `send`/`next` are two bounded channels (`send` resolves once the thread took the frame);
   dropping the task cancels it; a thread that ends without `done` or a failure (a panic, a job dropped unrun) is
@@ -41,9 +43,22 @@ Paths are relative to this crate.
   `try_take_now` is the no-wait form (no ticket, no waker)
   (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
+- `src/artifacts.rs` (PR-26c-3) a session's pyfiles and archives (`SessionUdfs::set_artifacts`): paths checked
+  when set (absolute, a regular file, canonical: no symbolic link at or above it, `INVALID_ARTIFACT_PATH`; one name
+  once, `ARTIFACT_ALREADY_EXISTS`; the device and inode recorded), prepared once per set by the first worker start
+  into a directory of the pool (each file opened `O_NOFOLLOW` and refused unless it is the file checked by the same
+  canonical path; `py/` copies; each archive copied to `in/` and that copy unpacked into `archives/<name>/` by
+  `unpack.py` with the worker interpreter, sandboxed when the sandbox is on, killed through its pidfd on a cancel;
+  `tarfile`'s `data` filter, a hard link counted at its target's size), within `PoolConfig::artifact_limit`
+  (`KRISHIV_PYTHON_ARTIFACT_REFUSED`); only a failure about the artifacts is kept for the set (`Failure::lasting`),
+  a cancel, timeout or server I/O failure is retried by the next call, and the set's lock is not held while it is
+  made; the directory is the worker's only extra read path, its entries go on `sys.path` (index 1, Spark's
+  `add_path`; the archives too, a recorded difference) after the worker's own imports; the pool key carries the
+  set's id (a worker never serves another set)
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
-- `src/package.rs` the embedded worker package and the `-c` bootstrap
+- `src/package.rs` the embedded worker package and the `-c` bootstrap (`bootstrap_for`: the worker with its
+  artifact paths, or `unpack.py` for one archive)
 - `worker/krishiv/_udf` a symbolic link to `python/krishiv/_udf` (one copy of the Python code; `cargo package`
   copies the files through it; one link rather than one per file, so ruff, which lints them under `python/`, does
   not lint them again without that config). The worker program is `python/krishiv/_udf/pool_worker.py`; `_host.py` switches the
@@ -59,7 +74,7 @@ Paths are relative to this crate.
   worker of the previous build cannot read raises `WIRE_VERSION` (the worker is part of the same binary, so the
   version guards mixed packages, not stored data).
 - A new file in the worker package: an entry in `package::FILES` (the file itself lives in `python/krishiv/_udf/`).
-- Window aggregates, UDTF analyze and archives (PR-26c-3), Connect decode and registered functions (PR-26d) build on
+- UDTFs and UDTF analyze (PR-26c-3 part B), Connect decode and registered functions (PR-26d) build on
   `SessionUdfs` and `Worker`.
 
 ## Invariants
@@ -101,7 +116,9 @@ Paths are relative to this crate.
   `execve`/`execveat` `EPERM` (`package::exec_deny_filter`), before `sys.path` changes: the parent-death signal is
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
-- One worker serves one `Owner` (principal and session) and one interpreter; reuse only within that key.
+- One worker serves one `Owner` (principal and session), one interpreter and one artifact set; reuse only within
+  that key. Archive artifacts are reachable on `sys.path` and by their absolute path, not from the worker's working
+  directory (Spark's executor working directory holds them): a recorded difference.
 - Blocking work (spawn, socket I/O, waits) runs on the pool's threads, never on a compute worker.
 - A relation task's server side writes to the worker only after the worker's `want`, so neither side blocks on a
   full socket while the other writes; the worker is given back before the task's results end.
@@ -109,7 +126,8 @@ Paths are relative to this crate.
 
 ## Not here yet (design note §9 records why)
 Per-query RSS accounting and `system.queries` visibility, the timing trailer, traceback shaping by the three
-`spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, artifacts and the in-process opt-in:
+`spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, a `krishiv.*` key for the artifact
+limit (the hosting server sets `PoolConfig::artifact_limit`) and the in-process opt-in:
 PR-26c/26d, where the pool meets the session and the query. Also open (review 2026-11-13): the default-Docker
 CI run of the sandbox suite.
 

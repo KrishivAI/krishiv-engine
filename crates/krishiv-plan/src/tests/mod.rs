@@ -31,4 +31,5 @@ mod rewrite;
 mod secrets;
 mod setops;
 mod sqlfn;
+mod time_window;
 mod tpch;

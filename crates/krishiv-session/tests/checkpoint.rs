@@ -257,3 +257,118 @@ fn a_temp_view_of_a_lazy_file_checkpoint_keeps_the_snapshot() {
         vec![1, 2, 3]
     );
 }
+
+/// The shape an iterative graph algorithm (GraphFrames, label propagation) runs: each round joins
+/// the state with the edges and checkpoints the result. The checkpoint cuts the lineage, so the
+/// plan of round 50 is no bigger than the plan of round 2, and the rows stay right.
+fn iterate(s: &Session, eager: bool, local: bool, rounds: usize) -> (Vec<usize>, Vec<i32>) {
+    use krishiv_session::{ExplainMode, JoinType};
+    run(s, "CREATE TABLE edges (id INT, nxt INT) USING parquet");
+    run(s, "INSERT INTO edges VALUES (1, 2), (2, 3), (3, 1)");
+    let edges = s.table("edges");
+    let mut state = s.table("src");
+    let mut sizes = Vec::new();
+    for _ in 0..rounds {
+        let joined = state
+            .join_using(&edges, ["id"], JoinType::Inner)
+            .select([krishiv_session::functions::col("nxt").alias("id")]);
+        state = if local {
+            block_on(joined.local_checkpoint(eager, None)).unwrap()
+        } else {
+            block_on(joined.checkpoint(eager)).unwrap()
+        };
+        // A lazy checkpoint takes its rows at the first action: run one every round, as a loop
+        // that reads its state (a convergence test, a count) does.
+        assert_eq!(block_on(state.count()).unwrap(), 3);
+        sizes.push(
+            block_on(state.explain(ExplainMode::Extended))
+                .unwrap()
+                .len(),
+        );
+    }
+    (sizes, ids(&state))
+}
+
+/// Runs `iterate` for 50 rounds in `modes` and checks the plan stays bounded and the rows right.
+fn assert_bounded(modes: &[(bool, bool)]) {
+    for &(eager, local) in modes {
+        let dir = tempfile::tempdir().unwrap();
+        let s = session(
+            dir.path(),
+            &[(
+                "spark.checkpoint.dir",
+                dir.path().join("cp").to_str().unwrap(),
+            )],
+        );
+        let (sizes, rows) = within_a_minute(move || iterate(&s, eager, local, 50));
+        let first = sizes[1];
+        let last = sizes[49];
+        assert!(
+            last <= first + first / 10,
+            "eager={eager} local={local}: the plan grew from {first} to {last} characters: {sizes:?}"
+        );
+        assert_eq!(rows, vec![1, 2, 3], "eager={eager} local={local}");
+    }
+}
+
+/// `checkpoint()` and `localCheckpoint()` (eager, the default GraphFrames uses) cut the lineage.
+#[test]
+fn fifty_rounds_of_join_and_eager_checkpoint_keep_the_plan_bounded() {
+    assert_bounded(&[(true, true), (true, false)]);
+}
+
+/// Spark's lazy checkpoint truncates the plan at once (`LogicalRDD`): so does this one, its plan is
+/// a leaf standing for the snapshot until an action takes the rows.
+#[test]
+fn fifty_rounds_of_join_and_lazy_checkpoint_keep_the_plan_bounded() {
+    assert_bounded(&[(false, true), (false, false)]);
+}
+
+/// A round that joins the state with a frame derived from the state (a self-join) must not double
+/// what the frame holds each time: 30 lazy rounds finish at once, and the rows stay right.
+#[test]
+fn thirty_lazy_self_join_rounds_do_not_double_what_the_frames_hold() {
+    use krishiv_session::JoinType;
+    use krishiv_session::functions::col;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    let ids_of = ids;
+    let rows = within_a_minute(move || {
+        let mut state = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+        for _ in 0..30 {
+            let other = state.select([col("id").alias("other")]);
+            let joined = state
+                .join(&other, col("id").eq(col("other")), JoinType::Inner)
+                .select([col("id")]);
+            state = block_on(joined.local_checkpoint(false, None)).unwrap();
+        }
+        ids_of(&state)
+    });
+    assert_eq!(rows, vec![1, 2, 3]);
+}
+
+/// Once a lazy checkpoint has taken its rows it no longer holds the frame it came from.
+#[test]
+fn a_lazy_checkpoint_lets_go_of_its_source_once_its_rows_are_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    let mut state = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+    for _ in 0..5 {
+        state = block_on(state.limit(10).local_checkpoint(false, None)).unwrap();
+        assert_eq!(block_on(state.count()).unwrap(), 3);
+    }
+    let b = block_on(async {
+        s.sql("SELECT CAST(entries AS STRING) FROM system.caches WHERE cache = 'checkpoint'")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    let c = b[0].column(0);
+    let held = c
+        .as_string_view_opt()
+        .map(|a| a.value(0).to_owned())
+        .or_else(|| c.as_string_opt::<i32>().map(|a| a.value(0).to_owned()))
+        .unwrap();
+    assert_eq!(held, "1");
+}

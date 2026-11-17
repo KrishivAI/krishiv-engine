@@ -1,0 +1,28 @@
+-- variant_get / schema_of_variant edge cases (cheap subset)
+select variant_get(parse_json('{"a":1}'), '$.a', 'int'), variant_get(parse_json('{"a":1}'), '$.b', 'int');
+select variant_get(parse_json('{"a":"x"}'), '$.a', 'int');
+select try_variant_get(parse_json('{"a":"x"}'), '$.a', 'int');
+select variant_get(parse_json('{"a":1}'), 'a', 'int');
+select variant_get(parse_json('{"a":1}'), '$.a', 'bogus');
+select variant_get(parse_json('[1,2,3]'), '$[5]', 'int'), variant_get(parse_json('[1,2,3]'), '$[-1]', 'int');
+select variant_get(parse_json('{"a":300}'), '$.a', 'tinyint');
+select try_variant_get(parse_json('{"a":300}'), '$.a', 'tinyint');
+select variant_get(parse_json('null'), '$', 'int'), variant_get(cast(null as variant), '$', 'int'), variant_get(parse_json('{"a":1}'), cast(null as string), 'int');
+select variant_get(parse_json('{"a":1.5}'), '$.a', 'double'), variant_get(parse_json('{"a":"NaN"}'), '$.a', 'double'), variant_get(parse_json('{"a":-0.0}'), '$.a', 'double');
+select variant_get(parse_json('{"a":1.5}'), '$.a', 'decimal(2,1)'), variant_get(parse_json('{"a":1.55}'), '$.a', 'decimal(2,1)');
+select variant_get(parse_json('{"a":"2020-03-08 02:30:00"}'), '$.a', 'timestamp');
+select variant_get(parse_json('{"a b":1,"c.d":2}'), '$["a b"]', 'int'), variant_get(parse_json('{"a b":1,"c.d":2}'), '$[''c.d'']', 'int');
+select variant_get(parse_json('{"a":[1,{"b":2}]}'), '$.a[1].b', 'string');
+select variant_get(parse_json('{"a":[1,{"b":2}]}'), '$.a', 'array<variant>');
+select variant_get(parse_json('{"a":1}'), '$.a', 'int'), cast(parse_json('{"a":1}') as string), to_json(parse_json('{"b":1,"a":[1,null]}'));
+select schema_of_variant(parse_json('{"a":1}')), is_variant_null(parse_json('null')), is_variant_null(cast(null as variant));
+create temporary view v as select * from values ('{"a":1}'), ('{"a":"x"}'), (null) as t(j);
+select j, variant_get(parse_json(j), '$.a', 'int') from v where j = '{"a":1}';
+select j, case when j like '%x%' then null else variant_get(parse_json(j), '$.a', 'int') end from v order by j;
+select j, try_variant_get(parse_json(j), '$.a', 'int') from v order by j;
+select j, variant_get(parse_json(j), '$.a', 'int') from v where j = '{"a":"x"}';
+drop view v;
+set spark.sql.ansi.enabled=false;
+select variant_get(parse_json('{"a":"x"}'), '$.a', 'int');
+select variant_get(parse_json('{"a":300}'), '$.a', 'tinyint');
+select cast(parse_json('{"a":"x"}') as int);
