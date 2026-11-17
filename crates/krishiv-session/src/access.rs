@@ -595,10 +595,12 @@ impl Session {
     /// (their `owner_reads`: the tables, and the views their texts inline, review M1), as an
     /// invoker would be asked, before their inlined queries are shown (`EXPLAIN`, estimates,
     /// warnings; P3-T062 §2.4: an explain checks the privileges of the statement it explains).
-    /// Column-level policies are asked per column read. Audited.
+    /// Column-level policies are asked per column read. Audited whole; the reader is told only
+    /// the refusal's class and SQLSTATE, as of a definer failure (review r2 item 6: the reader
+    /// wrote none of these names).
     ///
     /// # Errors
-    /// The first refusal (42501).
+    /// The first refusal (42501), redacted.
     pub(crate) async fn authorize_shown_definer_reads(
         &self,
         analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
@@ -611,7 +613,8 @@ impl Session {
                 privilege,
             )
             .await;
-            audit(self, StatementClass::Read, r)?;
+            audit(self, StatementClass::Read, r)
+                .map_err(|e| e.redacted().without_pending_site())?;
         }
         Ok(())
     }

@@ -876,3 +876,56 @@ fn profiles_of_a_definer_views_plan_ask_what_explain_analyze_asks() {
         shown(&bob).unwrap_or_else(|e| panic!("{entry}: {e}"));
     }
 }
+
+/// Review r2 item 6 (r2 M-b): a refusal to show a definer view's plan names only what the reader
+/// wrote: its class and SQLSTATE, not the definer's base table, column or the views inside it.
+#[test]
+fn a_refused_explain_of_a_definer_view_names_only_what_the_reader_wrote() {
+    let (w, root, ana) = world();
+    let (bob, carl) = (w.user("bob"), w.user("carl"));
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(
+        &ana,
+        "CREATE VIEW inner_v AS SELECT a FROM t WHERE a < 424242",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW inner_v TO user:bob");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    ok(
+        &bob,
+        "CREATE VIEW outer_v SQL SECURITY DEFINER AS SELECT a FROM inner_v",
+    );
+    ok(&bob, "GRANT SELECT ON VIEW outer_v TO user:carl");
+    let hidden = ["inner_v", "`t`", "`a`", "`ana`", "`bob`", "424242"];
+    let shown: Vec<(&str, Result<String, KrishivError>)> = vec![
+        ("EXPLAIN", run(&carl, "EXPLAIN SELECT * FROM outer_v")),
+        (
+            "EXPLAIN EXTENDED",
+            run(&carl, "EXPLAIN EXTENDED SELECT * FROM outer_v"),
+        ),
+        (
+            "EXPLAIN ANALYZE",
+            run(&carl, "EXPLAIN ANALYZE SELECT * FROM outer_v"),
+        ),
+        (
+            "explain_analyze",
+            block_on(carl.table("outer_v").explain_analyze()).map(|p| format!("{p:?}")),
+        ),
+        (
+            "explain_verbose",
+            block_on(carl.table("outer_v").explain_verbose()).map(|p| format!("{p:?}")),
+        ),
+    ];
+    for (entry, r) in shown {
+        match r {
+            Err(e) => {
+                assert_eq!(e.error_class().name(), DENIED, "{entry}: {e}");
+                assert_redacted(&e.to_string(), &hidden);
+            }
+            Ok(text) => {
+                for h in hidden {
+                    assert!(!text.contains(h), "{entry}: {h}: {text}");
+                }
+            }
+        }
+    }
+}
