@@ -30,10 +30,10 @@ use krishiv_optimizer::{DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, 
 
 /// One window expression, read off the plan: its function call, frame and
 /// output attribute, and the expressions it reads (arguments, filter).
-struct Call<'a> {
-    f: &'a krishiv_plan::ResolvedFunction,
-    frame: WindowFrame,
-    output: &'a krishiv_plan::BoundColumn,
+pub(super) struct Call<'a> {
+    pub(super) f: &'a krishiv_plan::ResolvedFunction,
+    pub(super) frame: WindowFrame,
+    pub(super) output: &'a krishiv_plan::BoundColumn,
 }
 
 impl Planner<'_> {
@@ -49,6 +49,34 @@ impl Planner<'_> {
             .max(-1)
     }
 
+    /// A `Window` relation: its Python aggregate calls (design P3-T085
+    /// §3.1) in a window of their own above the other calls' (Spark's
+    /// `ExtractWindowExpressions` gives each function type its own window,
+    /// v4.2.0). With Python calls the group limit is not applied: it would
+    /// drop rows below the calls that read them.
+    pub(crate) fn window_relation(
+        &mut self,
+        input: Planned,
+        exprs: &[Arc<Expr>],
+        partition_by: &[Arc<Expr>],
+        order_by: &[SortOrder],
+        limit: Option<WindowGroupLimit>,
+    ) -> Result<Planned> {
+        let (python, rest): (Vec<Arc<Expr>>, Vec<Arc<Expr>>) = exprs
+            .iter()
+            .cloned()
+            .partition(|e| super::python_udf::has_python_aggregate_udf(e));
+        if python.is_empty() {
+            return self.window(input, exprs, partition_by, order_by, limit);
+        }
+        let input = if rest.is_empty() {
+            input
+        } else {
+            self.window(input, &rest, partition_by, order_by, None)?
+        };
+        self.python_window(input, &python, partition_by, order_by)
+    }
+
     pub(crate) fn window(
         &mut self,
         input: Planned,
@@ -56,6 +84,22 @@ impl Planner<'_> {
         partition_by: &[Arc<Expr>],
         order_by: &[SortOrder],
         limit: Option<WindowGroupLimit>,
+    ) -> Result<Planned> {
+        self.window_with(input, exprs, partition_by, order_by, limit, &[])
+    }
+
+    /// As [`Self::window`], computing `count(*)` over each frame of `counts`
+    /// too, as a `BIGINT` column of that attribute (the frame bounds of a
+    /// Python window aggregate). With no call and no count: the input
+    /// placed and sorted as the window needs, without the window.
+    pub(crate) fn window_with(
+        &mut self,
+        input: Planned,
+        exprs: &[Arc<Expr>],
+        partition_by: &[Arc<Expr>],
+        order_by: &[SortOrder],
+        limit: Option<WindowGroupLimit>,
+        counts: &[(WindowFrame, krishiv_plan::BoundColumn)],
     ) -> Result<Planned> {
         let calls = exprs.iter().map(|e| call(e)).collect::<Result<Vec<_>>>()?;
         // The columns the window reads: partitioning, ordering, then each
@@ -106,6 +150,22 @@ impl Planner<'_> {
                 )));
             }
             functions.push(plan);
+        }
+        for (frame, output) in counts {
+            let count = aggregate_expr(
+                AggregateFunction::Count,
+                Vec::new(),
+                None,
+                &input.schema,
+                output.name.clone(),
+            )?
+            .with_array_result(&arrow_schema::DataType::Int64);
+            functions.push(WindowFunctionPlan {
+                function: WindowFunction::Aggregate(count),
+                frame: *frame,
+                filter: None,
+                name: output.name.clone(),
+            });
         }
         let window = WindowPlan {
             partition_by: columns[..np].to_vec(),
@@ -230,10 +290,15 @@ impl Planner<'_> {
             }
             None => sorted,
         };
+        if window.functions.is_empty() {
+            return Ok(sorted);
+        }
         let op = Window::with_env(Arc::clone(&sorted.schema), window.clone(), &self.env, None)?;
         let mut layout = sorted.layout.clone();
         layout.extend(calls.iter().map(|c| c.output.id));
-        let names: Vec<String> = calls.iter().map(|c| c.output.name.clone()).collect();
+        layout.extend(counts.iter().map(|(_, c)| c.id));
+        let mut names: Vec<String> = calls.iter().map(|c| c.output.name.clone()).collect();
+        names.extend(counts.iter().map(|(_, c)| c.name.clone()));
         let detail = format!(
             "[{}], partition={}, order={}",
             names.join(", "),
@@ -349,7 +414,7 @@ impl Planner<'_> {
 
 /// The window call of a window relation's expression `e` (an alias of a
 /// resolved window).
-fn call(e: &Expr) -> Result<Call<'_>> {
+pub(super) fn call(e: &Expr) -> Result<Call<'_>> {
     let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node else {
         return Err(internal("a window expression without an alias"));
     };

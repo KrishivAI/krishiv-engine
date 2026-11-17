@@ -1928,6 +1928,27 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
                         output: AttrId(10),
                     },
                 ],
+                window: None,
+            },
+        ),
+        (
+            "python_window",
+            PhysNode::PythonAggregate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                keys: vec![0],
+                key_values: Vec::new(),
+                calls: vec![
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggArrow),
+                        output: AttrId(9),
+                    },
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggPandas),
+                        output: AttrId(10),
+                    },
+                ],
+                window: Some(vec![true, false]),
             },
         ),
         (

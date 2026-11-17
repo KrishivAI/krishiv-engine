@@ -2219,6 +2219,37 @@ fn the_python_udf_relation_kinds_need_their_feature() {
     }
 }
 
+/// A Python window aggregate lists `python_udf_windows` (semantic: an older
+/// reader would run the node as a grouped aggregate, one row per partition),
+/// and a reader without it refuses the plan; the grouped form does not list
+/// it.
+#[test]
+fn a_python_window_aggregate_needs_its_feature() {
+    assert_eq!(Feature::PythonUdfWindows.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        message("python_window").features,
+        ["python_udf", "python_udf_relations", "python_udf_windows"]
+    );
+    assert!(
+        !message("python_aggregate")
+            .features
+            .contains(&"python_udf_windows".to_owned())
+    );
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdfWindows),
+    );
+    let bytes = message("python_window").encode_to_vec();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["python_udf_windows".to_owned()]
+        }
+    );
+}
+
 /// A `TABLESAMPLE` plan lists `sample` (a semantic feature: no plan without
 /// the node keeps the same rows), and a reader without it refuses the plan
 /// naming the feature.
