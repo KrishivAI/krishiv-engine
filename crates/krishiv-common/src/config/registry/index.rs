@@ -27,8 +27,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.access.provider", &ACCESS_PROVIDER),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.connect.address", &CONNECT_ADDRESS),
+    ("krishiv.io.egress.proxy", &IO_EGRESS_PROXY),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
@@ -65,6 +67,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
+    ("krishiv.server.allowedHosts", &SERVER_ALLOWED_HOSTS),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -91,6 +94,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
+    ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
     ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
@@ -224,12 +228,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.connect.artifacts.maxBytes",
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+    ),
+    (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
         "krishiv.io.credentials.refreshSkew",
         &IO_CREDENTIALS_REFRESH_SKEW,
+    ),
+    (
+        "krishiv.io.egress.privateAddresses",
+        &IO_EGRESS_PRIVATE_ADDRESSES,
     ),
     (
         "krishiv.memory.abortReleaseTimeout",
@@ -268,8 +280,17 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
     (
+        "krishiv.iceberg.manifestCache.bytes",
+        &ICEBERG_MANIFEST_CACHE_BYTES,
+    ),
+    ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
+    (
         "krishiv.python.worker.maxPerSession",
         &PYTHON_WORKER_MAX_PER_SESSION,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.atScale",
+        &RUNTIME_FILTER_BLOOM_AT_SCALE,
     ),
     (
         "krishiv.sql.files.maxPartitionBytes",
@@ -332,6 +353,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "krishiv.exec.agg.distinctCountAtMerge",
+        &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    ),
+    (
         "krishiv.optimizer.ndvSampling.enabled",
         &NDV_SAMPLING_ENABLED,
     ),
@@ -386,6 +411,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.connect.artifacts.maxTotalBytes",
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
     ),
     (
         "krishiv.connect.execute.detachedTimeout",
@@ -474,6 +503,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "krishiv.connect.artifacts.maxArtifactBytes",
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
     ),
     (
         "krishiv.connect.http2.maxConcurrentStreams",
@@ -578,6 +611,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.execute.reattachable.senderMaxStreamSize",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
     ),
     (
         "spark.connect.execute.reattachable.observerRetryBufferSize",

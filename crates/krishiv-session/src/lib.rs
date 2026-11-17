@@ -51,6 +51,7 @@ mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+pub mod catalog_decl;
 mod char_write;
 mod collation_defaults;
 mod column;
@@ -59,10 +60,12 @@ mod command;
 mod conf;
 mod dataframe;
 mod delta;
+pub mod egress;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
@@ -76,6 +79,7 @@ pub mod logging;
 mod memory_table;
 mod monitor;
 mod nested_value;
+mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
 mod partition_keys;
@@ -113,7 +117,7 @@ pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, Stateme
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
-pub use system::register_build_features;
+pub use system::{capabilities, register_build_features, register_surface};
 
 pub mod agent;
 
@@ -122,7 +126,7 @@ pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
-    JoinType, StorageLevel,
+    JoinType, ObservedSink, StorageLevel,
 };
 pub use explain::Estimate;
 pub use explain_graph::{
@@ -143,9 +147,14 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].

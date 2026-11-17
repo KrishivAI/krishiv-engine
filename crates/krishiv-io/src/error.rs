@@ -112,6 +112,17 @@ impl FormatError {
             Self::Other(e) => e,
         }
     }
+
+    /// This error classified for the file printed as `path`, so that a caller
+    /// labelling errors with another file of a read (schema inference over
+    /// several files) leaves it as it is.
+    #[must_use]
+    pub(crate) fn at(self, path: &str) -> Self {
+        match self {
+            Self::Other(_) => self,
+            e => Self::Other(e.into_error(path)),
+        }
+    }
 }
 
 impl fmt::Display for FormatError {

@@ -189,7 +189,14 @@ impl Planner<'_> {
         // gives its schema.
         let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
-        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        // Validated as the worker builds it by default (the planner has no
+        // session config; the worker reads it at instantiation).
+        aggregate_node(
+            Arc::new(crate::physical::Unbuilt),
+            spec,
+            &plan.distinct,
+            crate::aggregate::distinct_count_at_merge(None),
+        )?;
         let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
         layout.extend(calls.iter().map(|c| c.id));
         // Grouping keys keep their attributes: a filter on one drops whole
@@ -259,7 +266,14 @@ impl Planner<'_> {
     ) -> Result<Planned> {
         let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
-        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        // Validated as the worker builds it by default (the planner has no
+        // session config; the worker reads it at instantiation).
+        aggregate_node(
+            Arc::new(crate::physical::Unbuilt),
+            spec,
+            &plan.distinct,
+            crate::aggregate::distinct_count_at_merge(None),
+        )?;
         let k = plan.group_by.len();
         let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
         for _ in k..schema.fields().len() {
@@ -337,7 +351,14 @@ impl Planner<'_> {
         };
         let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
-        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        // Validated as the worker builds it by default (the planner has no
+        // session config; the worker reads it at instantiation).
+        aggregate_node(
+            Arc::new(crate::physical::Unbuilt),
+            spec,
+            &plan.distinct,
+            crate::aggregate::distinct_count_at_merge(None),
+        )?;
         // The optimizer typed the states without the executor's help.
         let produced = schema.fields().iter().skip(k).map(|f| f.data_type());
         let declared = states.iter().map(|c| c.data_type.to_arrow());

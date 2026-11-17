@@ -146,10 +146,10 @@ pub use operator::{
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, Expand, FetchSlot, FileScan, FileScanMetrics, FileScanSource,
     FileSelections, FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate,
-    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem,
-    PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows, RowStageSettings,
-    RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics,
-    SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
+    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, PathRoots, Predicate, Project,
+    ProjectItem, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows,
+    RowStageSettings, RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, SortMetrics, SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

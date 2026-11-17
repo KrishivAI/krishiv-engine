@@ -198,7 +198,7 @@ fn arrow_of(schema: &AvroSchema) -> FormatResult<DataType> {
 
 /// An Arrow field of an Avro schema: nullable exactly for unions with a null
 /// branch.
-fn field_of(name: &str, schema: &AvroSchema) -> FormatResult<Field> {
+pub(super) fn field_of(name: &str, schema: &AvroSchema) -> FormatResult<Field> {
     let dt = arrow_of(schema)?;
     Ok(Field::new(name, dt, is_nullable_union(schema)))
 }
@@ -315,9 +315,21 @@ fn decimal_size(precision: u8) -> usize {
 /// A writer of Avro schema JSON from Arrow fields.
 struct Writer {
     namespace: String,
+    /// `to_avro`'s inference writes a nullable type as `[T, "null"]` (Spark's `SchemaConverters.toAvroType`); the file writer
+    /// keeps `["null", T]`.
+    null_last: bool,
 }
 
 impl Writer {
+    /// A nullable `inner` as a union, in the order this writer uses.
+    fn nullable(&self, inner: &str) -> String {
+        if self.null_last {
+            format!("[{inner},\"null\"]")
+        } else {
+            format!("[\"null\",{inner}]")
+        }
+    }
+
     /// The JSON of `dt` (an Avro type fragment), with named types scoped
     /// under `scope`.
     ///
@@ -383,7 +395,7 @@ impl Writer {
                 };
                 let inner = self.fragment(item.data_type(), element, scope)?;
                 let items = if item.is_nullable() {
-                    format!("[\"null\",{inner}]")
+                    self.nullable(&inner)
                 } else {
                     inner
                 };
@@ -413,7 +425,7 @@ impl Writer {
                 };
                 let inner = self.fragment(value.data_type(), value_type, scope)?;
                 let values = if value.is_nullable() {
-                    format!("[\"null\",{inner}]")
+                    self.nullable(&inner)
                 } else {
                     inner
                 };
@@ -465,7 +477,7 @@ impl Writer {
                 &format!("{name}_{}", avro_name(f.name())),
             )?;
             let ty = if f.is_nullable() {
-                format!("[\"null\",{inner}]")
+                self.nullable(&inner)
             } else {
                 inner
             };
@@ -491,8 +503,30 @@ pub(crate) fn schema_json_of_arrow(
 ) -> FormatResult<String> {
     Writer {
         namespace: record_namespace.to_owned(),
+        null_last: false,
     }
     .record(record_name, schema.fields(), None)
+}
+
+/// The Avro schema JSON `to_avro` infers for a column of `field`'s type:
+/// the type itself, or for a nullable column the union `[T, "null"]` (the
+/// value is branch 0, as Spark's `SchemaConverters.toAvroType` writes it for
+/// a nullable top-level type). A struct is the record `topLevelRecord`.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for an Arrow type with no Avro type.
+pub(super) fn schema_json_of_column(field: &Field) -> FormatResult<String> {
+    let spark = SparkType::from_arrow_field(field).ok();
+    let inner = Writer {
+        namespace: String::new(),
+        null_last: true,
+    }
+    .fragment(field.data_type(), spark.as_ref(), "topLevelRecord")?;
+    Ok(if field.is_nullable() {
+        format!("[{inner},\"null\"]")
+    } else {
+        inner
+    })
 }
 
 /// The default value of an Avro record field, for schema evolution: missing

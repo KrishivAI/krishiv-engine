@@ -114,7 +114,41 @@ pub(crate) enum TempTable {
         /// The query text of a view `CREATE TEMPORARY VIEW` made (`SHOW TABLE EXTENDED` prints it as
         /// `View Text`); `None` for a DataFrame view.
         text: Option<String>,
+        /// What the frame that made a DataFrame view kept (its `Observation` handles): a query that
+        /// inlines this entry runs its observed nodes, so it completes them. Part of the entry, so a
+        /// query reads the handles of the definition it expanded, and they are published with it.
+        keeps: ViewKeeps,
     },
+}
+
+impl TempTable {
+    /// A view `CREATE TEMPORARY VIEW` made over `plan`, with its query `text`: no pins, no keeps.
+    pub(crate) fn sql_view(
+        plan: Arc<LogicalPlan>,
+        columns: Vec<TableColumn>,
+        text: Option<String>,
+    ) -> Self {
+        Self::View {
+            plan,
+            columns,
+            pins: Vec::new(),
+            text,
+            keeps: ViewKeeps::default(),
+        }
+    }
+}
+
+/// A keep-alive handle a frame holds (an `Observation`'s shared state, a sink).
+pub(crate) type Keep = Arc<dyn std::any::Any + Send + Sync>;
+
+/// [`TempTable::View::keeps`]: empty for a SQL view.
+#[derive(Clone, Default)]
+pub(crate) struct ViewKeeps(pub(crate) Vec<Keep>);
+
+impl std::fmt::Debug for ViewKeeps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ViewKeeps({})", self.0.len())
+    }
 }
 
 /// The prefix of the hidden names snapshots pin tables under. No user
@@ -237,6 +271,7 @@ impl SessionCatalog {
         columns: Vec<TableColumn>,
         pins: Vec<String>,
         new_pins: Vec<(String, Arc<TempTable>)>,
+        keeps: ViewKeeps,
     ) {
         let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
         for (hidden, table) in new_pins {
@@ -251,6 +286,7 @@ impl SessionCatalog {
                     columns,
                     pins,
                     text: None,
+                    keeps,
                 }),
             ),
         );
@@ -656,6 +692,27 @@ impl QueryCatalog {
         }
     }
 
+    /// The `_metadata` column `scan` can read (`input_file_name()` reads it): its file source's, none for a
+    /// table that is no file source or a cached snapshot substituted after analysis (Spark's cached data has no
+    /// file either). Iceberg and Delta scans are no `TempTable::Files`: none (a recorded divergence,
+    /// `krishiv-plan` `analyzer/input_file.rs`).
+    pub(crate) fn scan_file_metadata(&self, scan: &Scan) -> FileMetadata {
+        let format = match &scan.source {
+            ReadSource::Files { format, .. } => format.clone(),
+            ReadSource::Table { name, .. } if !crate::system::is_system_table(name) => {
+                match self.loaded_for(name).as_deref() {
+                    Some(TempTable::Files {
+                        source: ReadSource::Files { format, .. },
+                        ..
+                    }) => format.clone(),
+                    _ => return FileMetadata::None,
+                }
+            }
+            _ => return FileMetadata::None,
+        };
+        file_metadata(&format)
+    }
+
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
     /// temporary view or table by its single part, a permanent table by
     /// `namespace.table`.
@@ -1042,6 +1099,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }
             | PhysNode::Sample { input, .. }
+            | PhysNode::CollectMetrics { input, .. }
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
@@ -1478,6 +1536,7 @@ pub(crate) fn expand_views_in(
         deferred: None,
         stored_reads: Vec::new(),
         views: Vec::new(),
+        keeps: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1486,6 +1545,7 @@ pub(crate) fn expand_views_in(
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
         views: expander.views,
+        keeps: expander.keeps,
     })
 }
 
@@ -1514,6 +1574,8 @@ pub(crate) struct Expansion {
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
     pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
+    /// What the temporary views inlined kept ([`TempTable::View::keeps`]), from the entries expanded.
+    pub(crate) keeps: Vec<Keep>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

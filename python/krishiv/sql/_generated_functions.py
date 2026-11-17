@@ -505,7 +505,6 @@ _ENGINE_UNSUPPORTED = (
     "hll_sketch_estimate",
     "hll_union",
     "hll_union_agg",
-    "is_valid_variant",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -1418,8 +1417,8 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
 
 
 def is_valid_variant(v: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("is_valid_variant")
+    """Calls the registry function ``is_valid_variant``."""
+    return _call("is_valid_variant", _named(v, "v"))
 
 
 def is_variant_null(v: ColumnOrName) -> Column:
