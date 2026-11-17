@@ -66,7 +66,10 @@ struct Task {
     reservation: Reservation,
     /// Partitions `parts` of every driver table, in table order, each with
     /// its share of the driver's reservation.
-    inputs: Vec<(RowTable, Reservation)>,
+    inputs: Vec<(Arc<RowTable>, Reservation)>,
+    /// WIP prototype (`KRISHIV_PROTO_SPLIT`): merge only the rows whose `h`
+    /// bits 56..60 are this value (inputs shared with the other sub-tasks).
+    sub: Option<u64>,
     /// The next row to merge: (input, partition, row).
     at: (usize, usize, usize),
     /// Bytes to reserve before the task can (re)start.
@@ -88,6 +91,7 @@ impl Task {
             reservation,
             inputs,
             at,
+            sub,
             ..
         } = self;
         loop {
@@ -103,13 +107,18 @@ impl Task {
             }
             let len = input.part_len(p);
             if row >= len {
-                input.release_part(p);
-                shrink_to(held, input.memory_size());
+                if let Some(input) = Arc::get_mut(input) {
+                    input.release_part(p);
+                    shrink_to(held, input.memory_size());
+                }
                 *at = (t, p + 1, 0);
                 continue;
             }
             let end = (row + CHUNK).min(len);
-            let chunk = input.merge_chunk(p, row..end)?;
+            let chunk = match *sub {
+                Some(s) => input.merge_chunk_sub(p, row..end, s)?,
+                None => input.merge_chunk(p, row..end)?,
+            };
             let want = table.projected_merge(&chunk);
             if let Err(missing) = reserve_to(reservation, want) {
                 return Ok(Some(missing));
@@ -476,7 +485,7 @@ impl HashAggregate {
             }]
         };
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
-        let mut per_task: Vec<Vec<(RowTable, Reservation)>> = ranges
+        let mut per_task: Vec<Vec<(Arc<RowTable>, Reservation)>> = ranges
             .iter()
             .map(|_| Vec::with_capacity(inputs.len()))
             .collect();
@@ -484,28 +493,57 @@ impl HashAggregate {
         for (t, mut r) in inputs.iter_mut().zip(held) {
             for (slices, part) in per_task.iter_mut().zip(t.split_parts(&ranges)) {
                 let share = r.split(part.memory_size());
-                slices.push((part, share));
+                slices.push((Arc::new(part), share));
             }
             if spill && spare.is_none() {
                 shrink_to(&mut r, HEADROOM);
                 spare = Some(r);
             }
         }
+        // WIP prototype (`KRISHIV_PROTO_SPLIT`): a routed table's partition
+        // holding over an eighth of the rows (few keys) merges in 16 tasks.
+        let split = std::env::var_os("KRISHIV_PROTO_SPLIT").is_some()
+            && inputs.first().is_some_and(RowTable::routed);
+        let total_rows: usize = per_task.iter().flatten().map(|(t, _)| t.len()).sum();
         drop(inputs);
         let mut queue = VecDeque::with_capacity(plan.len());
         for (t, inputs) in plan.into_iter().zip(per_task) {
-            let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?
-                .with_resizes(Arc::clone(&self.counters.resizes))
-                .with_probes(g.probes.clone());
-            queue.push_back(Task {
-                need: table.projected_presize(t.groups),
-                presize: t.groups.max(1),
-                at: (0, t.parts.start, 0),
-                parts: t.parts,
-                table,
-                reservation: ctx.consumer().reservation(),
-                inputs,
-            });
+            let rows: usize = inputs.iter().map(|(t, _)| t.len()).sum();
+            let heavy = split && rows >= 65_536 && rows.saturating_mul(8) > total_rows;
+            let subs: Vec<Option<u64>> = if heavy {
+                (0..16).map(Some).collect()
+            } else {
+                vec![None]
+            };
+            let mut inputs = Some(inputs);
+            for (n, sub) in subs.iter().enumerate() {
+                let mine: Vec<(Arc<RowTable>, Reservation)> = if n + 1 == subs.len() {
+                    inputs.take().unwrap_or_default()
+                } else {
+                    inputs
+                        .as_ref()
+                        .map(|v| {
+                            v.iter()
+                                .map(|(t, _)| (Arc::clone(t), ctx.consumer().reservation()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let groups = t.groups / subs.len();
+                let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?
+                    .with_resizes(Arc::clone(&self.counters.resizes))
+                    .with_probes(g.probes.clone());
+                queue.push_back(Task {
+                    need: table.projected_presize(groups),
+                    presize: groups.max(1),
+                    at: (0, t.parts.start, 0),
+                    parts: t.parts.clone(),
+                    table,
+                    reservation: ctx.consumer().reservation(),
+                    inputs: mine,
+                    sub: *sub,
+                });
+            }
         }
         Ok((queue, spare))
     }

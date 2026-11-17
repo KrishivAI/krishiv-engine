@@ -37,6 +37,58 @@ impl RowTable {
         })
     }
 
+    /// WIP prototype (`KRISHIV_PROTO_SPLIT`): [`merge_chunk`](Self::merge_chunk)
+    /// of only the rows whose `h` bits 56..60 are `sub` (a heavy routed
+    /// partition merged by 16 tasks; routed, those bits come from the
+    /// hash of the whole pair, so the tasks' pair sets are disjoint).
+    pub(crate) fn merge_chunk_sub(
+        &self,
+        p: usize,
+        rows: Range<usize>,
+        sub: u64,
+    ) -> Result<MergeChunk> {
+        let mut c = self.merge_chunk(p, rows)?;
+        let keep: Vec<bool> = c
+            .refs
+            .iter()
+            .map(|&r| (word(row_at(&self.parts, self.stride, self.refs, r), 0) >> 56) & 0xF == sub)
+            .collect();
+        if keep.iter().all(|&k| k) {
+            return Ok(c);
+        }
+        let mut i = 0;
+        c.refs.retain(|_| {
+            let k = keep[i];
+            i += 1;
+            k
+        });
+        if !c.states.is_empty() {
+            let mask = arrow_array::BooleanArray::from(keep.clone());
+            c.states = c
+                .states
+                .iter()
+                .map(|a| arrow_select::filter::filter(a, &mask))
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|e| internal(e.to_string()))?;
+        }
+        if let Some(l) = &self.views {
+            c.heap = c
+                .refs
+                .iter()
+                .map(|&r| l.long_bytes(row_at(&self.parts, self.stride, self.refs, r)))
+                .sum();
+        }
+        Ok(c)
+    }
+
+    /// Whether the table's layout routes rows by a key prefix.
+    pub(crate) fn routed(&self) -> bool {
+        self.core
+            .rows
+            .as_ref()
+            .is_some_and(crate::rows::RowLayout::routed)
+    }
+
     /// [`memory_size`](Self::memory_size) after
     /// [`apply_merge`](Self::apply_merge) of `c` from `src`, plus the
     /// merge's scratch (an upper bound for the merge to reserve).

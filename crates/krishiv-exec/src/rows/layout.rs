@@ -568,6 +568,11 @@ impl RowLayout {
         Ok(keys)
     }
 
+    /// Whether rows are routed by a key prefix ([`with_route`](Self::with_route)).
+    pub(crate) fn routed(&self) -> bool {
+        self.route > 0
+    }
+
     /// This layout with the top [`ROUTE_BITS`] of every row's hash taken
     /// from its first `prefix` key columns alone (0 turns it off): rows of
     /// one prefix value fall in one radix partition.
