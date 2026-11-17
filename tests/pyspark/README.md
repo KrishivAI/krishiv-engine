@@ -10,8 +10,10 @@ krishiv-internal `design/P3-pyspark-suite-runner.md`.
 
 Current summaries are `source: static`: an `ast` census of the pinned tag (never imported or executed), 0 passed.
 The first CI-sandbox run (pytest `--collect-only`, then the oracle run for `ORACLE_ENV`) replaces them.
-The `run` step needs `pytest-timeout` in the version venv and a `krishiv server` command (not wired yet: it
-needs the P2b server stub).
+The `run` step needs `pytest-timeout` in the version venv and a `krishiv server` command. The nightly job
+`pyspark-connect-suite` (`.github/workflows/nightly.yml`) runs it for 4.3.0 and 4.2.1 and fails when a test the committed
+summary records as passing no longer passes (the pass-list ratchet); the first real summary is committed by hand from
+its artifact, after the owner freezes the manifest.
 
 ```text
 cd tests/scripts

@@ -624,6 +624,55 @@ jobs:
           KRISHIV_CONNECT_URL: sc://127.0.0.1:15002
         run: cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored --skip blocked_ --test-threads=1
 
+  # The PySpark Connect test suite against `krishiv server` (P3-T030, PB-01), one Spark version per leg. The run
+  # fails when a test the committed summary records as passing no longer passes (the pass-list ratchet in
+  # `tests/scripts/pyspark_suite`); the summary it wrote is uploaded either way. Committing a better summary is a
+  # reviewed PR, never this job.
+  pyspark-connect-suite:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        spark: ["4.3.0", "4.2.1"]
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: $/.github/actions/setup-uv
+      - name: Build the server
+        run: cargo build -p krishiv-cli --release --locked
+      - name: Spark test sources (sparse checkout of the tag)
+        run: |
+          git clone --quiet --depth 1 --filter=blob:none --sparse --branch "v${{ matrix.spark }}" \
+            https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark
+      - name: Version venv
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "pyspark-client==${{ matrix.spark }}" \
+            pytest pytest-timeout pandas pyarrow grpcio grpcio-status protobuf googleapis-common-protos numpy
+      - name: Run the suite and gate on the ratchet
+        working-directory: tests/scripts
+        run: |
+          PYTHONPATH=. "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run \
+            --version "${{ matrix.spark }}" --checkout "$RUNNER_TEMP/spark" --port 15002 \
+            --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pyspark-connect-${{ matrix.spark }}
+          path: tests/pyspark/results
+          if-no-files-found: ignore
+
   # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
   connect-proto-upstream:
     if: github.repository == 'KrishivAI/krishiv-engine'
