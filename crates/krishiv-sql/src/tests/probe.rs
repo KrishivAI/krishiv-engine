@@ -16,6 +16,10 @@ const SPARK_DEVIATIONS: &[(&str, &str)] = &[
         "`EXPLAIN ANALYZE <query>` is a Krishiv extension (ADR 0023): it runs the query and prints its metrics",
     ),
     (
+        "EXPLAIN FORMAT JSON SELECT 1",
+        "`EXPLAIN FORMAT JSON <query>` is a Krishiv extension (design P3-T063-analyze-api.md 3.3.1): Spark's grammar has no `FORMAT`",
+    ),
+    (
         "EXPLAIN VERBOSE SELECT 1",
         "`EXPLAIN VERBOSE <query>` is accepted (Krishiv's verbose plan output); Spark's grammar has no `VERBOSE`",
     ),
