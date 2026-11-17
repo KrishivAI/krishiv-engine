@@ -175,13 +175,14 @@ impl DatumDecoder {
         .map_err(|_| corrupt("an undecodable datum"))?
         .map_err(|e| corrupt(format!("an undecodable datum: {e}")))?;
         if self.reencode_check {
-            // What was read, written back, must be what the datum starts with (trailing bytes are ignored, as Spark does).
+            // A truncated payload is read as an empty value, whose encoding is longer than the bytes given. Map entry order and block
+            // splits change the bytes but never make the encoding longer than a valid datum (trailing bytes are ignored, as Spark does).
             let again = apache_avro::writer::datum::GenericDatumWriter::builder(&self.writer)
                 .build()
                 .and_then(|w| w.write_value_to_vec(value.clone()))
                 .map_err(|e| corrupt(format!("an unwritable datum: {e}")))?;
-            if !bytes.starts_with(&again) {
-                return Err(corrupt("a truncated or non-canonical datum"));
+            if again.len() > bytes.len() {
+                return Err(corrupt("a truncated datum"));
             }
         }
         let resolved = resolve(&self.writer, &self.reader, value, false)?;
@@ -310,6 +311,47 @@ mod tests {
         let s = out.as_any().downcast_ref::<StructArray>().unwrap();
         assert!(!s.is_null(0));
         assert!(s.column(0).is_null(0) && s.column(1).is_null(0));
+    }
+
+    const MAP_OF_UNION: &str = r#"{"type":"map","values":["int","string"]}"#;
+
+    #[test]
+    fn a_valid_map_or_array_of_a_union_decodes_whatever_its_entry_order_or_block_split() {
+        // Three entries in one block, then the same three in three blocks: the re-encoding the truncation check makes orders map entries
+        // arbitrarily and writes one block, so only its length may be compared.
+        let one_block = [6, 2, 97, 0, 2, 2, 98, 0, 4, 2, 99, 0, 6, 0];
+        let three_blocks = [2, 2, 97, 0, 2, 2, 2, 98, 0, 4, 2, 2, 99, 0, 6, 0];
+        for _ in 0..30 {
+            let dec = DatumDecoder::new(MAP_OF_UNION, None, false).unwrap();
+            let out = dec
+                .decode(&[Some(&one_block[..]), Some(&three_blocks[..])])
+                .unwrap();
+            assert_eq!(out.len(), 2);
+            assert!(out.null_count() == 0);
+        }
+        let arr =
+            DatumDecoder::new(r#"{"type":"array","items":["int","string"]}"#, None, false).unwrap();
+        // Two blocks of one element each: [int 1] [int 2] end.
+        let out = arr.decode(&[Some(&[2, 0, 2, 2, 0, 4, 0][..])]).unwrap();
+        assert_eq!(out.null_count(), 0);
+    }
+
+    #[test]
+    fn a_truncated_union_payload_fails_and_permissive_nulls_it() {
+        let schema =
+            r#"{"type":"record","name":"r","fields":[{"name":"u","type":["int","string"]}]}"#;
+        // Branch "string" chosen, its length missing.
+        let cut = [2u8];
+        assert!(
+            DatumDecoder::new(schema, None, false)
+                .unwrap()
+                .decode(&[Some(&cut[..])])
+                .is_err()
+        );
+        let lax = DatumDecoder::new(schema, None, true).unwrap();
+        let out = lax.decode(&[Some(&cut[..])]).unwrap();
+        let s = out.as_any().downcast_ref::<StructArray>().unwrap();
+        assert!(s.column(0).is_null(0) || s.is_null(0));
     }
 
     #[test]
