@@ -59,7 +59,7 @@ mod tests;
 /// The revision of this surface: an integer that grows whenever the descriptor snapshot changes
 /// (design §6.3; `cargo xtask admin-api` requires the increase). `GetVersion` returns it and
 /// `system.capabilities` carries it in the `("surface", "admin.v1", <revision>, ..)` row.
-pub const ADMIN_V1_REVISION: i64 = 1;
+pub const ADMIN_V1_REVISION: i64 = 2;
 
 /// Whether the surface is still `preview` (design D8): until the first release that ships it a
 /// non-additive change is possible.
