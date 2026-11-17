@@ -245,3 +245,23 @@ fn a_reads_ignore_corrupt_files_option_reaches_the_scan_of_csv_and_json() {
         );
     }
 }
+
+#[test]
+fn a_padded_conf_carried_to_a_worker_still_reads() {
+    // Spark trims the SQL conf (`booleanConf`) but not the option: a padded
+    // `spark.sql.files.ignoreCorruptFiles` carried as an option (a write's
+    // or a worker's options) must still parse.
+    let mut padded = Config::new();
+    padded
+        .set("spark.sql.files.ignoreCorruptFiles", " true ")
+        .expect("set");
+    for format in [&CsvFormat as &dyn FileFormat, &crate::json::JsonFormat] {
+        let schema = format.options();
+        let carried = schema.with_conf_fallbacks(&BTreeMap::new(), &padded);
+        let o = schema.parse(&carried, &Config::new()).expect("carried").0;
+        assert_eq!(o.ignore_corrupt_files(), Some(true));
+        // Parsed on the driver against the session: the same.
+        let o = schema.parse(&BTreeMap::new(), &padded).expect("session").0;
+        assert!(crate::scan::ScanOptions::for_read(&padded, &o).ignore_corrupt_files);
+    }
+}
