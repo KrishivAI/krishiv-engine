@@ -640,8 +640,9 @@ pub(crate) struct Sources {
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
     /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
     pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
-    /// The persisted query history (`krishiv.history.path`), when one is kept: `partition_advice` reads it.
-    pub(crate) history: Option<Arc<crate::profile_history::ProfileHistory>>,
+    /// The advice of the persisted query history (`krishiv.history.path`), read off the executor when the
+    /// `partition_advice` table loads.
+    pub(crate) advice: Arc<crate::partition_advice::AdviceCell>,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1295,6 +1296,8 @@ pub(crate) fn provider(
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
     monitor: Arc<Monitor>,
+    /// The history's advice, which `partition_advice` reads once the decision is made.
+    advice: Arc<crate::partition_advice::AdviceCell>,
     /// The session catalog of the query, asked first for a bare name: a temporary table or view of the
     /// session wins over a system table of the same name, as it does over any table.
     temps: Option<Arc<crate::catalog::QueryCatalog>>,
@@ -1311,6 +1314,7 @@ impl SystemCatalog {
     pub(crate) fn of(sources: &Sources) -> Self {
         Self {
             monitor: Arc::clone(&sources.monitor),
+            advice: Arc::clone(&sources.advice),
             temps: None,
         }
     }
@@ -1363,6 +1367,10 @@ impl Catalog for SystemCatalog {
             .any(|t| id.name.eq_ignore_ascii_case(t))
             {
                 self.monitor.decide().await;
+                // The history read is file I/O: done here, in the async load, on the blocking pool.
+                if id.name.eq_ignore_ascii_case("partition_advice") && self.monitor.sees_all() {
+                    self.advice.load().await;
+                }
             }
             Ok(columns(&id.name).map(|columns| TableMeta {
                 ident: TableIdent {

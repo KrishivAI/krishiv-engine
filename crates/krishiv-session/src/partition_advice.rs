@@ -8,14 +8,15 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use krishiv_exec::Executor;
 use krishiv_exec::profile::QueryProfile;
 use krishiv_optimizer::{AdvisedColumn, AdvisedTable, PartitionAdvice, advise};
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::{ArrayRef, Float64Array, Int32Array};
 
-use crate::profile_history::read_history;
+use crate::profile_history::{ProfileHistory, read_history};
 use crate::system::{Kind, Sources, long, text};
 
 /// The ranked suggestions for one table.
@@ -56,7 +57,7 @@ pub(crate) fn from_history(dir: &Path) -> Vec<TableAdvice> {
             continue;
         };
         for scan in profile.scans {
-            let entry = seen.entry(scan.table).or_default();
+            let entry = seen.entry(scan.table.to_lowercase()).or_default();
             entry.queries += 1;
             if scan.rows.is_some() {
                 entry.rows = scan.rows;
@@ -94,10 +95,10 @@ pub(crate) fn from_history(dir: &Path) -> Vec<TableAdvice> {
 
 /// The `EXPLAIN` section for `tables`: one `partition advice` line per suggestion, the best first; `None` when
 /// there is nothing to advise.
-pub(crate) fn explain_section(dir: &Path, tables: &[String]) -> Option<String> {
-    let lines: Vec<String> = from_history(dir)
-        .into_iter()
-        .filter(|t| tables.contains(&t.table))
+fn section_of(advice: &[TableAdvice], tables: &[String]) -> Option<String> {
+    let lines: Vec<String> = advice
+        .iter()
+        .filter(|t| tables.iter().any(|n| n.eq_ignore_ascii_case(&t.table)))
         .flat_map(|t| {
             t.advice
                 .iter()
@@ -111,9 +112,9 @@ pub(crate) fn explain_section(dir: &Path, tables: &[String]) -> Option<String> {
 /// The `system.partition_advice` rows: one per suggestion, the best of each table first. The history holds every
 /// principal's queries, so only a caller with `Monitor` on `system` reads them.
 pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
-    let advice = match (&sources.history, sources.monitor.sees_all()) {
-        (Some(history), true) => from_history(history.dir()),
-        _ => Vec::new(),
+    let advice = match sources.monitor.sees_all() {
+        true => sources.advice.get(),
+        false => &[],
     };
     let rows: Vec<(&TableAdvice, i32, &PartitionAdvice)> = advice
         .iter()
@@ -146,12 +147,75 @@ pub(crate) fn layout() -> Vec<(&'static str, Kind, bool)> {
     ]
 }
 
+/// The history's advice, read once per query and off the executor: the read is file and Parquet I/O.
+#[derive(Debug)]
+pub(crate) struct AdviceCell {
+    history: Option<Arc<ProfileHistory>>,
+    executor: Arc<dyn Executor>,
+    loaded: OnceLock<Vec<TableAdvice>>,
+}
+
+impl AdviceCell {
+    pub(crate) fn new(history: Option<Arc<ProfileHistory>>, executor: Arc<dyn Executor>) -> Self {
+        Self {
+            history,
+            executor,
+            loaded: OnceLock::new(),
+        }
+    }
+
+    /// Reads the history on the blocking pool, once; a read that cannot run leaves no advice.
+    pub(crate) async fn load(&self) {
+        if self.loaded.get().is_some() {
+            return;
+        }
+        let advice = match &self.history {
+            Some(history) => {
+                let dir = history.dir().to_path_buf();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let ran = self
+                    .executor
+                    .spawn_blocking(Box::new(move || drop(tx.send(from_history(&dir)))))
+                    .await;
+                match (ran, rx.await) {
+                    (Ok(()), Ok(advice)) => advice,
+                    _ => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+        let _ = self.loaded.set(advice);
+    }
+
+    /// The advice [`Self::load`] read (none before it ran).
+    pub(crate) fn get(&self) -> &[TableAdvice] {
+        self.loaded.get().map_or(&[], Vec::as_slice)
+    }
+}
+
 impl crate::session::Session {
     /// The `== Partition Advice ==` section of `EXPLAIN` for a query that scans `tables`, when the runtime
-    /// keeps a history and it has advice for one of them.
-    pub(crate) fn partition_advice_section(&self, tables: &[String]) -> Option<String> {
+    /// keeps a history and it has advice for one of them. The history spans principals, so the section is
+    /// for a caller with `Monitor` on `system`, as `system.partition_advice` is.
+    pub(crate) async fn partition_advice_section(&self, tables: &[String]) -> Option<String> {
+        if tables.is_empty() {
+            return None;
+        }
         let history = self.state.runtime.profile_history.as_ref()?;
-        explain_section(history.dir(), tables)
+        let monitor = crate::system::Monitor::new(
+            Arc::clone(&self.state.principal),
+            Arc::clone(&self.state.policy),
+        );
+        monitor.decide().await;
+        if !monitor.sees_all() {
+            return None;
+        }
+        let cell = AdviceCell::new(
+            Some(Arc::clone(history)),
+            Arc::clone(&self.state.runtime.executor),
+        );
+        cell.load().await;
+        section_of(cell.get(), tables)
     }
 }
 

@@ -1278,7 +1278,6 @@ impl FileScanSource {
             .collect()
     }
 
-    /// The values of `file`'s partition columns, one row each.
     /// Whether a runtime filter or a filter on a partition column rules out the file: it is never opened.
     fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
         (!partition_filters.is_empty() || !self.static_partition.is_empty())
@@ -1311,6 +1310,7 @@ impl FileScanSource {
             .any(|e| prune(e, &stats) == TriState::False)
     }
 
+    /// The values of `file`'s partition columns, one row each.
     fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
         if self.layout.is_empty() {
             return Ok(Vec::new());

@@ -448,7 +448,7 @@ impl DataFrame {
         }
         // Only with a history that has advice for a table the query reads (P3-T025); read here, after
         // planning, so no query's planning pays for it.
-        if let Some(section) = self.session.partition_advice_section(&scanned) {
+        if let Some(section) = self.session.partition_advice_section(&scanned).await {
             let _ = write!(text, "\n{section}");
         }
         Ok(text)

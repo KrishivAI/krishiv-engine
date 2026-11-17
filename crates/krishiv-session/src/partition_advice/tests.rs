@@ -169,3 +169,114 @@ fn applying_the_advice_reads_at_least_half_the_bytes_less() {
     assert!(before > 0, "the unpartitioned table read no bytes");
     assert!(after * 2 <= before, "after {after} before {before}");
 }
+
+/// Allows everything except `MONITOR` on `system`, which only `admin` holds.
+struct MonitorForAdmin;
+
+impl crate::AccessPolicy for MonitorForAdmin {
+    fn version(&self) -> crate::PolicyVersion {
+        crate::PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a crate::Principal,
+        securable: &'a crate::Securable,
+        privilege: crate::Privilege,
+    ) -> crate::BoxFuture<'a, Result<crate::AccessDecision, krishiv_common::error::KrishivError>>
+    {
+        let decision = match (securable, privilege) {
+            (crate::Securable::System(_), crate::Privilege::Monitor)
+                if principal.name != "admin" =>
+            {
+                crate::AccessDecision::Deny {
+                    reason: "monitor".to_owned(),
+                }
+            }
+            _ => crate::AccessDecision::Allow,
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+fn as_user(rt: &Arc<EngineRuntime>, who: &str, warehouse: &std::path::Path) -> Session {
+    let s = Session::builder()
+        .runtime(Arc::clone(rt))
+        .principal(crate::Principal::new(who, crate::PrincipalKind::User))
+        .access_policy(Arc::new(MonitorForAdmin))
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .unwrap();
+    s
+}
+
+#[test]
+fn a_caller_without_monitor_sees_no_advice_on_either_surface() {
+    let (history, warehouse) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", history.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let admin = as_user(&rt, "admin", warehouse.path());
+    run(
+        &admin,
+        &format!("CREATE TABLE ev USING parquet AS {EVENTS}"),
+    );
+    workload(&admin, "ev");
+    flush(&rt);
+    let query = "EXPLAIN SELECT sum(id) FROM ev WHERE d = 7";
+    let table = "SELECT CAST(count(*) AS STRING) FROM system.partition_advice";
+    // The holder of MONITOR sees the history of every principal.
+    assert!(text(&admin, query).contains("partition advice: d"));
+    assert_ne!(text(&admin, table), "0");
+    // Another principal, with SELECT on the table, sees neither.
+    let bob = as_user(&rt, "bob", warehouse.path());
+    let plan = text(&bob, query);
+    assert!(!plan.contains("partition advice"), "{plan}");
+    assert!(!plan.contains("Partition Advice"), "{plan}");
+    assert_eq!(text(&bob, table), "0");
+}
+
+#[test]
+fn a_unique_key_is_not_advised_through_the_history() {
+    let (history, warehouse) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (rt, session) = setup(history.path(), warehouse.path());
+    run(
+        &session,
+        &format!("CREATE TABLE ev USING parquet AS {EVENTS}"),
+    );
+    // Only the unique `id` is filtered by.
+    for i in 0..50 {
+        run(&session, &format!("SELECT sum(c) FROM ev WHERE id = {i}"));
+    }
+    flush(&rt);
+    let advice = from_history(history.path());
+    assert!(
+        advice
+            .iter()
+            .all(|t| t.advice.iter().all(|a| a.column != "id")),
+        "{advice:?}"
+    );
+}
+
+#[test]
+fn a_table_is_one_table_whatever_the_case_of_its_name() {
+    let (history, warehouse) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (rt, session) = setup(history.path(), warehouse.path());
+    run(
+        &session,
+        &format!("CREATE TABLE ev USING parquet AS {EVENTS}"),
+    );
+    for i in 0..50 {
+        run(&session, &format!("SELECT sum(id) FROM EV WHERE d = {i}"));
+        run(&session, &format!("SELECT sum(id) FROM ev WHERE d = {i}"));
+    }
+    flush(&rt);
+    let advice = from_history(history.path());
+    assert_eq!(advice.len(), 1, "{advice:?}");
+    assert_eq!(advice[0].queries, 100);
+    let plan = text(&session, "EXPLAIN SELECT sum(id) FROM EV WHERE d = 7");
+    assert!(plan.contains("partition advice: d"), "{plan}");
+}
