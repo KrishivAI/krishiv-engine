@@ -48,7 +48,9 @@ impl Session {
                 Privilege::Select,
             ));
         }
-        let views = self.authorize_reads_as(&d.reads, env, &definer).await?;
+        let views = self
+            .authorize_reads_as(&d.reads, env, &definer, false)
+            .await?;
         let mut ctx = env.analysis.clone();
         ctx.principal = definer;
         ctx.definer_texts = texts.without(query);

@@ -1199,3 +1199,61 @@ fn a_stored_views_text_reads_under_the_cte_policy_it_was_created_with() {
         ok(&bob, "DROP VIEW c");
     }
 }
+
+/// Review r4 Y2 (ADR 0048 A1 §3 Listings): a read of a relation the principal may not list is
+/// refused at table level, before any column is resolved, so no resolution error (an unresolved
+/// column's suggestions, a type error) shows its schema; the refusal names the table only.
+#[test]
+fn a_relation_the_principal_may_not_list_is_refused_before_its_columns_resolve() {
+    let w = World::new();
+    let root = w.admin();
+    let (lister, bob, ana) = (w.user("lister"), w.user("bob"), w.user("ana"));
+    ok(&root, "CREATE NAMESPACE vaultns");
+    ok(
+        &root,
+        "CREATE TABLE vaultns.vt (secret_a INT, secret_b INT) USING parquet",
+    );
+    ok(
+        &root,
+        "CREATE TABLE t (secret_c INT, secret_d INT) USING parquet",
+    );
+    ok(&root, "CREATE TABLE ct (x INT, secret_e INT) USING parquet");
+    ok(&root, "GRANT USAGE ON CATALOG spark_catalog TO user:lister");
+    ok(&root, "GRANT USAGE ON SCHEMA default TO user:lister");
+    ok(&root, "GRANT USAGE ON CATALOG spark_catalog TO user:bob");
+    ok(&root, "GRANT SELECT (x) ON ct TO user:ana");
+    let hidden = ["secret_a", "secret_b", "secret_c", "secret_d", "secret_e"];
+    for (who, s, sql) in [
+        ("lister", &lister, "SELECT nosuch FROM vaultns.vt"),
+        (
+            "lister",
+            &lister,
+            "SELECT secret_a + array(1) FROM vaultns.vt",
+        ),
+        ("lister", &lister, "SELECT nosuch FROM default.t"),
+        ("bob", &bob, "SELECT nosuch FROM default.t"),
+        ("bob", &bob, "SELECT secret_c + array(1) FROM default.t"),
+        ("bob", &bob, "SELECT nosuch FROM ct"),
+    ] {
+        let e = denied(s, sql);
+        for h in hidden {
+            // The statement's own column names may show; no other does.
+            if !sql.contains(h) {
+                assert!(!e.contains(h), "{who}: {sql}: {h}: {e}");
+            }
+        }
+    }
+    let e =
+        block_on(async { bob.table("default.t").select(["nosuch"]).collect().await }).unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED, "{e}");
+    for h in hidden {
+        assert!(!e.to_string().contains(h), "{h}: {e}");
+    }
+    // A principal holding a grant on a relation may see its schema (A1): ana's suggestions list
+    // `ct`'s columns, as its `DESCRIBE` does.
+    let e = run(&ana, "SELECT nosuch FROM ct").unwrap_err();
+    assert!(
+        e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+        "{e}"
+    );
+}

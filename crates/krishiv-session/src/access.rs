@@ -498,16 +498,18 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<Vec<TableIdent>, KrishivError> {
         let principal = Arc::clone(&self.state.principal);
-        self.authorize_reads_as(reads, env, &principal).await
+        self.authorize_reads_as(reads, env, &principal, true).await
     }
 
     /// [`Self::authorize_reads`] for `principal`: the session's own, or the definer of a
-    /// `SQL SECURITY DEFINER` view acting for it (P3-T062 §2.4).
+    /// `SQL SECURITY DEFINER` view acting for it (P3-T062 §2.4). `audited`: a refusal is audited
+    /// here (`false` when the caller audits it, as the definer's failure is).
     pub(crate) async fn authorize_reads_as(
         &self,
         reads: &[crate::catalog::ReadCandidate],
         env: &QueryEnv,
         principal: &Principal,
+        audited: bool,
     ) -> Result<Vec<TableIdent>, KrishivError> {
         let catalogs = &*env.analysis.catalogs;
         let fold = !env.analysis.conf.case_sensitive;
@@ -560,7 +562,13 @@ impl Session {
                     wanted,
                 )
                 .await;
-                audit_read(self, env, r)?;
+                if !audited {
+                    // A definer's refusal is audited once, by `Session::definer_failure`, which
+                    // redacts it for the reader (one record per refusal, review M4).
+                    r?;
+                } else {
+                    audit_read(self, env, r)?;
+                }
                 checked.push(securable);
             }
         }

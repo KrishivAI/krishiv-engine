@@ -314,7 +314,11 @@ impl GrantState {
 
     /// Whether `principal` holds `privilege` on `key` (note §2.1): an owner holds everything; a
     /// grant on the key or a parent counts; `Browse` is held through any grant that covers the
-    /// key, or any column grant of a relation. No `DENY` (Q2).
+    /// key, or any column grant of a relation. No `DENY` (Q2). `Browse` on a table or view is
+    /// the listing rule ([`Self::lists`], review r4 Y2): Bind asks it of a policy that decides
+    /// columns before any column resolves, so a relation the principal may not list is refused at
+    /// table level and no resolution error (an unresolved column's suggestions, a type error)
+    /// shows its schema; a parent's `USAGE` lets the principal see the namespace, not its tables.
     pub(crate) fn allows(
         &self,
         principal: &Principal,
@@ -324,6 +328,9 @@ impl GrantState {
     ) -> bool {
         if self.owns(principal, key, cs) {
             return true;
+        }
+        if privilege == Privilege::Browse && key.kind == KeyKind::Relation {
+            return self.lists(principal, key, cs);
         }
         let grantees = self.effective(principal);
         if privilege == Privilege::Browse {
