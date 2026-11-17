@@ -55,7 +55,7 @@
 //! - **Abort:** [`DataFileWriter::finish`] failing, [`DataFileWriter::abort`]
 //!   and a drop before `finish` abort the open uploads (nothing becomes
 //!   visible) and delete the files already finished (a drop deletes in a
-//!   task spawned on the current runtime, else the I/O runtime). An abort
+//!   task spawned on the I/O runtime, else the current runtime). An abort
 //!   dropped midway leaves what it did not delete to the drop. A close
 //!   cancelled after the store completed the upload leaves an unreferenced
 //!   file (in no manifest); an open upload dropped outside a runtime is not
@@ -90,6 +90,8 @@ use krishiv_memory::Reservation;
 
 use super::data_file::{DataLocations, WrittenDataFile, file_name, partition_tuple};
 use super::scan::{iceberg_type, plan_transform, schema_fields};
+use super::storage::Registered;
+#[cfg(test)]
 use super::storage::StorageRegistration;
 use super::types::arrow_schema;
 use super::write_metrics::WriteMetricsConfig;
@@ -97,7 +99,7 @@ use crate::plan::file_metrics::file_metrics;
 use crate::plan::transform::partition_value;
 use crate::plan::types::{IcebergType, SchemaField, Transform};
 
-/// Open files per task by default (the future `krishiv.iceberg.write.maxOpenFiles`).
+/// Open files per task by default (`krishiv.iceberg.write.maxOpenFiles`).
 pub(crate) const DEFAULT_MAX_OPEN_FILES: usize = 100;
 
 /// `write.target-file-size-bytes` and its default (Java's
@@ -214,9 +216,26 @@ impl DataFileWriter {
     /// (inside a list or map), and [`DataLocations::for_table`]'s; the
     /// schema's conversion errors ([`arrow_schema`]); `INTERNAL_ERROR` when
     /// the registration is gone.
+    #[cfg(test)]
     pub(crate) fn new(
         metadata: &TableMetadata,
         registration: &StorageRegistration,
+        ids: TaskIds<'_>,
+        max_open_files: usize,
+        mem: Reservation,
+    ) -> Result<Self, KrishivError> {
+        let registered = registration.registered()?;
+        Self::with_registered(metadata, registered, ids, max_open_files, mem)
+    }
+
+    /// As `new`, through a registration already resolved (what an opened
+    /// table keeps; the sink's writers).
+    ///
+    /// # Errors
+    /// As `new`, except the registration's.
+    pub(crate) fn with_registered(
+        metadata: &TableMetadata,
+        registered: Registered,
         ids: TaskIds<'_>,
         max_open_files: usize,
         mem: Reservation,
@@ -244,7 +263,6 @@ impl DataFileWriter {
         ParquetFormat
             .check_write(&arrow, &options)
             .map_err(|e| e.into_error(metadata.location()))?;
-        let registered = registration.registered()?;
         Ok(Self {
             io: registered.io,
             paths: registered.paths,
@@ -594,9 +612,14 @@ impl Drop for DataFileWriter {
                 let _ = io.delete_pinned(&f.store, &f.at.path).await;
             }
         };
-        let handle = tokio::runtime::Handle::try_current()
-            .ok()
-            .or_else(|| self.io.scheduler().runtime().cloned());
+        // The I/O runtime first: it outlives a query's compute runtime, which
+        // may be shutting down when a cancelled driver drops its writer.
+        let handle = self
+            .io
+            .scheduler()
+            .runtime()
+            .cloned()
+            .or_else(|| tokio::runtime::Handle::try_current().ok());
         if let Some(h) = handle {
             h.spawn(delete);
         }
