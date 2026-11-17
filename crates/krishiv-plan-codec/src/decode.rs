@@ -1314,6 +1314,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         PercentileApprox => percentile_approx_function(a)?,
         PercentileDisc => percentile_disc_function(a)?,
         ApproxCountDistinct => hll_function(a)?,
+        HistogramNumeric => histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
@@ -1484,6 +1485,23 @@ fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
         return Err(bad());
     }
     Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
+}
+
+/// A `histogram_numeric` function from its wire form.
+fn histogram_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+        || a.hll_precision != 0
+        || a.histogram_bins < 2
+    {
+        return Err(corrupt("a `histogram_numeric` of bad parameters"));
+    }
+    Ok(AggregateFunction::HistogramNumeric {
+        nb: a.histogram_bins,
+    })
 }
 
 fn join_type(t: i32) -> Result<JoinType> {

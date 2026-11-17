@@ -9,16 +9,17 @@
 //! denial count), to decide whether to list a target's directories.
 //!
 //! Directories: a run of `DROP TABLE` or `TRUNCATE TABLE` on a managed table also asks `MODIFY` on the
-//! table's directory when it exists, and a run of `INSERT` asks `MODIFY` and `CREATE` on the table's
-//! location; analyze lists them after the targets, only where the run asks ([`dirs`]), as the qualified
-//! path the run's 42501 names (`file:` for a local one, the store URL for an object store; the policy gets
-//! a local path with its links resolved). They are listed only when a quiet trial of the run's own target
-//! check passes: a caller denied a target learns nothing about it from analyze (whether it exists, its
-//! kind, its location), as from a run. Listing them reads the file system (whether the directory exists),
-//! so the list is the directory's state at analysis. Not listed yet: the directories a run of `CREATE
-//! TABLE`, CTAS, `REPLACE TABLE`, `ALTER TABLE ... RENAME TO`, `DROP NAMESPACE ... CASCADE` or partition
-//! DDL checks ([`dirs`]). The integration test `securables_equal_what_a_run_authorizes` checks the list
-//! against the run's questions and pins those differences.
+//! table's directory when it exists, a run of `INSERT` asks `MODIFY` and `CREATE` on the table's
+//! location, and `CREATE TABLE`, CTAS, `ALTER TABLE ... RENAME TO` and `DROP NAMESPACE ... CASCADE` ask
+//! about the directories they make, move or delete; analyze lists them after the targets, only where the
+//! run asks ([`dirs`]), as the qualified path the run's 42501 names (`file:` for a local one, the store URL
+//! for an object store; the policy gets a local path with its links resolved). They are listed only when a
+//! quiet trial of the run's own target check passes: a caller denied a target learns nothing about it from
+//! analyze (whether it exists, its kind, its location), as from a run. Listing them reads the file system
+//! (whether the directory exists), so the list is the directory's state at analysis. Not listed yet: the
+//! partition directories of `ADD`, `DROP` and `RENAME PARTITION` and `MSCK REPAIR TABLE` ([`dirs`]). The
+//! integration test `securables_equal_what_a_run_authorizes` checks the list against the run's questions
+//! and pins those differences.
 //!
 //! [`Analysis::to_json`] writes the `krishiv.analyze.v1` document
 //! (`docs/reference/analyze/krishiv.analyze.v1.schema.json`, described by
@@ -238,7 +239,9 @@ impl Session {
     /// or directory, so a caller denied a target learns nothing about it, not even whether it exists.
     /// The directories are listed only when a quiet trial of that same check passes
     /// ([`Session::targets_allowed_quietly`]: no audit record, no denial count); otherwise nothing more
-    /// is listed, and the output is the one a missing table gives.
+    /// is listed, and the output is the one a missing table gives. A statement whose list names
+    /// what a listing shows (`DROP NAMESPACE ... CASCADE`: its tables) also needs that listing's
+    /// right, asked as quietly ([`Session::listing_allowed_quietly`], review D1).
     async fn with_directories(
         &self,
         mut parts: crate::access::StatementParts,
@@ -247,21 +250,24 @@ impl Session {
             return parts;
         }
         let env = self.query_env();
-        if self.targets_allowed_quietly(&parts.statement, &env).await {
-            let dirs = self.directory_securables(&parts.statement, &env);
+        if self.targets_allowed_quietly(&parts.statement, &env).await
+            && self.listing_allowed_quietly(&parts.statement, &env).await
+        {
+            let dirs = self.directory_securables(&parts, &env);
             crate::access::merge_reads(&mut parts.info.securables, &dirs);
         }
         parts
     }
 
-    /// The analysis of the parsed `statement`, whose spans index `redacted`'s text: what
+    /// The analysis of the parsed `statement`, whose spans index `text` (redacted: `redacted`): what
     /// `EXPLAIN FORMAT JSON <statement>` returns. Nothing runs.
     pub(crate) async fn analyze_statement(
         &self,
         statement: Statement,
+        text: &str,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<Analysis, KrishivError> {
-        let parts = self.parts_of_statement(statement, redacted).await?;
+        let parts = self.parts_of_statement(statement, text, redacted).await?;
         Analysis::of_parts(self.with_directories(parts).await)
     }
 }

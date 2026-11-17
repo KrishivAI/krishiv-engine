@@ -12,7 +12,7 @@ process, on one vectorized, Arrow-native engine, with no JVM. Keep the PySpark a
 
 ## Install
 
-Krishiv 0.2 is on PyPI: `pip install "krishiv[pyarrow]"`. The [Quickstart](get-started/quickstart.md) has the steps.
+Krishiv 0.2 is on PyPI: `pip install krishiv`. The [Quickstart](get-started/quickstart.md) has the steps.
 You can also build the wheel from the repository (`maturin build` in `python/`).
 
 ## Where to start

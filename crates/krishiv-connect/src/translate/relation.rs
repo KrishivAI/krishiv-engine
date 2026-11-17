@@ -100,6 +100,13 @@ impl Translator<'_> {
                     })
                 })?))
             }
+            RelType::CachedRemoteRelation(c) => {
+                self.conf.cached_remote.record(&c.relation_id);
+                PlanNode::Read(ReadSource::Table {
+                    name: super::cached_remote_table(&c.relation_id),
+                    options: std::collections::BTreeMap::new(),
+                })
+            }
             RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
                 input: self.input("CollectMetrics", c.input.as_deref())?,
                 name: c.name.clone(),

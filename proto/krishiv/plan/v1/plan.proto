@@ -815,6 +815,8 @@ enum AggregateFunction {
   // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
   // feature: collated_min_max
   AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
+  // feature: histogram_numeric
+  AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC = 49;
 }
 
 enum AggregateInput {
@@ -869,6 +871,9 @@ message AggregateExpr {
   bytes result_element = 17;
   // feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
   UdafCall udaf = 18;
+  // feature: histogram_numeric (`histogram_numeric` only: the folded number of
+  // bins, at least 2).
+  int32 histogram_bins = 19;
 }
 
 // The call of a session aggregate UDF: its implementation by name and

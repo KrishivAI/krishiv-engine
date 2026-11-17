@@ -1308,6 +1308,26 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_histogram_numeric",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::HistogramNumeric { nb: 5 },
+                        args: vec![0],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::Int32,
+                        name: "x".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
             "sort_merge_join",

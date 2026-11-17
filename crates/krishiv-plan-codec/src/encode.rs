@@ -1262,6 +1262,7 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
             ..
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         _ => false,
     };
     if invalid {
@@ -1367,6 +1368,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 a,
                 nested,
             ));
+        }
+        AggregateFunction::HistogramNumeric { nb } => {
+            let mut e = percentile_expr(
+                pb::AggregateFunction::HistogramNumeric,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            );
+            e.histogram_bins = *nb;
+            return Ok(e);
         }
         AggregateFunction::ApproxCountDistinct { p } => {
             return Ok(percentile_expr(
