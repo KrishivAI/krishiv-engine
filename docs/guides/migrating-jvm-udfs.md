@@ -7,12 +7,18 @@ registration that names one is refused. This guide shows what to use instead.
 ## What happens today
 
 A statement that registers a function implemented by a JVM class fails at parse time with
-`KRISHIV_UNSUPPORTED_FEATURE`, which names the feature it could not run:
+`KRISHIV_JVM_FUNCTION_UNSUPPORTED` (SQLSTATE `0A000`), which names the function and the class it could not
+load, and points at the replacement:
 
 ```sql
 CREATE TEMPORARY FUNCTION my_upper AS 'com.example.MyUpper' USING JAR 'my-udfs.jar';
--- KRISHIV_UNSUPPORTED_FEATURE: CREATE FUNCTION ... AS 'class' (a function implemented by a JVM class)
+-- KRISHIV_JVM_FUNCTION_UNSUPPORTED: The function my_upper is implemented by the JVM class com.example.MyUpper,
+-- which Krishiv cannot load: it runs no JVM. Rewrite it as a built-in function, a SQL function (CREATE FUNCTION ... RETURN),
+-- a Rust UDF or a Python UDF; the guide "Migrating JVM UDFs" lists the replacements.
 ```
+
+When the function or the class name matches a built-in the migration table knows, the message names that built-in
+instead (for example, "Use the built-in function `<name>` instead.").
 
 The statement is refused before anything runs, so nothing is registered and no JAR is read.
 
