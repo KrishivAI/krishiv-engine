@@ -972,6 +972,24 @@ fn payload_rows_round_trip_exactly() {
             .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(want.to_data(), b.to_data(), "{}", c.data_type());
         }
+        // Bytes mode: strings come back as `BinaryView` with no UTF-8
+        // check, and arrow-row encodes them to the same key rows (the
+        // distinct counter relies on it).
+        let raw = layout
+            .decode_rows_bytes(&rows)
+            .unwrap_or_else(|e| panic!("{e}"));
+        for (b, r) in back.iter().zip(&raw) {
+            assert_eq!(r.data_type(), &super::bytes_type(b.data_type()));
+            let rows_of = |c: &ArrayRef| {
+                crate::hash::KeyEncoder::new(&[c.data_type().clone()])
+                    .and_then(|k| k.encode(&[Arc::clone(c)]))
+                    .unwrap_or_else(|e| panic!("{e}"))
+            };
+            let (want, got) = (rows_of(b), rows_of(r));
+            for i in 0..3 {
+                assert_eq!(want.row(i).data(), got.row(i).data(), "{}", b.data_type());
+            }
+        }
     }
     let one = RowLayout::for_payload(&[DataType::Int64]).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(one.stride(), 16);

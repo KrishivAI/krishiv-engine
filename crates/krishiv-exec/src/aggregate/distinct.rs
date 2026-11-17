@@ -87,6 +87,7 @@ use crate::error::{Result, internal};
 use crate::hash::{HashSeed, KeyEncoder, KeyTable, grown};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::pipeline::{ExecNode, PipelineBuilder};
+use crate::rows::bytes_type;
 use crate::sync::{Mutex, lock};
 
 /// Pairs encoded and counted at once.
@@ -308,11 +309,47 @@ fn plain_on_keys(a: &AggregateExpr, k: &KeyInput) -> AggregateExpr {
     a
 }
 
+/// `col` (decoded by the bytes encoder) as type `t`: a `BinaryView` column
+/// of a string or binary key becomes that type, its strings UTF-8 checked
+/// (`INTERNAL_ERROR` for a corrupt one, never a panic).
+pub(super) fn checked_strings(col: ArrayRef, t: &DataType) -> Result<ArrayRef> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::{BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
+    if col.data_type() == t {
+        return Ok(col);
+    }
+    let Some(b) = col.as_binary_view_opt() else {
+        return Err(internal(format!(
+            "a {} counter key column for a {t} key",
+            col.data_type()
+        )));
+    };
+    let text = || {
+        b.clone()
+            .to_string_view()
+            .map_err(|e| internal(format!("a counted key is not UTF-8: {e}")))
+    };
+    Ok(match t {
+        DataType::Utf8View => Arc::new(text()?),
+        DataType::Utf8 => Arc::new(StringArray::from_iter(text()?.iter())),
+        DataType::LargeUtf8 => Arc::new(LargeStringArray::from_iter(text()?.iter())),
+        DataType::Binary => Arc::new(BinaryArray::from_iter(b.iter())),
+        DataType::LargeBinary => Arc::new(LargeBinaryArray::from_iter(b.iter())),
+        _ => return Err(internal(format!("no counter key decoding for {t}"))),
+    })
+}
+
 /// The per-partition counts the final phase's merge tasks queue for the
 /// count rows' source.
 pub(crate) struct PairCounts {
     /// Key columns at the start of a pairs batch; the rest are the values.
     keys: usize,
+    /// The key types (the count rows' keys are checked into them).
+    key_types: Vec<DataType>,
+    /// The pairs' encoder over the types [`RowTable::key_bytes`] gives
+    /// (strings and binaries as `BinaryView`): its key rows are byte for
+    /// byte those of an encoder over the key types, since arrow-row encodes
+    /// every string and binary type alike.
     encoder: KeyEncoder,
     seed: HashSeed,
     input: Arc<KeyInput>,
@@ -344,10 +381,9 @@ impl PairCounts {
         r.try_grow(bytes).is_err()
     }
 
-    /// Encodes a pairs batch's keys and which rows have every value
-    /// non-NULL.
-    fn encode_pairs(&self, b: &RecordBatch) -> Result<Encoded> {
-        let cols = b.columns();
+    /// Encodes the keys of pairs read as bytes ([`RowTable::key_bytes`])
+    /// and which rows have every value non-NULL.
+    fn encode_pairs(&self, cols: &[ArrayRef]) -> Result<Encoded> {
         let (keys, values) = cols.split_at(self.keys.min(cols.len()));
         let rows = self.encoder.encode(keys)?;
         let hashes = (0..rows.num_rows())
@@ -366,7 +402,16 @@ impl PairCounts {
         let mut out = Vec::with_capacity(n.div_ceil(self.batch));
         for start in (0..n).step_by(self.batch) {
             let end = (start + self.batch).min(n);
-            let keys = self.encoder.decode(&local.keys, start..end)?;
+            // Decoded as bytes, then checked into the key types: the keys
+            // were encoded from unchecked bytes, and arrow-row's own UTF-8
+            // check in a decode panics.
+            let keys = self
+                .encoder
+                .decode(&local.keys, start..end)?
+                .into_iter()
+                .zip(&self.key_types)
+                .map(|(c, t)| checked_strings(c, t))
+                .collect::<Result<Vec<_>>>()?;
             let counts = local
                 .counts
                 .get(start..end)
@@ -441,8 +486,12 @@ impl PairCounts {
         for start in (0..len).step_by(COUNT_ROWS) {
             query.check_cancelled()?;
             let ids = t.part_ids(p, start..(start + COUNT_ROWS).min(len));
-            let batch = t.output_batch(&ids)?;
-            if self.refused(&mut scratch, batch.get_array_memory_size()) {
+            // The pairs' bytes, with no UTF-8 check of string columns: they
+            // are only encoded here (C3 q14 profile: the check was ~5% of
+            // the query).
+            let batch = t.key_bytes(&ids)?;
+            let size = batch.iter().map(Array::get_array_memory_size).sum();
+            if self.refused(&mut scratch, size) {
                 #[cfg(test)]
                 self.hooks.scratch_refusals.fetch_add(1, Ordering::Relaxed);
                 return Ok(None);
@@ -755,7 +804,8 @@ impl Sink for DistinctCount {
             ConsumerHandle::register(Arc::clone(query.pool()), "DistinctCount counts", None);
         let counts = Arc::new(PairCounts {
             keys: self.key_types.len(),
-            encoder: KeyEncoder::new(&self.key_types)?,
+            key_types: self.key_types.clone(),
+            encoder: KeyEncoder::new(&self.key_types.iter().map(bytes_type).collect::<Vec<_>>())?,
             seed: HashSeed::new(query.config().seed),
             input: Arc::clone(&self.input),
             batch: query.config().batch_size.max(1),

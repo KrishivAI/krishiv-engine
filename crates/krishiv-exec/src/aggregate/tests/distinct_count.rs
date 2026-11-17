@@ -232,6 +232,71 @@ async fn string_keys() {
     assert_eq!(got, want);
 }
 
+/// String keys and values counted by parallel merge tasks, which read the
+/// pairs' bytes with no UTF-8 check (`RowTable::key_bytes`): the counter's
+/// keys match the ones `finalize` and the key table encode from strings,
+/// for every string carrier, short (inline) and long (heap) values.
+#[tokio::test]
+async fn merge_tasks_count_string_pairs_by_their_bytes() {
+    use arrow_array::{LargeStringArray, StringArray};
+    for t in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        let s = schema(vec![
+            ("k", t.clone()),
+            ("v", DataType::Utf8),
+            ("w", DataType::Int64),
+        ]);
+        let b: Vec<Vec<ArrayRef>> = (0..120_i64)
+            .map(|j| {
+                let ks: Vec<Option<String>> = (0..250_i64)
+                    .map(|i| {
+                        let x = (i * 7919 + j * 13) % 2_000;
+                        (x % 7 != 3).then(|| {
+                            if x % 2 == 0 {
+                                format!("k{x}")
+                            } else {
+                                format!("a long search phrase \u{e9} {x:05}")
+                            }
+                        })
+                    })
+                    .collect();
+                let k: ArrayRef = match t {
+                    DataType::Utf8 => Arc::new(StringArray::from(ks)),
+                    DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ks)),
+                    _ => Arc::new(StringViewArray::from(ks)),
+                };
+                let v: ArrayRef = Arc::new(StringArray::from(
+                    (0..250_i64)
+                        .map(|i| {
+                            ((i % 5) != 0).then(|| format!("value number {}", (i * 31 + j) % 97))
+                        })
+                        .collect::<Vec<_>>(),
+                ));
+                let w = i64s(&(0..250_i64).map(|i| Some(i % 11)).collect::<Vec<_>>());
+                vec![k, v, w]
+            })
+            .collect();
+        for plain in [false, true] {
+            let (sp, flags) = shape(&s, plain, 0);
+            let old = distinct_plan_with(scan(&s, b.clone()), sp.clone(), &flags, false).unwrap();
+            let want = rows(&exec_with(old, Opts::default(), true).await.unwrap().0);
+            let op = DistinctCount::with_pairs(&sp, &flags, |p| {
+                HashAggregate::with_row_mode(p, rowtable::Mode::Grow)
+            })
+            .unwrap();
+            let hooks = Arc::clone(op.hooks());
+            let plan = crate::aggregate::distinct::DistinctCountNode::new(scan(&s, b.clone()), op);
+            let o = Opts {
+                slots: 4,
+                ..Opts::default()
+            };
+            let got = rows(&exec_with(plan, o, true).await.unwrap().0);
+            assert_eq!(got, want, "{t} plain {plain}");
+            let parts = hooks.parts.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(parts > 1, "{t}: the merge tasks counted {parts} partitions");
+        }
+    }
+}
+
 /// A pool far smaller than the tables: both tables spill, the pairs reach
 /// the output on disk and are counted in `finalize`; the rows are those of
 /// the plan with memory to spare.
@@ -662,4 +727,38 @@ async fn a_distinct_count_alone_keeps_the_two_aggregations() {
             "plain {plain}"
         );
     }
+}
+
+/// The counter's keys decode as bytes and are checked into the key types:
+/// every string and binary type round-trips, and a key that is not UTF-8
+/// is an error, never a panic.
+#[test]
+fn counter_keys_are_checked_into_their_types() {
+    use crate::aggregate::distinct::checked_strings;
+    use arrow_array::BinaryViewArray;
+    let long = "a value longer than twelve bytes \u{e9}";
+    let col: ArrayRef = Arc::new(BinaryViewArray::from(vec![
+        Some(&b"k"[..]),
+        None,
+        Some(long.as_bytes()),
+    ]));
+    for t in [
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Binary,
+        DataType::LargeBinary,
+        DataType::BinaryView,
+    ] {
+        let got = checked_strings(Arc::clone(&col), &t).unwrap_or_else(|e| panic!("{t}: {e}"));
+        assert_eq!(got.data_type(), &t);
+        assert_eq!((got.len(), got.null_count()), (3, 1), "{t}");
+    }
+    let bad: ArrayRef = Arc::new(BinaryViewArray::from(vec![Some(&[0xff_u8, 0xfe][..])]));
+    for t in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        assert!(checked_strings(Arc::clone(&bad), &t).is_err(), "{t}");
+    }
+    assert!(checked_strings(bad, &DataType::Binary).is_ok());
+    let ints: ArrayRef = Arc::new(arrow_array::Int64Array::from(vec![1]));
+    assert!(checked_strings(ints, &DataType::Utf8).is_err());
 }

@@ -1366,6 +1366,18 @@ impl RowTable {
     }
 
     fn key_columns(&self, refs: &[u32]) -> Result<Vec<ArrayRef>> {
+        self.key_columns_as(refs, false)
+    }
+
+    /// The key columns of rows `refs`, each string or binary key as a
+    /// `BinaryView` column of its bytes with no UTF-8 check
+    /// ([`RowLayout::decode_rows_bytes`](crate::rows::RowLayout::decode_rows_bytes)):
+    /// for a reader that only encodes or hashes them.
+    pub(crate) fn key_bytes(&self, refs: &[u32]) -> Result<Vec<ArrayRef>> {
+        self.key_columns_as(refs, true)
+    }
+
+    fn key_columns_as(&self, refs: &[u32], bytes: bool) -> Result<Vec<ArrayRef>> {
         let rows = self.rows_of(refs)?;
         match &self.views {
             None => layout(&self.core)?.decode(&rows),
@@ -1381,7 +1393,11 @@ impl RowTable {
                         (row, heap)
                     })
                     .collect();
-                l.decode_rows(&with_heaps)
+                if bytes {
+                    l.decode_rows_bytes(&with_heaps)
+                } else {
+                    l.decode_rows(&with_heaps)
+                }
             }
         }
     }

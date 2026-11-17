@@ -401,6 +401,22 @@ impl RowLayout {
     /// `INTERNAL_ERROR` for a row shorter than the stride, a view outside
     /// its heap or a string that is not UTF-8 (a corrupt row).
     pub fn decode_rows(&self, rows: &[(&[u8], &[u8])]) -> Result<Vec<ArrayRef>> {
+        self.decode_rows_as(rows, false)
+    }
+
+    /// [`decode_rows`](Self::decode_rows), but every string or binary
+    /// column comes back as a `BinaryView` column of its bytes, with no
+    /// UTF-8 check: for a reader that only re-encodes or hashes the bytes
+    /// (arrow-row encodes every string and binary type the same way).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a row shorter than the stride or a view outside
+    /// its heap.
+    pub(crate) fn decode_rows_bytes(&self, rows: &[(&[u8], &[u8])]) -> Result<Vec<ArrayRef>> {
+        self.decode_rows_as(rows, true)
+    }
+
+    fn decode_rows_as(&self, rows: &[(&[u8], &[u8])], bytes: bool) -> Result<Vec<ArrayRef>> {
         if let Some((r, _)) = rows.iter().find(|(r, _)| r.len() < self.stride) {
             return Err(internal(format!(
                 "a {}-byte row for a {}-byte layout",
@@ -435,6 +451,9 @@ impl RowLayout {
                     }
                 });
                 let values = values.collect::<Result<Vec<Option<&[u8]>>>>()?;
+                if bytes {
+                    return Ok(Arc::new(arrow_array::BinaryViewArray::from(values)) as ArrayRef);
+                }
                 strings_array(&c.data_type, &values)
             })
             .collect()
@@ -1058,6 +1077,16 @@ fn strings_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<Array
         DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),
         t => return Err(internal(format!("no row view decoding for {t}"))),
     })
+}
+
+/// The type [`RowLayout::decode_rows_bytes`] gives a column of type `t`:
+/// `BinaryView` for a string or binary type, else `t`.
+pub(crate) fn bytes_type(t: &DataType) -> DataType {
+    if Kind::of(t) == Some(Kind::View) {
+        DataType::BinaryView
+    } else {
+        t.clone()
+    }
 }
 
 /// Rows taken out of [`EncodedKeys`] by [`EncodedKeys::gather`].
