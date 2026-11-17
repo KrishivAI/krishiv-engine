@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`MergeIndex`]: the key index of a large final-phase merge table, a salted
 //! directory like the large [`crate::rows::JoinIndex`]. Its slots hold a
-//! 16-bit salt and `row reference + 1`, probed linearly at load at most 1/2.
+//! 16-bit salt and `row reference + 1`, probed linearly. It is sized for
+//! load 1/2 at the estimate, exactly rather than to a power of two (a key's
+//! first slot is a multiply-shift of its hash, not a mask), and grows only past
+//! load 5/8, so an estimate a little low does not double it. A power of two
+//! made it up to twice that: ClickBench q33's merge held 268M slots for 100M
+//! groups (`design/P3-A-wide-string-groups.md`).
 //!
 //! A merge is mostly inserts into a table too large for the caches, so each
 //! lookup misses. `hashbrown` has no way to prefetch; this directory's slots
@@ -19,23 +24,24 @@ const SALT_MASK: u64 = 0xFFFF << 48;
 const ID_MASK: u64 = !SALT_MASK;
 /// Fewest slots.
 const MIN_SLOTS: usize = 1 << 10;
+/// Bits of `g` below the salt that pick a key's first slot.
+const POS_BITS: u32 = 48;
 
-/// Slots for `keys` keys at load at most 1/2.
+/// Slots for `keys` keys at load 1/2 (a whole number of cache lines).
 fn slots_for(keys: usize) -> usize {
     keys.saturating_mul(2)
-        .checked_next_power_of_two()
+        .checked_next_multiple_of(8)
         .unwrap_or(usize::MAX)
         .max(MIN_SLOTS)
 }
 
+/// The first slot of `g` among `len`: the low [`POS_BITS`] bits of `g`
+/// scaled to `len` (multiply-shift; the salt bits are not used).
 #[inline]
-fn low(g: u64, mask: usize) -> usize {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "only the low bits below the mask are used"
-    )]
-    let low = g as usize;
-    low & mask
+fn first(g: u64, len: usize) -> usize {
+    let x = u128::from(g & ID_MASK);
+    // Below `len` (a 48-bit fraction of it), so the cast keeps every bit.
+    ((x * len as u128) >> POS_BITS) as usize
 }
 
 /// What a lookup found in one slot.
@@ -81,9 +87,15 @@ impl MergeIndex {
         self.slots.capacity() * size_of::<u64>()
     }
 
-    /// Whether `new` more keys need a larger directory.
+    /// Whether `new` more keys need a larger directory: past load 5/8.
     fn must_grow(&self, new: usize) -> bool {
-        self.keys.saturating_add(new).saturating_mul(2) > self.slots.len()
+        self.keys.saturating_add(new).saturating_mul(8) > self.slots.len().saturating_mul(5)
+    }
+
+    /// The slots a growth for `new` more keys allocates: load 1/2, and at
+    /// least twice the old directory (so repeated growth stays linear).
+    fn grown_slots(&self, new: usize) -> usize {
+        slots_for(self.keys.saturating_add(new)).max(self.slots.len().saturating_mul(2))
     }
 
     /// Bytes at the peak of [`reserve`](Self::reserve) for `new` more keys:
@@ -91,7 +103,7 @@ impl MergeIndex {
     pub(super) fn projected(&self, new: usize) -> usize {
         if self.must_grow(new) {
             self.bytes()
-                .saturating_add(Self::bytes_for(self.keys.saturating_add(new)))
+                .saturating_add(self.grown_slots(new).saturating_mul(size_of::<u64>()))
         } else {
             self.bytes()
         }
@@ -106,12 +118,12 @@ impl MergeIndex {
         if !self.must_grow(new) {
             return Ok(false);
         }
-        let mut slots = zeroed(slots_for(self.keys.saturating_add(new)))?;
-        let mask = slots.len() - 1;
+        let mut slots = zeroed(self.grown_slots(new))?;
+        let len = slots.len();
         for &s in self.slots.iter().filter(|&&s| s != 0) {
-            let mut i = low(g_of(row_ref(s)), mask);
+            let mut i = first(g_of(row_ref(s)), len);
             while slots[i] != 0 {
-                i = (i + 1) & mask;
+                i = next(i, len);
             }
             slots[i] = s;
         }
@@ -122,23 +134,23 @@ impl MergeIndex {
     /// Asks the CPU to load the slot of `g`.
     #[inline]
     pub(super) fn prefetch_slot(&self, g: u64) {
-        prefetch_read(&self.slots, low(g, self.slots.len() - 1));
+        prefetch_read(&self.slots, first(g, self.slots.len()));
     }
 
     /// The first position of a lookup of `g`.
     #[inline]
     pub(super) fn start(&self, g: u64) -> usize {
-        low(g, self.slots.len() - 1)
+        first(g, self.slots.len())
     }
 
     /// The next position after `at`.
     #[inline]
     pub(super) fn after(&self, at: usize) -> usize {
-        (at + 1) & (self.slots.len() - 1)
+        next(at, self.slots.len())
     }
 
     /// The first empty or salt-matching slot of `g` from position `at`.
-    /// Load at most 1/2 means an empty slot always ends the walk.
+    /// Load at most 5/8 means an empty slot always ends the walk.
     #[inline]
     pub(super) fn walk(&self, g: u64, mut at: usize) -> Slot {
         loop {
@@ -159,6 +171,12 @@ impl MergeIndex {
         self.slots[at] = (g & SALT_MASK) | (u64::from(r) + 1);
         self.keys += 1;
     }
+}
+
+/// The position after `at` among `len`, wrapping at the end.
+#[inline]
+fn next(at: usize, len: usize) -> usize {
+    if at + 1 == len { 0 } else { at + 1 }
 }
 
 /// The row reference of an occupied slot.
@@ -196,7 +214,7 @@ mod tests {
 
     #[test]
     fn growth_keeps_every_key_and_is_projected() {
-        let g = |r: u32| u64::from(r) << 3;
+        let g = |r: u32| u64::from(r).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let mut index = MergeIndex::new(10).unwrap();
         for r in 0..10 {
             let Slot::Empty(at) = index.walk(g(r), index.start(g(r))) else {
@@ -217,5 +235,58 @@ mod tests {
             ));
         }
         assert_eq!(MergeIndex::bytes_for(usize::MAX), usize::MAX);
+    }
+
+    /// Inserts `g(r)` for each `r` of `rows` (all new keys).
+    fn fill(index: &mut MergeIndex, rows: std::ops::Range<u32>, g: impl Fn(u32) -> u64) {
+        for r in rows {
+            let Slot::Empty(at) = index.walk(g(r), index.start(g(r))) else {
+                panic!("key {r} seen twice");
+            };
+            index.insert(at, g(r), r);
+        }
+    }
+
+    #[test]
+    fn the_directory_is_sized_to_the_estimate_not_a_power_of_two() {
+        // q33's merge: 100M groups took 2^28 slots; now 2 per key.
+        assert_eq!(MergeIndex::bytes_for(100_000_000), 200_000_000 * 8);
+        assert_eq!(MergeIndex::new(3_000).unwrap().slots(), 6_000);
+        assert_eq!(MergeIndex::new(3_001).unwrap().slots(), 6_008);
+        assert_eq!(MergeIndex::new(1).unwrap().slots(), MIN_SLOTS);
+    }
+
+    #[test]
+    fn keys_past_the_estimate_fit_up_to_load_five_eighths() {
+        // A 1,000-key estimate (2,000 slots) takes 1,250 keys without growing,
+        // so an estimate a little low or a last merge chunk does not double it.
+        let g = |r: u32| u64::from(r).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut index = MergeIndex::new(1_000).unwrap();
+        assert!(!index.reserve(1_250, g).unwrap());
+        fill(&mut index, 0..1_250, g);
+        assert_eq!(index.slots(), 2_000);
+        assert!(index.reserve(1, g).unwrap());
+        // A growth at least doubles.
+        assert_eq!(index.slots(), 4_000);
+        fill(&mut index, 1_250..2_000, g);
+        for r in 0..2_000 {
+            assert!(matches!(
+                index.walk(g(r), index.start(g(r))),
+                Slot::Candidate(_, x) if x == r
+            ));
+        }
+    }
+
+    #[test]
+    fn a_walk_from_the_last_slot_wraps_to_the_first() {
+        let mut index = MergeIndex::new(1).unwrap();
+        let last = MIN_SLOTS - 1;
+        // The highest 48-bit position maps to the last slot.
+        let (a, b) = (0x0001_FFFF_FFFF_FFFF_u64, 0x0002_FFFF_FFFF_FFFF_u64);
+        assert_eq!(index.start(a), last);
+        index.insert(last, a, 3);
+        assert!(matches!(index.walk(b, index.start(b)), Slot::Empty(0)));
+        index.insert(0, b, 4);
+        assert!(matches!(index.walk(b, last), Slot::Candidate(0, 4)));
     }
 }
