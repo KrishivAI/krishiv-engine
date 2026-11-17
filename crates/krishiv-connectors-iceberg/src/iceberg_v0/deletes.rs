@@ -17,7 +17,8 @@
 //!   store's error naming it; it is never skipped.
 //!
 //! The positions are charged to the query's memory (the scan's consumer,
-//! [`super::lazy`]) while they are read and while the selections live; a
+//! [`super::lazy`]) from their read until their data files' selections are
+//! built (one data file at a time), and the selections while they live; a
 //! load that does not fit fails with the memory class (PR-25d).
 
 use std::collections::{BTreeSet, HashMap};
@@ -138,46 +139,59 @@ pub(super) async fn load(
         .buffered(DELETE_FILE_CONCURRENCY)
         .try_collect::<Vec<_>>();
     let (from_files, from_dvs) = futures::try_join!(read_positions, read_dvs)?;
-    let mut deleted: HashMap<String, Vec<u64>> = HashMap::new();
-    let mut charges = Vec::with_capacity(from_files.len() + from_dvs.len());
+    // Each read's charge, with how many data files' positions it still
+    // pays for: it goes once they are all converted (a position delete file
+    // can cover several data files).
+    let mut deleted: HashMap<String, (Vec<u64>, Vec<usize>)> = HashMap::new();
+    let mut charges: Vec<(Option<Reservation>, usize)> =
+        Vec::with_capacity(from_files.len() + from_dvs.len());
     for (per_file, charge) in from_files {
+        let c = charges.len();
+        charges.push((Some(charge), per_file.len()));
         for (path, mut p) in per_file {
-            deleted.entry(path).or_default().append(&mut p);
+            let at = deleted.entry(path).or_default();
+            at.0.append(&mut p);
+            at.1.push(c);
         }
-        charges.push(charge);
     }
     for (path, p, charge) in from_dvs {
-        deleted.entry(path).or_default().extend(p);
-        charges.push(charge);
+        let c = charges.len();
+        charges.push((Some(charge), 1));
+        let at = deleted.entry(path).or_default();
+        at.0.extend(p);
+        at.1.push(c);
     }
-    // While the selections are built, each data file's positions are sorted
-    // in a copy and become ranges (one per position, plus one): charged up
-    // front, then trimmed to what the selections hold once the positions
-    // are gone.
-    let positions = deleted
-        .values()
-        .map(|p| p.len().saturating_add(1))
-        .fold(0_usize, usize::saturating_add);
+    // One data file at a time: its positions are sorted in a copy and
+    // become ranges (one per position, plus one), both charged while it
+    // converts; then the copy's charge goes and the ranges' stays as long as
+    // the selections.
     let mut held = mem.reservation();
-    held.grow(positions.saturating_mul(POSITION_BYTES + RANGE_BYTES))
-        .await?;
     let mut out = DeleteSelections::default();
-    // A selection's ranges are allocated for its positions plus one (its
-    // capacity, which `RowSelection` does not expose; dedup only lowers it).
-    let mut ranges = 0_usize;
     for (data, file, _) in tasks {
-        if let Some(p) = deleted.remove(&data.file.path) {
-            ranges = ranges.saturating_add(p.len().saturating_add(1).saturating_mul(RANGE_BYTES));
-            // `excluding` sorts and dedups; the selection is unbounded so a
-            // wrong record count in the manifest never drops a row.
-            out.by_file
-                .insert(key(file), RowSelection::excluding(u64::MAX, p));
+        let Some((p, paid_by)) = deleted.remove(&data.file.path) else {
+            continue;
+        };
+        let n = p.len().saturating_add(1);
+        held.grow(n.saturating_mul(POSITION_BYTES + RANGE_BYTES))
+            .await?;
+        // `excluding` sorts and dedups; the selection is unbounded so a
+        // wrong record count in the manifest never drops a row.
+        out.by_file
+            .insert(key(file), RowSelection::excluding(u64::MAX, p));
+        // A selection's ranges are allocated for its positions plus one
+        // (its capacity, which `RowSelection` does not expose; dedup only
+        // lowers it).
+        held.shrink(n.saturating_mul(POSITION_BYTES));
+        for c in paid_by {
+            if let Some((charge, left)) = charges.get_mut(c) {
+                *left = left.saturating_sub(1);
+                if *left == 0 {
+                    drop(charge.take());
+                }
+            }
         }
     }
     drop((deleted, charges));
-    if let Some(extra) = held.size().checked_sub(ranges) {
-        held.shrink(extra);
-    }
     Ok((out, vec![held]))
 }
 

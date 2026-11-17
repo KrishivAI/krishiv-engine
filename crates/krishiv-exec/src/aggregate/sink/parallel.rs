@@ -46,7 +46,7 @@ use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{Reservation, SpillError, SpillFile, SpillWriter};
 
-use super::super::is_order_sensitive;
+use super::super::observes_order;
 use super::super::rowtable::{FinalTask, Mode, RowTable, final_tasks};
 use super::super::table::Table;
 use super::parts::{Helper, MAX_WRITERS};
@@ -157,13 +157,8 @@ impl HashAggregate {
             }
             let mut tables = std::mem::take(&mut inner.tables);
             // The default path's merge order: the largest table first,
-            // unless an order-sensitive aggregate needs partition order.
-            let ordered = self
-                .core
-                .spec
-                .aggregates
-                .iter()
-                .any(|a| is_order_sensitive(&a.function));
+            // unless an aggregate that observes order needs partition order.
+            let ordered = self.core.spec.aggregates.iter().any(observes_order);
             if !ordered && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len()) {
                 tables.swap(0, big);
             }
@@ -246,8 +241,18 @@ impl HashAggregate {
                     task.need = 0;
                 }
                 let query = Arc::clone(ctx.query());
+                let counter = g.counter.get().cloned();
                 running.push(Box::pin(ctx.run_blocking(move || {
                     let stall = task.run(&query)?;
+                    // A `count(DISTINCT)` counted at the merge: the task's
+                    // pairs are distinct and no other task holds them, so
+                    // they are counted here, in parallel, and freed.
+                    if stall.is_none()
+                        && let Some(c) = counter
+                    {
+                        c.count_table(&mut task.table, &query)?;
+                        shrink_to(&mut task.reservation, task.table.memory_size());
+                    }
                     Ok((task, stall))
                 })));
             }

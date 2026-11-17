@@ -97,7 +97,7 @@ fn a_failed_build_is_not_cached() {
 }
 
 /// A non-default value for every key, so a key missing from the fingerprint shows up.
-fn changed(key: ClientConfigKey) -> ClientOptions {
+pub(super) fn changed(key: ClientConfigKey) -> ClientOptions {
     use ClientConfigKey as K;
     // Booleans flip their default (some default to true).
     let default = ClientOptions::new().get_config_value(&key);
@@ -129,10 +129,10 @@ fn changed(key: ClientConfigKey) -> ClientOptions {
 fn every_key_changes_the_fingerprint() {
     let distinct: HashSet<ClientConfigKey> = KEYS.iter().copied().collect();
     assert_eq!(distinct.len(), KEYS.len(), "no key is listed twice");
-    let mut seen = HashSet::from([fingerprint(&ClientOptions::new()).unwrap()]);
+    let mut seen = HashSet::from([fingerprint(&ClientOptions::new(), None).unwrap()]);
     for key in KEYS {
         assert!(
-            seen.insert(fingerprint(&changed(key)).unwrap()),
+            seen.insert(fingerprint(&changed(key), None).unwrap()),
             "{key:?} does not change the fingerprint"
         );
     }

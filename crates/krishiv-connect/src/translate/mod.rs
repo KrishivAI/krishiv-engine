@@ -76,9 +76,19 @@
 mod errors;
 mod expression;
 mod literal;
+mod local;
 mod names;
 mod relation;
+mod schema;
 mod types;
+mod udf;
+
+pub use udf::{
+    Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
+};
+
+pub use local::{LocalRelations, LocalRequest};
+pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
@@ -97,6 +107,11 @@ type Result<T> = std::result::Result<T, KrishivError>;
 pub struct TranslateConf {
     /// The format of a read that names none: `spark.sql.sources.default`.
     pub default_data_source: String,
+    /// The session settings that change how SQL text parses; an
+    /// `ExpressionString` (`expr()`, `selectExpr`) is parsed with them.
+    pub parser: krishiv_sql::ParserOptions,
+    /// The local relations of the plan (`createDataFrame`), built by the host.
+    pub local_relations: LocalRelations,
 }
 
 impl Default for TranslateConf {
@@ -104,6 +119,8 @@ impl Default for TranslateConf {
     fn default() -> Self {
         Self {
             default_data_source: "parquet".to_owned(),
+            parser: krishiv_sql::ParserOptions::default(),
+            local_relations: LocalRelations::default(),
         }
     }
 }
@@ -132,18 +149,23 @@ pub fn expression_from_bytes(bytes: &[u8], conf: &TranslateConf) -> Result<Arc<E
     translate_expression(&*wire::decode_expression(bytes)?, conf)
 }
 
-/// Translates a `Plan` whose root is a relation.
+/// Translates a `Plan` whose root is a relation. A `sql_command` translates as the `SQL` relation
+/// it answers for a query ([`sql_command_relation`]); running it as a command, or not, is the
+/// server's job (it needs the session).
 ///
 /// # Errors
-/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a command, `KRISHIV_UNSUPPORTED_FEATURE` for a compressed plan (the
-/// server's job, P3), plus the errors of [`translate_relation`].
+/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for any other command, `KRISHIV_UNSUPPORTED_FEATURE` for a compressed plan (the
+/// server's job, P3), plus the errors of [`translate_relation`] and [`sql_command_relation`].
 pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => translate_relation(relation, conf),
-        Some(OpType::Command(command)) => Err(match &command.command_type {
-            Some(arm) => unsupported_variant("spark.connect.Command", arm.variant()),
-            None => not_set("spark.connect.Command", "COMMAND_TYPE_NOT_SET"),
-        }),
+        Some(OpType::Command(command)) => match &command.command_type {
+            Some(pb::command::CommandType::SqlCommand(c)) => {
+                translate_relation(&sql_command_relation(c)?, conf)
+            }
+            Some(arm) => Err(unsupported_variant("spark.connect.Command", arm.variant())),
+            None => Err(not_set("spark.connect.Command", "COMMAND_TYPE_NOT_SET")),
+        },
         Some(OpType::CompressedOperation(_)) => Err(unsupported_field(
             "Plan",
             "compressed_operation",
@@ -151,6 +173,66 @@ pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
         )),
         None => Err(not_set("spark.connect.Plan", "OP_TYPE_NOT_SET")),
     }
+}
+
+/// The `SQL` relation of a `SqlCommand`: what `spark.sql()`'s client re-sends when the statement
+/// was a query. When `input` is set (every `spark.sql()` of a PySpark 4.x client sends it, the
+/// other fields being deprecated) it is the relation, unchanged and with its `common` (Spark's
+/// `handleSqlCommand` answers `command.getInput`); otherwise the deprecated `sql`, `args` and
+/// `pos_args` fields are the relation's `query`, `args` and `pos_args`, the named and positional
+/// expressions carrying over as they are.
+///
+/// The library form of a `sql_command` exists for the coverage tie and for the server, which
+/// runs the command; `AnalyzePlan` of a command plan stays refused by the server.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for an `input` of `WithRelations` (SQL over DataFrame
+/// arguments, Connect group 4); `CONNECT_INVALID_PLAN.SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS`
+/// for any other `input` relation.
+pub fn sql_command_relation(command: &pb::SqlCommand) -> Result<pb::Relation> {
+    if let Some(input) = &command.input {
+        return match &input.rel_type {
+            Some(pb::relation::RelType::Sql(_)) => Ok(input.clone()),
+            Some(pb::relation::RelType::WithRelations(_)) => Err(unsupported_field(
+                "SqlCommand",
+                "input",
+                "SQL over DataFrame arguments",
+            )),
+            other => Err(
+                krishiv_common::error::ConnectInvalidPlanSqlCommandExpectsSqlOrWithRelations {
+                    other: other.as_ref().map_or_else(
+                        || "REL_TYPE_NOT_SET".to_owned(),
+                        |r| r.variant().field.to_ascii_uppercase(),
+                    ),
+                }
+                .into(),
+            ),
+        };
+    }
+    #[expect(
+        deprecated,
+        reason = "Spark still accepts the deprecated fields of older clients"
+    )]
+    let sql = pb::Sql {
+        query: command.sql.clone(),
+        args: command.args.clone(),
+        pos_args: command.pos_args.clone(),
+        named_arguments: command.named_arguments.clone(),
+        pos_arguments: command.pos_arguments.clone(),
+    };
+    Ok(pb::Relation {
+        common: None,
+        rel_type: Some(pb::relation::RelType::Sql(sql)),
+    })
+}
+
+/// Whether a `SQL` relation carries parameters (`args`, `pos_args`, named or positional
+/// expressions).
+#[must_use]
+pub fn sql_has_parameters(sql: &pb::Sql) -> bool {
+    #[expect(deprecated, reason = "older clients send the literal fields")]
+    let literals = !sql.args.is_empty() || !sql.pos_args.is_empty();
+    literals || !sql.named_arguments.is_empty() || !sql.pos_arguments.is_empty()
 }
 
 /// The refusal of a command (`Plan.command`) until the server translates
@@ -185,6 +267,20 @@ pub fn translate_relation(relation: &pb::Relation, conf: &TranslateConf) -> Resu
     Plan::try_new(root)
 }
 
+/// [`translate_relation`] with the inline Python UDFs of the plan sent to `udfs` (a server's session),
+/// which names the function each call resolves to.
+///
+/// # Errors
+/// As [`translate_relation`], plus what `udfs` refuses and the errors of [`python_udf`].
+pub fn translate_relation_with(
+    relation: &pb::Relation,
+    conf: &TranslateConf,
+    udfs: &mut dyn UdfHost,
+) -> Result<Plan> {
+    let root = Translator::with_udfs(conf, udfs).relation(relation)?;
+    Plan::try_new(root)
+}
+
 /// Translates an expression.
 ///
 /// # Errors
@@ -199,12 +295,16 @@ pub fn translate_expression(
 /// The state of one translation.
 pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
+    /// Where inline Python UDFs go; `None` refuses them.
+    udfs: Option<&'c mut dyn UdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
     /// Relations and expressions translated so far.
     nodes: usize,
     /// Threads started so far for subtrees past [`INLINE_LEVELS`].
     hops: usize,
+    /// Local relations met so far: the ordinal of the next one's request.
+    locals: usize,
 }
 
 /// The most threads one translation starts for deep subtrees. A plan needs
@@ -218,9 +318,26 @@ impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {
         Self {
             conf,
+            udfs: None,
             depth: 0,
             nodes: 0,
             hops: 0,
+            locals: 0,
+        }
+    }
+
+    fn with_udfs(conf: &'c TranslateConf, udfs: &'c mut dyn UdfHost) -> Self {
+        Self {
+            udfs: Some(udfs),
+            ..Self::new(conf)
+        }
+    }
+
+    /// The function a call of the inline Python UDF `udf` resolves to.
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
+        match self.udfs.as_deref_mut() {
+            Some(host) => host.inline_python_udf(udf),
+            None => Err(udf::no_host()),
         }
     }
 

@@ -190,6 +190,8 @@ pub(super) struct Resolver<'a> {
     /// (`encode::identity_keys`): resolution does not depend on how the
     /// input shares subtrees, so equal input keys give equal plans.
     pub(super) canon: HashMap<usize, Arc<LogicalPlan>>,
+    /// The relation (canonical address) that first used each observation name (`observe`).
+    pub(super) observed: HashMap<String, usize>,
     /// The identity key of every relation of the input, kept from the first `canonicalize` (the root's).
     pub(super) keys: HashMap<usize, u128>,
     /// The input holds a node the prefix cache does not serve (a resolved scan, SQL text, a read by path).
@@ -232,6 +234,8 @@ pub(super) struct Resolver<'a> {
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
+    /// Binding the metrics of an `observe` (Spark checks them in `CheckAnalysis`, not as an aggregate).
+    pub(super) observing: bool,
     /// The ids of the `Range` leaves resolved so far: a later one with the same id gets a fresh one.
     range_ids: std::collections::HashSet<AttrId>,
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
@@ -250,6 +254,7 @@ type Resolved = (
     Vec<Option<String>>,
     Option<super::prefix::PrefixEntry>,
     bool,
+    (std::collections::HashSet<u64>, bool),
 );
 
 pub(super) fn resolve(
@@ -271,6 +276,8 @@ pub(super) fn resolve(
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
+        observed: HashMap::new(),
+        observing: false,
         keys: HashMap::new(),
         uncacheable: false,
         warm_started: false,
@@ -313,6 +320,8 @@ pub(super) fn resolve(
     } else {
         None
     };
+    // What the hints read, before they are dropped (P3-T062 review r-m1).
+    let hinted = super::reads::hint_reads(&rel.plan);
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -357,6 +366,7 @@ pub(super) fn resolve(
         comments,
         entry,
         r.warm_started,
+        hinted,
     ))
 }
 
@@ -672,6 +682,7 @@ impl Resolver<'_> {
                 | PlanNode::Offset { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::Sample { .. }
+                | PlanNode::CollectMetrics { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);
@@ -947,6 +958,11 @@ impl Resolver<'_> {
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
+            PlanNode::CollectMetrics {
+                input,
+                name,
+                metrics,
+            } => self.collect_metrics(p, input, name, metrics, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
@@ -1159,6 +1175,7 @@ impl Resolver<'_> {
             | PlanNode::Hint { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
+            | PlanNode::CollectMetrics { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }

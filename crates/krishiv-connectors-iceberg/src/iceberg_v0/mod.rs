@@ -28,6 +28,9 @@ pub(crate) mod write_metrics;
 #[cfg(test)]
 mod append_tests;
 #[cfg(test)]
+#[cfg(feature = "cloud")]
+mod azure_tests;
+#[cfg(test)]
 mod baseline_tests;
 #[cfg(test)]
 mod data_file_tests;
