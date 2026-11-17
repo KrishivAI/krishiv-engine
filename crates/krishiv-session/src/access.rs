@@ -594,15 +594,16 @@ impl Session {
                 // `Select` as a whole (column grants on views are not supported).
                 let wanted = env.analysis.mode.read_privilege();
                 let privilege = if wanted == Privilege::Select
-                    && self.state.policy.column_level()
+                    && env.analysis.policy.column_level()
                     && matches!(securable, Securable::Table(_))
                 {
                     Privilege::Browse
                 } else {
                     wanted
                 };
+                // The analysis' policy: the session's, quiet in a trial (`QuietPolicy`).
                 let r = authorize_reported(
-                    &*self.state.policy,
+                    &*env.analysis.policy,
                     &self.state.principal,
                     &securable,
                     privilege,
@@ -635,7 +636,7 @@ impl Session {
         }
         for view in views {
             if let Err(denied) = authorize(
-                &*self.state.policy,
+                &*env.analysis.policy,
                 &self.state.principal,
                 &Securable::View(view.clone()),
                 Privilege::Select,
@@ -1531,6 +1532,42 @@ impl AccessPolicy for ReadOnlyPolicy {
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
     }
+}
+
+/// The policy of a trial analysis ([`crate::session::QueryEnv::set_quiet_denials`], P3 PR-14d):
+/// decides exactly as `inner` does, but is never told of a refusal, so a trial's read denials,
+/// which are answers and not refusals, leave no count or audit record in the provider
+/// (T063 review R2-1). Never a session's policy: only a trial analysis' `AnalysisContext` holds it.
+pub(crate) struct QuietPolicy {
+    inner: Arc<dyn AccessPolicy>,
+}
+
+impl QuietPolicy {
+    /// `inner`, quiet.
+    pub(crate) fn new(inner: Arc<dyn AccessPolicy>) -> Self {
+        Self { inner }
+    }
+}
+
+impl AccessPolicy for QuietPolicy {
+    fn version(&self) -> PolicyVersion {
+        self.inner.version()
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        self.inner.check(principal, securable, privilege)
+    }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    // `denied` keeps the default: told nothing.
 }
 
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or

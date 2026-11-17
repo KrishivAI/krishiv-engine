@@ -3,7 +3,8 @@
 //! listing directories, the `BROWSE` trial of `DROP NAMESPACE ... CASCADE`) leave no trace: no
 //! `krishiv::audit` record, no session denial count, no provider denial count
 //! (`Grants::denied_counts`, the `krishiv_access_denied_total` counters) and no
-//! `AccessPolicy::denied` call. A run of the same statement still counts and audits its refusal.
+//! `AccessPolicy::denied` call; nor does plain `EXPLAIN`'s trial analysis of a read (P3 PR-14d). A run
+//! of the same statement still counts and audits its refusal.
 //! One test per binary: the subscriber is process-wide.
 #![cfg(test)]
 
@@ -78,8 +79,12 @@ fn total(counts: &[DeniedCount]) -> u64 {
 
 /// The provider's own counters (`Grants::denied_counts`), the session's, and the audit records,
 /// after `analyze` and `EXPLAIN FORMAT JSON` of `sql`: all must stay still.
+fn total_session(counts: &DeniedCounts) -> u64 {
+    counts.counts().iter().map(|c| c.count).sum()
+}
+
 fn assert_trials_quiet(s: &Session, session: &DeniedCounts, provider: &dyn Fn() -> u64, sql: &str) {
-    let counted = || session.counts().iter().map(|c| c.count).sum::<u64>();
+    let counted = || total_session(session);
     let before_session = counted();
     take();
     let before = provider();
@@ -194,6 +199,34 @@ fn quiet_trials_leave_no_trace() {
         assert_eq!(provider(), before + 1, "{sql}: the run counts one denial");
         assert_eq!(take().len(), 1, "{sql}: the run writes one audit record");
     }
+
+    // Plain EXPLAIN (P3 PR-14d) first tries the ordinary analysis, whose `SELECT` denial is an
+    // answer: with `BROWSE` only, it shows the withheld plan, and the provider counts nothing.
+    run(&root, "GRANT BROWSE ON TABLE d.t TO user:ana").unwrap();
+    for sql in [
+        "EXPLAIN SELECT * FROM d.t",
+        "EXPLAIN SELECT a FROM d.t WHERE a = 1",
+    ] {
+        take();
+        let (before, before_session) = (provider(), total_session(&ana_counts));
+        assert_eq!(run(&ana, sql).unwrap(), 1, "{sql}");
+        assert_eq!(
+            provider(),
+            before,
+            "{sql}: the trial counted a provider denial"
+        );
+        assert_eq!(total_session(&ana_counts), before_session, "{sql}");
+        assert_eq!(
+            take(),
+            Vec::<String>::new(),
+            "{sql}: the trial wrote an audit record"
+        );
+    }
+    // The run of the read is refused, counted once and audited once.
+    let before = provider();
+    run(&ana, "SELECT * FROM d.t").unwrap_err();
+    assert_eq!(provider(), before + 1, "the read counts one denial");
+    assert_eq!(take().len(), 1, "the read writes one audit record");
 
     // A custom policy that may drop but not browse: the CASCADE's BROWSE trial tells it nothing.
     let warehouse = tempfile::tempdir().unwrap();

@@ -542,8 +542,9 @@ pub trait AccessPolicy: Send + Sync {
     ///
     /// It may also be asked speculatively: `analyze` and `EXPLAIN FORMAT JSON` of a write ask the run's target
     /// checks quietly ([`super::authorize_quietly`]: no audit record, no denial count, no [`Self::denied`]
-    /// call) to decide whether to list the target's directories. A policy that logs or counts its own `check`
-    /// answers sees those trial questions too.
+    /// call) to decide whether to list the target's directories, and a plain `EXPLAIN` first tries the ordinary
+    /// analysis of a read, whose policy is never told of a refusal either. A policy that logs or counts its own
+    /// `check` answers sees those trial questions too.
     fn check<'a>(
         &'a self,
         principal: &'a Principal,

@@ -137,9 +137,30 @@ pub(crate) struct QueryEnv {
     /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
     pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
     /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
-    /// `krishiv::audit` record ([`crate::access::audit_read`]). Only a caller that falls back to
-    /// an analysis of its own, which is audited, sets it.
+    /// `krishiv::audit` record ([`crate::access::audit_read`]) and the policy is not told of them
+    /// (set with [`Self::set_quiet_denials`], which makes `analysis.policy` quiet too). Only a
+    /// caller that falls back to an analysis of its own, which is audited, sets it.
     pub(crate) quiet_denials: bool,
+}
+
+impl QueryEnv {
+    /// Makes this analysis a trial (`quiet`, P3 PR-14d) or an ordinary one: [`Self::quiet_denials`],
+    /// and the policy every read check of the analysis asks (`analysis.policy`, Bind's and the
+    /// session's alike): `policy` itself, or for a trial `policy` behind
+    /// [`crate::access::QuietPolicy`], which decides as `policy` does but is never told of a refusal
+    /// (T063 review R2-1), so the provider counts and audits nothing for a trial either.
+    pub(crate) fn set_quiet_denials(
+        &mut self,
+        quiet: bool,
+        policy: &Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) {
+        self.quiet_denials = quiet;
+        self.analysis.policy = if quiet {
+            Arc::new(crate::access::QuietPolicy::new(Arc::clone(policy)))
+        } else {
+            Arc::clone(policy)
+        };
+    }
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
