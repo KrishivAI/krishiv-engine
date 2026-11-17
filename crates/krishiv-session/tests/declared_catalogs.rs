@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
@@ -22,9 +22,16 @@ use krishiv_session::catalog_registry::{CatalogDeps, CatalogFactory, CatalogSetu
 use krishiv_session::{EngineRuntime, Principal, PrincipalKind, Session};
 use krishiv_types::DataType;
 
-/// A catalog holding `db.t (x INT)`.
+/// What a [`OneTable`] holds, shared with the test: its epoch, and whether `x` is a string.
+#[derive(Debug, Default)]
+struct Shape {
+    epoch: AtomicU64,
+    string: AtomicBool,
+}
+
+/// A catalog holding `db.t (x INT)` (`x STRING` once its [`Shape`] says so).
 #[derive(Debug)]
-struct OneTable(String);
+struct OneTable(String, Arc<Shape>);
 
 impl Catalog for OneTable {
     fn name(&self) -> &str {
@@ -32,7 +39,7 @@ impl Catalog for OneTable {
     }
 
     fn epoch(&self) -> u64 {
-        0
+        self.1.epoch.load(Ordering::SeqCst)
     }
 
     fn load_table<'a>(
@@ -41,11 +48,16 @@ impl Catalog for OneTable {
         _version: Option<TableVersion>,
         _form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
+        let ty = if self.1.string.load(Ordering::SeqCst) {
+            DataType::String
+        } else {
+            DataType::Integer
+        };
         Box::pin(async move {
             Ok(
                 (id.namespace == ["db"] && id.name == "t").then(|| TableMeta {
                     ident: id.clone(),
-                    columns: vec![TableColumn::new("x", DataType::Integer, true)],
+                    columns: vec![TableColumn::new("x", ty, true)],
                     version: None,
                     kind: TableKind::Table,
                     file_metadata: Default::default(),
@@ -63,6 +75,7 @@ struct Fake {
     builds: AtomicUsize,
     fail_first: usize,
     delay: std::time::Duration,
+    shape: Arc<Shape>,
 }
 
 impl CatalogFactory for Fake {
@@ -84,7 +97,10 @@ impl CatalogFactory for Fake {
             }
             .into());
         }
-        Ok(Arc::new(OneTable(decl.name.clone())))
+        Ok(Arc::new(OneTable(
+            decl.name.clone(),
+            Arc::clone(&self.shape),
+        )))
     }
 }
 
@@ -225,6 +241,70 @@ fn a_failed_build_is_not_kept() {
         2,
         "built once, then shared"
     );
+}
+
+/// A frame's analysis is reused only while every catalog it read is at the epoch it read: a
+/// declared catalog's table that changed is analyzed again (CodeRabbit #836).
+#[test]
+fn a_frame_is_analyzed_again_when_a_declared_catalog_changes() {
+    let factory = Arc::new(Fake::default());
+    let rt = EngineRuntime::builder()
+        .catalogs(setup(DeclMode::Embedded, &LAKE, Arc::clone(&factory)))
+        .build()
+        .unwrap();
+    let s = Session::builder().runtime(rt).build().unwrap();
+    let df = block_on(s.sql("SELECT * FROM lake.db.t")).unwrap();
+    let type_of = || {
+        let schema = block_on(df.schema()).unwrap();
+        schema.field(0).data_type().clone()
+    };
+    assert_eq!(type_of(), arrow_schema::DataType::Int32);
+    factory.shape.string.store(true, Ordering::SeqCst);
+    // Unchanged epoch: the analysis is reused.
+    assert_eq!(type_of(), arrow_schema::DataType::Int32);
+    factory.shape.epoch.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(type_of(), arrow_schema::DataType::Utf8View);
+}
+
+/// With a declared catalog current, the Catalog API refuses what it would answer from the
+/// embedded catalog's namespaces and tables (the catalog resolves names only, PR-58a), never
+/// labelling them with the declared catalog's name; `spark_catalog.<db>` stays the embedded one.
+#[test]
+fn the_catalog_api_never_lists_embedded_namespaces_as_a_declared_catalogs() {
+    let rt = runtime(DeclMode::Embedded, &LAKE);
+    let s = Session::builder().runtime(rt).build().unwrap();
+    run(&s, "CREATE TABLE default.e (a INT) USING parquet").unwrap();
+    let c = s.catalog();
+    block_on(c.set_current_catalog("lake")).unwrap();
+    fn class<T: std::fmt::Debug>(r: Result<T, KrishivError>) -> String {
+        r.unwrap_err().error_class().name().to_owned()
+    }
+    let unsupported = "KRISHIV_UNSUPPORTED_FEATURE";
+    assert_eq!(class(block_on(c.list_databases(None))), unsupported);
+    assert_eq!(class(block_on(c.list_tables(None, None))), unsupported);
+    for name in ["default", "lake.db"] {
+        assert_eq!(class(block_on(c.get_database(name))), unsupported, "{name}");
+        assert_eq!(
+            class(block_on(c.database_exists(name))),
+            unsupported,
+            "{name}"
+        );
+        assert_eq!(
+            class(block_on(c.list_tables(Some(name), None))),
+            unsupported,
+            "{name}"
+        );
+    }
+    for name in ["e", "default.e", "lake.db.t"] {
+        assert_eq!(class(block_on(c.get_table(name))), unsupported, "{name}");
+        assert_eq!(class(block_on(c.table_exists(name))), unsupported, "{name}");
+    }
+    // Qualified with `spark_catalog`, the embedded namespace and table are its own.
+    let d = block_on(c.get_database("spark_catalog.default")).unwrap();
+    assert_eq!(d.catalog, "spark_catalog");
+    assert!(block_on(c.database_exists("spark_catalog.default")).unwrap());
+    let t = block_on(c.get_table("spark_catalog.default.e")).unwrap();
+    assert_eq!(t.catalog.as_deref(), Some("spark_catalog"));
 }
 
 /// The error text with the catalog name replaced, so a hidden and an undeclared name compare.
