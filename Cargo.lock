@@ -3657,11 +3657,13 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-plan",
+ "krishiv-session",
  "krishiv-types",
  "krishiv-udf-sandbox",
  "rustix",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

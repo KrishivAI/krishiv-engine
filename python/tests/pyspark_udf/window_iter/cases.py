@@ -93,7 +93,7 @@ def _window_udfs(api: Api) -> dict[str, Any]:
 
     @F.arrow_udf("double")
     def arrow_sum(a: pa.Array) -> float | None:
-        return pc.sum(a).as_py()
+        return pc.call_function("sum", [a]).as_py()
 
     @F.arrow_udf("long")
     def arrow_count(a: pa.Array) -> int:
@@ -148,12 +148,12 @@ def _iter_udfs(api: Api) -> dict[str, Any]:
 
     @F.pandas_udf("long")
     def pandas_not_iterator(it: Iterator[pd.Series]) -> Iterator[pd.Series]:
-        return pd.Series([1, 2])  # type: ignore[return-value]
+        return pd.Series([1, 2])  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
 
     @F.arrow_udf("long")
     def arrow_plus_one(it: Iterator[pa.Array]) -> Iterator[pa.Array]:
         for a in it:
-            yield pc.add(a, 1)
+            yield pc.call_function("add", [a, 1])
 
     @F.arrow_udf("long")
     def arrow_twice(it: Iterator[pa.Array]) -> Iterator[pa.Array]:

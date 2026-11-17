@@ -30,8 +30,9 @@ GOLDENS = json.loads((Path(__file__).resolve().parent / "window_iter" / "goldens
 KNOWN_GAPS: list[tuple[str, str]] = [
     (
         r"window/.*|iter/.*",
-        "Krishiv refuses eval types 202/203, 252/253, 204 and 251 (NOT_IMPLEMENTED) until PR-26c-3 part A "
-        "(P3-T014) runs window aggregates and scalar iterators on the worker pool",
+        "the embedded facade refuses eval types 202/203, 252/253, 204 and 251 (NOT_IMPLEMENTED) until its "
+        "in-process runtime runs them (PR-48, P3-T085); the server's worker pool matches every case "
+        "(krishiv-udf-pool tests/window_iter_goldens.rs replays these goldens as SQL on a session over the pool)",
     ),
 ]
 

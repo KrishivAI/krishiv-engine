@@ -13,5 +13,6 @@
   203, 253: seven window specs, bounded and unbounded frames, NULLs, empty frames) and scalar iterators (204, 251:
   re-batched output and the worker's row checks), built against `pyspark` or `krishiv` by `window_iter/cases.py`.
   `window_iter/goldens.json` holds PySpark 4.2.0's answers from a real local run (`window_iter/gen_goldens.py`,
-  its docstring has the command); `KNOWN_GAPS` lists the cases Krishiv does not match yet.
+  its docstring has the command); `KNOWN_GAPS` lists the cases the embedded facade does not match yet (all of
+  them until PR-48); `crates/krishiv-udf-pool/tests/window_iter_goldens.rs` replays the same goldens on the worker pool.
 - Run: `cd python && uv run --group dev --extra pandas pytest tests/pyspark_udf`.
