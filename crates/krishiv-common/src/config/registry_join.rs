@@ -67,8 +67,8 @@ pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
           each pays its per-batch cost once per batch of that size. Rows keep their order, \
           and only rows of one scan split are joined. The rows held are not charged to the \
           query's memory, like any batch between two operators: each driver holds at most \
-          about one batch, and 1 MiB, for each operator that joins its input. Results are the \
-          same either way.",
+          about one batch, and 1 MiB (or a 64th of the memory limit, if less), \
+          for each operator that joins its input. Results are the same either way.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",

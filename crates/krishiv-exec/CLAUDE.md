@@ -12,7 +12,7 @@ driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detect
 the driver's `InputCoalesce`: in a pipeline whose sink allows it (`Sink::coalesce_input`: hash join build, hash
 aggregate), small batches (under a quarter of `min(batchSize, 4096)` rows, unweighted, one split) are joined into batches of
 about `krishiv.exec.batchSize` rows before the sink and each operator that asks (`Operator::coalesce_input`: hash
-probe), uncharged like a batch in flight but held to one batch and 1 MiB (`HELD_MAX_BYTES`), and handed on before the operator's `finish` / the sink's `combine`
+probe), uncharged like a batch in flight but held to one batch and 1 MiB (`HELD_MAX_BYTES`), or a sixty-fourth of the query's memory limit when less (`held_max_bytes`), and handed on before the operator's `finish` / the sink's `combine`
 (`krishiv.exec.coalesceInput`) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·

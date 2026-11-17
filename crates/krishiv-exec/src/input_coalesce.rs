@@ -19,11 +19,14 @@
 //! weighted batch or one of another split sends the held rows on first. The
 //! held batches are not charged to the memory pool, like any batch in flight
 //! between two operators: they are bounded instead, at about one batch of
-//! `target` rows and at most [`HELD_MAX_BYTES`] (counted with the buffers
+//! `target` rows and at most [`held_max_bytes`] (counted with the buffers
 //! they keep alive, so a slice of a large batch is not held long): per
-//! driver, that much for each operator that joins its input. Charging
-//! them made an operator under a tight limit fail for memory that its own
-//! spill could not free.
+//! driver, that much for each operator that joins its input. The cap is
+//! 1 MiB, or a sixty-fourth of the query's memory limit when that is less:
+//! a hash build reserves a whole input batch at once, so under a tight limit
+//! (Q18 at 1 MiB) batches of a few tens of KiB pass on alone, as they would
+//! without joining. Charging them made an operator under a tight limit
+//! fail for memory that its own spill could not free.
 
 use std::collections::VecDeque;
 
@@ -35,8 +38,15 @@ use krishiv_types::batch::Batch;
 const PASS_CAP: usize = 4096;
 
 /// Held batches whose memory reaches this many bytes are joined and sent
-/// on at once.
+/// on at once, at most (see [`held_max_bytes`]).
 pub(crate) const HELD_MAX_BYTES: usize = 1 << 20;
+
+/// The byte cap on held batches under a memory `limit`: [`HELD_MAX_BYTES`],
+/// or a sixty-fourth of the limit when that is less. A cap of 0 (a limit
+/// under 64 bytes) never joins: each batch is sent on as it comes.
+pub(crate) fn held_max_bytes(limit: Option<usize>) -> usize {
+    limit.map_or(HELD_MAX_BYTES, |l| HELD_MAX_BYTES.min(l / 64))
+}
 
 /// Joins small batches into batches of about `target` rows, in order.
 pub(crate) struct InputCoalesce {
@@ -49,13 +59,16 @@ pub(crate) struct InputCoalesce {
     split: Option<u32>,
     /// The memory `held` keeps alive.
     bytes: usize,
+    /// Held batches whose memory reaches this are sent on.
+    max_bytes: usize,
     /// Batches ready to hand on, in input order.
     ready: VecDeque<Batch>,
 }
 
 impl InputCoalesce {
-    /// Joins batches toward `target` rows (at least 1).
-    pub(crate) fn new(target: usize) -> Self {
+    /// Joins batches toward `target` rows (at least 1), holding at most
+    /// about `max_bytes`.
+    pub(crate) fn new(target: usize, max_bytes: usize) -> Self {
         let target = target.max(1);
         Self {
             target,
@@ -64,6 +77,7 @@ impl InputCoalesce {
             rows: 0,
             split: None,
             bytes: 0,
+            max_bytes,
             ready: VecDeque::new(),
         }
     }
@@ -92,7 +106,7 @@ impl InputCoalesce {
         self.rows += rows;
         self.bytes += batch.data().get_array_memory_size();
         self.held.push(batch);
-        if self.rows >= self.target || self.bytes >= HELD_MAX_BYTES {
+        if self.rows >= self.target || self.bytes >= self.max_bytes {
             self.flush();
         }
     }
@@ -170,7 +184,7 @@ mod tests {
 
     #[test]
     fn small_batches_join_in_order_and_dense_ones_pass_uncopied() {
-        let mut c = InputCoalesce::new(16);
+        let mut c = InputCoalesce::new(16, HELD_MAX_BYTES);
         for i in 0..6 {
             c.push(batch(i * 3, 3));
         }
@@ -199,7 +213,7 @@ mod tests {
 
     #[test]
     fn rows_of_another_split_or_with_weights_are_not_joined() {
-        let mut c = InputCoalesce::new(100);
+        let mut c = InputCoalesce::new(100, HELD_MAX_BYTES);
         c.push(batch(0, 2).with_split(Some(1)));
         c.push(batch(2, 2).with_split(Some(1)));
         c.push(batch(4, 2).with_split(Some(2)));
@@ -225,7 +239,7 @@ mod tests {
 
     #[test]
     fn a_batch_of_another_schema_is_not_joined() {
-        let mut c = InputCoalesce::new(100);
+        let mut c = InputCoalesce::new(100, HELD_MAX_BYTES);
         c.push(batch(0, 2));
         let other = Arc::new(Schema::new(vec![Field::new("w", DataType::Int64, true)]));
         let renamed = RecordBatch::try_new(other, vec![Arc::clone(data(2, 2).column(0))]).unwrap();
@@ -240,21 +254,39 @@ mod tests {
 
     #[test]
     fn the_pass_through_threshold_is_capped() {
-        let mut c = InputCoalesce::new(64 * PASS_CAP);
+        let mut c = InputCoalesce::new(64 * PASS_CAP, HELD_MAX_BYTES);
         let rows = i64::try_from(PASS_CAP / 4).unwrap();
         c.push(batch(0, rows));
         assert_eq!(c.pop_ready().map(|b| b.num_rows()), Some(PASS_CAP / 4));
         // A target of 0 is 1: everything passes.
-        let mut c = InputCoalesce::new(0);
+        let mut c = InputCoalesce::new(0, HELD_MAX_BYTES);
         c.push(batch(0, 1));
         assert_eq!(drain(&mut c), vec![(None, vec![0])]);
+    }
+
+    #[test]
+    fn a_tight_memory_limit_lowers_the_byte_cap() {
+        assert_eq!(held_max_bytes(None), HELD_MAX_BYTES);
+        assert_eq!(held_max_bytes(Some(1 << 30)), HELD_MAX_BYTES);
+        assert_eq!(held_max_bytes(Some(1 << 26)), HELD_MAX_BYTES);
+        assert_eq!(held_max_bytes(Some(1 << 20)), 1 << 14);
+        assert_eq!(held_max_bytes(Some(0)), 0);
+        // A cap just above one 20-row batch's memory: the second reaches it,
+        // so the two go on joined, before the 100-row target.
+        let one = batch(0, 20).data().get_array_memory_size();
+        let mut c = InputCoalesce::new(100, one + 1);
+        c.push(batch(0, 20));
+        assert!(c.has_held());
+        c.push(batch(20, 20));
+        assert!(!c.has_held());
+        assert_eq!(drain(&mut c), vec![(None, (0..40).collect())]);
     }
 
     #[test]
     fn slices_of_a_large_batch_are_not_held_past_the_byte_cap() {
         // Each one-row slice keeps the whole 64K-row buffer (512 KiB) alive:
         // the second reaches the cap, so the two go on as one batch.
-        let mut c = InputCoalesce::new(1024);
+        let mut c = InputCoalesce::new(1024, HELD_MAX_BYTES);
         let big = batch(0, 65_536);
         c.push(big.slice(0, 1).unwrap());
         assert!(c.has_held() && c.pop_ready().is_none());

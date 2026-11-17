@@ -24,7 +24,7 @@ use krishiv_types::batch::Batch;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
-use crate::input_coalesce::InputCoalesce;
+use crate::input_coalesce::{InputCoalesce, held_max_bytes};
 use crate::metrics::{DriverStats, OperatorMetrics};
 use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
 use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
@@ -1147,9 +1147,10 @@ fn coalescers(run: &PipelineRun, slots: &mut [Slot]) {
         .iter()
         .map(|(_, op)| op.coalesce_input())
         .chain(std::iter::once(true));
+    let max_bytes = held_max_bytes(run.query.pool().effective_limit());
     for (slot, wants) in slots.iter_mut().skip(1).zip(wants) {
         if wants {
-            slot.coalesce = Some(InputCoalesce::new(config.batch_size));
+            slot.coalesce = Some(InputCoalesce::new(config.batch_size, max_bytes));
         }
     }
 }
