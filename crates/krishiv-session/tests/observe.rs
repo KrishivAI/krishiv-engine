@@ -594,32 +594,49 @@ fn a_shared_cte_under_limit_zero_runs_its_body_once() {
     );
 }
 
-/// A shared CTE read only under `LIMIT 0` reports nothing (Spark replaces the zero-row read with
-/// an empty relation), though the one shared plan it shares carries the observed node.
-#[test]
-fn a_shared_cte_read_only_under_limit_zero_reports_nothing() {
+/// Runs `q` over an observed view `ov` and returns the rows and what the observation reported.
+fn observed_rows(q: &str) -> (usize, serde_json::Map<String, Value>) {
     let s = Session::new().unwrap();
     let obs = Observation::new();
     let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
     block_on(df.create_or_replace_temp_view("ov")).unwrap();
-    let q = "WITH c AS (SELECT k, rand() AS r FROM ov) \
-             SELECT k FROM (SELECT * FROM c LIMIT 0) UNION ALL SELECT k FROM base_other";
-    block_on(async {
-        s.sql("CREATE TEMPORARY VIEW base_other AS SELECT 'x' AS k")
-            .await
-            .unwrap()
-            .collect()
-            .await
-    })
-    .unwrap();
     let rows: usize = block_on(async { s.sql(q).await.unwrap().collect().await })
         .unwrap()
         .iter()
         .map(RecordBatch::num_rows)
         .sum();
-    assert_eq!(rows, 1);
     let got = obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap();
-    assert!(metrics(&got).is_empty(), "{got:?}");
+    (rows, metrics(&got))
+}
+
+/// A shared CTE read only under `LIMIT 0` (twice, so the CTE is one shared plan) reports nothing:
+/// Spark replaces each zero-row read with an empty relation and drops the definition with its
+/// observed node. Without the liveness strip the shared plan reports the view's rows.
+#[test]
+fn a_shared_cte_read_only_under_limit_zero_reports_nothing() {
+    let (rows, got) = observed_rows(
+        "WITH c AS (SELECT k, rand() AS r FROM ov) \
+         SELECT k FROM (SELECT * FROM c LIMIT 0) \
+         UNION ALL SELECT k FROM (SELECT * FROM c LIMIT 0) \
+         UNION ALL SELECT 'x'",
+    );
+    assert_eq!(rows, 1);
+    assert!(got.is_empty(), "{got:?}");
+}
+
+/// The liveness is transitive: `a` is read live only by `b`, which only `LIMIT 0` reads, so `a`'s
+/// observed node is dropped with `b`.
+#[test]
+fn a_shared_cte_read_live_only_by_a_dead_one_reports_nothing() {
+    let (rows, got) = observed_rows(
+        "WITH a AS (SELECT k, rand() AS r FROM ov), \
+              b AS (SELECT x.k, rand() AS r FROM a x CROSS JOIN a y) \
+         SELECT k FROM (SELECT * FROM b LIMIT 0) \
+         UNION ALL SELECT k FROM (SELECT * FROM b LIMIT 0) \
+         UNION ALL SELECT 'x'",
+    );
+    assert_eq!(rows, 1);
+    assert!(got.is_empty(), "{got:?}");
 }
 
 /// `spark_partition_id()` in a metric under the second `UNION ALL` branch (its partitions

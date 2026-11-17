@@ -88,7 +88,10 @@ impl SharedReads {
     }
 }
 
-/// `node` without its [`PhysNode::CollectMetrics`] nodes: their input in their place.
+/// `node` without its [`PhysNode::CollectMetrics`] nodes: their input in their place. The walk
+/// follows `children_mut`, which reaches every node that can hold one (the subquery plans of Filter,
+/// Project, Expand, ReplicateRows and Generate included); a node type that held a plan elsewhere
+/// would have to be added there.
 fn strip_observed(node: &mut PhysNode) {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
