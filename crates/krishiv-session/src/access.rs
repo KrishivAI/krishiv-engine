@@ -110,20 +110,21 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(sql);
         let statement = krishiv_sql::parse_statement(sql, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        self.parts_of_statement(statement, &redacted).await
+        self.parts_of_statement(statement, sql, &redacted).await
     }
 
-    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `redacted`'s text
-    /// (`EXPLAIN FORMAT JSON` analyzes its explained statement here).
+    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `text` (redacted:
+    /// `redacted`; `EXPLAIN FORMAT JSON` analyzes its explained statement here).
     pub(crate) async fn parts_of_statement(
         &self,
         statement: Statement,
+        text: &str,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let class = krishiv_sql::classify_with(&statement, &env.parser);
         if let Statement::ExecuteImmediate(e) = &statement {
-            return Box::pin(self.immediate_parts(e, class, statement.clone())).await;
+            return Box::pin(self.immediate_parts(e, class, statement.clone(), text)).await;
         }
         let explain = krishiv_sql::explain_kind(&statement);
         let queries = krishiv_sql::statement_reads(&statement);
@@ -150,6 +151,7 @@ impl Session {
             partial,
             analyzed,
             statement,
+            text: text.to_owned(),
         })
     }
 }
@@ -198,6 +200,7 @@ impl Session {
         e: &krishiv_sql::ast::ExecuteImmediate,
         class: StatementClass,
         statement: Statement,
+        text: &str,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: nothing to list.
@@ -220,12 +223,15 @@ impl Session {
                     partial: true,
                     analyzed: Vec::new(),
                     statement,
+                    text: text.to_owned(),
                 });
             }
         };
-        let inner_redacted =
-            krishiv_sql::redact_sql(krishiv_sql::immediate_text(e).unwrap_or_default());
-        let mut parts = self.parts_of_statement(inner, &inner_redacted).await?;
+        let inner_text = krishiv_sql::immediate_text(e).unwrap_or_default();
+        let inner_redacted = krishiv_sql::redact_sql(inner_text);
+        let mut parts = self
+            .parts_of_statement(inner, inner_text, &inner_redacted)
+            .await?;
         parts.info.class = class;
         if !e.into.is_empty() {
             // The row goes to variables: no result columns or lineage.
@@ -245,6 +251,9 @@ pub(crate) struct StatementParts {
     pub(crate) analyzed: Vec<Arc<krishiv_plan::analyzer::AnalyzedPlan>>,
     /// The parsed statement.
     pub(crate) statement: Statement,
+    /// The text the statement's spans index, as the run reads it (not redacted: never shown; the
+    /// directories of a `CREATE TABLE` read its option values from it, `analyze/dirs.rs`).
+    pub(crate) text: String,
 }
 
 /// Adds the reads `used` to `securables`: one entry per (securable, privilege), with the union of
