@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ResolvedExpr,
-    Scan, SubqueryKind,
+    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ReadSource,
+    ResolvedExpr, Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
@@ -244,7 +244,10 @@ impl Rewrite<'_> {
                     .filter(|c| req.contains(&c.id))
                     .cloned()
                     .collect();
-                if output.is_empty() {
+                // A Parquet scan read for its rows alone (`COUNT(*)`) keeps no
+                // column: the reader counts the rows its row groups declare
+                // and decodes nothing. Other sources keep their first column.
+                if output.is_empty() && !reads_rows_without_columns(scan) {
                     output.extend(scan.output.first().cloned());
                 }
                 replace(
@@ -593,4 +596,12 @@ fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a A
         }
         e.for_each_child(&mut |c| stack.push(c));
     }
+}
+
+/// Whether `scan` can be read with no column at all: a Parquet file scan,
+/// whose reader takes each batch's row count from its row groups. A source
+/// that has to decode a column to find its rows (CSV, JSON, text, tables of
+/// other providers) keeps one.
+fn reads_rows_without_columns(scan: &Scan) -> bool {
+    matches!(&scan.source, ReadSource::Files { format, .. } if format.eq_ignore_ascii_case("parquet"))
 }
