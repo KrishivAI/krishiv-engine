@@ -27,23 +27,6 @@ pub struct DatumDecoder {
     reader: AvroSchema,
     field: Field,
     permissive: bool,
-    /// The schema has a union of several non-null types somewhere: its datums are checked by re-encoding what was read, because
-    /// `apache-avro` reads a truncated union payload as an empty value instead of failing.
-    reencode_check: bool,
-}
-
-/// Whether `schema` holds a union of several non-null types at any depth.
-fn has_member_union(schema: &AvroSchema) -> bool {
-    match schema {
-        AvroSchema::Union(u) => {
-            matches!(union_shape(u.variants()), UnionShape::Members)
-                || u.variants().iter().any(has_member_union)
-        }
-        AvroSchema::Record(r) => r.fields.iter().any(|f| has_member_union(&f.schema)),
-        AvroSchema::Array(a) => has_member_union(&a.items),
-        AvroSchema::Map(m) => has_member_union(&m.types),
-        _ => false,
-    }
 }
 
 /// `dt` with every field nullable, all the way down (Spark's
@@ -71,6 +54,23 @@ fn nullable_type(dt: &DataType) -> DataType {
             DataType::Map(std::sync::Arc::new(entries), *sorted)
         }
         other => other.clone(),
+    }
+}
+
+/// A reader that records whether any read returned fewer bytes than asked for
+/// (a `Cursor` does so only at the end of its input).
+struct ShortReads<R> {
+    inner: R,
+    short: bool,
+}
+
+impl<R: std::io::Read> std::io::Read for ShortReads<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n < buf.len() {
+            self.short = true;
+        }
+        Ok(n)
     }
 }
 
@@ -107,13 +107,11 @@ impl DatumDecoder {
             let dt = nullable_type(field.data_type());
             field = field.with_data_type(dt);
         }
-        let reencode_check = has_member_union(&writer);
         Ok(Self {
             writer,
             reader,
             field,
             permissive,
-            reencode_check,
         })
     }
 
@@ -166,24 +164,22 @@ impl DatumDecoder {
         bytes: &[u8],
         node: &mut super::decode::Node,
     ) -> FormatResult<()> {
-        let mut cursor = std::io::Cursor::new(bytes);
+        let mut reader = ShortReads {
+            inner: std::io::Cursor::new(bytes),
+            short: false,
+        };
         // `apache-avro` can panic on malformed bytes instead of returning an
         // error; the unwind becomes the same typed failure.
         let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            datum.read_value(&mut cursor)
+            datum.read_value(&mut reader)
         }))
         .map_err(|_| corrupt("an undecodable datum"))?
         .map_err(|e| corrupt(format!("an undecodable datum: {e}")))?;
-        if self.reencode_check {
-            // A truncated payload is read as an empty value, whose encoding is longer than the bytes given. Map entry order and block
-            // splits change the bytes but never make the encoding longer than a valid datum (trailing bytes are ignored, as Spark does).
-            let again = apache_avro::writer::datum::GenericDatumWriter::builder(&self.writer)
-                .build()
-                .and_then(|w| w.write_value_to_vec(value.clone()))
-                .map_err(|e| corrupt(format!("an unwritable datum: {e}")))?;
-            if again.len() > bytes.len() {
-                return Err(corrupt("a truncated datum"));
-            }
+        // `apache-avro` reads a union index or payload cut off by the end of the
+        // input as branch 0 / an empty value instead of failing; Spark raises.
+        // Trailing bytes are ignored, as Spark does.
+        if reader.short {
+            return Err(corrupt("a truncated datum"));
         }
         let resolved = resolve(&self.writer, &self.reader, value, false)?;
         append(node, &self.reader, &resolved, true)?;
@@ -352,6 +348,30 @@ mod tests {
         let out = lax.decode(&[Some(&cut[..])]).unwrap();
         let s = out.as_any().downcast_ref::<StructArray>().unwrap();
         assert!(s.column(0).is_null(0) || s.is_null(0));
+    }
+
+    #[test]
+    fn a_datum_cut_off_anywhere_fails_even_for_a_plain_nullable_union() {
+        let nullable = r#"{"type":"record","name":"r","fields":[{"name":"a","type":"int"},{"name":"u","type":["null","int"]}]}"#;
+        // a = 0, then the union index is missing.
+        for cut in [&[0u8][..], &[][..]] {
+            assert!(
+                DatumDecoder::new(nullable, None, false)
+                    .unwrap()
+                    .decode(&[Some(cut)])
+                    .is_err(),
+                "{cut:?}"
+            );
+        }
+        // The whole datum, and one with trailing bytes, still decode.
+        let dec = DatumDecoder::new(nullable, None, false).unwrap();
+        dec.decode(&[Some(&[0u8, 0][..]), Some(&[0, 2, 2, 9, 9][..])])
+            .unwrap();
+        // A negative-count array block (count -1, byte size 2) cut before its end marker, with a union element hidden behind it.
+        let arr =
+            DatumDecoder::new(r#"{"type":"array","items":["null","int"]}"#, None, false).unwrap();
+        assert!(arr.decode(&[Some(&[1, 2, 2, 2][..])]).is_err());
+        arr.decode(&[Some(&[1, 2, 2, 2, 0][..])]).unwrap();
     }
 
     #[test]

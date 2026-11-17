@@ -42,7 +42,6 @@ const KNOWN_GAPS: &[&str] = &[
     "basic#149",
     // `to_avro` infers its schema from the physical nullability of the argument, where Spark uses the analyzer's (a `cast` of a
     // literal is nullable there): the bytes differ by the union branch index. Needs the analyzer's nullability, or owner sign-off.
-    "basic#133",
     "basic#140",
     // Spark quirks the owner put under opt-in incompatibility: a `["null","int"]` reader returns 0 for the null branch.
     "basic#78",
