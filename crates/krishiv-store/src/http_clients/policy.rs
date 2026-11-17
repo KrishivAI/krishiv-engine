@@ -428,7 +428,7 @@ impl PolicyConnector {
     }
 
     /// Checks the host of one request a non-object_store caller is about to send (what
-    /// [`PolicyService`] does for object_store's requests): an address literal in any spelling
+    /// the connector's `PolicyService` does for object_store's requests): an address literal in any spelling
     /// must pass the rule, the provider literals only on a connector that admits them; a host
     /// no URL parser reads is refused; names pass (the egress resolver checks what they resolve
     /// to).
