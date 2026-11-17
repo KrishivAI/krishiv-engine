@@ -1188,7 +1188,7 @@ impl Session {
     /// Resolves `SELECT name(NULL, ...)` in `env`, calling `def` with a
     /// typed `NULL` for each parameter it needs (defaults fill the rest):
     /// the type of the result.
-    async fn probe(
+    pub(crate) async fn probe(
         &self,
         def: &SqlFunction,
         qualifier: &[String],
@@ -1268,8 +1268,8 @@ impl Session {
         Ok((namespace, part))
     }
 
-    /// The first temporary SQL function the body or a default of `def`
-    /// calls by a bare or session-qualified name (built-ins rank first).
+    /// The first temporary SQL function or session UDF (Spark: a temporary function too) the body
+    /// or a default of `def` calls by a bare or session-qualified name (built-ins rank first).
     fn reads_temporary_function(&self, def: &SqlFunction) -> Option<String> {
         let temporary = self.state.sql_functions.snapshot();
         let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
@@ -1281,14 +1281,27 @@ impl Session {
                 let session = matches!(call.qualifier.as_slice(), [q] if q.eq_ignore_ascii_case("session"))
                     || matches!(call.qualifier.as_slice(), [s, q]
                         if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"));
+                // A built-in by its own name (a bare lookup would find a session UDF too).
                 let builtin = bare
-                    && !matches!(
-                        self.state
-                            .functions
-                            .lookup(std::slice::from_ref(&call.name), self.state.profile),
+                    && (krishiv_plan::function::Builtin::from_name(&call.name).is_some()
+                        || !matches!(
+                            self.state.functions.lookup(
+                                &["system".to_owned(), "builtin".to_owned(), call.name.clone()],
+                                self.state.profile
+                            ),
+                            FunctionLookup::NotFound
+                        ));
+                // A session UDF (review r8 item 2), as Spark's `isTemporaryFunction` counts one.
+                let udf = || {
+                    !matches!(
+                        self.state.functions.lookup(
+                            &["session".to_owned(), call.name.clone()],
+                            self.state.profile
+                        ),
                         FunctionLookup::NotFound
-                    );
-                if (bare || session) && !builtin && temporary.get(&call.name).is_some() {
+                    )
+                };
+                if (bare || session) && !builtin && (temporary.get(&call.name).is_some() || udf()) {
                     return Some(call.name.to_lowercase());
                 }
             }
@@ -1455,8 +1468,11 @@ impl Session {
             env.analysis.functions = Arc::clone(&candidate) as _;
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
+            let unvaried = env.clone();
             let output = self
                 .probe(&entry.def, &entry.def.qualifier, env, redacted)
+                .await?;
+            self.refuse_session_variables(&object, &entry.def, unvaried, redacted)
                 .await?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {

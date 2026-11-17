@@ -4,7 +4,9 @@
 //! query reads a temporary view, then one calling a temporary function, then one reading a
 //! temporary variable, each `INVALID_TEMP_OBJ_REFERENCE` with the parameters of
 //! `QueryCompilationErrors.notAllowedToCreatePermanentViewByReferencingTemp{View,Func,Var}Error`
-//! (lines 3447-3481). Session UDFs (`spark.udf.register`) are temporary functions there.
+//! (lines 3447-3481). Session UDFs (`spark.udf.register`) are temporary functions there. A stored
+//! SQL function's body may read no session variable either (review r8 item 2,
+//! [`Session::refuse_session_variables`]).
 
 use std::sync::Arc;
 
@@ -88,6 +90,56 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Refuses the stored function `object` (printed as Spark does) whose body `def`, already
+    /// probed in `env`, reads a session variable (review r8 item 2; Spark v4.2.0
+    /// `CreateSQLFunctionCommand.scala` lines 388-392, the last of its temporary-object checks).
+    /// A name reads a variable only where nothing else has it (a parameter, a column), so a body
+    /// naming one is probed again with no variable: if that fails, the name it could not resolve
+    /// is the variable.
+    ///
+    /// # Errors
+    /// `INVALID_TEMP_OBJ_REFERENCE`.
+    pub(crate) async fn refuse_session_variables(
+        &self,
+        object: &str,
+        def: &krishiv_plan::analyzer::SqlFunction,
+        mut env: QueryEnv,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<(), KrishivError> {
+        let Some(first) = variable_name_in_expr(&def.body, &env.analysis.variables) else {
+            return Ok(());
+        };
+        env.quiet_denials = true;
+        env.analysis.variables = Arc::new(VariableSnapshot {
+            // Never a version a resolution with variables was cached under.
+            version: u64::MAX,
+            ..VariableSnapshot::default()
+        });
+        let Err(e) = Box::pin(self.probe(def, &def.qualifier, env, redacted)).await else {
+            return Ok(());
+        };
+        let unresolved = e
+            .error_class()
+            .name()
+            .starts_with("UNRESOLVED_COLUMN")
+            .then(|| {
+                e.message_parameters()
+                    .iter()
+                    .find(|(k, _)| *k == "objectName")
+                    .map(|(_, v)| v.clone())
+            })
+            .flatten();
+        Err(krishiv_common::error::InvalidTempObjReference {
+            obj_name: object.to_owned(),
+            obj: "FUNCTION".to_owned(),
+            temp_obj_name: unresolved.unwrap_or_else(|| sql_id(&first)),
+            temp_obj: "VARIABLE".to_owned(),
+        }
+        .into())
+    }
+}
+
 /// The first name in `plan` (operators top down, as Spark collects them) that a session variable
 /// of `variables` could answer: a variable's name, or a struct variable's with fields after it.
 fn variable_name(plan: &Arc<LogicalPlan>, variables: &VariableSnapshot) -> Option<Vec<String>> {
@@ -118,6 +170,37 @@ fn variable_name(plan: &Arc<LogicalPlan>, variables: &VariableSnapshot) -> Optio
         let mut children = Vec::new();
         p.for_each_child(&mut |c| children.push(c));
         plans.extend(children.into_iter().rev());
+    }
+    None
+}
+
+/// As [`variable_name`], for the expression `expr` (a stored function's body, review r8 item 2):
+/// the first name in it, its subqueries' included, that a session variable could answer.
+pub(crate) fn variable_name_in_expr(
+    expr: &Arc<Expr>,
+    variables: &VariableSnapshot,
+) -> Option<Vec<String>> {
+    if variables.variables.is_empty() && variables.locals.is_empty() {
+        return None;
+    }
+    let mut exprs = vec![expr];
+    while let Some(e) = exprs.pop() {
+        if let ExprNode::Column(c) = &e.node {
+            if variables.get(&c.name).is_some() {
+                return Some(c.name.clone());
+            }
+            if let Some((_, used)) = variables.get_struct_prefix(&c.name) {
+                return Some(c.name[..used].to_vec());
+            }
+        }
+        if let ExprNode::Subquery { plan, .. } = &e.node
+            && let Some(name) = variable_name(plan, variables)
+        {
+            return Some(name);
+        }
+        let mut children = Vec::new();
+        e.for_each_child(&mut |c| children.push(c));
+        exprs.extend(children.into_iter().rev());
     }
     None
 }
