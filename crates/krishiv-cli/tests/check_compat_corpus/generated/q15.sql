@@ -1,7 +1,5 @@
 -- query 15: nope(1)
-SELECT regr_count(a, b) AS c1 FROM t15 WHERE x IN (1, 2) AND y = 'x(regr_count)';
-SELECT legacy_fn_29(a, b) AS c2 FROM t15 WHERE x IN (1, 2) AND y = 'x(legacy_fn_29)';
-SELECT bitmap_bucket_number(a, b) AS c3 FROM t15 WHERE x IN (1, 2) AND y = 'x(bitmap_bucket_number)';
-SELECT hypot(a, b) AS c4 FROM t15 WHERE x IN (1, 2) AND y = 'x(hypot)';
-SELECT decode(a, b) AS c5 FROM t15 WHERE x IN (1, 2) AND y = 'x(decode)';
-SELECT time_trunc(a, b) AS c6 FROM t15 WHERE x IN (1, 2) AND y = 'x(time_trunc)';
+SELECT kll_sketch_agg_double(a, b) AS c1 FROM t15 WHERE x IN (1, 2) AND y = 'x(kll_sketch_agg_double)';
+SELECT theta_sketch_agg(a, b) AS c2 FROM t15 WHERE x IN (1, 2) AND y = 'x(theta_sketch_agg)';
+SELECT legacy_fn_0(a, b) AS c3 FROM t15 WHERE x IN (1, 2) AND y = 'x(legacy_fn_0)';
+SELECT current_schema(a, b) AS c4 FROM t15 WHERE x IN (1, 2) AND y = 'x(current_schema)';

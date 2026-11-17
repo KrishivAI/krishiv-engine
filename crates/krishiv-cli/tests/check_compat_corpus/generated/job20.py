@@ -2,9 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.tuple_difference_theta_integer("a"), F.col("b"))
-df = spark.sql("SELECT size(a) FROM t20")
-df = df.select(F.kll_sketch_to_string_float("a"), F.col("b"))
-df = df.select(F.schema_of_variant("a"), F.col("b"))
-df = df.select(F.tan("a"), F.col("b"))
-df = spark.sql("SELECT bround(a) FROM t20")
+df = df.select(F.dayofmonth("a"), F.col("b"))
+df = spark.sql("SELECT from_protobuf(a) FROM t20")
+df = spark.sql("SELECT element_at(a) FROM t20")
+df = spark.sql("SELECT histogram_numeric(a) FROM t20")
+df = df.select(F.schema_of_avro("a"), F.col("b"))
