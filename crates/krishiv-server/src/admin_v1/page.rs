@@ -79,13 +79,16 @@ impl Page {
         hex(format!("{:016x}|{}|{}", fingerprint(filter), last.0, last.1).as_bytes())
     }
 
-    /// The page of `rows` (already sorted by `(key, id)`), and the token of the next one.
+    /// The page of `rows` (sorted here by `(key, id)`, whatever order the caller has them in), and
+    /// the token of the next one.
     pub fn apply<T>(
         &self,
         rows: Vec<T>,
         key: impl Fn(&T) -> (i64, String),
         filter: &str,
     ) -> (Vec<T>, String) {
+        let mut rows = rows;
+        rows.sort_by_cached_key(|r| key(r));
         let mut rest: Vec<T> = rows
             .into_iter()
             .filter(|r| {
@@ -138,6 +141,29 @@ mod tests {
         let (third, token) = last.apply(now, Clone::clone, "f");
         assert_eq!(third.len(), 1);
         assert!(token.is_empty(), "the last page has no token");
+    }
+
+    #[test]
+    fn rows_in_any_order_are_paged_without_skips_or_repeats() {
+        // Equal keys (the same millisecond) and an order that is not sorted: every row appears once.
+        let mut all: Vec<(i64, String)> = (0..7)
+            .map(|i| (i64::from(i % 2), format!("id{i}")))
+            .collect();
+        all.reverse();
+        let mut seen = Vec::new();
+        let mut token = String::new();
+        loop {
+            let page = Page::parse(3, &token, "f").unwrap_or_else(|e| panic!("{}", e.message));
+            let (rows, next) = page.apply(all.clone(), Clone::clone, "f");
+            seen.extend(rows);
+            if next.is_empty() {
+                break;
+            }
+            token = next;
+        }
+        let mut expected = all.clone();
+        expected.sort();
+        assert_eq!(seen, expected);
     }
 
     #[test]

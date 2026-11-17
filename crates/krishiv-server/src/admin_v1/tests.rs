@@ -146,7 +146,11 @@ async fn rest_returns_the_proto_json_of_the_messages() {
     assert_eq!(headers[header::CONTENT_TYPE], "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     assert_eq!(json["version"], "9.9.9");
-    assert_eq!(json["adminV1Revision"], "1", "64-bit integers are strings");
+    assert_eq!(
+        json["adminV1Revision"],
+        ADMIN_V1_REVISION.to_string(),
+        "64-bit integers are strings"
+    );
     assert_eq!(json["preview"], true);
     let (status, _, body) = send(&app, get("/api/admin/v1/capabilities")).await;
     assert_eq!(status, StatusCode::OK);

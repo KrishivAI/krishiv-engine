@@ -410,11 +410,9 @@ impl AdminApi for SessionAdmin {
             }
             // Without `Operate` only the caller's own queries match, so the answer never depends
             // on other principals' queries.
-            let ids = self.runtime.cancel_by_tag(
-                &request.selector,
-                &who.principal.name,
-                who.operate_queries,
-            );
+            let ids =
+                self.runtime
+                    .cancel_by_tag(&request.selector, &who.principal, who.operate_queries);
             let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
             let target = format!("{} -> [{}]", request.selector, ids.join(","));
             self.log(
