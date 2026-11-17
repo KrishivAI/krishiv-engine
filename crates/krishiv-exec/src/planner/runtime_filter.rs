@@ -110,9 +110,9 @@ pub(crate) struct Settings {
     /// `krishiv.runtimeFilter.bloom.atScaleRatio`: the probe-to-build row
     /// ratio from which the at-scale caps apply.
     at_scale_ratio: f64,
-    /// `krishiv.runtimeFilter.bloom.memoryTier`: the at-scale caps taken
-    /// from the query memory limit (keys, bytes), when larger.
-    memory_tier: Option<(u64, usize)>,
+    /// `krishiv.runtimeFilter.bloom.memoryTier`: the at-scale size cap
+    /// taken from the query memory limit, when larger.
+    memory_tier: Option<usize>,
     row: RowStageSettings,
 }
 
@@ -186,6 +186,32 @@ impl Settings {
     pub(crate) fn row_stage(&self) -> RowStageSettings {
         self.row
     }
+
+    /// These settings for one scan of `scan_rows` estimated rows filtered by
+    /// a build of `build_rows`: a scan at least `atScaleRatio` times the
+    /// build gets the at-scale caps (`bloom.atScale`: 20 M keys, 32 MiB;
+    /// with R4's prefetching probe a Bloom past the caches still pays) and
+    /// the memory tier's (study 36 §4.4). The tier's key cap is what the
+    /// size cap in force holds, so an explicit `bloom.maxBytes` also bounds
+    /// the keys a build collects hashes for (review M1).
+    fn for_scan(mut self, scan_rows: f64, build_rows: f64) -> Self {
+        if scan_rows < self.at_scale_ratio * build_rows {
+            return self;
+        }
+        if self.at_scale_bytes {
+            self.bloom_max_bytes = self
+                .bloom_max_bytes
+                .max(BLOOM_AT_SCALE_MAX_BYTES)
+                .max(self.memory_tier.unwrap_or(0));
+        }
+        if self.at_scale_items {
+            let tier = self
+                .memory_tier
+                .map_or(0, |t| keys_for(t.min(self.bloom_max_bytes)));
+            self.bloom_max_items = self.bloom_max_items.max(BLOOM_AT_SCALE_MAX_ITEMS).max(tier);
+        }
+        self
+    }
 }
 
 /// The memory a query may use: `krishiv.memory.limit` (else the root pool's
@@ -206,15 +232,17 @@ fn query_memory_limit(config: &Config) -> Option<usize> {
     Some(size(&SESSION_MEMORY_LIMIT).map_or(root, |s| s.min(root)))
 }
 
-/// The memory tier's caps for a query memory limit: 1/64 of it in bytes,
-/// and the keys a Bloom of that size holds at the producers' false-positive
-/// rate.
-fn memory_tier(limit: Option<usize>) -> Option<(u64, usize)> {
+/// The memory tier's size cap for a query memory limit: 1/64 of it.
+fn memory_tier(limit: Option<usize>) -> Option<usize> {
     let bytes = limit? / BLOOM_MEMORY_TIER_SHARE;
+    (bytes > 0).then_some(bytes)
+}
+
+/// The keys a Bloom of `bytes` holds at the producers' false-positive rate.
+fn keys_for(bytes: usize) -> u64 {
     let fpp = KeyFilterOptions::default().bloom_fpp;
-    let per_key = RuntimeBloom::bytes_for(1 << 20, fpp) as u64;
-    let items = (bytes as u64).saturating_mul(1 << 20) / per_key.max(1);
-    (bytes > 0).then_some((items, bytes))
+    let per_mi_keys = RuntimeBloom::bytes_for(1 << 20, fpp) as u64;
+    (bytes as u64).saturating_mul(1 << 20) / per_mi_keys.max(1)
 }
 
 /// The attribute `e` reads when it is a column or a widening cast of one
@@ -282,40 +310,18 @@ impl Planner<'_> {
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
-                // `krishiv.runtimeFilter.bloom.atScale` (ledger
-                // §4 item 13): a scan estimated at least `atScaleRatio`
-                // times the build (8x, Polars' admission) plans its Bloom
-                // with the larger caps; with R4's prefetching probe a Bloom
-                // past the caches still pays there. `memoryTier` (L3, study
-                // 36 §4.4) raises them further, from the memory limit.
-                let base_items = s.bloom_max_items;
-                let mut s = s;
-                if site.scan_rows >= s.at_scale_ratio * build_rows {
-                    let (tier_items, tier_bytes) = s.memory_tier.unwrap_or((0, 0));
-                    if s.at_scale_items {
-                        s.bloom_max_items = s
-                            .bloom_max_items
-                            .max(BLOOM_AT_SCALE_MAX_ITEMS)
-                            .max(tier_items);
-                    }
-                    if s.at_scale_bytes {
-                        s.bloom_max_bytes = s
-                            .bloom_max_bytes
-                            .max(BLOOM_AT_SCALE_MAX_BYTES)
-                            .max(tier_bytes);
-                    }
-                }
+                // The at-scale caps (`bloom.atScale`, ledger §4 item 13;
+                // `bloom.memoryTier`, the L3 tier).
+                let s = s.for_scan(site.scan_rows, build_rows);
                 // A build whose estimate is a guess over an aggregate's
                 // output (`HAVING`) plans its Bloom filter anyway: the build
                 // decides from the keys it holds, as it does for any planned
                 // Bloom (TPC-H q18: estimated 150M, holds 6,398 at SF100).
                 // Past `bloom.maxItems` it publishes none, so the guess is
-                // capped there for the scan-size test and the planned size:
-                // at the base cap, so that a raised cap does not turn the
-                // guess into a build too large for its scan.
+                // capped there for the scan-size test and the planned size.
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
                 let rows = if s.bloom_max_items > 0 && filtered_aggregate(build) {
-                    build_rows.min(base_items.max(1) as f64)
+                    build_rows.min(s.bloom_max_items as f64)
                 } else {
                     build_rows
                 };
@@ -445,7 +451,10 @@ mod tests {
 
     use krishiv_common::config::Config;
 
-    use super::{PhysNode, Settings, memory_tier, query_memory_limit, reads_source, scan_waits};
+    use super::{
+        BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, keys_for,
+        memory_tier, query_memory_limit, reads_source, scan_waits,
+    };
     use crate::physical::{ScanId, ScanNode};
 
     fn files(path: &str) -> ReadSource {
@@ -495,8 +504,9 @@ mod tests {
     /// Bloom of that size holds at 1% (about 9.7 bits a key).
     #[test]
     fn the_memory_tier_is_a_64th_of_the_limit() {
-        let (items, bytes) = memory_tier(Some(20 << 30)).unwrap();
+        let bytes = memory_tier(Some(20 << 30)).unwrap();
         assert_eq!(bytes, 320 << 20);
+        let items = keys_for(bytes);
         assert!((250_000_000..=290_000_000).contains(&items), "{items}");
         // What it holds fits it.
         assert!(krishiv_io::runtime_filter::RuntimeBloom::bytes_for(items, 0.01) <= bytes + 4096);
@@ -512,12 +522,68 @@ mod tests {
         assert_eq!(query_memory_limit(&c), Some(20 << 30));
         c.set("krishiv.session.memoryLimit", "4g").unwrap();
         assert_eq!(query_memory_limit(&c), Some(4 << 30));
-        assert_eq!(Settings::new(&c).memory_tier.map(|t| t.1), Some(64 << 20));
+        assert_eq!(Settings::new(&c).memory_tier, Some(64 << 20));
         c.set("krishiv.runtimeFilter.bloom.memoryTier", "false")
             .unwrap();
         assert_eq!(Settings::new(&c).memory_tier, None);
         c.set("krishiv.runtimeFilter.bloom.atScaleRatio", "20")
             .unwrap();
         assert!((Settings::new(&c).at_scale_ratio - 20.0).abs() < f64::EPSILON);
+    }
+
+    fn settings(pairs: &[(&str, &str)]) -> Settings {
+        let mut c = Config::new();
+        c.set("krishiv.memory.limit", "20g").unwrap();
+        for (k, v) in pairs {
+            c.set(k, v).unwrap();
+        }
+        Settings::new(&c)
+    }
+
+    fn caps(s: Settings) -> (u64, usize) {
+        (s.bloom_max_items, s.bloom_max_bytes)
+    }
+
+    /// Below the ratio nothing is raised; at it the tier raises both caps
+    /// past the at-scale ones (320 MiB at 20g); with the tier off, the
+    /// at-scale caps; with both keys off, the base caps (main's plans).
+    #[test]
+    fn the_caps_a_scan_gets() {
+        let base = (4_000_000, 8 << 20);
+        let tier = (keys_for(320 << 20), 320 << 20);
+        let at_scale = (BLOOM_AT_SCALE_MAX_ITEMS, BLOOM_AT_SCALE_MAX_BYTES);
+        let s = settings(&[]);
+        assert_eq!(caps(s.for_scan(7.9e6, 1e6)), base);
+        assert_eq!(caps(s.for_scan(8e6, 1e6)), tier);
+        let off = settings(&[("krishiv.runtimeFilter.bloom.memoryTier", "false")]);
+        assert_eq!(caps(off.for_scan(8e6, 1e6)), at_scale);
+        let main = settings(&[
+            ("krishiv.runtimeFilter.bloom.memoryTier", "false"),
+            ("krishiv.runtimeFilter.bloom.atScaleRatio", "20"),
+        ]);
+        assert_eq!(caps(main.for_scan(19e6, 1e6)), base);
+        assert_eq!(caps(main.for_scan(20e6, 1e6)), at_scale);
+    }
+
+    /// An explicit cap binds under the tier as under `atScale`; an explicit
+    /// size cap also bounds the tier's key cap, so a build never collects
+    /// hashes for more keys than its Bloom can hold (review M1).
+    #[test]
+    fn explicit_caps_bind_under_the_memory_tier() {
+        let bytes = settings(&[("krishiv.runtimeFilter.bloom.maxBytes", "8m")]).for_scan(1e9, 1e6);
+        assert_eq!(bytes.bloom_max_bytes, 8 << 20);
+        assert_eq!(
+            bytes.bloom_max_items,
+            BLOOM_AT_SCALE_MAX_ITEMS.max(keys_for(8 << 20))
+        );
+        let items = settings(&[("krishiv.runtimeFilter.bloom.maxItems", "100")]).for_scan(1e9, 1e6);
+        assert_eq!(caps(items), (100, 320 << 20));
+        // Set explicitly, `atScale` lifts explicit caps again, to the tier's.
+        let lifted = settings(&[
+            ("krishiv.runtimeFilter.bloom.maxItems", "100"),
+            ("krishiv.runtimeFilter.bloom.atScale", "true"),
+        ])
+        .for_scan(1e9, 1e6);
+        assert_eq!(caps(lifted), (keys_for(320 << 20), 320 << 20));
     }
 }

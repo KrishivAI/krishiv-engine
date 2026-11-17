@@ -1486,7 +1486,9 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(4_000_000)),
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
           none, and one that turns out larger publishes none. Left at its default, it is raised to \
-          20,000,000 for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
+          20,000,000 for a scan estimated at least `krishiv.runtimeFilter.bloom.atScaleRatio` times its build \
+          (`krishiv.runtimeFilter.bloom.atScale`), and further to the keys the memory tier's size holds \
+          (`krishiv.runtimeFilter.bloom.memoryTier`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1500,7 +1502,9 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(8 * MIB)),
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
           built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
-          for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
+          for a scan estimated at least `krishiv.runtimeFilter.bloom.atScaleRatio` times its build \
+          (`krishiv.runtimeFilter.bloom.atScale`), and further to 1/64 of the query memory limit \
+          (`krishiv.runtimeFilter.bloom.memoryTier`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
