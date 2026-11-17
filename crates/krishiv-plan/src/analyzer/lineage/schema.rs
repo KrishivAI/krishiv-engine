@@ -68,7 +68,7 @@ pub const PRIVILEGES: [Privilege; 10] = [
 ];
 
 /// The securable kinds, as [`securable_kind`] names them.
-pub const SECURABLE_KINDS: [&str; 8] = [
+pub const SECURABLE_KINDS: [&str; 9] = [
     "table",
     "view",
     "function",
@@ -77,6 +77,7 @@ pub const SECURABLE_KINDS: [&str; 8] = [
     "system",
     "secret",
     "connection",
+    "column",
 ];
 
 /// Every transform, weakest first.
@@ -120,6 +121,7 @@ pub const fn securable_kind(securable: &Securable) -> &'static str {
         Securable::System(_) => "system",
         Securable::Secret { .. } => "secret",
         Securable::Connection(_) => "connection",
+        Securable::Column { .. } => "column",
     }
 }
 
@@ -133,6 +135,11 @@ pub fn securable_name(securable: &Securable) -> Vec<String> {
         Securable::Path(p) => vec![p.to_string()],
         Securable::System(n) | Securable::Connection(n) => vec![n.clone()],
         Securable::Secret { scope } => vec![scope.clone()],
+        Securable::Column { table, column } => {
+            let mut parts = table.parts();
+            parts.push(column.clone());
+            parts
+        }
     }
 }
 
@@ -669,6 +676,14 @@ mod tests {
                 scope: "s".to_owned(),
             },
             Securable::Connection("k".to_owned()),
+            Securable::Column {
+                table: TableIdent {
+                    catalog: "c".to_owned(),
+                    namespace: vec!["d".to_owned()],
+                    name: "t".to_owned(),
+                },
+                column: "a".to_owned(),
+            },
         ];
         let kinds: Vec<&str> = all.iter().map(securable_kind).collect();
         assert_eq!(kinds, SECURABLE_KINDS);
@@ -682,6 +697,7 @@ mod tests {
         assert_eq!(securable_name(&all[0]), ["c", "d", "t"]);
         assert_eq!(securable_name(&all[3]), ["/p"]);
         assert_eq!(securable_name(&all[6]), ["s"]);
+        assert_eq!(securable_name(&all[8]), ["c", "d", "t", "a"]);
         let leaves = [
             Leaf::Table {
                 name: vec!["t".to_owned()],
