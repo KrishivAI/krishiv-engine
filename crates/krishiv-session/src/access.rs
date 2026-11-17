@@ -742,7 +742,8 @@ impl Session {
     }
 
     /// Whether this session's principal may see the session catalog's namespace `namespace` in a
-    /// listing: `Browse` on it, or on any relation in it (a table grant shows where the table is).
+    /// listing: `Browse` on it, or on any relation or function in it (a table grant shows where the
+    /// table is).
     pub(crate) async fn may_list_namespace(&self, namespace: &str) -> bool {
         let securable = Securable::Namespace(vec![
             crate::catalog::CATALOG.to_owned(),
@@ -759,6 +760,19 @@ impl Session {
                 name: t.name.clone(),
             };
             if self.may_list(&Securable::Table(ident)).await {
+                return true;
+            }
+        }
+        // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
+        let functions = crate::store::CatalogStore::functions(&*self.state.catalog.store)
+            .in_namespace(namespace);
+        for name in functions {
+            let securable = Securable::Function(vec![
+                crate::catalog::CATALOG.to_owned(),
+                namespace.to_owned(),
+                name,
+            ]);
+            if self.may_list(&securable).await {
                 return true;
             }
         }

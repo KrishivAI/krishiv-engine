@@ -929,3 +929,29 @@ fn a_refused_explain_of_a_definer_view_names_only_what_the_reader_wrote() {
         }
     }
 }
+
+/// Review r3 N4 (ADR 0048 A1 §3 Listings): a namespace shows to a principal holding a grant on it
+/// or on anything in it, functions included, so a grant on one function shows its namespace.
+#[test]
+fn a_function_grant_shows_its_namespace() {
+    let (w, root, _) = world();
+    let fan = w.user("fan");
+    ok(&root, "GRANT USAGE ON CATALOG spark_catalog TO user:fan");
+    ok(&root, "CREATE NAMESPACE fnns");
+    ok(&root, "CREATE FUNCTION fnns.g() RETURNS INT RETURN 7");
+    ok(&root, "CREATE NAMESPACE closedns");
+    ok(&root, "CREATE FUNCTION closedns.h() RETURNS INT RETURN 8");
+    ok(&root, "GRANT SELECT ON FUNCTION fnns.g TO user:fan");
+    let namespaces = ok(&fan, "SHOW NAMESPACES");
+    assert!(
+        namespaces.contains("fnns") && !namespaces.contains("closedns"),
+        "{namespaces}"
+    );
+    let c = fan.catalog();
+    assert!(block_on(c.database_exists("fnns")).unwrap());
+    assert!(!block_on(c.database_exists("closedns")).unwrap());
+    block_on(c.get_database("fnns")).unwrap();
+    ok(&fan, "DESCRIBE NAMESPACE fnns");
+    block_on(c.get_function("fnns.g")).unwrap();
+    assert_eq!(rows(&fan, "SELECT fnns.g()"), 1);
+}
