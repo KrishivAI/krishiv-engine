@@ -398,6 +398,31 @@ fn an_unproven_range_under_ansi_refuses() {
     );
 }
 
+/// A `count`'s range rests on the estimated input rows, so under ANSI it proves no `+` safe: an
+/// estimate of 1 row says nothing of a count of 10^10 (`n + 9223372026854775807` would overflow).
+/// Without ANSI `+` wraps and needs no proof.
+#[test]
+fn a_count_range_is_an_estimate_and_proves_nothing_under_ansi() {
+    let sql = "SELECT n, n + 9223372026854775807 AS m FROM \
+               (SELECT c, count(*) AS n FROM h GROUP BY c) GROUP BY n, n + 9223372026854775807";
+    let ansi = run_over(sql, FOOTER, true, false);
+    assert!(!ansi.moved(), "{}", ansi.text());
+    assert!(
+        ansi.notes
+            .iter()
+            .any(|n| n.contains("the range of n is an estimate")),
+        "{:?}",
+        ansi.notes
+    );
+    let wrapping = run_over(sql, FOOTER, false, false);
+    assert!(
+        wrapping.moved(),
+        "{:?}\n{}",
+        wrapping.notes,
+        wrapping.text()
+    );
+}
+
 /// A range that reaches the type's end is no proof; wrapping needs none.
 #[test]
 fn a_key_at_int_max_rewrites_only_without_ansi() {

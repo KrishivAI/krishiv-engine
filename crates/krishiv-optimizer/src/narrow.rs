@@ -172,6 +172,7 @@ fn or(a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
                 null_frac: p.null_frac.max(q.null_frac),
                 min: p.min.zip(q.min).map(|(m, n)| m.min(n)),
                 max: p.max.zip(q.max).map(|(m, n)| m.max(n)),
+                range_estimated: p.range_estimated || q.range_estimated,
                 source: p.source.min(q.source),
             };
             v.over.insert(id, merged);

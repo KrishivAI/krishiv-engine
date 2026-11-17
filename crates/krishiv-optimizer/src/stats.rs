@@ -177,6 +177,10 @@ pub struct AttrStats {
     pub min: Option<f64>,
     /// An upper bound of the non-null values.
     pub max: Option<f64>,
+    /// Whether `min`/`max` rest on an estimate (a `count`'s maximum is the
+    /// estimated input rows) rather than on statistics or literals: such a
+    /// range may guide costs but proves nothing.
+    pub range_estimated: bool,
     /// Where the distinct count comes from.
     pub source: StatSource,
 }
@@ -190,6 +194,7 @@ impl AttrStats {
             null_frac: 0.0,
             min: None,
             max: None,
+            range_estimated: false,
             source: StatSource::Guess,
         }
     }

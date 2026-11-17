@@ -239,7 +239,7 @@ fn ansi_with_a_key_at_int_max_refuses_and_both_plans_raise() {
     let off = db.optimize(QUERY, &range, false);
     assert!(keys(&on).contains("c#0 - 1"), "{}", on.root());
     let want = db.execute(&off);
-    assert!(want.is_err(), "{want:?}");
+    assert_eq!(want, Err(ErrorClass::ArithmeticOverflow));
     assert_eq!(db.execute(&on), want);
     assert_eq!(db.execute(&db.analyze(QUERY)), want);
 }

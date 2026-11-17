@@ -426,17 +426,22 @@ fn bound(e: &Arc<Expr>, rel: Option<&RelStats>) -> Result<f64, String> {
             }
             match rel {
                 None => Ok(0.0),
-                Some(rel) => rel
-                    .cols
-                    .get(&c.id)
-                    .and_then(|s| Some(s.min?.abs().max(s.max?.abs())))
-                    .filter(|m| m.is_finite())
-                    .ok_or_else(|| {
-                        format!(
-                            "it may overflow: no minimum and maximum statistics for {}",
-                            c.name
-                        )
-                    }),
+                Some(rel) => match rel.cols.get(&c.id) {
+                    // A `count`'s maximum is the estimated input rows: no proof.
+                    Some(s) if s.range_estimated => Err(format!(
+                        "it may overflow: the range of {} is an estimate",
+                        c.name
+                    )),
+                    s => s
+                        .and_then(|s| Some(s.min?.abs().max(s.max?.abs())))
+                        .filter(|m| m.is_finite())
+                        .ok_or_else(|| {
+                            format!(
+                                "it may overflow: no minimum and maximum statistics for {}",
+                                c.name
+                            )
+                        }),
+                },
             }
         }
         ExprNode::Cast { expr, .. } if cannot_raise(e) => bound(expr, rel),
