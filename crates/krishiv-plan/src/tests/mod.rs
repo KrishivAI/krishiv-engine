@@ -25,6 +25,7 @@ mod observe;
 mod pivot;
 mod prefix_cache;
 mod props;
+mod python_relation_analysis;
 mod python_relations;
 mod rewrite;
 mod secrets;

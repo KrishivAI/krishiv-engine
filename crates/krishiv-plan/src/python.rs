@@ -74,10 +74,9 @@ pub fn plan_is_deterministic(plan: &crate::LogicalPlan) -> bool {
 /// over the input's columns (`PrettyPythonUDF`: `name(a, b)`) and its
 /// output attributes; a cogroup's UDF call and output (its key counts are
 /// not expressions). Spark raises it at analysis (`df.schema`, `explain`
-/// and SQL fail); no front end builds these nodes yet (Connect's
-/// `GroupMap`/`CoGroupMap` are not lowered, P3-T014), so for now only the
-/// physical planner calls it, at a DataFrame's first action. The front end
-/// that builds them must call it where it resolves the node.
+/// and SQL fail): the analyzer calls it where it resolves the node
+/// (`analyzer/python_relations.rs`). The physical planner calls it too, for
+/// plans built resolved that never went through the analyzer.
 ///
 /// Known differences: the UDF's name is the canonical lower-case one (a
 /// [`crate::PythonUdfRef`] keeps no other), and a
