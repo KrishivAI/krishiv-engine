@@ -22,9 +22,8 @@
 //! analyzed, ADR 0046 §3b).
 //!
 //! **Relation UDFs** (`mapInPandas`, `applyInPandas`, cogroups and their Arrow forms) take a version the same
-//! way and the same privilege check (`InlineUdfs::seen`); the pool runs no relation yet (no
-//! `prepare_relation`, PR-26c-2), so such a plan is typed and explained but fails when it runs
-//! (`KRISHIV_UDF_NOT_AVAILABLE`).
+//! way and the same privilege check (`InlineUdfs::seen`), and run on the session's workers through the
+//! pool's `prepare_relation` (`tests/udf.rs`: map, grouped and cogrouped).
 //!
 //! **Clones** (`CloneSession`, PR-15) must not share a runtime: its owner is the source session.
 //! `SessionPython::copy_for` builds the clone's own runtime with the payloads the source registered.
@@ -373,9 +372,8 @@ impl TranslateHost for InlineUdfs<'_> {
     }
 
     /// A relation's UDF takes a version as an inline call's does, under the same privilege check (the plan
-    /// is marked as calling client code, and nothing is registered before [`Self::grant`]). The session's
-    /// workers cannot run a relation yet (the pool has no `prepare_relation`, PR-26c-2), so a plan holding
-    /// one fails when it is planned for execution.
+    /// is marked as calling client code, and nothing is registered before [`Self::grant`]); it runs on the
+    /// session's workers like an inline call.
     fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<PythonUdfRef, KrishivError> {
         let version = self.version_of(udf)?;
         Ok(PythonUdfRef {

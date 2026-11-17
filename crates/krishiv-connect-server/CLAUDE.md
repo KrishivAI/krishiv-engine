@@ -100,9 +100,10 @@ Paths are relative to this crate.
   `InlineUdfs` is the translator's host (inline UDFs as the session's encoded unregistered-UDF names, one version per
   distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege; the UDFs of
   `mapInPandas`/`applyInPandas`/cogroup relations (PR-26d part 2, `relation_python_udf`) take a version the same way
-  under the same check, and fail with `KRISHIV_UDF_NOT_AVAILABLE` when run until the pool's `prepare_relation`,
-  PR-26c-2; `tests/udf.rs` `a_relation_udf_is_client_code_and_does_not_run_yet`); `copy_for` gives a
-  `CloneSession` clone a runtime of its own (to be called by PR-15's CloneSession); `tests/udf.rs` (real workers with
+  under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
+  `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
+  `admin_runs_apply_in_pandas_per_group`, `admin_runs_a_cogrouped_apply_in_pandas`); `copy_for` gives a
+  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
