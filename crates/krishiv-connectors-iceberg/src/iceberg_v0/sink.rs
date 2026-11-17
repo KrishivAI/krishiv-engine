@@ -628,7 +628,7 @@ fn has_required(field: &Field) -> bool {
 /// Whether `array` (of the table field `field`) holds a NULL in a required
 /// position among the rows `reach` marks (`None`: every row); `path` ends
 /// at that position when it does.
-fn null_in_required(
+pub(super) fn null_in_required(
     array: &ArrayRef,
     field: &Field,
     reach: Option<&[bool]>,

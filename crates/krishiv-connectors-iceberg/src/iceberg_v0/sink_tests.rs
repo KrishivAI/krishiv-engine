@@ -688,3 +688,92 @@ fn attempt_ids_are_unique() {
         (0..100_000).map(|_| super::sink::unique_u64()).collect();
     assert_eq!(ids.len(), 100_000);
 }
+
+/// A NULL below a large list's or a map's required position is found, with
+/// its path; one below a NULL row is not reachable, and a type the walk does
+/// not descend into holds none (the arrays carry nullable fields, as Arrow
+/// requires for NULLs; the table's fields are the required ones).
+#[test]
+fn nulls_in_required_positions_of_large_lists_and_maps() {
+    use super::sink::null_in_required;
+    use arrow_array::{Array, LargeListArray, MapArray, StringArray, StructArray};
+    use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+    let found = |array: &ArrayRef, field: &Field| {
+        let mut path = vec![field.name().clone()];
+        null_in_required(array, field, None, &mut path).then_some(path)
+    };
+
+    // large list<long>, its element required.
+    let element = Arc::new(Field::new("element", A::Int64, true));
+    let values = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+    let list = |nulls: Option<NullBuffer>| {
+        Arc::new(LargeListArray::new(
+            Arc::clone(&element),
+            OffsetBuffer::new(vec![0_i64, 1, 3].into()),
+            Arc::clone(&values),
+            nulls,
+        )) as ArrayRef
+    };
+    let table = Field::new(
+        "l",
+        A::LargeList(Arc::new(Field::new("element", A::Int64, false))),
+        true,
+    );
+    assert_eq!(
+        found(&list(None), &table),
+        Some(vec!["l".to_owned(), "element".to_owned()])
+    );
+    // The NULL element sits in row 1, which is NULL itself.
+    let row_null = list(Some(NullBuffer::from(vec![true, false])));
+    assert_eq!(found(&row_null, &table), None);
+
+    // map<string, long>, its value required.
+    let kv = |value_nullable: bool| {
+        vec![
+            Arc::new(Field::new("key", A::Utf8, false)),
+            Arc::new(Field::new("value", A::Int64, value_nullable)),
+        ]
+    };
+    let entries = StructArray::new(
+        kv(true).into(),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![Some(1), None])) as ArrayRef,
+        ],
+        None,
+    );
+    let entries_field = Arc::new(Field::new("entries", A::Struct(kv(true).into()), false));
+    let map = |nulls: Option<NullBuffer>| {
+        Arc::new(MapArray::new(
+            Arc::clone(&entries_field),
+            OffsetBuffer::new(vec![0_i32, 1, 2].into()),
+            entries.clone(),
+            nulls,
+            false,
+        )) as ArrayRef
+    };
+    let table = Field::new(
+        "m",
+        A::Map(
+            Arc::new(Field::new("entries", A::Struct(kv(false).into()), false)),
+            false,
+        ),
+        true,
+    );
+    assert_eq!(
+        found(&map(None), &table),
+        Some(vec!["m".to_owned(), "value".to_owned()])
+    );
+    let row_null = map(Some(NullBuffer::from(vec![true, false])));
+    assert_eq!(row_null.null_count(), 1);
+    assert_eq!(found(&row_null, &table), None);
+
+    // A map array under a list field: not descended into, nothing found.
+    let mismatched = Field::new(
+        "x",
+        A::LargeList(Arc::new(Field::new("element", A::Int64, false))),
+        true,
+    );
+    assert_eq!(found(&map(None), &mismatched), None);
+}
