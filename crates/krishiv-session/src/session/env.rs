@@ -317,7 +317,8 @@ mod quiet_tests {
     fn a_kept_trial_analysis_asks_the_sessions_policy() {
         let s = crate::Session::new().unwrap();
         let policy = &s.state.policy;
-        // A fresh trial env is quiet and asks a `QuietPolicy`.
+        // A fresh env is ordinary and asks the session's policy; made a trial, it is quiet and asks a
+        // `QuietPolicy` instead.
         let mut env = s.query_env();
         assert!(env.asks_policy(policy) && !env.quiet_denials());
         env.set_quiet_denials(true, policy);
