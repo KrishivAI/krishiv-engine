@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use krishiv_exec::Executor;
-use krishiv_exec::profile::QueryProfile;
+use krishiv_exec::profile::{ProfileScan, QueryProfile};
 use krishiv_optimizer::{AdvisedColumn, AdvisedTable, PartitionAdvice, advise};
 
 use std::sync::{Arc, OnceLock};
@@ -22,7 +22,7 @@ use crate::system::{Kind, Sources, long, text};
 /// The ranked suggestions for one table.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TableAdvice {
-    /// The table, as `catalog.schema.name`.
+    /// The table, as `catalog.schema.name` (components quoted where needed), lowercased ([`table_key`]).
     pub(crate) table: String,
     /// Finished queries that scanned it.
     pub(crate) queries: u64,
@@ -36,9 +36,18 @@ struct Seen {
     queries: u64,
     /// Queries that compared each column with values.
     filters: HashMap<String, u64>,
-    /// The latest row count and distinct counts a query planned with.
+    /// The latest row count a query planned with.
     rows: Option<u64>,
-    distinct: BTreeMap<String, u64>,
+    /// The latest distinct count of each column, with the row count of the same query: a distinct count is
+    /// weighed only against the row count it was planned with.
+    distinct: BTreeMap<String, (u64, Option<u64>)>,
+}
+
+/// How advice names a table: its profile name (`catalog.schema.name`, components quoted where needed) lowercased,
+/// Unicode-aware (`EV` and `ev`, `Ä` and `ä` are one table). Both the history's side and the scanned tables
+/// of `EXPLAIN` go through it.
+fn table_key(name: &str) -> String {
+    name.to_lowercase()
 }
 
 /// The advice for every table the history under `dir` has finished queries on, by table name. A history that
@@ -47,17 +56,21 @@ pub(crate) fn from_history(dir: &Path) -> Vec<TableAdvice> {
     let Ok(rows) = read_history(dir) else {
         return Vec::new();
     };
-    let mut seen: BTreeMap<String, Seen> = BTreeMap::new();
     // Oldest first, so the statistics kept are the latest.
-    for row in rows
-        .iter()
-        .filter(|r| r.state == "finished" && r.error_class.is_none())
-    {
-        let Ok(profile) = QueryProfile::from_json(&row.profile) else {
-            continue;
-        };
-        for scan in profile.scans {
-            let entry = seen.entry(scan.table.to_lowercase()).or_default();
+    advice_of(
+        rows.iter()
+            .filter(|r| r.state == "finished" && r.error_class.is_none())
+            .filter_map(|r| QueryProfile::from_json(&r.profile).ok())
+            .map(|p| p.scans),
+    )
+}
+
+/// The advice for the tables of `queries`, each the scans of one finished query, oldest first.
+fn advice_of(queries: impl IntoIterator<Item = Vec<ProfileScan>>) -> Vec<TableAdvice> {
+    let mut seen: BTreeMap<String, Seen> = BTreeMap::new();
+    for scans in queries {
+        for scan in scans {
+            let entry = seen.entry(table_key(&scan.table)).or_default();
             entry.queries += 1;
             if scan.rows.is_some() {
                 entry.rows = scan.rows;
@@ -65,19 +78,22 @@ pub(crate) fn from_history(dir: &Path) -> Vec<TableAdvice> {
             for c in scan.equality {
                 *entry.filters.entry(c.name.clone()).or_default() += 1;
                 if let Some(d) = c.distinct {
-                    entry.distinct.insert(c.name, d);
+                    entry.distinct.insert(c.name, (d, scan.rows));
                 }
             }
         }
     }
     seen.into_iter()
         .filter_map(|(table, s)| {
+            let rows = s.rows?;
             let table_stats = AdvisedTable {
-                rows: s.rows?,
+                rows,
+                // A distinct count planned with another row count is not compared with this one.
                 columns: s
                     .distinct
                     .iter()
-                    .map(|(name, d)| AdvisedColumn {
+                    .filter(|(_, (_, at))| *at == Some(rows))
+                    .map(|(name, (d, _))| AdvisedColumn {
                         name: name.clone(),
                         distinct: Some(*d),
                     })
@@ -96,9 +112,10 @@ pub(crate) fn from_history(dir: &Path) -> Vec<TableAdvice> {
 /// The `EXPLAIN` section for `tables`: one `partition advice` line per suggestion, the best first; `None` when
 /// there is nothing to advise.
 fn section_of(advice: &[TableAdvice], tables: &[String]) -> Option<String> {
+    let scanned: Vec<String> = tables.iter().map(|n| table_key(n)).collect();
     let lines: Vec<String> = advice
         .iter()
-        .filter(|t| tables.iter().any(|n| n.eq_ignore_ascii_case(&t.table)))
+        .filter(|t| scanned.iter().any(|n| *n == table_key(&t.table)))
         .flat_map(|t| {
             t.advice
                 .iter()

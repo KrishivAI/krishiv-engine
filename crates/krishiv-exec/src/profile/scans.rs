@@ -18,7 +18,8 @@ use crate::physical::{PhysNode, PhysicalPlan};
 /// One table a query scanned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileScan {
-    /// The table, as `catalog.schema.name`.
+    /// The table, as `catalog.schema.name`, each component backquoted (backquotes doubled) unless it is a plain
+    /// identifier (letters, digits and `_`, not all digits), so distinct component sequences name distinct tables.
     pub table: String,
     /// The table's row count when the query was planned, if known.
     pub rows: Option<u64>,
@@ -61,7 +62,7 @@ pub fn profile_scans(
         let ReadSource::Table { name, .. } = &scan.source else {
             continue;
         };
-        let table = name.join(".");
+        let table = table_name(name);
         let table_stats = stats(scan);
         let at = *seen.entry(table.clone()).or_insert_with(|| {
             out.push(ProfileScan {
@@ -88,6 +89,26 @@ pub fn profile_scans(
         s.equality.sort_by(|a, b| a.name.cmp(&b.name));
     }
     out
+}
+
+/// The components of a table name joined by `.`, each of letters, digits and `_` (not all digits) left bare and any
+/// other backquoted with its backquotes doubled (Spark's `quoteIfNeeded`): `["cat", "db", "a.b"]` is
+/// ``cat.db.`a.b` ``, never the same text as `["cat", "db.a", "b"]`.
+fn table_name(parts: &[String]) -> String {
+    let quoted: Vec<String> = parts
+        .iter()
+        .map(|p| {
+            let bare = !p.is_empty()
+                && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !p.chars().all(|c| c.is_ascii_digit());
+            if bare {
+                p.clone()
+            } else {
+                format!("`{}`", p.replace('`', "``"))
+            }
+        })
+        .collect();
+    quoted.join(".")
 }
 
 fn collect<'a>(node: &'a PhysNode, scans: &mut Vec<&'a Scan>, predicates: &mut Vec<&'a Expr>) {

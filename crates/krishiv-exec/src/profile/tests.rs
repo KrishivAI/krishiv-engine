@@ -1064,3 +1064,78 @@ fn scans_round_trip_and_an_older_document_has_none() {
             .is_empty()
     );
 }
+
+/// A mistyped or negative `distinct` or `rows` of a scan is a malformed document, not an unknown count; a missing
+/// one is unknown.
+#[test]
+fn a_malformed_scan_count_is_rejected_and_a_missing_one_is_none() {
+    let mut profile = QueryProfile::new(&plan(matching()), metrics(), false);
+    profile.scans = vec![ProfileScan {
+        table: "c.s.t".to_owned(),
+        rows: Some(10),
+        equality: vec![ScanColumn {
+            name: "d".to_owned(),
+            distinct: Some(3),
+        }],
+    }];
+    let v = profile.to_json_value();
+    for bad in [serde_json::Value::from("bad"), serde_json::Value::from(-1)] {
+        let mut d = v.clone();
+        d["scans"][0]["equality"][0]["distinct"] = bad.clone();
+        assert!(
+            QueryProfile::from_json(&d.to_string()).is_err(),
+            "distinct {bad}"
+        );
+        let mut r = v.clone();
+        r["scans"][0]["rows"] = bad.clone();
+        assert!(
+            QueryProfile::from_json(&r.to_string()).is_err(),
+            "rows {bad}"
+        );
+    }
+    let mut missing = v;
+    missing["scans"][0].as_object_mut().unwrap().remove("rows");
+    missing["scans"][0]["equality"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("distinct");
+    let back = QueryProfile::from_json(&missing.to_string()).unwrap();
+    assert_eq!(
+        back.scans,
+        vec![ProfileScan {
+            table: "c.s.t".to_owned(),
+            rows: None,
+            equality: vec![ScanColumn {
+                name: "d".to_owned(),
+                distinct: None,
+            }],
+        }]
+    );
+}
+
+/// A table is named by its components, each backquoted when it is not a plain identifier, so `cat.db.a.b` split
+/// two ways names two tables.
+#[test]
+fn a_scanned_table_keeps_the_boundaries_of_its_name() {
+    let named = |parts: &[&str]| {
+        let PhysNode::Scan(mut s) = scan_of("x", &[(1, "d")], None) else {
+            unreachable!()
+        };
+        s.scan.source = krishiv_plan::ReadSource::Table {
+            name: parts.iter().map(|p| (*p).to_owned()).collect(),
+            options: std::collections::BTreeMap::new(),
+        };
+        profile_scans(&plan_of(PhysNode::Scan(s)), &|_| None)
+            .into_iter()
+            .map(|s| s.table)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(named(&["cat", "db", "a.b"]), ["cat.db.`a.b`"]);
+    assert_eq!(named(&["cat", "db.a", "b"]), ["cat.`db.a`.b"]);
+    assert_eq!(named(&["c", "s", "a`b"]), ["c.s.`a``b`"]);
+    assert_eq!(named(&["c", "s", "\u{c4}"]), ["c.s.`\u{c4}`"]);
+    assert_eq!(
+        named(&["spark_catalog", "default", "Ev_1"]),
+        ["spark_catalog.default.Ev_1"]
+    );
+}

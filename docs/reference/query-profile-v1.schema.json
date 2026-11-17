@@ -29,7 +29,7 @@
         "required": ["table", "equality"],
         "additionalProperties": false,
         "properties": {
-          "table": { "type": "string", "description": "The table, as `catalog.schema.name`." },
+          "table": { "type": "string", "description": "The table, as `catalog.schema.name`, each component backquoted (backquotes doubled) unless it is letters, digits and `_` (not all digits)." },
           "rows": { "$ref": "#/$defs/u64", "description": "The table's row count when the query was planned, if known." },
           "equality": {
             "type": "array",

@@ -239,13 +239,13 @@ fn scans_of(v: &Value) -> R<Vec<ProfileScan>> {
                     let c = obj(c, "scan column")?;
                     Ok(ScanColumn {
                         name: str_of(c, "name")?.to_owned(),
-                        distinct: c.get("distinct").and_then(Value::as_u64),
+                        distinct: opt_u64(c, "distinct")?,
                     })
                 })
                 .collect::<R<Vec<_>>>()?;
             Ok(ProfileScan {
                 table: str_of(s, "table")?.to_owned(),
-                rows: s.get("rows").and_then(Value::as_u64),
+                rows: opt_u64(s, "rows")?,
                 equality,
             })
         })
