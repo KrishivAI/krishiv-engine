@@ -501,18 +501,36 @@ fn every_request_goes_through_the_egress_policy_client() {
     let names = client_with(config).list_namespaces(&[]).unwrap().unwrap();
     assert_eq!(names, vec![ns(&["a"])]);
     assert_eq!(idp.seen().len(), 1);
-    // A token endpoint at a literal the rule refuses (here 127.0.0.2, not the declared host) is never called.
+    // A live token endpoint the rule refuses (`localhost`: not the declared host, a loopback
+    // address) is never called, so the refusal is the policy's, not a failed connection.
+    let refused_idp = serve(|_| {
+        Reply::Json(
+            200,
+            r#"{"access_token": "t2", "token_type": "bearer"}"#.into(),
+        )
+    });
     let mut config = config_for(&server);
     config.egress = Some(deny_connector(&["127.0.0.1"]));
     config.auth = RestAuth::ClientCredentials {
         client_id: Some("id".into()),
         client_secret: SecretString::new("s"),
-        token_endpoint: Some(Url::parse("http://127.0.0.2:9/token").unwrap()),
+        token_endpoint: Some(
+            Url::parse(&format!(
+                "{}/token",
+                refused_idp.base.replace("127.0.0.1", "localhost")
+            ))
+            .unwrap(),
+        ),
         scope: None,
         extra: Vec::new(),
     };
     let before = server.seen().len();
-    assert!(client_with(config).list_namespaces(&[]).is_err());
+    let e = client_with(config).list_namespaces(&[]).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    assert!(
+        refused_idp.seen().is_empty(),
+        "the refused endpoint is never called"
+    );
     assert_eq!(
         server.seen().len(),
         before,

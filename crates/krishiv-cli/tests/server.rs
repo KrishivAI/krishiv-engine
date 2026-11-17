@@ -56,7 +56,16 @@ fn an_unsupported_spark_connect_setting_is_refused() {
 /// `krishiv server` with `confs`, expected to refuse startup: its stderr.
 fn refused(confs: &[&str]) -> String {
     let mut cmd = krishiv();
-    cmd.args(["server", "--port", "0", "--connect-port", "0"]);
+    // `--allow-root`: CI containers may run as root, and the root refusal comes before the
+    // catalogs are built.
+    cmd.args([
+        "server",
+        "--port",
+        "0",
+        "--connect-port",
+        "0",
+        "--allow-root",
+    ]);
     for c in confs {
         cmd.args(["--conf", c]);
     }
@@ -130,17 +139,27 @@ fn catalog_declarations_are_checked_at_startup() {
                 "krishiv.catalog.lake.tokenEndpoint=https://169.254.169.254/token",
             ),
         ] {
-            let mut confs = vec![
+            // One value per key: the tested one replaces the accepted one.
+            let confs: Vec<&str> = [
                 "krishiv.catalog.lake.type=iceberg-rest",
                 "krishiv.catalog.lake.uri=https://catalog.example.com/api",
                 "krishiv.catalog.lake.auth=client-credentials",
                 "krishiv.catalog.lake.clientId=krishiv",
                 "krishiv.catalog.lake.clientSecret=env:PATH",
                 "krishiv.catalog.lake.tokenEndpoint=https://idp.example.com/token",
-            ];
-            confs.push(conf);
+            ]
+            .into_iter()
+            .map(|c| {
+                if c.split_once('=').map(|(k, _)| k) == Some(key) {
+                    conf
+                } else {
+                    c
+                }
+            })
+            .collect();
             let err = refused(&confs);
             assert!(err.contains(key), "{err}");
+            assert!(!err.contains("set twice"), "{err}");
             assert!(
                 !err.contains("169.254") && !err.contains("2852039166"),
                 "{err}"

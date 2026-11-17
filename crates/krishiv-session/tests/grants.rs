@@ -172,10 +172,15 @@ fn observe_metrics_need_a_grant_on_their_columns() {
                 .table("t")
                 .observe(&obs, [max(col(metric))])?
                 .select([col("a")]);
-            df.collect().await.map(|b| b.len())
+            df.collect().await.map(|b| {
+                b.iter()
+                    .map(arrow_array::RecordBatch::num_rows)
+                    .sum::<usize>()
+            })
         })
     };
-    count("a").unwrap_or_else(|e| panic!("observe(max(a)): {e}"));
+    let rows = count("a").unwrap_or_else(|e| panic!("observe(max(a)): {e}"));
+    assert_eq!(rows, 1, "the one row of `t`");
     match count("b") {
         Err(e) if e.error_class().name() == DENIED => assert!(e.to_string().contains("`b`"), "{e}"),
         other => panic!("observe(max(b)): expected a denial, got {other:?}"),
@@ -195,14 +200,21 @@ fn column_grants_cover_grouping_sets_over_their_columns() {
     ok(&root, "INSERT INTO g VALUES (1, 2, 3, 4)");
     let ana = w.user("ana");
     ok(&root, "GRANT SELECT (a, b, c) ON g TO user:ana");
+    // One input row: one output row per grouping set.
     let shapes = [
-        "SELECT a, b, sum(c), grouping(a), grouping_id() FROM g GROUP BY ROLLUP(a, b)",
-        "SELECT a, sum(c) FROM g GROUP BY CUBE(a, b)",
-        "SELECT a, grouping_id(a, b), max(c) FROM g GROUP BY GROUPING SETS ((a), (a, b), ())",
-        "SELECT a + b, count(c) FROM g GROUP BY ROLLUP(a + b)",
+        (
+            "SELECT a, b, sum(c), grouping(a), grouping_id() FROM g GROUP BY ROLLUP(a, b)",
+            3,
+        ),
+        ("SELECT a, sum(c) FROM g GROUP BY CUBE(a, b)", 4),
+        (
+            "SELECT a, grouping_id(a, b), max(c) FROM g GROUP BY GROUPING SETS ((a), (a, b), ())",
+            3,
+        ),
+        ("SELECT a + b, count(c) FROM g GROUP BY ROLLUP(a + b)", 2),
     ];
-    for sql in shapes {
-        assert!(ok(&ana, sql) > 0, "{sql}");
+    for (sql, rows) in shapes {
+        assert_eq!(ok(&ana, sql), rows, "{sql}");
     }
     // The same shapes with `d` referenced (a key, an aggregate input, a computed key).
     for sql in [
@@ -217,7 +229,7 @@ fn column_grants_cover_grouping_sets_over_their_columns() {
     // Without `c`, the shapes reading `c` are refused.
     let bob = w.user("bob");
     ok(&root, "GRANT SELECT (a, b) ON g TO user:bob");
-    for sql in shapes {
+    for (sql, _) in shapes {
         let e = denied(&bob, sql);
         assert!(e.contains("`c`"), "{sql}: {e}");
     }
