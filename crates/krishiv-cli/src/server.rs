@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, UI_ALLOWED_HOSTS, UI_ENABLED,
+    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ALLOWED_HOSTS, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -104,6 +104,15 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
         builder = builder.config(k, v);
+    }
+    // The egress policy (design P3-T067 §5.1): a server allows only globally routable
+    // destinations unless the admin chose otherwise.
+    if !args
+        .conf
+        .iter()
+        .any(|(k, _)| k == IO_EGRESS_PRIVATE_ADDRESSES.key)
+    {
+        builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
     let host = match args.host {
         Some(h) => h,
@@ -196,14 +205,27 @@ async fn run_listeners(
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
     let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
-    let manager = Arc::new(if authenticated {
+    let manager = if authenticated {
         SessionManager::new(
             role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
             limits,
         )
     } else {
         SessionManager::from_base(base, limits)
-    });
+    };
+    // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
+    // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
+    // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
+    #[cfg(target_os = "linux")]
+    let manager = {
+        let pool_config = krishiv_udf_pool::PoolConfig::from_config(config);
+        let pool = tokio::task::spawn_blocking(move || krishiv_udf_pool::Pool::new(pool_config))
+            .await
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
+        manager.with_udf_host(Arc::new(pool))
+    };
+    let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;

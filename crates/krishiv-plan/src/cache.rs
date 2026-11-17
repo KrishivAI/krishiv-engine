@@ -557,8 +557,16 @@ impl Encoder {
                 self.tag("rfunction");
                 // The canonical name only: a registry handle is an
                 // in-process lookup, never part of a key, as in the
-                // canonical encoding.
+                // canonical encoding. A session UDF's version is part of
+                // its identity (a re-registration, or another unregistered
+                // Python UDF of the same name, is another function: Spark
+                // compares a `PythonUDF`'s pickled function).
                 self.text(f.id.name());
+                match &f.id {
+                    crate::FunctionId::PythonUdf { version, .. }
+                    | crate::FunctionId::Udf { version, .. } => self.num(u64::from(*version)),
+                    _ => self.num(0),
+                }
                 self.debug(&f.kind);
                 self.exprs(&f.args, bias);
                 self.flag(f.distinct);

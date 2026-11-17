@@ -27,8 +27,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.access.provider", &ACCESS_PROVIDER),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.connect.address", &CONNECT_ADDRESS),
+    ("krishiv.io.egress.proxy", &IO_EGRESS_PROXY),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
@@ -93,6 +95,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
+    ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
     ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
@@ -234,6 +237,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_CREDENTIALS_REFRESH_SKEW,
     ),
     (
+        "krishiv.io.egress.privateAddresses",
+        &IO_EGRESS_PRIVATE_ADDRESSES,
+    ),
+    (
         "krishiv.memory.abortReleaseTimeout",
         &MEMORY_ABORT_RELEASE_TIMEOUT,
     ),
@@ -333,6 +340,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.maxInboundMessageSize",
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    ),
+    (
+        "krishiv.exec.agg.distinctCountAtMerge",
+        &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     ),
     (
         "krishiv.optimizer.ndvSampling.enabled",

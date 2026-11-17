@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Per-query spill scopes and the target of a write.
+//! Per-query spill scopes, the worker context a query's plans run with, and the target of a write.
 
 use super::*;
 
