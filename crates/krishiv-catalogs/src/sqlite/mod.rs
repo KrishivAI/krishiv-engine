@@ -128,8 +128,8 @@ impl SqliteCatalog {
         mut conn: Connection,
         case_sensitive: bool,
     ) -> Result<Self, KrishivError> {
-        let setup = |conn: &mut Connection| -> Result<(), Failure> {
-            conn.busy_timeout(BUSY_TIMEOUT)?;
+        let setup = |conn: &mut Connection, timeout: Duration| -> Result<(), Failure> {
+            conn.busy_timeout(timeout)?;
             conn.pragma_update(None, "foreign_keys", true)?;
             // WAL for a file (readers never block the writer); a memory database answers "memory", which is fine.
             conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
@@ -142,10 +142,14 @@ impl SqliteCatalog {
         // the busy timeout is spent.
         let started = std::time::Instant::now();
         loop {
-            match setup(&mut conn) {
+            // Each attempt may wait only for what is left of the one budget, so the whole setup stays within it.
+            let left = BUSY_TIMEOUT.saturating_sub(started.elapsed());
+            match setup(&mut conn, left) {
                 Ok(()) => break,
                 Err(Failure::Sql(detail))
-                    if detail.contains("locked") && started.elapsed() < BUSY_TIMEOUT =>
+                    if detail.contains("locked")
+                        && !left.is_zero()
+                        && started.elapsed() < BUSY_TIMEOUT =>
                 {
                     std::thread::sleep(Duration::from_millis(5));
                 }
