@@ -57,10 +57,6 @@ def test_pyspark_client_runs_range_join_and_agg(server: Any) -> None:
         spark.stop()
 
 
-@pytest.mark.xfail(
-    reason="spark.sql sends a SqlCommand; Connect commands arrive with P3-T012 (56K00 until then)",
-    strict=True,
-)
 def test_pyspark_client_runs_sql(server: Any) -> None:
     spark = _remote(server.url)
     try:
