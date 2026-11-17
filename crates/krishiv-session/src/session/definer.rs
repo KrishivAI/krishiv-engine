@@ -77,7 +77,16 @@ impl Session {
             .await
             .map_err(|e| e.error)?;
         let privilege = env.analysis.mode.read_privilege();
-        let called = calls.stored_calls();
+        // Its own calls and what their bodies look up, not those of the definer views inside it,
+        // which are their definers' (review r6 m1); the bodies read as the definer (r6 M8).
+        let (called, body) = calls.definer_scope(query, &ctx.definer_texts, self.state.profile);
+        self.authorize_reads_as(&body.reads, env, &definer, false)
+            .await?;
+        self.authorize_reads_as(&body.definer_reads, env, &definer, false)
+            .await?;
+        if let Some((e, _)) = body.deferred {
+            return Err(e);
+        }
         for (namespace, name) in &called {
             let securable = krishiv_plan::analyzer::Securable::Function(vec![
                 crate::catalog::CATALOG.to_owned(),
@@ -102,6 +111,43 @@ impl Session {
             }
         }
         Ok(reads)
+    }
+
+    /// The views the bodies of the functions a query called read, once the policy allows them; a
+    /// failure inside a view's text after that. The bodies only a definer view's text calls were
+    /// its definer's to read (review r6 M8). The lookups of a definer view's text a body reads are
+    /// the principal's too (fails closed), but a refusal of one, or a failure inside its text, is
+    /// told as a definer failure: the reader wrote none of its names.
+    ///
+    /// Boxed: `analyze_in` runs on the deepest stacks (a script's nested
+    /// statements), where the size of its future counts.
+    pub(super) fn authorize_body_reads<'a>(
+        &'a self,
+        env: &'a QueryEnv,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<krishiv_plan::analyzer::TableIdent>, KrishivError>>
+    {
+        Box::pin(async move {
+            let body = env.sql_functions.body_reads();
+            let mut views = if body.reads.is_empty() {
+                Vec::new()
+            } else {
+                Box::pin(self.authorize_reads(&body.reads, env)).await?
+            };
+            if !body.definer_reads.is_empty() {
+                let principal = Arc::clone(&self.state.principal);
+                match Box::pin(self.authorize_reads_as(&body.definer_reads, env, &principal, false))
+                    .await
+                {
+                    Ok(more) => views.extend(more),
+                    Err(e) => return Err(self.definer_failure(env, e)),
+                }
+            }
+            match body.deferred {
+                Some((e, true)) => Err(self.definer_failure(env, e)),
+                Some((e, false)) => Err(e),
+                None => Ok(views),
+            }
+        })
     }
 
     /// What the reader is told of the failure `e` of a definer view's read (review B2; ADR 0048

@@ -129,7 +129,9 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
         b.sql.insert(addr(p), Arc::clone(&root));
         roots.push(root);
     }
-    sql_function_roots(ctx, &mut roots)?;
+    // Per root: whether it is only under definer views' texts (a body only they call).
+    let mut root_under = vec![false; roots.len()];
+    sql_function_roots(ctx, &mut roots, &mut root_under)?;
     let mut found = Vec::new();
     // Per `found` entry: whether it is under a definer view's text.
     let mut definer = Vec::new();
@@ -137,8 +139,8 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     // Every CTE scope stays alive for the walk, so no scope address is
     // reused while `seen` holds it.
     let mut scopes: Vec<Arc<[String]>> = vec![Arc::from(Vec::new())];
-    for root in &roots {
-        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), false, false)];
+    for (root, &root_under) in roots.iter().zip(&root_under) {
+        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), root_under, false)];
         while let Some((node, env, under, in_view)) = stack.pop() {
             if !seen.insert((node.key() as usize, addr(&*env), under, in_view)) {
                 continue;
@@ -314,57 +316,41 @@ fn visit<'a>(
 /// SQL-bodied function the plans in `roots` call, and of those they call
 /// in turn, so that the walk below binds the tables and functions they read
 /// like the query's own. A function is added once, however often it is
-/// called.
+/// called; `under` (one flag per root) holds whether a root is reached only
+/// under definer views' texts ([`AnalysisContext::definer_texts`]): such a
+/// body reads as the view's definer, who was asked about it (review r6 M8). A
+/// body also called outside them is added (again) as the principal's.
 fn sql_function_roots(
     ctx: &AnalysisContext,
     roots: &mut Vec<Arc<LogicalPlan>>,
+    under: &mut Vec<bool>,
 ) -> Result<(), AnalysisError> {
-    let mut known: HashSet<String> = HashSet::new();
+    // Each function added, and whether only as reached under a definer's text.
+    let mut known: HashMap<String, bool> = HashMap::new();
     let mut next = 0;
     while next < roots.len() {
         let mut defs = Vec::new();
-        let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
-            if let Node::Plan(p) = node
-                && let PlanNode::TableFunction { name, .. } = &p.node
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &name
-                        .split(crate::TABLE_FUNCTION_NAME_SEP)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>(),
-                    ctx.profile,
-                )
-            {
-                defs.push(def);
-            }
-            if let Node::Expr(e) = node
-                && let ExprNode::Function(f) = &e.node
-                && is_registry_call(&f.name)
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &if is_session_qualifier(&f.qualifier) {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    } else if f.qualifier.is_empty() {
-                        vec![f.name.clone()]
-                    } else if is_builtin_qualifier(&f.qualifier) {
-                        return ControlFlow::Continue(());
-                    } else {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    },
-                    ctx.profile,
-                )
-            {
-                defs.push(def);
-            }
-            ControlFlow::Continue(())
-        });
-        next += 1;
-        for def in defs {
-            if !known.insert(def.routine_name()) {
+        let mut seen: HashSet<(usize, bool)> = HashSet::new();
+        let mut stack = vec![(Node::Plan(&roots[next]), under[next])];
+        let mut children = Vec::new();
+        while let Some((node, below)) = stack.pop() {
+            let below = below || matches!(node, Node::Plan(p) if ctx.definer_texts.contains(p));
+            if !seen.insert((node.key() as usize, below)) {
                 continue;
             }
+            if let Some(def) = called_sql_function(ctx, node) {
+                defs.push((def, below));
+            }
+            walk::children(node, &mut children);
+            stack.extend(children.drain(..).rev().map(|c| (c, below)));
+        }
+        next += 1;
+        for (def, below) in defs {
+            match known.get(&def.routine_name()) {
+                Some(&only_under) if !only_under || below => continue,
+                _ => {}
+            }
+            known.insert(def.routine_name(), below);
             if known.len() > crate::MAX_DEPTH {
                 return Err(AnalysisError::new(
                     krishiv_common::error::FailedToParseTooComplex {},
@@ -379,9 +365,41 @@ fn sql_function_roots(
                 input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
                 exprs,
             })));
+            under.push(below);
         }
     }
     Ok(())
+}
+
+/// The SQL-bodied function `node` calls, if any (a table function or a registry call).
+fn called_sql_function(ctx: &AnalysisContext, node: Node<'_>) -> Option<Arc<super::SqlFunction>> {
+    let parts = match node {
+        Node::Plan(p) => {
+            let PlanNode::TableFunction { name, .. } = &p.node else {
+                return None;
+            };
+            name.split(crate::TABLE_FUNCTION_NAME_SEP)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        }
+        Node::Expr(e) => {
+            let ExprNode::Function(f) = &e.node else {
+                return None;
+            };
+            if !is_registry_call(&f.name)
+                || (!is_session_qualifier(&f.qualifier) && is_builtin_qualifier(&f.qualifier))
+            {
+                return None;
+            }
+            let mut parts = f.qualifier.clone();
+            parts.push(f.name.clone());
+            parts
+        }
+    };
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
 }
 
 /// A node of a permanent view's text ([`AnalysisContext::stored_view_texts`], review r5 Z1): no

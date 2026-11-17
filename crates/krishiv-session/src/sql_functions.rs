@@ -144,14 +144,10 @@ pub(crate) struct QueryFunctions {
     /// What reading a permanent view in a body needs; `None` for a registry
     /// that inlines temporary views only.
     views: Option<ViewSource>,
-    expanded: Mutex<HashMap<String, Arc<SqlFunction>>>,
-    /// The catalog-store lookups the bodies expanded so far made, and the
-    /// first failure inside a stored view's text (see
-    /// [`crate::catalog::Expansion`]).
-    reads: Mutex<(Vec<ReadCandidate>, Option<KrishivError>)>,
-    /// The views the bodies expanded so far inlined, for the query's view side table
-    /// (`AnalyzedPlan::views`).
-    views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
+    /// The bodies expanded so far, what their expansion looked up and the views it inlined: shared
+    /// with [`Self::recording_fork`]s, so a definer view's analysis and the query's meet one body
+    /// (and one record of its lookups) however often it is called.
+    bodies: Arc<Bodies>,
     /// The stored functions a lookup resolved so far (namespace, name as stored), each once: a
     /// call needs `Select` on the function (P3-T062 §2.4).
     called: Mutex<Vec<(String, String)>>,
@@ -160,11 +156,68 @@ pub(crate) struct QueryFunctions {
     defining: Option<(String, String)>,
     /// The stored functions a definer view's text calls (asked of its definer, review r5 M7), and
     /// of those the ones only such texts call: the query's principal is not asked those.
-    definer_calls: Mutex<(Calls, Calls)>,
+    definer_calls: Mutex<DefinerCalls>,
 }
 
 /// Stored functions by (namespace, name as stored), each once.
 type Calls = Vec<(String, String)>;
+
+/// [`QueryFunctions::definer_calls`].
+#[derive(Default)]
+struct DefinerCalls {
+    /// The stored functions definer views' texts call, asked of their definers.
+    asked: Calls,
+    /// Of [`Self::asked`], those only such texts call.
+    skipped: Calls,
+    /// The bodies (by `cache_key`) the query calls outside definer views' texts, directly or
+    /// through bodies; `None` until settled, or when unknown (every body is the principal's).
+    own_bodies: Option<Vec<String>>,
+}
+
+/// [`QueryFunctions::bodies`].
+#[derive(Default)]
+struct Bodies {
+    /// Each body as expanded, by `cache_key`.
+    expanded: Mutex<HashMap<String, Arc<SqlFunction>>>,
+    /// What each body's expansion looked up, by `cache_key`, in order.
+    reads: Mutex<Vec<BodyReads>>,
+    /// The views the bodies inlined, for the query's view side table (`AnalyzedPlan::views`).
+    views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
+}
+
+/// The catalog-store lookups of one body's expansion (see [`crate::catalog::Expansion`]).
+#[derive(Clone, Default)]
+pub(crate) struct BodyReads {
+    /// The body's `cache_key`.
+    key: String,
+    /// Its own lookups.
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// The lookups of the texts of the definer views it reads (read as invoker ones, fails closed):
+    /// a refusal of one names what the reader did not write, so it is redacted.
+    pub(crate) definer_reads: Vec<ReadCandidate>,
+    /// The first failure inside a stored view's text, and whether it is inside a definer's.
+    pub(crate) deferred: Option<(KrishivError, bool)>,
+}
+
+impl BodyReads {
+    /// `self` with `other`'s lookups and failure added, each once.
+    fn merge(mut self, other: &Self) -> Self {
+        for read in &other.reads {
+            if !self.reads.contains(read) {
+                self.reads.push(read.clone());
+            }
+        }
+        for read in &other.definer_reads {
+            if !self.definer_reads.contains(read) {
+                self.definer_reads.push(read.clone());
+            }
+        }
+        if self.deferred.is_none() {
+            self.deferred.clone_from(&other.deferred);
+        }
+        self
+    }
+}
 
 /// How a body's permanent views are read: the parser options of the query
 /// and the source ids of the views' lowered text.
@@ -194,17 +247,16 @@ impl QueryFunctions {
             case_sensitive,
             stored,
             views,
-            expanded: Mutex::new(HashMap::new()),
-            reads: Mutex::new((Vec::new(), None)),
-            views_read: Mutex::new(Vec::new()),
+            bodies: Arc::default(),
             called: Mutex::new(Vec::new()),
             defining: None,
-            definer_calls: Mutex::new((Vec::new(), Vec::new())),
+            definer_calls: Mutex::default(),
         }
     }
 
     /// This registry with nothing looked up yet: what an analysis through it calls is recorded
-    /// apart from the query's (a definer view's query, review r5 M7).
+    /// apart from the query's (a definer view's query, review r5 M7). The bodies it expands are the
+    /// query's ([`Self::bodies`]).
     pub(crate) fn recording_fork(&self) -> Self {
         Self {
             base: Arc::clone(&self.base),
@@ -215,12 +267,10 @@ impl QueryFunctions {
             stored: Arc::clone(&self.stored),
             path: self.path.clone(),
             views: self.views.clone(),
-            expanded: Mutex::new(HashMap::new()),
-            reads: Mutex::new((Vec::new(), None)),
-            views_read: Mutex::new(Vec::new()),
+            bodies: Arc::clone(&self.bodies),
             called: Mutex::new(Vec::new()),
             defining: self.defining.clone(),
-            definer_calls: Mutex::new((Vec::new(), Vec::new())),
+            definer_calls: Mutex::default(),
         }
     }
 
@@ -231,16 +281,17 @@ impl QueryFunctions {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         for call in calls {
-            if !noted.0.contains(&call) {
-                noted.0.push(call);
+            if !noted.asked.contains(&call) {
+                noted.asked.push(call);
             }
         }
     }
 
     /// Of the stored functions definer views' texts called, those `plan` (the query, its definer
     /// views' texts `texts` aside) does not call itself, directly or through a body: the query's
-    /// principal is not asked about them (review r5 M7). A plan holding SQL text (not walked here)
-    /// keeps every call the principal's.
+    /// principal is not asked about them (review r5 M7), nor about what the bodies only those texts
+    /// reach look up (review r6 M8: their definers were). A plan holding SQL text (not walked here)
+    /// keeps every call and body the principal's.
     pub(crate) fn settle_definer_calls(
         &self,
         plan: &Arc<LogicalPlan>,
@@ -251,30 +302,68 @@ impl QueryFunctions {
             .definer_calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if noted.0.is_empty() {
+        if noted.asked.is_empty() {
             return;
         }
-        let own = self.calls_outside(plan, texts, profile);
-        noted.1 = match own {
-            Some(own) => noted
-                .0
-                .iter()
-                .filter(|c| !own.contains(c))
-                .cloned()
-                .collect(),
-            None => Vec::new(),
-        };
+        match self.calls_outside(plan, texts, profile) {
+            Some((own, bodies)) => {
+                noted.skipped = noted
+                    .asked
+                    .iter()
+                    .filter(|c| !own.contains(c))
+                    .cloned()
+                    .collect();
+                noted.own_bodies = Some(bodies);
+            }
+            None => {
+                noted.skipped = Vec::new();
+                noted.own_bodies = None;
+            }
+        }
+    }
+
+    /// What a definer view's query `query` calls and looks up through bodies, the texts `nested` of
+    /// the definer views inside it aside (each is its own definer's, review r6 m1), as analyzed
+    /// through this registry (a [`Self::recording_fork`]): the stored functions, then the bodies'
+    /// lookups, all asked of the view's definer (review r5 M7, r6 M8). A query holding SQL text
+    /// gives everything this registry called and every body's lookups (asked of the definer too,
+    /// fails closed).
+    pub(crate) fn definer_scope(
+        &self,
+        query: &Arc<LogicalPlan>,
+        nested: &krishiv_plan::analyzer::views::DefinerTexts,
+        profile: SparkProfile,
+    ) -> (Calls, BodyReads) {
+        let reads = self
+            .bodies
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match self.calls_outside(query, nested, profile) {
+            Some((calls, bodies)) => {
+                let reads = reads
+                    .iter()
+                    .filter(|r| bodies.contains(&r.key))
+                    .fold(BodyReads::default(), BodyReads::merge);
+                (calls, reads)
+            }
+            None => (
+                self.stored_calls(),
+                reads.iter().fold(BodyReads::default(), BodyReads::merge),
+            ),
+        }
     }
 
     /// The stored functions `plan` calls outside the subtrees `texts`, directly or through the
-    /// bodies of the functions it calls, as this registry resolves them; `None` for a plan holding
-    /// SQL text.
+    /// bodies of the functions it calls, as this registry resolves them, and the bodies it reaches
+    /// so (by `cache_key`); `None` for a plan holding SQL text.
     fn calls_outside(
         &self,
         plan: &Arc<LogicalPlan>,
         texts: &krishiv_plan::analyzer::views::DefinerTexts,
         profile: SparkProfile,
-    ) -> Option<Vec<(String, String)>> {
+    ) -> Option<(Calls, Vec<String>)> {
         let fork = self.recording_fork();
         let mut bodies: Vec<String> = Vec::new();
         let mut plans: Vec<Arc<LogicalPlan>> = vec![Arc::clone(plan)];
@@ -321,7 +410,7 @@ impl QueryFunctions {
                 break;
             }
         }
-        Some(fork.stored_calls())
+        Some((fork.stored_calls(), bodies))
     }
 
     /// The stored functions a lookup resolved so far that the query's principal is asked about:
@@ -331,7 +420,7 @@ impl QueryFunctions {
             .definer_calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .1
+            .skipped
             .clone();
         self.stored_calls()
             .into_iter()
@@ -388,18 +477,31 @@ impl QueryFunctions {
         .with_path(self.path.clone())
     }
 
-    /// The catalog-store lookups the bodies expanded so far made, in order,
-    /// and the first failure inside a stored view's text. A query asks the
-    /// policy about the reads before it raises the failure.
-    pub(crate) fn body_reads(&self) -> (Vec<ReadCandidate>, Option<KrishivError>) {
-        let reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
-        (reads.0.clone(), reads.1.clone())
+    /// The catalog-store lookups the bodies expanded so far made, in order, and the first failure
+    /// inside a stored view's text, of the bodies the query's principal reaches: not those only a
+    /// definer view's text reaches (review r6 M8; [`Self::definer_scope`] gives those to its
+    /// definer). A query asks the policy about the reads before it raises the failure.
+    pub(crate) fn body_reads(&self) -> BodyReads {
+        let own = self
+            .definer_calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .own_bodies
+            .clone();
+        self.bodies
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|r| own.as_ref().is_none_or(|own| own.contains(&r.key)))
+            .fold(BodyReads::default(), BodyReads::merge)
     }
 
     /// The views the bodies expanded so far inlined, one entry per expansion (a body is expanded once per
     /// query, however often it is called).
     pub(crate) fn body_views(&self) -> Vec<krishiv_plan::analyzer::views::ViewExpansion> {
-        self.views_read
+        self.bodies
+            .views_read
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -424,7 +526,11 @@ impl QueryFunctions {
     /// namespace, not the caller's, so no temporary function or session
     /// UDF of the same name shadows them.
     fn expanded(&self, def: &Arc<SqlFunction>, profile: SparkProfile) -> Arc<SqlFunction> {
-        let mut cache = self.expanded.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cache = self
+            .bodies
+            .expanded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let key = cache_key(def);
         if let Some(hit) = cache.get(&key) {
             return Arc::clone(hit);
@@ -440,6 +546,9 @@ impl QueryFunctions {
         // The calls of a view a body reads resolve as in any stored view's text (review r5 Z1).
         let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>]| {
             self.qualify_calls(e, namespace, path, profile, true)
+        };
+        let qualify_table = |name: &str, namespace: &str, path: &[Vec<String>]| {
+            self.qualify_table_call(name, namespace, path, profile)
         };
         let expansion = match &self.views {
             Some(views) => {
@@ -458,6 +567,7 @@ impl QueryFunctions {
                     },
                     next_source: &|| next_source(views),
                     qualify: Some(&qualify),
+                    qualify_table: Some(&qualify_table),
                     namespace: stored_in
                         .clone()
                         .unwrap_or_else(|| self.catalog.current_namespace()),
@@ -484,20 +594,27 @@ impl QueryFunctions {
         // stays as written: the analyzer then reports the table missing.
         let body = match expansion {
             Ok(expansion) => {
-                let mut seen = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
                 // A definer view read by a body is read as an invoker one (fails closed): the
                 // lookups of its text are the caller's too (P3-T062 §2.4).
-                let inner = expansion.definers.into_iter().flat_map(|d| d.reads);
-                for read in expansion.reads.into_iter().chain(inner) {
-                    if !seen.0.contains(&read) {
-                        seen.0.push(read);
-                    }
-                }
-                if let Some(e) = expansion.deferred {
-                    seen.1.get_or_insert(e);
-                }
-                drop(seen);
-                self.views_read
+                let mine = BodyReads {
+                    key: key.clone(),
+                    reads: expansion.reads,
+                    definer_reads: expansion
+                        .definers
+                        .into_iter()
+                        .flat_map(|d| d.reads)
+                        .collect(),
+                    deferred: expansion
+                        .deferred
+                        .map(|e| (e, expansion.deferred_in_definer)),
+                };
+                self.bodies
+                    .reads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(mine);
+                self.bodies
+                    .views_read
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .extend(expansion.views);
@@ -589,42 +706,11 @@ impl QueryFunctions {
                         return Ok(e);
                     }
                     let mut call = call.clone();
-                    let name = fold(&call.name, self.case_sensitive);
-                    let from_path = path.iter().find_map(|entry| match entry.as_slice() {
-                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
-                            let n = fold(n, self.case_sensitive);
-                            self.stored.get(&n, &name).map(|_| vec![c.clone(), n])
-                        }
-                        _ => None,
-                    });
-                    // A routine gone from the frozen path stays unresolved: it
-                    // is looked up in the path's first schema, never the
-                    // namespace outside the path.
-                    let first = path.iter().find_map(|entry| match entry.as_slice() {
-                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
-                            Some(vec![c.clone(), fold(n, self.case_sensitive)])
-                        }
-                        _ => None,
-                    });
-                    // Only a view is held to the path's first schema; a stored
-                    // function's body falls back to its own namespace.
-                    call.qualifier = match from_path.or(first.filter(|_| in_view)) {
-                        Some(q) => q,
-                        // A view stored without a path reads its own namespace.
-                        None if in_view && path.is_empty() => {
-                            vec![
-                                crate::catalog::CATALOG.to_owned(),
-                                fold(namespace, self.case_sensitive),
-                            ]
-                        }
-                        // A view whose path holds no catalog schema keeps the call bare: the
-                        // analyzer refuses it in a stored view's text, never the reader's.
-                        None if in_view => return Ok(e),
-                        None if self.in_system => {
-                            vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()]
-                        }
-                        None => vec![namespace.to_owned()],
-                    };
+                    call.qualifier =
+                        match self.stored_qualifier(&call.name, namespace, path, in_view) {
+                            Some(q) => q,
+                            None => return Ok(e),
+                        };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
@@ -633,6 +719,87 @@ impl QueryFunctions {
             .unwrap_or_else(|never| match never {});
         (!Arc::ptr_eq(&out, body)).then_some(out)
     }
+}
+
+impl QueryFunctions {
+    /// The qualifier [`Self::qualify_calls`] gives a bare call of `name` that no built-in answers:
+    /// the first catalog schema of `path` holding a stored function of that name; for a view, else
+    /// the path's first catalog schema, else (a view stored with no path) its own `namespace`; for
+    /// a body, else `namespace`. `None`: a view whose path holds no catalog schema keeps the call
+    /// bare (the analyzer refuses it in a stored view's text, never the reader's).
+    fn stored_qualifier(
+        &self,
+        name: &str,
+        namespace: &str,
+        path: &[Vec<String>],
+        in_view: bool,
+    ) -> Option<Vec<String>> {
+        let name = fold(name, self.case_sensitive);
+        let from_path = path.iter().find_map(|entry| match entry.as_slice() {
+            [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                let n = fold(n, self.case_sensitive);
+                self.stored.get(&n, &name).map(|_| vec![c.clone(), n])
+            }
+            _ => None,
+        });
+        // A routine gone from the frozen path stays unresolved: it is looked up in the path's first
+        // schema, never the namespace outside the path.
+        let first = path.iter().find_map(|entry| match entry.as_slice() {
+            [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                Some(vec![c.clone(), fold(n, self.case_sensitive)])
+            }
+            _ => None,
+        });
+        // Only a view is held to the path's first schema; a stored function's body falls back to
+        // its own namespace.
+        match from_path.or(first.filter(|_| in_view)) {
+            Some(q) => Some(q),
+            // A view stored without a path reads its own namespace.
+            None if in_view && path.is_empty() => Some(vec![
+                crate::catalog::CATALOG.to_owned(),
+                fold(namespace, self.case_sensitive),
+            ]),
+            None if in_view => None,
+            None if self.in_system => Some(vec![
+                crate::catalog::CATALOG.to_owned(),
+                namespace.to_owned(),
+            ]),
+            None => Some(vec![namespace.to_owned()]),
+        }
+    }
+
+    /// The name of a table function a stored view's text calls (`name` as written, its parts joined
+    /// by [`krishiv_plan::TABLE_FUNCTION_NAME_SEP`]) qualified as [`Self::qualify_calls`] qualifies
+    /// a scalar call of a view (review r6 R6-1): a bare name no built-in table function answers goes
+    /// to the stored function its frozen `path` (or its `namespace`) holds, never to a temporary
+    /// one of the reader. `None` when it stays as written.
+    pub(crate) fn qualify_table_call(
+        &self,
+        name: &str,
+        namespace: &str,
+        path: &[Vec<String>],
+        profile: SparkProfile,
+    ) -> Option<String> {
+        if name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP) || builtin_table(name, profile) {
+            return None;
+        }
+        let mut parts = self.stored_qualifier(name, namespace, path, true)?;
+        parts.push(name.to_owned());
+        Some(parts.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()))
+    }
+}
+
+/// Whether a built-in table function (or `json_tuple`) answers a bare table function call of `name`.
+fn builtin_table(name: &str, profile: SparkProfile) -> bool {
+    name.eq_ignore_ascii_case("json_tuple")
+        || matches!(
+            krishiv_plan::analyzer::TableFunctionRegistry::lookup(
+                &krishiv_plan::analyzer::BuiltinTableFunctions::new(),
+                name,
+                profile,
+            ),
+            krishiv_plan::analyzer::TableFunctionLookup::Found(_)
+        )
 }
 
 impl QueryFunctions {
@@ -705,15 +872,7 @@ impl QueryFunctions {
             return temporary || udf;
         }
         let builtin = if table {
-            name.eq_ignore_ascii_case("json_tuple")
-                || matches!(
-                    krishiv_plan::analyzer::TableFunctionRegistry::lookup(
-                        &krishiv_plan::analyzer::BuiltinTableFunctions::new(),
-                        name,
-                        profile,
-                    ),
-                    krishiv_plan::analyzer::TableFunctionLookup::Found(_)
-                )
+            builtin_table(name, profile)
         } else {
             name == "qualify"
                 || Builtin::from_name(name).is_some()

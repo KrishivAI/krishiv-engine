@@ -1428,11 +1428,18 @@ pub(crate) struct StoredViews<'a> {
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.
     pub(crate) qualify: Option<&'a QualifyCalls<'a>>,
+    /// As [`Self::qualify`], for the name of a table function a stored view's query calls (review
+    /// r6 R6-1): the qualified name, its parts joined by `TABLE_FUNCTION_NAME_SEP`.
+    pub(crate) qualify_table: Option<&'a QualifyTableCall<'a>>,
 }
 
 /// See [`StoredViews::qualify`]: the expression, the namespace it was written in and the path frozen with it.
 pub(crate) type QualifyCalls<'a> =
     dyn Fn(&Arc<Expr>, &str, &[Vec<String>]) -> Option<Arc<Expr>> + 'a;
+
+/// See [`StoredViews::qualify_table`]: the table function's name as written, the namespace it was
+/// written in and the path frozen with it.
+pub(crate) type QualifyTableCall<'a> = dyn Fn(&str, &str, &[Vec<String>]) -> Option<String> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.

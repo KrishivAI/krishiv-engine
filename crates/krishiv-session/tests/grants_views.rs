@@ -1702,3 +1702,178 @@ fn a_function_a_definer_views_text_calls_is_asked_of_the_definer() {
     let e = column(&bob, "SELECT owner FROM default.dvr").unwrap_err();
     assert_redacted(&e.to_string(), &["rootf", "`t`"]);
 }
+
+/// Review r6 R6-1: a stored view's text calls a stored SQL table function by its bare name as it
+/// calls a scalar one, through the built-ins, then the catalog schemas of its frozen path (or, stored
+/// with no path, its own namespace), for its creator and its readers alike; a reader's temporary
+/// table function of that name never answers there. Spark v4.2.0 `SessionCatalog.scala` lines
+/// 2427-2441 (`handleViewContext` filters only temporary functions while a permanent view resolves;
+/// a persistent table function resolves through the view's captured `catalogAndNamespace`).
+#[test]
+fn a_stored_views_text_calls_a_stored_table_function_by_its_bare_name() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "CREATE SCHEMA ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    ok(
+        &ana,
+        "CREATE FUNCTION gt() RETURNS TABLE (o STRING) RETURN SELECT owner FROM t",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION ns2.gt() RETURNS TABLE (o STRING) RETURN SELECT 'ns2'",
+    );
+    ok(&ana, "CREATE VIEW ivt AS SELECT o FROM gt()");
+    ok(
+        &ana,
+        "CREATE VIEW dvt SQL SECURITY DEFINER AS SELECT o FROM gt()",
+    );
+    ok(&ana, "CREATE VIEW ivl AS SELECT x.o FROM t, LATERAL gt() x");
+    ok(&ana, "SET spark.sql.path.enabled = true");
+    ok(
+        &ana,
+        "SET PATH = system.builtin, spark_catalog.ns2, spark_catalog.default",
+    );
+    ok(&ana, "CREATE VIEW ivp AS SELECT o FROM gt()");
+    ok(&ana, "SET PATH = DEFAULT_PATH");
+    let sorted = |s: &Session, sql: &str| {
+        let mut v = column(s, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        v.sort();
+        v
+    };
+    let two = ["ana", "carl"];
+    let four = ["ana", "ana", "carl", "carl"];
+    assert_eq!(sorted(&ana, "SELECT * FROM ivt"), two);
+    assert_eq!(sorted(&ana, "SELECT * FROM dvt"), two);
+    assert_eq!(sorted(&ana, "SELECT * FROM ivl"), four);
+    assert_eq!(sorted(&ana, "SELECT * FROM ivp"), ["ns2"]);
+    for v in ["ivt", "dvt", "ivl"] {
+        ok(&ana, &format!("GRANT SELECT ON VIEW {v} TO user:bob"));
+    }
+    ok(&ana, "GRANT SELECT ON FUNCTION gt TO user:bob");
+    // bob's temporary table function of the same name answers his own bare call, never the views'.
+    ok(
+        &bob,
+        "CREATE TEMPORARY FUNCTION gt() RETURNS TABLE (o STRING) RETURN SELECT 'bob'",
+    );
+    assert_eq!(sorted(&bob, "SELECT * FROM gt()"), ["bob"]);
+    for policy in POLICIES {
+        ok(
+            &bob,
+            &format!("SET spark.sql.legacy.ctePrecedencePolicy = {policy}"),
+        );
+        assert_eq!(sorted(&bob, "SELECT * FROM default.ivt"), two, "{policy}");
+        assert_eq!(sorted(&bob, "SELECT * FROM default.dvt"), two, "{policy}");
+        assert_eq!(sorted(&bob, "SELECT * FROM default.ivl"), four, "{policy}");
+    }
+    let table = block_on(async { values(bob.table("default.dvt")).await }).unwrap();
+    assert_eq!(table.len(), 2);
+}
+
+/// Review r6 M8: the body of a stored function a definer view's text calls reads as that definer,
+/// as the view's text does: its reader needs `Select` on the view only, and a refusal inside it is
+/// the definer's failure, redacted. A function body reads as invoker for a call the reader makes
+/// itself. A definer view read in a body is read as an invoker one (fails closed), and its refusal
+/// names nothing the reader did not write.
+#[test]
+fn a_function_a_definer_views_text_calls_reads_its_body_as_the_definer() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "CREATE TABLE hidden_allow (o STRING) USING parquet");
+    ok(&root, "INSERT INTO hidden_allow VALUES ('ana')");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE hidden_allow TO user:ana");
+    ok(
+        &ana,
+        "CREATE FUNCTION g(x STRING) RETURNS BOOLEAN RETURN x IN (SELECT o FROM hidden_allow)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW dvg SQL SECURITY DEFINER AS SELECT owner FROM t WHERE g(owner)",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION gt() RETURNS TABLE (o STRING) RETURN SELECT o FROM hidden_allow",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW dvgt SQL SECURITY DEFINER AS SELECT o FROM gt()",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dvg TO user:bob");
+    ok(&ana, "GRANT SELECT ON VIEW dvgt TO user:bob");
+    assert_eq!(column(&bob, "SELECT * FROM default.dvg").unwrap(), ["ana"]);
+    assert_eq!(column(&bob, "SELECT * FROM default.dvgt").unwrap(), ["ana"]);
+    let table = block_on(async { values(bob.table("default.dvg")).await }).unwrap();
+    assert_eq!(table, ["ana"]);
+    // bob's own call of g reads its body as bob.
+    ok(&ana, "GRANT SELECT ON FUNCTION g TO user:bob");
+    assert_eq!(column(&bob, "SELECT * FROM default.dvg").unwrap(), ["ana"]);
+    let e = denied(&bob, "SELECT default.g('ana')");
+    assert!(e.contains("hidden_allow"), "{e}");
+    let e = denied(&bob, "SELECT owner FROM default.dvg WHERE default.g(owner)");
+    assert!(e.contains("hidden_allow"), "{e}");
+    // The definer losing the body's table refuses bob, redacted.
+    ok(&root, "REVOKE SELECT ON TABLE hidden_allow FROM user:ana");
+    for v in ["dvg", "dvgt"] {
+        let e = column(&bob, &format!("SELECT * FROM default.{v}")).unwrap_err();
+        assert_redacted(&e.to_string(), &["hidden_allow", "`t`", "`ana`"]);
+    }
+    // A definer view read in a body bob calls is read as an invoker one: refused, redacted.
+    ok(
+        &ana,
+        "CREATE VIEW dvl SQL SECURITY DEFINER AS SELECT a FROM t",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION af() RETURNS TABLE (a INT) RETURN SELECT a FROM default.dvl",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dvl TO user:bob");
+    ok(&ana, "GRANT SELECT ON FUNCTION af TO user:bob");
+    assert_eq!(
+        column(&bob, "SELECT * FROM default.dvl").unwrap(),
+        ["1", "5"]
+    );
+    let e = column(&bob, "SELECT * FROM default.af()").unwrap_err();
+    assert_redacted(&e.to_string(), &["hidden_allow", "`t`"]);
+}
+
+/// Review r6 m1: a definer view inside a definer view's text reads as its own definer, the
+/// functions its text calls included: the outer definer is not asked about them.
+#[test]
+fn a_nested_definer_views_calls_are_asked_of_its_own_definer() {
+    let w = World::new();
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:carl");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:carl");
+    ok(
+        &carl,
+        "CREATE FUNCTION cf(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &carl,
+        "CREATE VIEW dv2 SQL SECURITY DEFINER AS SELECT owner FROM t WHERE cf(owner)",
+    );
+    ok(&carl, "GRANT SELECT ON VIEW dv2 TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW dv1 SQL SECURITY DEFINER AS SELECT owner FROM default.dv2",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv1 TO user:bob");
+    assert_eq!(column(&ana, "SELECT * FROM dv1").unwrap(), ["ana"]);
+    assert_eq!(column(&bob, "SELECT * FROM default.dv1").unwrap(), ["ana"]);
+    // carl losing `t` refuses bob, redacted.
+    ok(&root, "REVOKE SELECT ON TABLE t FROM user:carl");
+    let e = column(&bob, "SELECT * FROM default.dv1").unwrap_err();
+    assert_redacted(&e.to_string(), &["`t`", "cf", "`carl`"]);
+}

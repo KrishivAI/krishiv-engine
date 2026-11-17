@@ -185,7 +185,36 @@ impl Expander<'_> {
             return self.go_with_cte(plan.origin, input, ctes, scope);
         }
         let plan = self.children_and_exprs(plan, scope)?;
+        let plan = self.qualified_table_function(plan);
         self.expand_stored(plan, scope)
+    }
+
+    /// `plan`, or inside a stored view's text, when it calls a table function by a bare name, the
+    /// call qualified as the text's scalar calls are (review r6 R6-1, [`StoredViews::qualify_table`]).
+    fn qualified_table_function(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        if self.in_stored_view == 0 {
+            return plan;
+        }
+        let PlanNode::TableFunction { name, args } = &plan.node else {
+            return plan;
+        };
+        let (Some(qualify), Some(namespace), Some(path)) = (
+            self.stored.and_then(|s| s.qualify_table),
+            &self.view_namespace,
+            &self.view_path,
+        ) else {
+            return plan;
+        };
+        match qualify(name, namespace, path) {
+            Some(name) => Arc::new(
+                LogicalPlan::new(PlanNode::TableFunction {
+                    name,
+                    args: args.clone(),
+                })
+                .with_origin(plan.origin),
+            ),
+            None => plan,
+        }
     }
 
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.

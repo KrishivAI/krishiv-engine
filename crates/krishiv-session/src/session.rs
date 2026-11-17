@@ -1417,6 +1417,10 @@ impl Session {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
                 }),
+                qualify_table: Some(&|name, namespace, path| {
+                    env.sql_functions
+                        .qualify_table_call(name, namespace, path, self.state.profile)
+                }),
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
@@ -1575,30 +1579,6 @@ impl Session {
             }
         }
         Ok(analyzed)
-    }
-
-    /// The views the bodies of the functions a query called read, once the
-    /// policy allows them; a failure inside a view's text after that.
-    ///
-    /// Boxed: `analyze_in` runs on the deepest stacks (a script's nested
-    /// statements), where the size of its future counts.
-    fn authorize_body_reads<'a>(
-        &'a self,
-        env: &'a QueryEnv,
-    ) -> futures::future::BoxFuture<'a, Result<Vec<krishiv_plan::analyzer::TableIdent>, KrishivError>>
-    {
-        Box::pin(async move {
-            let (reads, deferred) = env.sql_functions.body_reads();
-            let views = if reads.is_empty() {
-                Vec::new()
-            } else {
-                Box::pin(self.authorize_reads(&reads, env)).await?
-            };
-            match deferred {
-                Some(e) => Err(e),
-                None => Ok(views),
-            }
-        })
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
