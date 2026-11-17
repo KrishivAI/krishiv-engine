@@ -176,6 +176,19 @@ impl Session {
         .await
     }
 
+    /// Whether [`Self::authorize_store_options`] of `options` asks `Manage` on the cluster under the
+    /// session's stored configuration (what a DDL run passes): the analyze API lists it then.
+    pub(crate) fn store_options_asked<'a>(
+        &self,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        options.any(krishiv_io::is_server_scoped_option)
+            || self
+                .state
+                .conf
+                .store_settings_changed(&self.state.conf.snapshot())
+    }
+
     /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
     pub(crate) async fn unset_key(&self, key: &str) -> Result<(), KrishivError> {
         self.authorize_set_key(key).await?;

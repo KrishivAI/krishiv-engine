@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 from .. import worker
+from ..paths import data_root
 from .base import Dataset, Engine, Measure, Query
 from .proc_mem import TreeProc, tree_cpu_seconds, tree_measure
 
@@ -25,6 +26,19 @@ class EngineTimeout(RuntimeError):
 
 class EngineCrashed(RuntimeError):
     """The worker died (killed by the kernel, OOM, segfault); it restarts on the next request."""
+
+
+def worker_env() -> dict[str, str]:
+    """The worker's environment: the harness's, with ``TMPDIR`` and ``POLARS_TEMP_DIR`` defaulting to
+    ``<data root>/tmp/spill`` (created), so an engine that spills to the temp directory spills to disk. On a machine
+    whose ``/tmp`` is tmpfs, spill there would take RAM and would not show in ``/proc/<pid>/io`` ``write_bytes``, so
+    the result's ``spill_bytes_max`` would read 0. A value the caller already set is kept."""
+    env = dict(os.environ)
+    spill = data_root() / "tmp" / "spill"
+    spill.mkdir(parents=True, exist_ok=True)
+    for key in ("TMPDIR", "POLARS_TEMP_DIR"):
+        env.setdefault(key, str(spill))
+    return env
 
 
 class ProcessEngine(Engine):
@@ -64,6 +78,7 @@ class ProcessEngine(Engine):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             start_new_session=True,
+            env=worker_env(),
         )
         try:
             self.info = self._call({"op": "setup", "dataset": self._dataset}, self.setup_timeout_s)
@@ -132,8 +147,8 @@ class ProcessEngine(Engine):
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         """Runs ``query`` in the worker; the worker tree's peak RSS and CPU seconds land in ``last_peak_rss_bytes``
-        and ``last_cpu_seconds``."""
-        self.last_peak_rss_bytes = self.last_cpu_seconds = None
+        and ``last_cpu_seconds``, the bytes it wrote to storage (spill) in ``last_write_bytes``."""
+        self.last_peak_rss_bytes = self.last_cpu_seconds = self.last_write_bytes = None
         if self._proc is None:
             self._start()  # the window must cover the live worker, not a pid that does not exist yet
         assert self._proc is not None
@@ -143,7 +158,8 @@ class ProcessEngine(Engine):
         try:
             return self._request({"op": "time", "query": query})
         finally:
-            self.last_peak_rss_bytes = self.end_measure().peak_rss_bytes
+            m = self.end_measure()
+            self.last_peak_rss_bytes, self.last_write_bytes = m.peak_rss_bytes, m.write_bytes
             if self._proc is not None:  # a killed worker has no meaningful CPU reading
                 self.last_cpu_seconds = max(0.0, tree_cpu_seconds(pid) - cpu0)
 

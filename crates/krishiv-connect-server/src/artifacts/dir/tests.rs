@@ -143,3 +143,17 @@ fn planted_links_are_never_followed() {
     drop(root);
     assert_eq!(std::fs::read(outside.join("victim")).unwrap(), b"keep");
 }
+
+#[test]
+fn the_root_path_has_no_link_in_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    symlink(&real, &link).unwrap();
+    // A parent named through a link: the root's path is the real one (UDF workers refuse a link).
+    let root = root(&link);
+    let canonical = std::fs::canonicalize(&real).unwrap();
+    assert_eq!(root.path(), canonical.join("krishiv-artifacts-test"));
+    assert!(root.path().is_absolute());
+}

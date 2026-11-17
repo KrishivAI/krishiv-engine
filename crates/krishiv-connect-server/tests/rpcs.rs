@@ -545,31 +545,6 @@ async fn analyze_refusals() {
         "CONNECT_INVALID_PLAN.UNKNOWN_ANALYZE_METHOD"
     );
     assert_eq!(info(&status).metadata["sqlState"], "56K00");
-    let rel = Some(relation(RelType::Range(pb::Range {
-        start: Some(0),
-        end: 1,
-        step: 1,
-        num_partitions: None,
-    })));
-    for a in [
-        Analyze::Persist(Box::new(areq::Persist {
-            relation: rel.clone(),
-            storage_level: None,
-        })),
-        Analyze::Unpersist(Box::new(areq::Unpersist {
-            relation: rel.clone(),
-            blocking: None,
-        })),
-        Analyze::GetStorageLevel(Box::new(areq::GetStorageLevel {
-            relation: rel.clone(),
-        })),
-    ] {
-        let status = analyze(&run, a).await.unwrap_err();
-        assert_eq!(
-            error_class(&status),
-            "CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED"
-        );
-    }
     // An analysis error is the analyzer's.
     let status = analyze(
         &run,

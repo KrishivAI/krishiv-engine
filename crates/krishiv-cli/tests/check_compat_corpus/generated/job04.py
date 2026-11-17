@@ -2,7 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.kll_sketch_to_string_double("a"), F.col("b"))
-df = df.select(F.left("a"), F.col("b"))
-df = df.select(F.approx_top_k("a"), F.col("b"))
-df = df.select(F.legacy_fn_38("a"), F.col("b"))
+df = df.select(F.collect_list("a"), F.col("b"))
+df = spark.sql("SELECT signum(a) FROM t4")
+df = spark.sql("SELECT to_unix_timestamp(a) FROM t4")
+df = spark.sql("SELECT kll_sketch_merge_bigint(a) FROM t4")
+df = spark.sql("SELECT ascii(a) FROM t4")

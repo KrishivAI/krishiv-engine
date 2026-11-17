@@ -112,6 +112,26 @@ pub(crate) fn no_host() -> krishiv_common::error::KrishivError {
 pub enum Command {
     /// `register_function` with a Python UDF: register `udf` under its name in the session.
     RegisterPythonUdf(PythonUdf),
+    /// `checkpoint_command`: checkpoint the command's relation (translated by the server, which
+    /// runs the command) and hold the result under a new id.
+    Checkpoint(CheckpointSpec),
+    /// `remove_cached_remote_relation_command`: forget the frame held under `relation_id` (an id
+    /// the session does not hold is not an error, as in Spark).
+    RemoveCachedRemoteRelation {
+        /// The id to forget.
+        relation_id: String,
+    },
+}
+
+/// What a `checkpoint_command` asks besides its relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointSpec {
+    /// `local`: a local checkpoint (no checkpoint directory).
+    pub local: bool,
+    /// `eager`: take the rows now.
+    pub eager: bool,
+    /// `storage_level`, for a local checkpoint (Spark ignores it for a reliable one).
+    pub storage_level: Option<pb::StorageLevel>,
 }
 
 /// Translates a command the server runs itself.
@@ -123,6 +143,20 @@ pub enum Command {
 pub fn translate_command(command: &pb::Command) -> Result<Command> {
     match &command.command_type {
         Some(CommandType::RegisterFunction(fun)) => python_udf(fun).map(Command::RegisterPythonUdf),
+        Some(CommandType::CheckpointCommand(c)) => Ok(Command::Checkpoint(CheckpointSpec {
+            local: c.local,
+            eager: c.eager,
+            storage_level: c.storage_level,
+        })),
+        Some(CommandType::RemoveCachedRemoteRelationCommand(c)) => {
+            Ok(Command::RemoveCachedRemoteRelation {
+                relation_id: c
+                    .relation
+                    .as_ref()
+                    .map(|r| r.relation_id.clone())
+                    .unwrap_or_default(),
+            })
+        }
         _ => Err(super::command_not_supported(command)),
     }
 }

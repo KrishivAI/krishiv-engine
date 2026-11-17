@@ -1,8 +1,9 @@
 [package]
 name = "krishiv"
-description = "Spark-compatible SQL and DataFrame engine in Rust: embedded, vectorized on Arrow, no JVM"
-keywords = ["spark", "sql", "dataframe", "arrow", "query-engine"]
-categories = ["database-implementations", "data-structures"]
+description = "Spark alternative in Rust: run Spark SQL and DataFrames embedded, vectorized on Arrow, no JVM"
+readme = "README.md"
+keywords = ["spark", "pyspark", "sql", "dataframe", "query-engine"]
+categories = ["database-implementations", "database"]
 homepage = "https://krishiv.ai"
 documentation = "https://docs.rs/krishiv"
 version.workspace = true
@@ -18,11 +19,11 @@ workspace = true
 [dependencies]
 arrow-array.workspace = true
 arrow-schema.workspace = true
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0", optional = true }
-krishiv-server = { path = "../krishiv-server", version = "=0.2.0", optional = true }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
+krishiv-server = { path = "../krishiv-server", version = "=0.2.1", optional = true }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["alloc", "executor"] }
@@ -56,4 +57,6 @@ tokio-console = ["dep:krishiv-exec", "krishiv-exec/tokio-console"]
 # JSON log records with query, session and trace ids (T116), installed by the CLI
 # when `KRISHIV_LOG=json`; embedders call `krishiv_session::logging` themselves.
 telemetry-logs = ["krishiv-session/telemetry-logs"]
+# OTLP export of the query spans and engine metrics (`krishiv_session::otlp`), off by default.
+telemetry-otlp = ["krishiv-session/telemetry-otlp"]
 full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc", "cloud"]
