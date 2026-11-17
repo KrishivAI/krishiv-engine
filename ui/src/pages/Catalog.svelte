@@ -29,24 +29,33 @@
     load<CatalogItem>("/api/internal/catalog/catalogs", "catalogs").then((c) => (catalogs = c));
   });
 
+  // Each pick bumps the generation: an answer for an earlier selection is dropped.
+  let generation = 0;
   async function pickCatalog(name: string) {
+    const g = ++generation;
     catalog = name;
     schema = table = null;
-    tables = columns = [];
-    schemas = await load("/api/internal/catalog/" + enc(name) + "/schemas", "schemas");
+    schemas = tables = columns = [];
+    const r = await load<CatalogItem>("/api/internal/catalog/" + enc(name) + "/schemas", "schemas");
+    if (g === generation) schemas = r;
   }
   async function pickSchema(name: string) {
+    const g = ++generation;
     schema = name;
     table = null;
-    columns = [];
-    tables = await load(`/api/internal/catalog/${enc(catalog ?? "")}/${enc(name)}/tables`, "tables");
+    tables = columns = [];
+    const r = await load<CatalogItem>(`/api/internal/catalog/${enc(catalog ?? "")}/${enc(name)}/tables`, "tables");
+    if (g === generation) tables = r;
   }
   async function pickTable(name: string) {
+    const g = ++generation;
     table = name;
-    columns = await load(
+    columns = [];
+    const r = await load<CatalogItem>(
       `/api/internal/catalog/${enc(catalog ?? "")}/${enc(schema ?? "")}/${enc(name)}/columns`,
       "columns",
     );
+    if (g === generation) columns = r;
   }
   const levels = $derived<Level[]>([
     { title: "Catalogs", key: "catalog", items: catalogs, selected: catalog },

@@ -26,6 +26,20 @@ fn get(addr: &str, token: &str, path: &str) -> String {
     out.split_once("\r\n\r\n").unwrap().1.to_owned()
 }
 
+fn expected_operators() -> Vec<(u64, String, u64, u64)> {
+    [
+        (0, "Result", 7, 0),
+        (1, "HashAggregate", 5000, 0),
+        (2, "Range", 0, 5000),
+        (3, "Project", 5000, 5000),
+        (4, "HashAggregate", 0, 7),
+        (5, "Project", 7, 7),
+    ]
+    .into_iter()
+    .map(|(id, name, rin, rout)| (id, name.to_owned(), rin, rout))
+    .collect()
+}
+
 #[test]
 fn stored_profiles_open_with_no_server_and_show_their_operators() {
     let dir = tempfile::tempdir().unwrap();
@@ -69,6 +83,19 @@ fn stored_profiles_open_with_no_server_and_show_their_operators() {
     let ops = detail["operators"].as_array().unwrap();
     assert!(!ops.is_empty(), "{detail}");
     assert!(ops.iter().any(|o| o["compute_ns"].is_u64()), "{detail}");
+    // The stored profile of this fixed query: operator id, name, rows in and out (never the times).
+    let summary: Vec<(u64, String, u64, u64)> = ops
+        .iter()
+        .map(|o| {
+            (
+                o["operator_id"].as_u64().unwrap(),
+                o["name"].as_str().unwrap().to_owned(),
+                o["rows_in"].as_u64().unwrap(),
+                o["rows_out"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(summary, expected_operators(), "{detail}");
     child.kill().unwrap();
     child.wait().unwrap();
 }

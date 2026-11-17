@@ -177,10 +177,23 @@ def page_checks(origin: str) -> list[str]:
             "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
         )
         page.goto(f"{origin}/?token=fixture")
-        page.wait_for_timeout(800)
+        # Ready: the shell shows its navigation and the token has left the address.
+        page.wait_for_function("!location.search.includes('token')", timeout=10000)
+        page.get_by_role("navigation").first.wait_for(timeout=10000)
         # Session: the token left the address and no script can read it.
         if "token" in page.url:
             problems.append(f"the token is still in the address: {page.url}")
+        cookies = [c for c in ctx.cookies() if c["name"] == "krishiv_ui_token"]
+        if len(cookies) != 1:
+            problems.append(f"expected one krishiv_ui_token cookie, got {cookies}")
+        else:
+            c = cookies[0]
+            if not c["httpOnly"]:
+                problems.append("the session cookie is not HttpOnly")
+            if c["sameSite"] != "Strict":
+                problems.append(f"the session cookie is SameSite={c['sameSite']}")
+            if c["path"] != "/":
+                problems.append(f"the session cookie path is {c['path']}")
         if page.evaluate("document.cookie").find("fixture") >= 0:
             problems.append("the session cookie is readable by script (not HttpOnly)")
         if (
@@ -191,33 +204,40 @@ def page_checks(origin: str) -> list[str]:
         ):
             problems.append("the token is kept in web storage")
         # XSS: hostile text in query text, principals, catalog names, comments, results and errors renders as text.
+
+        def no_markup(view: str) -> None:
+            if page.evaluate("window.__xss") is not None:
+                problems.append(f"{view}: hostile text ran as script")
+            if page.locator('img[src="x"]').count() != 0:
+                problems.append(f"{view}: hostile text was rendered as an element")
+
         page.evaluate("window.location.hash = '#/queries'")
-        page.wait_for_timeout(1300)
+        page.get_by_text("<img src=x", exact=False).first.wait_for(timeout=10000)
+        no_markup("queries")
         page.evaluate("window.location.hash = '#/catalog'")
-        page.wait_for_timeout(600)
+        page.get_by_role("button", name="spark_catalog").wait_for(timeout=10000)
+        no_markup("catalog")
         page.get_by_role("button", name="spark_catalog").click()
         page.get_by_role("button", name="default").click()
         page.get_by_role("button", name="orders").click()
-        page.wait_for_timeout(500)
+        page.get_by_text("o_orderkey").wait_for(timeout=10000)
+        no_markup("catalog columns")
         page.evaluate("window.location.hash = '#/sql'")
-        page.wait_for_timeout(600)
         editor = page.locator(".cm-content")
-        for text in ("SELECT 1", "boom"):
+        editor.wait_for(timeout=10000)
+        for text, outcome in (("SELECT 1", "finished"), ("boom", "failed")):
             editor.click()
             page.keyboard.press("Control+A")
             page.keyboard.type(text)
             page.get_by_role("button", name="Run").click()
-            page.wait_for_timeout(900)
-        if page.evaluate("window.__xss") is not None:
-            problems.append("hostile text ran as script")
-        if page.locator('img[src="x"]').count() != 0:
-            problems.append("hostile text was rendered as an element")
+            page.get_by_text(outcome, exact=True).first.wait_for(timeout=10000)
+            no_markup(f"sql {text}")
         # Cancel shows the cancelled state within 2 s.
         editor.click()
         page.keyboard.press("Control+A")
         page.keyboard.type("sleep")
         page.get_by_role("button", name="Run").click()
-        page.wait_for_timeout(600)
+        page.get_by_text("running", exact=True).first.wait_for(timeout=10000)
         page.get_by_role("button", name="Cancel").click()
         try:
             page.get_by_text("cancelled", exact=True).wait_for(timeout=2000)
@@ -227,9 +247,16 @@ def page_checks(origin: str) -> list[str]:
             )
         # Redaction on the environment page.
         page.evaluate("window.location.hash = '#/environment'")
-        page.wait_for_timeout(600)
-        if page.inner_text("body").count("***") < 3:
-            problems.append("the environment page does not show *** for the secrets")
+        page.get_by_text("spark.sql.shuffle.partitions").wait_for(timeout=10000)
+        for key in (
+            "krishiv.auth.token",
+            "db.password",
+            "spark.hadoop.fs.s3a.secret.key",
+        ):
+            row = page.locator("tr", has=page.get_by_text(key, exact=True)).first
+            shown = row.locator("span.mono").nth(1).inner_text().strip()
+            if shown != "***":
+                problems.append(f"environment: {key} shows {shown!r}, not '***'")
         # Accessibility: no serious or critical axe violation on the four pages.
         if not AXE.exists():
             problems.append(
@@ -239,7 +266,7 @@ def page_checks(origin: str) -> list[str]:
             axe_js = AXE.read_text()
             for frag in AXE_PAGES:
                 page.evaluate(f"window.location.hash = {frag!r}")
-                page.wait_for_timeout(900)
+                page.wait_for_load_state("networkidle")
                 page.evaluate(axe_js)
                 found = page.evaluate(
                     "axe.run().then(r => r.violations.filter(v => ['serious','critical'].includes(v.impact))"

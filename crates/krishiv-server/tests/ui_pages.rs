@@ -99,13 +99,15 @@ async fn post(addr: std::net::SocketAddr, path: &str, body: &str) -> (u16, Value
 #[tokio::test]
 async fn the_catalog_browser_lists_catalogs_schemas_tables_and_columns() {
     let addr = start().await;
-    let (status, _) = post(
+    let (status, body) = post(
         addr,
         "/api/internal/sql",
-        &json!({"sql": "SELECT 1"}).to_string(),
+        &json!({"sql": "CREATE TABLE catalog_probe_table (a INT) USING parquet"}).to_string(),
     )
     .await;
     assert_eq!(status, 202);
+    let run = body["run_id"].as_str().unwrap().to_owned();
+    wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
     let catalogs = get(addr, "/api/internal/catalog/catalogs").await;
     let names: Vec<&str> = catalogs["catalogs"]
         .as_array()
@@ -124,7 +126,13 @@ async fn the_catalog_browser_lists_catalogs_schemas_tables_and_columns() {
         "{schemas}"
     );
     let tables = get(addr, "/api/internal/catalog/spark_catalog/default/tables").await;
-    assert!(tables["tables"].is_array(), "{tables}");
+    let names: Vec<&str> = tables["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(names, ["catalog_probe_table"], "{tables}");
     let cols = get(
         addr,
         "/api/internal/catalog/spark_catalog/system/queries/columns",
@@ -307,9 +315,15 @@ async fn the_session_cookie_is_http_only_strict_and_carries_gets_and_csrf_marked
     )
     .await;
     assert_eq!(status, 403);
-    // A token that cannot sit in a cookie is not turned into one.
-    let (status, ..) = raw(
-        addr,
+    // A token that cannot sit in a cookie is not turned into one: this server's own token passes the guard, so
+    // the request reaches the cookie check.
+    let semi = serve(router_with_ui(
+        Arc::new(SessionSource::new(EngineRuntime::builder().build().unwrap()).unwrap()),
+        "a;b",
+    ))
+    .await;
+    let (status, head, _) = raw(
+        semi,
         "POST",
         "/api/internal/session",
         &[
@@ -320,7 +334,8 @@ async fn the_session_cookie_is_http_only_strict_and_carries_gets_and_csrf_marked
         "",
     )
     .await;
-    assert!(status == 400 || status == 401, "{status}");
+    assert_eq!(status, 400);
+    assert!(!head.contains("set-cookie"), "{head}");
 }
 
 #[tokio::test]
@@ -545,25 +560,4 @@ async fn an_editor_result_is_cut_at_the_row_cap_and_says_so() {
     let done = wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
     assert_eq!(done["rows"].as_array().unwrap().len(), 1000, "{done}");
     assert_eq!(done["truncated"], json!(true), "{done}");
-}
-
-#[tokio::test]
-async fn the_catalog_lists_a_table_by_its_table_name() {
-    let addr = start().await;
-    let (_, body) = post(
-        addr,
-        "/api/internal/sql",
-        &json!({"sql": "CREATE TABLE catalog_probe_table (a INT) USING parquet"}).to_string(),
-    )
-    .await;
-    let run = body["run_id"].as_str().unwrap().to_owned();
-    wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
-    let tables = get(addr, "/api/internal/catalog/spark_catalog/default/tables").await;
-    let names: Vec<&str> = tables["tables"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
-    assert!(names.contains(&"catalog_probe_table"), "{tables}");
 }

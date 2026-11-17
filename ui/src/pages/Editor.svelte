@@ -13,6 +13,8 @@
   let runId = $state<string | null>(null);
   let message = $state("");
   let timer: ReturnType<typeof setInterval> | undefined;
+  // Bumped when the page goes away or a start begins: a start that finishes later installs nothing.
+  let startToken = 0;
 
   const text = () => view?.state.doc.toString() ?? "";
 
@@ -50,6 +52,7 @@
       }),
     });
     return () => {
+      startToken++;
       view?.destroy();
       clearInterval(timer);
     };
@@ -75,14 +78,17 @@
     if (run?.state === "running") return;
     message = "";
     run = { state: "running" };
+    const token = ++startToken;
     try {
       const r = await api<{ run_id: string }>("/api/internal/sql", { method: "POST", body: JSON.stringify({ sql: text() }) });
+      if (token !== startToken) return;
       runId = r.run_id;
       clearInterval(timer);
       const id = r.run_id;
       timer = setInterval(() => void poll(id), 250);
       void poll(id);
     } catch (e) {
+      if (token !== startToken) return;
       run = null;
       message = (e as Error).message;
     }
@@ -95,6 +101,8 @@
       void poll();
     } catch (e) {
       message = (e as Error).message;
+      // The run may have ended meanwhile: show its real state.
+      void poll();
     }
   }
 

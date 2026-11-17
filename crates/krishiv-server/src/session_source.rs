@@ -138,28 +138,39 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A cell of an editor result: the system-table conversion, and the display text for the types it leaves null.
+/// Largest magnitude a JavaScript number holds exactly.
+const JS_SAFE_INT: u64 = 9_007_199_254_740_992;
+
+/// A cell of an editor result: the system-table conversion, with timestamps as text (the system tables keep
+/// epoch microseconds, an editor shows a time), integers a browser cannot hold exactly as their decimal text,
+/// and the display text for the types the conversion leaves null.
 fn result_cell(column: &dyn Array, row: usize) -> Value {
-    match cell(column, row) {
-        Value::Null if !column.is_null(row) => {
-            arrow_cast::display::array_value_to_string(column, row)
-                .map_or(Value::Null, Value::String)
+    if column.is_null(row) {
+        return Value::Null;
+    }
+    let text = |c: &dyn Array| {
+        arrow_cast::display::array_value_to_string(c, row).map_or(Value::Null, Value::String)
+    };
+    match column.data_type() {
+        DataType::Timestamp(..) | DataType::Date32 | DataType::Date64 => text(column),
+        DataType::Int64
+            if column
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(row)
+                .unsigned_abs()
+                > JS_SAFE_INT =>
+        {
+            text(column)
         }
-        v => v,
+        _ => match cell(column, row) {
+            Value::Null => text(column),
+            v => v,
+        },
     }
 }
 
-fn result_json(batches: &[RecordBatch]) -> Value {
-    let columns: Vec<String> = batches
-        .first()
-        .map(|b| {
-            b.schema()
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .collect()
-        })
-        .unwrap_or_default();
+/// The editor's result: `columns` come from the result's schema, so an empty result keeps them.
+fn result_json(columns: &[String], batches: &[RecordBatch]) -> Value {
     let mut rows = Vec::new();
     let mut truncated = false;
     'outer: for b in batches {
@@ -183,6 +194,11 @@ fn quote(n: &str) -> String {
     format!("`{}`", n.replace('`', "``"))
 }
 
+/// A result the editor shows: its column names and the (capped) batches.
+type RunOutput = (Vec<String>, Vec<RecordBatch>);
+
+/// Runs one statement on a task of its own, so a panic ends the run as `failed` instead of leaving it running
+/// (and counted against its caller's cap) for ever.
 async fn run_to_end(
     editor: Session,
     runtime: Arc<EngineRuntime>,
@@ -190,28 +206,64 @@ async fn run_to_end(
     sql: String,
     tag: String,
 ) {
-    let result = async {
-        let df = editor
-            .sql_with(
-                &sql,
-                krishiv_session::QueryOptions::new().tags([tag.as_str()]),
-            )
-            .await?;
-        // A cancel that came before the query was registered has nothing to stop yet: honour it now.
-        if lock(&run).cancel_requested {
-            return Ok(None);
-        }
-        // One row past the cap tells `result_json` the result was cut; the rest is never materialised.
-        let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
-        capped.collect().await.map(Some)
-    }
-    .await;
+    supervise(&run, execute(editor, Arc::clone(&run), sql, tag)).await;
     drop(runtime);
-    let mut r = lock(&run);
+}
+
+/// Awaits `statement` on a task of its own and records its end in `run`; a panic is a failed run.
+async fn supervise(
+    run: &Mutex<Run>,
+    statement: impl std::future::Future<Output = Result<Option<RunOutput>, KrishivError>>
+    + Send
+    + 'static,
+) {
+    let Ok(result) = tokio::spawn(statement).await else {
+        let mut r = lock(run);
+        r.state = "failed";
+        r.outcome = Some(serde_json::json!({
+            "error": "the statement stopped unexpectedly",
+            "error_class": "INTERNAL_ERROR",
+            "sql_state": "XX000",
+        }));
+        return;
+    };
+    finish(run, result);
+}
+
+async fn execute(
+    editor: Session,
+    run: Arc<Mutex<Run>>,
+    sql: String,
+    tag: String,
+) -> Result<Option<RunOutput>, KrishivError> {
+    let df = editor
+        .sql_with(
+            &sql,
+            krishiv_session::QueryOptions::new().tags([tag.as_str()]),
+        )
+        .await?;
+    // A cancel that came before the query was registered has nothing to stop yet: honour it now.
+    if lock(&run).cancel_requested {
+        return Ok(None);
+    }
+    // One row past the cap tells `result_json` the result was cut; the rest is never materialised.
+    let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
+    let columns: Vec<String> = capped
+        .schema()
+        .await?
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    capped.collect().await.map(|b| Some((columns, b)))
+}
+
+fn finish(run: &Mutex<Run>, result: Result<Option<RunOutput>, KrishivError>) {
+    let mut r = lock(run);
     match result {
-        Ok(Some(batches)) => {
+        Ok(Some((columns, batches))) => {
             r.state = "finished";
-            r.outcome = Some(result_json(&batches));
+            r.outcome = Some(result_json(&columns, &batches));
         }
         Ok(None) => {
             r.state = "cancelled";
@@ -829,5 +881,49 @@ mod tests {
         )]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![list]).unwrap();
         assert_eq!(batches_to_rows(&[batch])[0]["pipelines"], Value::Null);
+    }
+
+    fn new_run() -> Arc<Mutex<Run>> {
+        Arc::new(Mutex::new(Run {
+            tag: "t".into(),
+            owner: None,
+            principal: None,
+            cancel_requested: false,
+            state: "running",
+            outcome: None,
+        }))
+    }
+
+    /// A statement that panics ends its run as failed (it would otherwise stay running for ever).
+    #[tokio::test]
+    async fn a_panicking_statement_ends_failed() {
+        let run = new_run();
+        supervise(&run, async { panic!("boom") }).await;
+        let r = lock(&run);
+        assert_eq!(r.state, "failed");
+        let outcome = r.outcome.clone().unwrap();
+        assert_eq!(outcome["error_class"], "INTERNAL_ERROR");
+        assert!(!outcome.to_string().contains("boom"));
+    }
+
+    /// An empty result keeps its column names.
+    #[test]
+    fn an_empty_result_keeps_its_columns() {
+        let v = result_json(&["a".to_owned(), "b".to_owned()], &[]);
+        assert_eq!(
+            v,
+            json!({"columns": ["a", "b"], "rows": [], "truncated": false})
+        );
+    }
+
+    /// Editor timestamps are text; an Int64 a browser could not hold exactly is its decimal text, others stay numbers.
+    #[test]
+    fn editor_cells_render_times_as_text_and_keep_integers_exact() {
+        let ts = TimestampMicrosecondArray::from(vec![Some(1_700_000_000_000_000)]);
+        assert_eq!(result_cell(&ts, 0), json!("2023-11-14T22:13:20"));
+        let big = Int64Array::from(vec![i64::MAX, 42, -9_007_199_254_740_993]);
+        assert_eq!(result_cell(&big, 0), json!("9223372036854775807"));
+        assert_eq!(result_cell(&big, 1), json!(42));
+        assert_eq!(result_cell(&big, 2), json!("-9007199254740993"));
     }
 }

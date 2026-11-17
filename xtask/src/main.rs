@@ -219,9 +219,15 @@ fn cargo_cmd() -> Command {
 fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
+    // `--repo DIR` names the tree being checked: its assets are the ones measured, not the workspace's.
+    let assets_root = match &mode {
+        budgets::Mode::Precheck { repo: Some(r), .. }
+        | budgets::Mode::CacheMain { repo: Some(r) } => r.clone(),
+        _ => root.clone(),
+    };
     eprintln!(
         "budgets: UI assets {} bytes (limit {})",
-        budgets::check_ui_assets(&root)?,
+        budgets::check_ui_assets(&assets_root)?,
         budgets::UI_ASSET_BUDGET_BYTES
     );
     if let budgets::Mode::Precheck { base, repo } = &mode {

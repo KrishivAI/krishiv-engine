@@ -108,7 +108,13 @@ pub fn ui_asset_bytes(dir: &Path) -> Result<u64, String> {
 /// # Errors
 /// Over the budget, or unreadable.
 pub fn check_ui_assets(root: &Path) -> Result<u64, String> {
-    let bytes = ui_asset_bytes(&root.join("crates/krishiv-ui-assets/assets"))?;
+    let assets = root.join("crates/krishiv-ui-assets/assets");
+    // A tree without the UI crate (a `--repo` of another project) has nothing to weigh.
+    let bytes = if assets.is_dir() {
+        ui_asset_bytes(&assets)?
+    } else {
+        0
+    };
     if bytes > UI_ASSET_BUDGET_BYTES {
         return Err(format!(
             "budgets: the UI assets weigh {bytes} bytes, over the {UI_ASSET_BUDGET_BYTES} byte budget"
@@ -539,6 +545,30 @@ mod tests {
         std::fs::write(assets.join("index.js"), big).unwrap();
         let err = check_ui_assets(dir.path()).unwrap_err();
         assert!(err.contains("over the"), "{err}");
+    }
+
+    fn assets_of(bytes: u64) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("crates/krishiv-ui-assets/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(
+            assets.join("index.js"),
+            vec![0_u8; usize::try_from(bytes).unwrap()],
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn ui_assets_of_exactly_the_budget_are_accepted_and_one_byte_more_is_not() {
+        let at = assets_of(UI_ASSET_BUDGET_BYTES);
+        assert_eq!(check_ui_assets(at.path()), Ok(3_000_000));
+        let over = assets_of(UI_ASSET_BUDGET_BYTES + 1);
+        let err = check_ui_assets(over.path()).unwrap_err();
+        assert!(
+            err.contains("3000001 bytes") && err.contains("over the 3000000 byte budget"),
+            "{err}"
+        );
     }
 
     #[test]
