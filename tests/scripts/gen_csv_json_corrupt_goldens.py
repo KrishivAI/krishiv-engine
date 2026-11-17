@@ -50,9 +50,25 @@ def main() -> None:
         p.chmod(0o755 if p.is_dir() else 0o644)
     script = (pathlib.Path(__file__).parent / "gen_csv_json_corrupt_goldens.scala").read_bytes()
     res = subprocess.run(
-        ["docker", "run", "--rm", "-i", "-e", "HOME=/tmp", "-v", f"{work}:/w:ro", IMAGE,
-         "/opt/spark/bin/spark-shell", "--master", "local[4]", "--driver-memory", "2g"],
-        input=script, capture_output=True, check=False,
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-e",
+            "HOME=/tmp",
+            "-v",
+            f"{work}:/w:ro",
+            IMAGE,
+            "/opt/spark/bin/spark-shell",
+            "--master",
+            "local[4]",
+            "--driver-memory",
+            "2g",
+        ],
+        input=script,
+        capture_output=True,
+        check=False,
     )
     text = res.stdout.decode("utf-8", "replace")
     probes = {}
@@ -62,16 +78,27 @@ def main() -> None:
             probes[label] = {"status": "ok", "value": rest}
         else:
             cls, cond, sqlstate, params, msg = rest.split("\t", 4)
-            probes[label] = {"status": "error", "exception": cls, "condition": cond, "sqlstate": sqlstate,
-                             "parameters": params, "message": msg}
+            probes[label] = {
+                "status": "error",
+                "exception": cls,
+                "condition": cond,
+                "sqlstate": sqlstate,
+                "parameters": params,
+                "message": msg,
+            }
     doc = {
         "format_version": 1,
         "spark_version": "4.2.0",
         "image": IMAGE,
         "generator": "tests/scripts/gen_csv_json_corrupt_goldens.py",
         "inputs_hex": {k: v.hex() for k, v in inputs.items()},
-        "big_file": {"rows": BIG_ROWS, "pad_to": BIG_PAD_TO, "max_partition_bytes": 1048576,
-                     "two_file_rows": list(BIG2_ROWS), "two_file_prefixes": ["a", "b"]},
+        "big_file": {
+            "rows": BIG_ROWS,
+            "pad_to": BIG_PAD_TO,
+            "max_partition_bytes": 1048576,
+            "two_file_rows": list(BIG2_ROWS),
+            "two_file_prefixes": ["a", "b"],
+        },
         "probes": probes,
     }
     (out_dir / "goldens.json").write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
