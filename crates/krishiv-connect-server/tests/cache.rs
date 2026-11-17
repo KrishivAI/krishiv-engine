@@ -209,6 +209,17 @@ struct ErrorInfo {
     metadata: BTreeMap<String, String>,
 }
 
+fn error_info(status: &tonic::Status) -> BTreeMap<String, String> {
+    let rpc = RpcStatus::decode(status.details()).expect("google.rpc.Status");
+    let info = ErrorInfo::decode(rpc.details[0].value.as_slice()).expect("ErrorInfo");
+    let params = info
+        .metadata
+        .get("messageParameters")
+        .cloned()
+        .unwrap_or_default();
+    serde_json::from_str(&params).expect("messageParameters is a JSON object")
+}
+
 fn error_class(status: &tonic::Status) -> String {
     let rpc = RpcStatus::decode(status.details()).expect("google.rpc.Status");
     ErrorInfo::decode(rpc.details[0].value.as_slice())
@@ -396,12 +407,19 @@ async fn a_local_checkpoint_is_held_under_an_id_and_read_back() {
         execute(&run, remove(&id)).await.expect("removes again");
         let e = execute(&run, root(remote(&id))).await.unwrap_err();
         assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND");
-        assert!(
-            e.message().contains(&format!(
-                "No DataFrame with id {id} is found in the session"
-            )),
-            "{}",
-            e.message()
+        // Spark's `SessionHolder.getDataFrameOrThrow`: the client's session id.
+        assert_eq!(
+            e.message(),
+            format!(
+                "[CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND] The Spark Connect plan is invalid. No DataFrame with id {id} is found in the session {SESSION} SQLSTATE: 56K00"
+            )
+        );
+        let fields = error_info(&e);
+        assert_eq!(fields.get("dfId"), Some(&id), "{fields:?}");
+        assert_eq!(
+            fields.get("sessionId").map(String::as_str),
+            Some(SESSION),
+            "{fields:?}"
         );
     }
 }
@@ -481,4 +499,29 @@ fn spill_files(dir: &std::path::Path) -> usize {
             }
         })
         .sum()
+}
+
+/// Pinned: analyzing a plan that reads a lazy checkpoint takes its rows (the schema is the
+/// snapshot's), over Connect as embedded (`DataFrame::schema`), where Spark's lazy checkpoint runs
+/// no job on analysis. Recorded in the coverage row and the connect-server CLAUDE.md.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn analyzing_a_lazy_checkpoint_takes_its_rows() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cp_dir = tmp.path().join("checkpoints");
+    let run = start(Some(cp_dir.to_str().expect("utf-8").to_owned())).await;
+    let id = relation_id(
+        &execute(&run, checkpoint(range(4), false, false))
+            .await
+            .expect("checkpoints"),
+    );
+    assert_eq!(spill_files(&cp_dir), 0, "lazy: nothing is taken yet");
+    analyze(
+        &run,
+        Analyze::Schema(Box::new(areq::Schema {
+            plan: Some(root(remote(&id))),
+        })),
+    )
+    .await
+    .expect("schema");
+    assert_eq!(spill_files(&cp_dir), 1, "the analysis took the rows");
 }

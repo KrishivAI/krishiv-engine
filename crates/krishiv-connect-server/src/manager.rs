@@ -129,6 +129,8 @@ pub struct SessionEntry {
     session: Session,
     caller: Authenticated,
     client_user_id: String,
+    /// The session id the client sent: what Spark's own messages name (`SessionHolder.sessionId`).
+    client_session_id: String,
     operations: Arc<Operations>,
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
@@ -191,6 +193,12 @@ impl SessionEntry {
         &self.caller
     }
 
+    /// The session id the client sent (Spark's `sessionId`, as opposed to the server-side one).
+    #[must_use]
+    pub fn client_session_id(&self) -> &str {
+        &self.client_session_id
+    }
+
     /// The `UserContext.user_id` the client sent when it created the
     /// session: recorded, never trusted.
     #[must_use]
@@ -216,6 +224,15 @@ impl SessionEntry {
         let ops = self.operations.close_all();
         self.session.close();
         self.python.release();
+        // The held DataFrames go with the session, whoever still holds the entry; dropped
+        // outside the lock.
+        let held = std::mem::take(
+            &mut *self
+                .cached_frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        drop(held);
         ops
     }
 }
@@ -454,6 +471,7 @@ impl SessionManager {
             session,
             caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
+            client_session_id: session_id.to_owned(),
             operations: Arc::default(),
             python,
             cached_frames: Mutex::default(),

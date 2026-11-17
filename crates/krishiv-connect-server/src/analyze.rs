@@ -205,6 +205,7 @@ async fn analyze(
             })
         }
         Some(Analyze::Persist(p)) => {
+            crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
             // `persist(level)`, or `persist()` (the session's default level) without one.
             let df = frame_of_relation(entry, p.relation.as_ref()).await?;
             let df = match &p.storage_level {
@@ -217,6 +218,7 @@ async fn analyze(
             res::Result::Persist(res::Persist {})
         }
         Some(Analyze::Unpersist(u)) => {
+            crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
             // `blocking` is accepted: removal is synchronous either way.
             frame_of_relation(entry, u.relation.as_ref())
                 .await?

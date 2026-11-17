@@ -48,11 +48,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
 | 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
-| 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); tests/cache.rs | P3-T083 | 7 |
+| 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
 | 40 | common_inline_user_defined_data_source | missing |  | the Python data source scan (T040) | P3-T040 | 6 |
-| 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES | P3-T012 | 4 |
+| 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES; a cached_remote_relation inside a subquery or with_relations is recorded by the translator but not spliced by Session::from_plan_over (it walks plan nodes, not expression subqueries): T012 must splice it | P3-T012 | 4 |
 | 42 | transpose | missing |  | new Transpose (output schema depends on data; Spark resolves it in the analyzer) | P3-T012 | 3 |
 | 43 | unresolved_table_valued_function | missing |  | TableFunction | P3-T012 | 4 |
 | 44 | lateral_join | missing |  | Join with a lateral right side; the IR has no lateral flag, so this is new | P3-T012 | 8 |
@@ -124,7 +124,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 11 | streaming_query_listener_bus_command | out of scope |  | P4 |  | 0 |
 | 12 | register_data_source | missing |  | T040 | P3-T040 | 6 |
 | 13 | create_resource_profile_command | missing |  | refusal: Krishiv has no stage-level resource profiles (an unsupported row; no IR) | P3-T012 | 4 |
-| 14 | checkpoint_command | done |  | `DataFrame::checkpoint` / `local_checkpoint` (translate_command reads the flags; the server runs it and answers `checkpoint_command_result` with the id it holds the frame under); tests/cache.rs | P3-T083 | 7 |
+| 14 | checkpoint_command | done |  | `DataFrame::checkpoint` / `local_checkpoint` (translate_command reads the flags; the server runs it and answers `checkpoint_command_result` with the id it holds the frame under; the operator floor of ADR 0046 §3b applies; the query carries no operation id or tags: an interrupt by operation id ends the command, one by tag does not reach it); tests/cache.rs, tests/auth.rs | P3-T083 | 7 |
 | 15 | remove_cached_remote_relation_command | done |  | drops the session's frame under the id (an unknown id is not an error); tests/cache.rs | P3-T083 | 7 |
 | 16 | merge_into_table_command | missing |  | DataFrame.mergeInto → MERGE (T023 for Parquet/Hive refusals, T021 Delta, T027 Iceberg) | P3-T023 | 11 |
 | 17 | ml_command | out of scope |  | machine learning is out of scope; a client may send it for cache cleanup when a session ends |  | 0 |

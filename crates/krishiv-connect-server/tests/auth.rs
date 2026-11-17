@@ -851,3 +851,127 @@ async fn config_refusals_are_counted_like_sql_set() {
     );
     assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
+
+// ---------------------------------------------------- cache rows (P3-T083, ADR 0046 §3b)
+
+fn rel_range(end: i64) -> pb::Relation {
+    match range(end).op_type {
+        Some(OpType::Root(r)) => *r,
+        _ => unreachable!("range is a root relation"),
+    }
+}
+
+async fn analyze_with(
+    run: &Running,
+    analyze: pb::analyze_plan_request::Analyze,
+    token: &str,
+) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
+    unary(
+        &run.channel,
+        "AnalyzePlan",
+        pb::AnalyzePlanRequest {
+            session_id: SESSION.to_owned(),
+            analyze: Some(analyze),
+            ..Default::default()
+        },
+        Some(token),
+    )
+    .await
+}
+
+fn checkpoint(eager: bool, local: bool) -> pb::Plan {
+    command(CommandType::CheckpointCommand(Box::new(
+        pb::CheckpointCommand {
+            relation: Some(rel_range(3)),
+            local,
+            eager,
+            storage_level: None,
+        },
+    )))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cache_rows_need_the_operator_floor_except_the_reads() {
+    use pb::analyze_plan_request::{self as areq, Analyze};
+    // A session id belongs to its caller: the viewer and the operator get a server each.
+    let run = start().await;
+    let op = start().await;
+    for (r, token) in [(&run, VIEWER), (&op, OPERATOR)] {
+        // `AnalyzePlan` needs the caller's session: each caller runs a plan first.
+        execute(&r.channel, range(1), Some(token))
+            .await
+            .expect("opens the session");
+    }
+    let persist = || {
+        Analyze::Persist(Box::new(areq::Persist {
+            relation: Some(rel_range(3)),
+            storage_level: None,
+        }))
+    };
+    let unpersist = || {
+        Analyze::Unpersist(Box::new(areq::Unpersist {
+            relation: Some(rel_range(3)),
+            blocking: None,
+        }))
+    };
+    // A viewer: refused with 42501, and nothing is registered or held.
+    let s = analyze_with(&run, persist(), VIEWER).await.unwrap_err();
+    assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let s = analyze_with(&run, unpersist(), VIEWER).await.unwrap_err();
+    assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+    for (eager, local) in [(true, true), (false, true), (false, false)] {
+        let s = execute(&run.channel, checkpoint(eager, local), Some(VIEWER))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            s.code(),
+            Code::PermissionDenied,
+            "eager={eager} local={local}: {s:?}"
+        );
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    // The viewer's refused persist registered nothing.
+    let level = |r: pb::AnalyzePlanResponse| match r.result {
+        Some(pb::analyze_plan_response::Result::GetStorageLevel(l)) => l.storage_level,
+        other => unreachable!("{other:?}"),
+    };
+    let get = || {
+        Analyze::GetStorageLevel(Box::new(areq::GetStorageLevel {
+            relation: Some(rel_range(3)),
+        }))
+    };
+    // `get_storage_level` is a read: a viewer may ask, and sees NONE.
+    let l = level(
+        analyze_with(&run, get(), VIEWER)
+            .await
+            .expect("viewer reads"),
+    )
+    .expect("level");
+    assert!(!l.use_disk && !l.use_memory);
+    // An operator persists, reads, unpersists and checkpoints.
+    analyze_with(&op, persist(), OPERATOR)
+        .await
+        .expect("operator persists");
+    let l = level(analyze_with(&op, get(), OPERATOR).await.expect("reads")).expect("level");
+    assert!(l.use_memory);
+    analyze_with(&op, unpersist(), OPERATOR)
+        .await
+        .expect("operator unpersists");
+    for (eager, local) in [(true, true), (false, true)] {
+        execute(&op.channel, checkpoint(eager, local), Some(OPERATOR))
+            .await
+            .expect("operator checkpoints");
+    }
+    // Removing an id forgets what the session holds: no floor (own session).
+    let removal = command(CommandType::RemoveCachedRemoteRelationCommand(Box::new(
+        pb::RemoveCachedRemoteRelationCommand {
+            relation: Some(pb::CachedRemoteRelation {
+                relation_id: "x".to_owned(),
+            }),
+        },
+    )));
+    execute(&run.channel, removal, Some(VIEWER))
+        .await
+        .expect("a viewer removes an id");
+}

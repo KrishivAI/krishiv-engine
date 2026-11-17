@@ -22,8 +22,9 @@ use crate::cache::{CacheDisk, batch_bytes};
 use crate::session::Session;
 
 /// The table name of the leaf that stands for a lazy checkpoint until its rows are taken; it is
-/// replaced before any analysis, so it is never looked up.
-const LAZY_LEAF: &str = "__krishiv_lazy_checkpoint";
+/// replaced before any analysis, so it is never looked up. It starts with the reserved cache prefix: no
+/// table of a user's can have its name.
+const LAZY_LEAF: &str = "__krishiv_cache_lazy_checkpoint";
 
 /// A checkpoint whose rows are not taken yet: `marker` is the plan id of the node standing in for
 /// the snapshot in the result's plan, `source` the frame that produces the rows.

@@ -398,7 +398,7 @@ impl Requested {
             let Some(frame) = entry.cached_frame(id) else {
                 return Err(ConnectInvalidPlanDataframeNotFound {
                     df_id: id.clone(),
-                    session_id: entry.server_side_id().to_owned(),
+                    session_id: entry.client_session_id().to_owned(),
                 }
                 .into());
             };
@@ -480,7 +480,7 @@ struct TranslatedCommand {
     /// `CONNECT_INVALID_PLAN` naming the command.
     refusal: KrishivError,
     /// The relation a `checkpoint_command` checkpoints, translated with the plan's host.
-    input: Option<krishiv_plan::Plan>,
+    input: Option<Result<krishiv_plan::Plan, KrishivError>>,
 }
 
 impl Translated {
@@ -492,11 +492,12 @@ impl Translated {
         let input = match &command.command_type {
             Some(pb::command::CommandType::CheckpointCommand(c)) => {
                 let empty = pb::Relation::default();
+                // The error waits for the command's class check: a viewer is refused first.
                 Some(translate_relation_with(
                     c.relation.as_ref().unwrap_or(&empty),
                     conf,
                     udfs,
-                )?)
+                ))
             }
             _ => None,
         };
@@ -578,6 +579,7 @@ async fn execution_plan(
                         }
                         .into());
                     };
+                    let input = input?;
                     if udfs.seen() {
                         crate::auth::enforce(&crate::auth::client_code(), session).await?;
                         udfs.grant(session)?;
@@ -722,7 +724,7 @@ async fn translate_locals(
     drop(collecting);
     let has_plan = match &translated {
         Translated::Relation(_) => true,
-        Translated::Command(c) => c.input.is_some(),
+        Translated::Command(c) => matches!(c.input, Some(Ok(_))),
     };
     if requests.is_empty() || !has_plan {
         return Ok((translated, cached.take()));
