@@ -73,6 +73,7 @@
 //! string, byte string or map (`crate::proto`), and a decoded plan wipes its
 //! option values and paths when it is dropped ([`crate::proto::Scrub`]).
 
+mod cached;
 mod errors;
 mod expression;
 mod literal;
@@ -84,9 +85,11 @@ mod types;
 mod udf;
 
 pub use udf::{
-    Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
+    CheckpointSpec, Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf,
+    translate_command,
 };
 
+pub use cached::{CACHED_REMOTE_NAMESPACE, CachedRemoteIds, cached_remote_table};
 pub use local::{LocalRelations, LocalRequest};
 pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
 
@@ -112,6 +115,8 @@ pub struct TranslateConf {
     pub parser: krishiv_sql::ParserOptions,
     /// The local relations of the plan (`createDataFrame`), built by the host.
     pub local_relations: LocalRelations,
+    /// Where the ids of the plan's cached remote relations are recorded (the host resolves them).
+    pub cached_remote: CachedRemoteIds,
 }
 
 impl Default for TranslateConf {
@@ -121,6 +126,7 @@ impl Default for TranslateConf {
             default_data_source: "parquet".to_owned(),
             parser: krishiv_sql::ParserOptions::default(),
             local_relations: LocalRelations::default(),
+            cached_remote: CachedRemoteIds::default(),
         }
     }
 }
