@@ -30,7 +30,8 @@ pub mod udf;
 
 pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
 pub use auth::{
-    AuthLayer, Check, ConnectAuth, Rpc, SessionOwner, check_command, check_rpc, role_sessions,
+    ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth, Rpc,
+    SessionOwner, check_command, check_rpc, role_sessions,
 };
 pub use errors::SessionErrors;
 pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};

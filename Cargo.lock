@@ -3067,6 +3067,7 @@ dependencies = [
  "arrow-array 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
+ "aws-lc-rs",
  "bytes",
  "futures",
  "getrandom 0.4.3",
