@@ -102,7 +102,7 @@ impl SessionManager {
         };
         // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
         let python = source.python().copy_for(&caller.principal.name, &session);
-        let entry = self.new_entry(caller, session, source.client_user_id(), python);
+        let entry = self.new_entry(caller, session, (source.client_user_id(), target), python);
         let pending = Unpublished(Some(Arc::clone(&entry)));
         let snapshot = snapshot.ok_or_else(source_closed)?;
         if !snapshot.is_empty() {
@@ -117,6 +117,8 @@ impl SessionManager {
                     }
                     .into()
                 })??;
+            // The clone's workers get the copied `pyfiles/` and `archives/` (its own paths).
+            entry.python().sync_artifacts(entry.artifacts());
         }
         {
             let mut inner = self.lock();

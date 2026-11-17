@@ -103,6 +103,42 @@ way, and are otherwise a different Bernoulli sample at the same fraction:
 Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
 (`tests/fixtures/spark-4.2.0/tablesample.json`).
 
+## `histogram_numeric` bins depend on where partial histograms merge
+
+`histogram_numeric(col, nb)` is Spark's `NumericHistogram` (add, merge, trim, the `java.util.Random(31183)`
+tie-break, the same serialized partial state). Its bins depend on the order rows are added and on where partial
+histograms merge, as Spark's do. The results equal Spark's when both engines split the input the same way, and
+can differ by a bin or its counts otherwise:
+
+- A local `VALUES` relation is one partition here; Spark's `local` run splits it into two. Merging two halves
+  reproduces Spark's bins, a single pass does not (the 50-row case of `group-by.sql`).
+- Krishiv merges at its own points: several drivers per partition, flushes of full partial tables, the adaptive
+  bypass of a partial aggregate and spills. A merge of two partial histograms does not combine equal `x` values,
+  so a bypassed two-phase aggregate over the rows `(1, 4), (1, 4)` gives two bins `{x: 4, y: 1}` where Spark gives
+  one bin `{x: 4, y: 2}`.
+- Not covered: `spark.sql.legacy.histogramNumericPropagateInputType=false`, TIME input, window use (refused).
+
+Pinned by `crates/krishiv-session/tests/aggregate_histogram_numeric.rs` and the golden runner (`group-by.sql`).
+
+## `SELECT *` next to `window(..)` or `session_window(..)`
+
+`SELECT *, window(ts, '5 minutes') FROM t` returns the window column once, as Spark does, also with a
+`QUALIFY` over a window. Krishiv adds the window column to the input before the star expands, where Spark
+expands the star first, so it leaves the added column out of a bare `*`. Three cases differ:
+
+- A table with a column named `window` (or `session_window`) next to a window call fails with
+  `AMBIGUOUS_REFERENCE`.
+- `SELECT * EXCEPT (window), window(..)` fails with `EXCEPT_OVERLAPPING_COLUMNS` where Spark answers
+  `UNRESOLVED_COLUMN`.
+- A `*` next to a window call in a `WHERE` or `ORDER BY`, and `struct(*)` next to one, are not pinned against a
+  Spark run; the star may include a trailing `window` column.
+
+## `session_window` over a string time column
+
+`session_window(s, '5 minutes')` over a string column returns `start` and `end` as strings, with the
+right values. Spark casts the column to `TIMESTAMP` first, so its fields are timestamps. Pinned (ignored) by
+`crates/krishiv-session/tests/time_window_oracle.rs`.
+
 ## Filters move below only their deterministic prefix
 
 Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass
