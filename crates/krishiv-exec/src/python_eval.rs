@@ -250,6 +250,14 @@ impl InFlight {
         done
     }
 
+    /// The calls of this slice still running.
+    fn running(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| matches!(s, Slot::Pending(_)))
+            .count()
+    }
+
     /// The error of a call of this slice that failed, if any.
     fn failed(&self) -> Option<&KrishivError> {
         self.slots.iter().find_map(|s| match s {
@@ -307,11 +315,6 @@ struct Pending {
 }
 
 impl Pending {
-    /// Polls the oldest slice; whether it is done (or there is none).
-    fn head_ready(&mut self, cx: &mut Context<'_>) -> bool {
-        self.slices.front_mut().is_none_or(|h| h.poll_all(cx))
-    }
-
     /// The first failure among the slices in flight, polling each of them
     /// (so `cx` is woken by any one): a failure behind a slice still
     /// running must not wait for it (design P2-T059 §6.3).
@@ -320,6 +323,27 @@ impl Pending {
             s.poll_all(cx);
             s.failed().cloned()
         })
+    }
+
+    /// Whether a driver blocked on a full window may go on: one slice failed,
+    /// the oldest is done, or a call finished during this poll. Every slice
+    /// is polled once (so each call still running holds `cx`'s waker) and the
+    /// answer comes from the state they are in afterwards: deciding on the
+    /// oldest slice before the others were polled let a call that finished in
+    /// between leave the driver waiting with every slice done and nothing left
+    /// to wake it (PY-055). A call finished elsewhere frees the driver too;
+    /// `sink` then blocks again if the window is still full.
+    fn unblocked(&mut self, cx: &mut Context<'_>) -> bool {
+        let mut finished = false;
+        for slice in &mut self.slices {
+            let before = slice.running();
+            slice.poll_all(cx);
+            if slice.failed().is_some() {
+                return true;
+            }
+            finished |= slice.running() < before;
+        }
+        finished || self.slices.front().is_none_or(|h| h.running() == 0)
     }
 
     /// The oldest slice if every call of it is done, without waiting.
@@ -527,10 +551,9 @@ impl Sink for PythonEvalSink {
         if lock(&l.pending).slices.len() >= self.window {
             let pending = Arc::clone(&l.pending);
             return Ok(SinkStatus::Blocked(Box::pin(poll_fn(move |cx| {
-                let mut p = lock(&pending);
-                // Free once the oldest slice is done, or any slice failed:
-                // the next `sink` call then returns the failure.
-                if p.head_ready(cx) || p.failure(cx).is_some() {
+                // Free once the oldest slice is done, or any slice failed (the
+                // next `sink` call then returns the failure).
+                if lock(&pending).unblocked(cx) {
                     Poll::Ready(())
                 } else {
                     Poll::Pending

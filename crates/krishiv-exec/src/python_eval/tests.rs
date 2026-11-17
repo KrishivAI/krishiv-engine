@@ -366,3 +366,67 @@ async fn a_cancel_while_calls_are_in_flight_releases_everything() {
     drop((g, r.ctx, r.query));
     assert_eq!(r.root.reserved(), 0, "memory left after a cancel");
 }
+
+/// A call that is still running when first polled and done at every later
+/// poll, waking nothing: a call that finishes while its driver checks the
+/// window.
+struct FinishesOnSecondPoll {
+    finished: Arc<AtomicBool>,
+}
+
+impl PreparedUdf for FinishesOnSecondPoll {
+    fn call(&self, args: RecordBatch) -> BoxFuture<'static, crate::error::Result<ArrayRef>> {
+        let finished = Arc::clone(&self.finished);
+        let mut polls = 0;
+        Box::pin(poll_fn(move |_cx| {
+            polls += 1;
+            if polls == 1 {
+                return Poll::Pending;
+            }
+            finished.store(true, Ordering::SeqCst);
+            Poll::Ready(Ok(Arc::clone(args.column(0))))
+        }))
+    }
+}
+
+/// PY-055: a blocked driver is freed by any call that finishes while the
+/// window is checked. The check used to poll the oldest slice, then every
+/// slice again: a call finishing in between was taken as done, yet the driver
+/// stayed blocked with every slice done and nothing left to wake it.
+#[tokio::test]
+async fn a_call_finishing_while_the_window_is_checked_frees_the_driver() {
+    let mut r = rig(64 << 20, 2, 1, false);
+    let finished = Arc::new(AtomicBool::new(false));
+    let schema = Schema::new(vec![Field::new("x", ArrowType::Int64, true)]);
+    let call = EvalCall {
+        args: vec![Arc::new(Col(0))],
+        udf: Arc::new(FinishesOnSecondPoll {
+            finished: Arc::clone(&finished),
+        }),
+        client: ArrowType::Int64,
+        canonical: ArrowType::Int64,
+    };
+    r.sink = PythonEvalSink::new(&schema, vec![call], 2, 1, None);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    // Two rows in slices of two: one slice, which fills the window of one.
+    let SinkStatus::Blocked(mut wait) = r.sink.sink(rows(2), &mut l, &g).unwrap() else {
+        panic!("a full window must block the driver");
+    };
+    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+    // Polled until it frees the driver: never `Pending` once a call is done.
+    for _ in 0..3 {
+        match wait.as_mut().poll(&mut cx) {
+            Poll::Ready(()) => break,
+            Poll::Pending => assert!(
+                !finished.load(Ordering::SeqCst),
+                "the driver stays blocked although its only call has finished"
+            ),
+        }
+    }
+    assert!(finished.load(Ordering::SeqCst), "the call never finished");
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    drop((g, r.ctx, r.query));
+    assert_eq!(r.root.reserved(), 0, "memory left after the phase");
+}
