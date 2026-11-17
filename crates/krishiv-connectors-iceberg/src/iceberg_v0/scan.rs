@@ -305,7 +305,7 @@ pub(crate) fn check_size(
 /// byte past the size reads (the reader refuses that range locally, without a
 /// request, when the file ends there), and a manifest cut at an Avro block
 /// boundary would otherwise parse with entries missing.
-pub(super) async fn read_capped(
+pub(crate) async fn read_capped(
     io: &FileIO,
     what: &str,
     location: &str,

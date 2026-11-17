@@ -1,6 +1,43 @@
 {
   "components": {
     "schemas": {
+      "CancelQueriesByTagRequest": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CancelQueriesByTagResponse": {
+        "properties": {
+          "queryIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "CancelQueryRequest": {
+        "properties": {
+          "queryId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CancelQueryResponse": {
+        "properties": {},
+        "type": "object"
+      },
       "Capability": {
         "properties": {
           "detail": {
@@ -79,12 +116,196 @@
           }
         },
         "type": "object"
+      },
+      "KillSessionRequest": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "KillSessionResponse": {
+        "properties": {
+          "queriesCancelled": {
+            "format": "int64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListQueriesRequest": {
+        "properties": {
+          "pageSize": {
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tag": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListQueriesResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "queries": {
+            "items": {
+              "$ref": "#/components/schemas/Query"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListSessionsRequest": {
+        "properties": {
+          "pageSize": {
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListSessionsResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Query": {
+        "properties": {
+          "ended": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "errorClass": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "queryId": {
+            "type": "string"
+          },
+          "resourceGroup": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "started": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "statementClass": {
+            "type": "string"
+          },
+          "submitted": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Session": {
+        "properties": {
+          "clientType": {
+            "type": "string"
+          },
+          "closeReason": {
+            "type": "string"
+          },
+          "closed": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "delegatedBy": {
+            "type": "string"
+          },
+          "lastActive": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "queriesRunning": {
+            "format": "int64",
+            "type": "string"
+          },
+          "queriesStarted": {
+            "format": "int64",
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "transport": {
+            "type": "string"
+          }
+        },
+        "type": "object"
       }
     }
   },
   "info": {
     "title": "krishiv.admin.v1",
-    "version": "1"
+    "version": "2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -97,6 +318,269 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GetCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/queries": {
+      "get": {
+        "operationId": "ListQueries",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListQueriesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/queries/{query_id}:cancel": {
+      "post": {
+        "operationId": "CancelQuery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelQueryRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelQueryResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/queries:cancelByTag": {
+      "post": {
+        "operationId": "CancelQueriesByTag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelQueriesByTagRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelQueriesByTagResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/sessions": {
+      "get": {
+        "operationId": "ListSessions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSessionsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/sessions/{session_id}:kill": {
+      "post": {
+        "operationId": "KillSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSessionRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSessionResponse"
                 }
               }
             },
