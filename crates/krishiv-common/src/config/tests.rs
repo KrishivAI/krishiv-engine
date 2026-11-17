@@ -1536,6 +1536,14 @@ fn egress_entries_are_startup_only_and_parse() {
         assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
         assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
     }
+    // `deny` keeps certificate verification on, embedded too (review #803 n1).
+    assert!(
+        IO_EGRESS_PRIVATE_ADDRESSES
+            .doc
+            .contains("certificate verification stays on"),
+        "{}",
+        IO_EGRESS_PRIVATE_ADDRESSES.doc
+    );
     c.set("krishiv.io.egress.privateAddresses", "deny").unwrap();
     assert!(
         c.set("krishiv.io.egress.privateAddresses", "maybe")
