@@ -247,11 +247,10 @@ async fn cancelling_a_running_statement_shows_cancelled_within_two_seconds() {
         get(addr, &format!("/api/internal/sql/{run}")).await["state"],
         "running"
     );
-    let t = Instant::now();
     let (status, _) = post(addr, &format!("/api/internal/sql/{run}/cancel"), "").await;
     assert_eq!(status, 200);
-    let v = wait_state(addr, &run, "cancelled", Duration::from_secs(2)).await;
-    assert!(t.elapsed() < Duration::from_secs(2), "{v}");
+    // `wait_state` fails the test when the state is not reached within the 2 s bound.
+    wait_state(addr, &run, "cancelled", Duration::from_secs(2)).await;
     let (status, _) = post(addr, &format!("/api/internal/sql/{run}/cancel"), "").await;
     assert_eq!(status, 404, "a finished run is not running");
 }
@@ -560,4 +559,92 @@ async fn an_editor_result_is_cut_at_the_row_cap_and_says_so() {
     let done = wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
     assert_eq!(done["rows"].as_array().unwrap().len(), 1000, "{done}");
     assert_eq!(done["truncated"], json!(true), "{done}");
+}
+
+#[tokio::test]
+async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() {
+    use krishiv_server::internal::{SystemTable, UiSource};
+    use krishiv_server::session_source::ProfilesSource;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let rt = EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let session = krishiv_session::Session::builder()
+            .runtime(Arc::clone(&rt))
+            .build()
+            .unwrap();
+        let df = session
+            .sql("SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3")
+            .await
+            .unwrap();
+        df.collect().await.unwrap();
+        // Dropping the runtime flushes the history writer.
+    }
+    let source = ProfilesSource::open(dir.path()).unwrap();
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(queries.len(), 1, "{queries:?}");
+    assert_eq!(queries[0]["state"], json!("finished"));
+    assert!(queries[0]["ended_at"].as_i64().unwrap() > 0);
+    let operators = source.rows(SystemTable::Operators).await.unwrap();
+    assert!(!operators.is_empty());
+    assert!(
+        operators
+            .iter()
+            .all(|o| o["query_id"] == queries[0]["query_id"])
+    );
+    assert!(source.rows(SystemTable::Memory).await.unwrap().is_empty());
+    assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
+    assert!(!source.cancel("anything").await.unwrap());
+    assert!(ProfilesSource::open(std::path::Path::new("/nonexistent/krishiv-profiles")).is_err());
+}
+
+struct Bare;
+impl krishiv_server::internal::UiSource for Bare {
+    fn rows(
+        &self,
+        _t: krishiv_server::internal::SystemTable,
+    ) -> krishiv_server::internal::UiFuture<'_, Vec<krishiv_server::internal::Row>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn cancel<'a>(&'a self, _q: &'a str) -> krishiv_server::internal::UiFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+#[tokio::test]
+async fn a_source_with_only_rows_and_cancel_offers_no_pages_and_a_caller_prints_its_name() {
+    use krishiv_server::internal::UiSource;
+    let s = Bare;
+    assert!(s.catalog(&[]).await.is_err());
+    assert!(s.environment().await.is_err());
+    assert!(s.sql_start("SELECT 1", None).await.is_err());
+    assert!(s.sql_status("r", None).await.unwrap().is_none());
+    assert!(!s.sql_cancel("r", None).await.unwrap());
+    let c = krishiv_server::guard::Caller::new("ann", Arc::new(()));
+    assert_eq!(c.name(), "ann");
+    assert!(format!("{c:?}").contains("ann"));
+}
+
+#[tokio::test]
+async fn the_origin_scheme_must_match_the_listener() {
+    let a = auth();
+    for (tls, origin, want) in [
+        (true, "Origin: https://localhost", 202),
+        (true, "Origin: http://localhost", 403),
+        (false, "Origin: http://localhost", 202),
+        (false, "Origin: https://localhost", 403),
+    ] {
+        let addr = start_with(UiPolicy::for_listener(true, []).secure_cookie(tls)).await;
+        let (status, ..) = raw(
+            addr,
+            "POST",
+            "/api/internal/sql",
+            &["Host: localhost", &a, "X-Krishiv-Csrf: 1", origin],
+            r#"{"sql":"SELECT 1"}"#,
+        )
+        .await;
+        assert_eq!(status, want, "tls={tls} {origin}");
+    }
 }

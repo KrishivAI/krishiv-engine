@@ -141,8 +141,14 @@ pub(crate) async fn host_guard(
         && let Some(origin) = req.headers().get(header::ORIGIN)
     {
         let same = origin.to_str().ok().is_some_and(|o| {
-            o.split_once("://")
-                .is_some_and(|(_, authority)| authority.eq_ignore_ascii_case(host))
+            let scheme = if s.policy.secure_cookie {
+                "https"
+            } else {
+                "http"
+            };
+            o.split_once("://").is_some_and(|(got, authority)| {
+                got.eq_ignore_ascii_case(scheme) && authority.eq_ignore_ascii_case(host)
+            })
         });
         if !same {
             return error(

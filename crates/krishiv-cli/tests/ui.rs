@@ -36,7 +36,7 @@ fn expected_operators() -> Vec<(u64, String, u64, u64)> {
         (5, "Project", 7, 7),
     ]
     .into_iter()
-    .map(|(id, name, rin, rout)| (id, name.to_owned(), rin, rout))
+    .map(|(id, name, rows_in, rows_out)| (id, name.to_owned(), rows_in, rows_out))
     .collect()
 }
 

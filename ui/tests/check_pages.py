@@ -247,7 +247,9 @@ def page_checks(origin: str) -> list[str]:
             )
         # Redaction on the environment page.
         page.evaluate("window.location.hash = '#/environment'")
-        page.get_by_text("spark.sql.shuffle.partitions").wait_for(timeout=10000)
+        page.get_by_text("spark.sql.shuffle.partitions", exact=True).wait_for(
+            timeout=10000
+        )
         for key in (
             "krishiv.auth.token",
             "db.password",

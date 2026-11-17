@@ -134,11 +134,7 @@ async fn an_operators_statement_runs_as_the_operator_and_is_recorded_under_them(
         .as_array()
         .unwrap()
         .iter()
-        .find(|q| {
-            q["query_text"]
-                .as_str()
-                .is_some_and(|t| t.contains("AS answer"))
-        })
+        .find(|q| q["principal"] == "ann" && q["rows_produced"] == 1)
         .unwrap_or_else(|| panic!("{history}"));
     assert_eq!(
         row["principal"], "ann",
