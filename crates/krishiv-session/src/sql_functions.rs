@@ -840,7 +840,7 @@ impl QueryFunctions {
         rule: CallRule<'_>,
     ) -> Option<Vec<String>> {
         let in_view = match rule {
-            CallRule::Bound(bound) => return bound.get(name).cloned(),
+            CallRule::Bound(bound) => return bound.names.get(name).cloned(),
             CallRule::View => true,
             CallRule::Body => false,
         };
@@ -917,7 +917,10 @@ impl QueryFunctions {
     /// The functions of a definer view's text `plan`, bound now (review r8 item 1): each name it
     /// calls bare (scalar or table, at every level) that no built-in answers, with the catalog and
     /// schema [`CallRule::View`] resolves it to through the view's frozen `path` and `namespace`.
-    /// A name that resolves nowhere is left out, so a read refuses its call.
+    /// A name that resolves nowhere is left out, so a read refuses its call. With them, the
+    /// revision of every stored function they name and of every one this registry's lookups
+    /// resolved so far (the view's analysis: its qualified calls, its invoker views' and the
+    /// bodies' calls), which a read may call only at that revision (review r9 item 1).
     pub(crate) fn bound_calls(
         &self,
         plan: &Arc<LogicalPlan>,
@@ -925,12 +928,19 @@ impl QueryFunctions {
         path: &[Vec<String>],
         profile: SparkProfile,
     ) -> BoundFunctions {
-        let mut bound = BoundFunctions::new();
+        let mut bound = BoundFunctions::default();
         let mut bind = |name: &str| {
-            if !bound.contains_key(name)
+            if !bound.names.contains_key(name)
                 && let Some(q) = self.stored_qualifier(name, namespace, path, CallRule::View)
             {
-                bound.insert(name.to_owned(), q);
+                if let [_, schema] = q.as_slice()
+                    && let Some(f) = self.stored.get(schema, name)
+                {
+                    bound
+                        .versions
+                        .insert((f.namespace.clone(), f.entry.def.name.clone()), f.revision);
+                }
+                bound.names.insert(name.to_owned(), q);
             }
         };
         let mut plans = vec![plan];
@@ -965,7 +975,38 @@ impl QueryFunctions {
                 e.for_each_child(&mut |c| exprs.push(c));
             }
         }
+        // Every stored function the view's analysis reached (its invoker views' and bodies'
+        // calls too), pinned at its revision (review r9 item 1).
+        for (function, revision) in self.called_versions() {
+            bound.versions.entry(function).or_insert(revision);
+        }
         bound
+    }
+}
+
+impl QueryFunctions {
+    /// Each stored function a lookup resolved so far (see [`Self::stored_calls`]), with the
+    /// revision this registry's snapshot holds: what a definer view being created reached, pinned
+    /// with it (review r9 item 1).
+    pub(crate) fn called_versions(&self) -> BTreeMap<(String, String), u64> {
+        self.stored_calls()
+            .into_iter()
+            .filter_map(|(namespace, name)| {
+                let revision = self.stored.get(&namespace, &name)?.revision;
+                Some(((namespace, name), revision))
+            })
+            .collect()
+    }
+
+    /// The revision and author of the stored function `(namespace, name)` in this registry's
+    /// snapshot; `None` when it holds none.
+    pub(crate) fn stored_identity(
+        &self,
+        (namespace, name): &(String, String),
+    ) -> Option<(u64, &str)> {
+        self.stored
+            .get(namespace, name)
+            .map(|f| (f.revision, f.author.as_str()))
     }
 }
 

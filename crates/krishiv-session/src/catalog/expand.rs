@@ -399,6 +399,7 @@ impl Expander<'_> {
                 view: 0,
                 namespace: view.namespace.clone(),
                 path: view.path.clone(),
+                bound: view.functions.clone().unwrap_or_default(),
             });
             self.definers.len() - 1
         });

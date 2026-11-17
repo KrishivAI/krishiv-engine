@@ -427,15 +427,16 @@ fn a_function_shadowing_a_definer_views_frozen_path_changes_nothing() {
         "ALTER VIEW default.dvp AS SELECT owner FROM default.t WHERE f(owner)",
     );
     assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana", "carl"]);
+    // The binding pins that version (review r9 item 1): bob replacing his `ns2.f` fails the view
+    // closed until ana alters it again.
     ok(
         &bob,
         "CREATE OR REPLACE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN false",
     );
     ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
-    assert_eq!(
-        read(&bob, "SELECT * FROM default.dvp"),
-        Vec::<String>::new()
-    );
+    for s in [&bob, &ana] {
+        assert_redacted(s, "SELECT * FROM default.dvp", &["ns2", "`bob`", "`ana`"]);
+    }
 }
 
 /// Review r8 item 1: a function a definer view was bound to, dropped, fails the view closed, as a
@@ -583,5 +584,200 @@ fn explain_formatted_of_a_refused_definer_read_prints_the_redacted_refusal() {
         for h in ["secret", "`ana`", "Scan"] {
             assert!(!text.contains(h), "{sql}: {h}: {text}");
         }
+    }
+}
+
+/// Review r9 item 1 (A1): a definer view binds the version of each stored function it reaches when
+/// it is created or altered: those its text calls, bare or qualified, and those their bodies call.
+/// A replacement of one by anyone but the view's definer fails the view closed, redacted for every
+/// reader, until the definer alters or re-creates it; the view never returns what the new body
+/// lets through. A function the definer owns and replaces herself keeps working: the view follows
+/// it.
+#[test]
+fn a_bound_function_replaced_by_another_principal_fails_the_definer_view_closed() {
+    let w = World::new();
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.k(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.h(x STRING) RETURNS BOOLEAN RETURN ns2.k(x)",
+    );
+    for f in ["f", "k", "h"] {
+        ok(
+            &bob,
+            &format!("GRANT SELECT ON FUNCTION ns2.{f} TO user:ana"),
+        );
+    }
+    ok(&ana, "SET spark.sql.path.enabled = true");
+    ok(
+        &ana,
+        "SET PATH = system.builtin, spark_catalog.ns2, spark_catalog.default",
+    );
+    let views = [
+        ("dvb", "SELECT owner FROM default.t WHERE f(owner)"),
+        ("dvq", "SELECT owner FROM default.t WHERE ns2.f(owner)"),
+        ("dvh", "SELECT owner FROM default.t WHERE h(owner)"),
+    ];
+    for (v, q) in views {
+        ok(
+            &ana,
+            &format!("CREATE VIEW default.{v} SQL SECURITY DEFINER AS {q}"),
+        );
+        ok(
+            &ana,
+            &format!("GRANT SELECT ON VIEW default.{v} TO user:carl"),
+        );
+        ok(
+            &ana,
+            &format!("GRANT SELECT ON VIEW default.{v} TO user:bob"),
+        );
+        assert_eq!(read(&carl, &format!("SELECT * FROM default.{v}")), ["ana"]);
+    }
+    // bob replaces the functions the views bound (a body's call `ns2.k` included).
+    ok(
+        &bob,
+        "CREATE OR REPLACE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN true",
+    );
+    ok(
+        &bob,
+        "CREATE OR REPLACE FUNCTION ns2.k(x STRING) RETURNS BOOLEAN RETURN true",
+    );
+    for (v, _) in views {
+        for s in [&carl, &bob, &ana] {
+            assert_redacted(
+                s,
+                &format!("SELECT * FROM default.{v}"),
+                &["ns2", "`bob`", "`ana`", "carl"],
+            );
+        }
+    }
+    // The definer altering the view binds the new versions.
+    for (v, q) in views {
+        ok(&ana, &format!("ALTER VIEW default.{v} AS {q}"));
+        assert_eq!(
+            read(&carl, &format!("SELECT * FROM default.{v}")),
+            ["ana", "carl"]
+        );
+    }
+    // A function the definer owns follows her own replacement.
+    ok(
+        &ana,
+        "CREATE FUNCTION default.g(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvg SQL SECURITY DEFINER AS \
+         SELECT owner FROM default.t WHERE default.g(owner)",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvg TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvg"), ["ana"]);
+    ok(
+        &ana,
+        "CREATE OR REPLACE FUNCTION default.g(x STRING) RETURNS BOOLEAN RETURN x = 'carl'",
+    );
+    assert_eq!(read(&carl, "SELECT * FROM default.dvg"), ["carl"]);
+}
+
+/// Review r9 item 2 (A1; r8 concern 3): inside a definer view's text, a call resolved at each read
+/// (in an invoker view the text reads, or in a stored body) may land only on a built-in, a function
+/// the definer owns or a version the view bound when created. A function created later earlier on
+/// the invoker view's (or the body's) frozen path, by someone else and granted to the definer, is
+/// refused, redacted, never called. The invoker view read directly still resolves at each read, as
+/// Spark's does.
+#[test]
+fn a_shadowing_function_in_a_nested_invoker_view_or_body_fails_the_definer_view_closed() {
+    let w = World::new();
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    ok(
+        &ana,
+        "CREATE FUNCTION f(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION g(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(&ana, "SET spark.sql.path.enabled = true");
+    ok(
+        &ana,
+        "SET PATH = system.builtin, spark_catalog.ns2, spark_catalog.default",
+    );
+    // A body calling `g` bare, through its frozen path; an invoker view calling `f` bare.
+    ok(
+        &ana,
+        "CREATE FUNCTION default.af(x STRING) RETURNS BOOLEAN RETURN g(x)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.iv AS SELECT owner FROM default.t WHERE f(owner)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvi SQL SECURITY DEFINER AS SELECT owner FROM default.iv",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dva SQL SECURITY DEFINER AS \
+         SELECT owner FROM default.t WHERE default.af(owner)",
+    );
+    for v in ["dvi", "dva"] {
+        ok(
+            &ana,
+            &format!("GRANT SELECT ON VIEW default.{v} TO user:carl"),
+        );
+        ok(
+            &ana,
+            &format!("GRANT SELECT ON VIEW default.{v} TO user:bob"),
+        );
+        assert_eq!(read(&carl, &format!("SELECT * FROM default.{v}")), ["ana"]);
+    }
+    // bob's `ns2.f` and `ns2.g`, earlier on both frozen paths, granted to ana.
+    for f in ["f", "g"] {
+        ok(
+            &bob,
+            &format!("CREATE FUNCTION ns2.{f}(x STRING) RETURNS BOOLEAN RETURN true"),
+        );
+        ok(
+            &bob,
+            &format!("GRANT SELECT ON FUNCTION ns2.{f} TO user:ana"),
+        );
+    }
+    for v in ["dvi", "dva"] {
+        for s in [&carl, &bob, &ana] {
+            assert_redacted(
+                s,
+                &format!("SELECT * FROM default.{v}"),
+                &["ns2", "`bob`", "`ana`", "carl"],
+            );
+        }
+    }
+    // The invoker view read by its own reader resolves at each read (Spark).
+    assert_eq!(read(&ana, "SELECT * FROM default.iv"), ["ana", "carl"]);
+    // bob drops them: the views read again.
+    for f in ["f", "g"] {
+        ok(&bob, &format!("DROP FUNCTION ns2.{f}"));
+    }
+    for v in ["dvi", "dva"] {
+        assert_eq!(read(&carl, &format!("SELECT * FROM default.{v}")), ["ana"]);
     }
 }

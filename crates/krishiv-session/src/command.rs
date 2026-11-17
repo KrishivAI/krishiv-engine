@@ -1458,6 +1458,8 @@ impl Session {
             let stored = StoredFunction {
                 namespace: namespace.to_owned(),
                 entry: entry.clone(),
+                revision: 0,
+                author: self.state.principal.name.clone(),
             };
             let mut env = self.query_env();
             let candidate = Arc::new(
@@ -1484,6 +1486,8 @@ impl Session {
             let stored = StoredFunction {
                 namespace: namespace.to_owned(),
                 entry,
+                revision: 0,
+                author: self.state.principal.name.clone(),
             };
             if store.define_function(stored, current.version()) {
                 return self.empty_frame().await;

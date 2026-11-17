@@ -1524,6 +1524,9 @@ pub(crate) struct DefinerRead {
     pub(crate) namespace: String,
     /// The SQL path frozen with it (`ViewDef::path`).
     pub(crate) path: Vec<Vec<String>>,
+    /// The functions it bound when created or last altered (`ViewDef::functions`; empty for one
+    /// stored without, so every stored call it reaches must be its definer's).
+    pub(crate) bound: crate::store::BoundFunctions,
 }
 
 /// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never

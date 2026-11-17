@@ -80,6 +80,17 @@ impl Session {
         // Its own calls and what their bodies look up, not those of the definer views inside it,
         // which are their definers' (review r6 m1); the bodies read as the definer (r6 M8).
         let scope = calls.definer_scope(query, &ctx.definer_texts, self.state.profile);
+        // Every stored function its text reaches, at any depth, is one the definer owns and last
+        // defined, or the version the view bound (review r9, ADR 0048 A1); else it fails closed.
+        for call in &scope.calls {
+            if !self.definer_may_call(d, &calls, call) {
+                return Err(krishiv_plan::analyzer::insufficient_permissions(
+                    &definer,
+                    &function_securable(call),
+                    env.analysis.mode.read_privilege(),
+                ));
+            }
+        }
         self.authorize_reads_as(&scope.body.reads, env, &definer, false)
             .await?;
         self.authorize_reads_as(&scope.body.definer_reads, env, &definer, false)
@@ -135,6 +146,28 @@ impl Session {
             }
         }
         Ok(reads)
+    }
+
+    /// Whether the definer view `d`'s text may call the stored function `call` (review r9, ADR
+    /// 0048 A1): its version is the one the view bound when created or last altered, or its
+    /// definer last defined it and owns it (the grants provider records the definer as its owner,
+    /// or no grants provider is set). A replacement by anyone else, or a function resolved at a
+    /// read (in an invoker view's text or a body) that is neither, is refused.
+    fn definer_may_call(
+        &self,
+        d: &crate::catalog::DefinerRead,
+        functions: &crate::sql_functions::QueryFunctions,
+        call: &(String, String),
+    ) -> bool {
+        let Some((revision, author)) = functions.stored_identity(call) else {
+            return false;
+        };
+        if d.bound.versions.get(call) == Some(&revision) {
+            return true;
+        }
+        author == d.definer
+            && (self.state.grants.is_none()
+                || self.function_owner(call).as_deref() == Some(d.definer.as_str()))
     }
 
     /// The owner the grants provider records for the stored function `(namespace, name)`; `None`

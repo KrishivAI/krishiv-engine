@@ -149,9 +149,18 @@ pub(crate) struct ViewDef {
     pub(crate) functions: Option<BoundFunctions>,
 }
 
-/// [`ViewDef::functions`]: each bare call's name as written in the view's text, with the
-/// catalog and schema of the stored function it resolved to.
-pub(crate) type BoundFunctions = BTreeMap<String, Vec<String>>;
+/// [`ViewDef::functions`]: what a definer view bound when it was created or last altered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct BoundFunctions {
+    /// Each bare call's name as written in the view's text, with the catalog and schema of the
+    /// stored function it resolved to (review r8 item 1).
+    pub(crate) names: BTreeMap<String, Vec<String>>,
+    /// Every stored function the view reached then (namespace, name as stored): those its text
+    /// calls, bare or qualified, those its invoker views call and those their bodies call, with
+    /// the [`StoredFunction::revision`] it had (review r9 item 1, ADR 0048 A1). A read may call a
+    /// stored function only at that revision, or one its definer owns and last defined.
+    pub(crate) versions: BTreeMap<(String, String), u64>,
+}
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +337,13 @@ pub(crate) struct NamespaceMeta {
 pub(crate) struct StoredFunction {
     pub(crate) namespace: String,
     pub(crate) entry: Entry,
+    /// This definition's identity: the store's function version that defined it, set by
+    /// [`StoredFunctions::with`], so every `CREATE [OR REPLACE] FUNCTION` gives a new one. A
+    /// definer view pins it ([`BoundFunctions::versions`], review r9 item 1).
+    pub(crate) revision: u64,
+    /// The principal whose statement defined this version (review r9 item 1: a definer view
+    /// follows only its definer's own replacements).
+    pub(crate) author: String,
 }
 
 /// The stored functions at one version: replaced, never edited, so a query
@@ -377,13 +393,14 @@ impl StoredFunctions {
     }
 
     /// This map with `function` defined (replacing any of its name).
-    pub(crate) fn with(&self, function: StoredFunction) -> Self {
+    pub(crate) fn with(&self, mut function: StoredFunction) -> Self {
         let mut next = self.clone();
+        next.version += 1;
+        function.revision = next.version;
         next.entries.insert(
             (function.namespace.clone(), function.entry.def.name.clone()),
             function,
         );
-        next.version += 1;
         next
     }
 }
