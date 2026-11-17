@@ -1464,8 +1464,28 @@ impl Session {
         self.function_namespace(ns)
     }
 
-    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
+    /// Refuses a namespace or table command that would resolve in the current catalog when that is
+    /// a declared one: a declared catalog resolves names in queries only for now (design P3-T067
+    /// PR-58a), and the embedded catalog is never read or changed in its name. `spark_catalog.<ns>`
+    /// forms, `global_temp` and temporary views are not refused.
+    pub(crate) fn refuse_declared_current(&self) -> Result<(), KrishivError> {
+        let catalog = self.state.catalog.current_catalog();
+        if is_system(&catalog) || catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+            return Ok(());
+        }
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "namespace and table commands in the declared catalog `{}`",
+                catalog.replace('`', "``")
+            ),
+        }
+        .into())
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
+    /// and under a declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         if is_system(&self.state.catalog.current_catalog()) {
             return Err(krishiv_common::error::SchemaNotFound {
                 schema_name: format!("`system`.`{ns}`"),
@@ -1526,6 +1546,12 @@ impl Session {
             }
             .into());
         }
+        if !global
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
+        {
+            self.refuse_declared_current()?;
+        }
         Ok(env.catalog.namespace().join("."))
     }
 
@@ -1541,6 +1567,7 @@ impl Session {
             }
             .into());
         }
+        self.refuse_declared_current()?;
         Ok(env.catalog.namespace().join("."))
     }
 }

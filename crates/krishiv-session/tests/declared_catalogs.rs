@@ -307,6 +307,74 @@ fn the_catalog_api_never_lists_embedded_namespaces_as_a_declared_catalogs() {
     assert_eq!(t.catalog.as_deref(), Some("spark_catalog"));
 }
 
+/// With a declared catalog current, the SQL namespace and table commands that would resolve in it
+/// refuse rather than read or change the embedded catalog in its name, as the Catalog API does;
+/// `spark_catalog.<db>` forms, `global_temp` and temporary views keep working.
+#[test]
+fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
+    let rt = runtime(DeclMode::Embedded, &LAKE);
+    let s = Session::builder().runtime(rt).build().unwrap();
+    run(&s, "CREATE TABLE default.e (a INT) USING parquet").unwrap();
+    run(&s, "CREATE NAMESPACE n0").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS a").unwrap();
+    run(&s, "USE lake").unwrap();
+    let mut wrong = Vec::new();
+    for sql in [
+        "SHOW NAMESPACES",
+        "SHOW DATABASES",
+        "SHOW TABLES",
+        "SHOW VIEWS",
+        "SHOW TABLE EXTENDED LIKE 'e'",
+        "SHOW TABLES IN default",
+        "SHOW VIEWS IN default",
+        "DESCRIBE NAMESPACE default",
+        "CREATE NAMESPACE n1",
+        "DROP NAMESPACE n0",
+        "ALTER NAMESPACE default SET DBPROPERTIES ('k' = 'v')",
+        "USE NAMESPACE default",
+        "USE default",
+        "CREATE TABLE t2 (a INT) USING parquet",
+        "CREATE TABLE default.t3 (a INT) USING parquet",
+        "CREATE VIEW v1 AS SELECT 1 AS a",
+        "DROP TABLE e",
+        "DROP TABLE default.e",
+        "SHOW COLUMNS IN e",
+        "SHOW TBLPROPERTIES default.e",
+        "SHOW CREATE TABLE default.e",
+        "ALTER TABLE default.e ADD COLUMNS (b INT)",
+    ] {
+        match run(&s, sql) {
+            Err(e)
+                if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
+                    && e.to_string().contains("`lake`") => {}
+            Err(e) => wrong.push(format!("{sql}: {e}")),
+            Ok(b) => wrong.push(format!(
+                "{sql}: ok, {} rows",
+                b.iter()
+                    .map(arrow_array::RecordBatch::num_rows)
+                    .sum::<usize>()
+            )),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    // Qualified with `spark_catalog`, temporary views and `global_temp` keep working.
+    assert_eq!(
+        strings(&s, "SHOW TABLES IN spark_catalog.default", 1),
+        ["e", "tv"]
+    );
+    run(&s, "DESCRIBE NAMESPACE spark_catalog.default").unwrap();
+    run(&s, "SHOW TABLES IN global_temp").unwrap();
+    run(&s, "SELECT * FROM tv").unwrap();
+    run(&s, "DROP VIEW tv").unwrap();
+    run(&s, "CREATE NAMESPACE spark_catalog.n2").unwrap();
+    run(&s, "DROP NAMESPACE spark_catalog.n2").unwrap();
+    // Nothing was changed in the embedded catalog.
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(strings(&s, "SHOW NAMESPACES", 0), ["default", "n0"]);
+    assert_eq!(strings(&s, "SHOW TABLES", 1), ["e"]);
+    assert_eq!(strings(&s, "SHOW COLUMNS IN e", 0), ["a"]);
+}
+
 /// The error text with the catalog name replaced, so a hidden and an undeclared name compare.
 fn error_as(s: &Session, sql: &str, name: &str) -> String {
     let e = run(s, sql).unwrap_err();
