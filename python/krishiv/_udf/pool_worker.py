@@ -18,8 +18,10 @@ crosses the socket: an Arrow IPC stream in a memfd does.
   (cloudpickled ``(func, return_type)``); answered by ``ready`` or ``error``.
 - server → worker: ``batch`` ``{udf, len, conf}`` + a sealed memfd holding one record batch, one column per
   argument; answered by ``result`` ``{len}`` + a memfd holding one record batch with one column, or ``error``.
-- server → worker: ``task`` ``{udf, key_count, arity, max_rows, conf}`` (no descriptor): a relation kind's
-  task (design ``P3-T085-embedded-python-udf-kinds.md`` §3.2) over loaded UDF ``udf``. The worker then asks
+- server → worker: ``task`` ``{udf, eval_type, key_count, arity, max_rows, conf}`` (no descriptor): a relation
+  kind's task (design ``P3-T085-embedded-python-udf-kinds.md`` §3.2) over loaded UDF ``udf``, run as
+  ``eval_type`` (the UDF's own, or the window kind of a grouped-aggregate UDF: 202 as 203, 252 as 253, as Spark
+  runs one over a window; a scalar iterator, 204 and 251, is a task too). The worker then asks
   for each frame with ``want``, and the server answers with exactly one of ``frame`` ``{side, len}`` + a sealed
   memfd holding one record batch, ``end_group`` or ``end``. The worker sends ``result`` ``{len}`` + a memfd
   holding one record batch of the declared columns whenever it has rows, and ``done`` when the UDF finished
@@ -144,11 +146,27 @@ def _write_batch(batch: Any) -> tuple[int, int]:
 
 
 class _Relation:
-    """A loaded relation UDF: its runner (``relations.make_relation``) and whether it is an aggregate."""
+    """A loaded relation UDF: the function, its return type and eval type, and its runners by the eval type a
+    task runs it as (``relations.make_relation``)."""
 
-    def __init__(self, runner: Any, aggregate: bool) -> None:
-        self.runner = runner
-        self.aggregate = aggregate
+    def __init__(self, func: Any, return_type: Any, eval_type: int) -> None:
+        from krishiv._udf.relations import make_relation
+
+        self.func = func
+        self.return_type = return_type
+        self.eval_type = eval_type
+        self.runners = {eval_type: make_relation(func, eval_type, return_type)}
+
+    def runner(self, eval_type: int) -> Any:
+        """The runner of a task run as ``eval_type``: the UDF's own kind, or the window kind of a
+        grouped-aggregate UDF."""
+        from krishiv._udf.relations import WINDOW_OF, make_relation
+
+        if eval_type not in self.runners:
+            if WINDOW_OF.get(self.eval_type) != eval_type:
+                raise _ProtocolError(f"a task of eval type {eval_type} for a UDF of eval type {self.eval_type}")
+            self.runners[eval_type] = make_relation(self.func, eval_type, self.return_type)
+        return self.runners[eval_type]
 
 
 #: The most rows of an aggregate's values kept before they are sent, when the task gives no ``max_rows``
@@ -236,7 +254,7 @@ class _Worker:
     def load_udf(self, msg: dict[str, Any], fd: int) -> None:
         from pyspark import cloudpickle  # ty: ignore[unresolved-import]  # pool workers only
 
-        from krishiv._udf.relations import AGGREGATE_EVAL_TYPES, RELATION_EVAL_TYPES, make_relation
+        from krishiv._udf.relations import RELATION_EVAL_TYPES
         from krishiv._udf.worker import make_wrapper
 
         _check_python_version(str(msg["python_ver"]))
@@ -244,8 +262,7 @@ class _Worker:
         func, return_type = cloudpickle.loads(command)
         eval_type = int(msg["eval_type"])
         if eval_type in RELATION_EVAL_TYPES:
-            runner = make_relation(func, eval_type, return_type)
-            self.udfs[int(msg["id"])] = _Relation(runner, eval_type in AGGREGATE_EVAL_TYPES)
+            self.udfs[int(msg["id"])] = _Relation(func, return_type, eval_type)
         else:
             self.udfs[int(msg["id"])] = make_wrapper(func, eval_type, return_type)
 
@@ -267,14 +284,17 @@ class _Worker:
         """Runs one relation task to its ``done`` (see the module doc); a UDF error propagates, with the
         worker still in step (it sends nothing until the server's next message)."""
         from krishiv._udf._host import set_runner_conf
+        from krishiv._udf.relations import AGGREGATE_EVAL_TYPES
 
         relation = self.udfs[int(msg["udf"])]
         if not isinstance(relation, _Relation):
             raise _ProtocolError("a task for a scalar UDF")
+        eval_type = int(msg.get("eval_type") or relation.eval_type)
+        runner = relation.runner(eval_type)
         set_runner_conf(dict(msg.get("conf") or {}))
-        results = _Results(self.sock, int(msg.get("max_rows") or 0), relation.aggregate)
+        results = _Results(self.sock, int(msg.get("max_rows") or 0), eval_type in AGGREGATE_EVAL_TYPES)
         frames = _Frames(self.sock, results)
-        for batch in relation.runner(frames, int(msg["key_count"]), int(msg["arity"])):
+        for batch in runner(frames, int(msg["key_count"]), int(msg["arity"])):
             results.add(batch)
         results.flush()
         _send(self.sock, {"t": "done"})
@@ -334,19 +354,36 @@ class _Worker:
                 os.close(fd)
 
 
-def main(sock: socket.socket | None = None) -> None:
+def _add_paths(paths: list[str]) -> None:
+    """The session's artifact paths on ``sys.path``: each at index 1, in order, once (``worker_util.py:59-65``
+    ``add_path`` and ``setup_spark_files``, v4.2.0), after the worker's own modules are imported, as Spark adds
+    them after its worker started."""
+    import importlib
+
+    changed = False
+    for path in paths:
+        if path not in sys.path:
+            sys.path.insert(1, path)
+            changed = True
+    if changed:
+        importlib.invalidate_caches()
+
+
+def main(sock: socket.socket | None = None, paths: list[str] | None = None) -> None:
     """The worker's entry: greets the server over ``sock`` (the worker's stdin when not given), then serves
-    ``udf`` and ``batch`` messages until EOF."""
+    ``udf`` and ``batch`` messages until EOF. ``paths`` are the session's artifact paths."""
     if sock is None:
         sock = socket.socket(fileno=0)
     try:
         import pyarrow
         import pyspark  # ty: ignore[unresolved-import]  # pool workers only
 
+        import krishiv._udf.relations  # fail at start, not at the first task
         import krishiv._udf.worker  # noqa: F401  # fail at start, not at the first batch
     except Exception as e:  # a missing package is reported to the server, then the worker exits
         _error(sock, "python", _traceback(e))
         sys.exit(1)
+    _add_paths(list(paths or []))
     _send(
         sock,
         {

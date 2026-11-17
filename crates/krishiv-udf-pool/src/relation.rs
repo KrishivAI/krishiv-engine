@@ -44,6 +44,7 @@ use krishiv_exec::python_relation::{
 };
 use krishiv_types::{StructField, StructType};
 
+use crate::artifacts::ArtifactSet;
 use crate::calls::{SlotTake, TaskSlot, TaskTicket};
 use crate::pool::{Owner, Pool};
 use crate::runtime::{CallState, CancelOnDrop, Registered, with_worker};
@@ -51,9 +52,18 @@ use crate::validate::{SchemaCheck, VALIDATE_SCHEMA};
 use crate::worker::{TaskEvent, Worker};
 
 /// The eval types of the relation kinds the worker runs (`relations.py`): map 205, 207; grouped map 201, 209,
-/// 216, 215; cogrouped map 206, 210; grouped aggregate 202, 217, 252, 254. The window kinds and UDTFs are
-/// PR-26c-3's.
-const KINDS: [i32; 12] = [205, 207, 201, 209, 216, 215, 206, 210, 202, 217, 252, 254];
+/// 216, 215; cogrouped map 206, 210; grouped aggregate 202, 217, 252, 254; window aggregate 203, 253; scalar
+/// iterator 204, 251. UDTFs are PR-26c-3's part B.
+const KINDS: [i32; 16] = [
+    205, 207, 201, 209, 216, 215, 206, 210, 202, 217, 252, 254, 203, 253, 204, 251,
+];
+
+/// Whether a UDF registered with eval type `registered` runs as `called`: its own kind, or a grouped-aggregate
+/// UDF over a window, which Spark runs as the window kind (`ArrowWindowPythonExec`, v4.2.0: 202 as 203, 252 as
+/// 253; the client registers the grouped-aggregate code).
+fn runs_as(registered: i32, called: i32) -> bool {
+    registered == called || matches!((registered, called), (202, 203) | (252, 253))
+}
 
 /// The relation slots of one owner on one pool: every call site of a session shares one, so a driver's lanes
 /// take theirs together.
@@ -111,6 +121,7 @@ pub(crate) fn prepare(
     registered: Registered,
     spec: &RelationCallSpec,
     session: &BTreeMap<String, String>,
+    artifacts: Arc<ArtifactSet>,
 ) -> Result<Arc<dyn PreparedRelationUdf>, KrishivError> {
     if !KINDS.contains(&spec.eval_type.code()) {
         // The executor called a kind this runtime does not run as a relation: its own inconsistency.
@@ -130,6 +141,7 @@ pub(crate) fn prepare(
         &registered,
         spec.eval_type.code(),
         "a relation",
+        runs_as,
     )?;
     let mut conf = session.clone();
     conf.extend(
@@ -155,7 +167,9 @@ pub(crate) fn prepare(
         owner,
         slots,
         registered,
+        artifacts,
         site: Arc::new(Site {
+            eval_type: spec.eval_type.code(),
             key_count: spec.key_count,
             arity: spec.arity,
             max_rows: spec.conf.max_records_per_batch,
@@ -168,6 +182,8 @@ pub(crate) fn prepare(
 
 /// What every task of one call site sends its worker.
 struct Site {
+    /// The kind the task runs (a window kind for a grouped-aggregate UDF over a window).
+    eval_type: i32,
     key_count: usize,
     arity: usize,
     max_rows: usize,
@@ -182,6 +198,7 @@ struct PreparedRelation {
     owner: Owner,
     slots: Arc<PoolSlots>,
     registered: Registered,
+    artifacts: Arc<ArtifactSet>,
     site: Arc<Site>,
 }
 
@@ -248,13 +265,15 @@ impl PreparedRelationUdf for PreparedRelation {
         let pool = self.pool.clone();
         let owner = self.owner.clone();
         let registered = self.registered.clone();
+        let artifacts = Arc::clone(&self.artifacts);
         let site = Arc::clone(&self.site);
         self.pool.submit_task(
             &self.owner,
             Box::new(move || {
-                let outcome = with_worker(&pool, &owner, &registered, &call, |worker| {
-                    drive(worker, &pool, &registered, &site, &mut ending)
-                });
+                let outcome =
+                    with_worker(&pool, &owner, &registered, &artifacts, &call, |worker| {
+                        drive(worker, &pool, &registered, &site, &mut ending)
+                    });
                 // The worker is given back: the slot frees before the operator can see the results end, so a
                 // scalar call the plan makes next never finds it still held (review R2-5).
                 drop(slot);
@@ -312,6 +331,7 @@ fn drive(
     let max_result = pool.max_result_bytes();
     worker.start_task(
         registered.id,
+        site.eval_type,
         site.key_count,
         site.arity,
         site.max_rows,

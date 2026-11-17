@@ -214,8 +214,67 @@ pub(super) fn decimal_unscaled(v: f64, scale: i8) -> i128 {
     }
 }
 
+/// The unscaled decimal of Spark's `HistogramNumeric.eval` for a double:
+/// `BigDecimal.decimal(x, MathContext(precision))` (the shortest text rounded
+/// half up to `precision` significant digits) set to `scale` half up.
+pub(crate) fn decimal_unscaled_in(v: f64, precision: u32, scale: i8) -> i128 {
+    if !v.is_finite() {
+        return decimal_unscaled(v, scale);
+    }
+    let text = format!("{:e}", v.abs());
+    let (mantissa, exp) = text.split_once('e').unwrap_or((&text, "0"));
+    let mut exp: i32 = exp.parse().unwrap_or(0);
+    let mut digits: Vec<u8> = mantissa
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .map(|b| b - b'0')
+        .collect();
+    let p = precision.max(1) as usize;
+    if digits.len() > p {
+        let up = digits[p] >= 5;
+        digits.truncate(p);
+        if up {
+            let mut i = p;
+            loop {
+                if i == 0 {
+                    digits.insert(0, 1);
+                    digits.truncate(p);
+                    exp += 1;
+                    break;
+                }
+                i -= 1;
+                if digits[i] == 9 {
+                    digits[i] = 0;
+                } else {
+                    digits[i] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    let n: i128 = digits.iter().fold(0_i128, |a, &d| a * 10 + i128::from(d));
+    let frac = i32::try_from(digits.len()).unwrap_or(0) - 1;
+    let shift = exp - frac + i32::from(scale);
+    let magnitude = if shift >= 0 {
+        10_i128
+            .checked_pow(u32::try_from(shift).unwrap_or(u32::MAX))
+            .and_then(|f| n.checked_mul(f))
+            .unwrap_or(i128::MAX)
+    } else {
+        match 10_i128.checked_pow(u32::try_from(-shift).unwrap_or(u32::MAX)) {
+            Some(d) => n / d + i128::from(n % d >= d - d / 2),
+            None => 0,
+        }
+    };
+    if v.is_sign_negative() {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
 /// Builds an array of type `t` from `i128` values (inverse of `int_like`).
-pub(super) fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayRef> {
+pub(crate) fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayRef> {
     fn prim<T>(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayRef>
     where
         T: arrow_array::ArrowPrimitiveType,

@@ -5,6 +5,7 @@
 //! the executor and the session need no change to call pool workers.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
@@ -18,8 +19,10 @@ use krishiv_common::error::{
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
+use krishiv_plan::function::PythonEvalType;
 use std::os::fd::OwnedFd;
 
+use crate::artifacts::ArtifactSet;
 use crate::pool::{CallWatch, Owner, Pool};
 use crate::relation::PoolSlots;
 use crate::worker::{PythonPayload, Worker, kill_via};
@@ -42,6 +45,8 @@ pub struct SessionUdfs {
     /// When set, read at each `prepare` instead of `conf`.
     conf_source: Option<ConfSource>,
     payloads: RwLock<HashMap<(String, u32), Registered>>,
+    /// The session's pyfiles and archives, read when a call is prepared.
+    artifacts: RwLock<Arc<ArtifactSet>>,
 }
 
 #[derive(Clone)]
@@ -68,7 +73,32 @@ impl SessionUdfs {
             conf: RwLock::new(Arc::new(BTreeMap::new())),
             conf_source: None,
             payloads: RwLock::new(HashMap::new()),
+            artifacts: RwLock::new(Arc::new(ArtifactSet::empty())),
         }
+    }
+
+    /// Sets the session's Python artifacts that calls prepared from now on see: `pyfiles` (`.py` files, and
+    /// zips or eggs) on the workers' `sys.path`, and `archives` (zip, jar, tar, tar.gz, tgz) unpacked and on
+    /// it too (`artifacts.rs`). The server names the paths: each must be an absolute path of a regular file
+    /// with no symbolic link at or above it, or the calls fail with `INVALID_ARTIFACT_PATH`; an archive the
+    /// pool cannot unpack within its limit fails them with `KRISHIV_PYTHON_ARTIFACT_REFUSED`. Workers started
+    /// for the previous set are not reused for the new one.
+    pub fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+        *self
+            .artifacts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Arc::new(ArtifactSet::new(pyfiles, archives));
+    }
+
+    /// The artifact set calls prepared now see.
+    fn artifacts(&self) -> Arc<ArtifactSet> {
+        Arc::clone(
+            &self
+                .artifacts
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// Registers `payload` as `(name, version)`; plans name UDFs by both, so an older version stays callable
@@ -126,24 +156,38 @@ impl SessionUdfs {
     }
 }
 
-/// The eval types the pool's workers run as scalar calls (`pool_worker.py`): Spark's `SQL_BATCHED_UDF`, its
-/// Arrow-optimized form, the pandas and the Arrow scalar UDF. A scalar call site accepts a payload of any of
-/// them: the worker runs the payload's own (over Connect a plain `@udf` is registered as 100 and planned as
-/// the Arrow-optimized 101, `krishiv-connect`'s `translate/udf.rs`; review R7c-1).
-const SCALAR_EVAL_TYPES: [i32; 4] = [100, 101, 200, 250];
+/// Spark's `SQL_BATCHED_UDF` (100), which a plan never names (`PythonEvalType` has no such kind): the worker
+/// runs it on the Arrow-batched path (`worker.py` `make_wrapper`).
+const SQL_BATCHED_UDF: i32 = 100;
+
+/// Whether the pool's workers run a payload of eval type `code` as a scalar call (`pool_worker.py`): Spark's
+/// `SQL_BATCHED_UDF`, or a [`PythonEvalType`] that [`PythonEvalType::is_scalar`] (the Arrow-optimized `@udf`,
+/// the pandas and the Arrow scalar UDF; review N7d-1: derived, so a new scalar kind cannot drift).
+///
+/// A scalar call site accepts a payload of any of them **on purpose** (review N7d-2): the worker runs the
+/// payload's own eval type, not the call's. Over Connect a plain `@udf` is registered as 100 and planned as the
+/// Arrow-optimized 101 (`krishiv-connect`'s `translate/udf.rs`; review R7c-1), and a payload registered as a
+/// pandas UDF (200) and called as 101 runs the pandas wrapper, as it did before the check existed. Do not
+/// tighten this to the call's exact code.
+fn runs_as_scalar(code: i32) -> bool {
+    code == SQL_BATCHED_UDF
+        || PythonEvalType::from_code(code).is_some_and(PythonEvalType::is_scalar)
+}
 
 /// The payload store finds a UDF by `(name, version)` only, so a plan's call and the registration may disagree
 /// on its kind (a scalar UDF called as a relation, or the reverse): `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`,
 /// before any worker starts, rather than a worker running a payload as the wrong kind. A relation call needs
-/// its exact eval type (each relation kind's runner differs).
+/// the eval type its runner runs (each relation kind's runner differs): `runs(registered, called)` says which
+/// payload codes fit, the exact code but for a grouped aggregate over a window (`relation.rs` `runs_as`).
 pub(crate) fn check_eval_type(
     name: &str,
     version: u32,
     registered: &Registered,
     eval_type: i32,
     called: &str,
+    runs: fn(i32, i32) -> bool,
 ) -> Result<(), KrishivError> {
-    if registered.payload.eval_type == eval_type {
+    if runs(registered.payload.eval_type, eval_type) {
         return Ok(());
     }
     Err(eval_type_mismatch(
@@ -151,14 +195,14 @@ pub(crate) fn check_eval_type(
     ))
 }
 
-/// As [`check_eval_type`] for a scalar call: any scalar payload ([`SCALAR_EVAL_TYPES`]) fits.
+/// As [`check_eval_type`] for a scalar call: any scalar payload ([`runs_as_scalar`]) fits.
 fn check_scalar_eval_type(
     name: &str,
     version: u32,
     registered: &Registered,
     eval_type: i32,
 ) -> Result<(), KrishivError> {
-    if SCALAR_EVAL_TYPES.contains(&registered.payload.eval_type) {
+    if runs_as_scalar(registered.payload.eval_type) {
         return Ok(());
     }
     Err(eval_type_mismatch(
@@ -196,6 +240,7 @@ impl UdfRuntime for SessionUdfs {
             registered,
             return_type: spec.return_arrow.clone(),
             conf: self.runner_conf(),
+            artifacts: self.artifacts(),
         }))
     }
 
@@ -212,6 +257,7 @@ impl UdfRuntime for SessionUdfs {
             registered,
             spec,
             &session,
+            self.artifacts(),
         )
     }
 }
@@ -222,6 +268,7 @@ struct Prepared {
     registered: Registered,
     return_type: DataType,
     conf: Arc<BTreeMap<String, String>>,
+    artifacts: Arc<ArtifactSet>,
 }
 
 /// A call's link to its future: dropping the future (the query was cancelled or failed) kills the worker
@@ -286,6 +333,7 @@ impl PreparedUdf for Prepared {
         let registered = self.registered.clone();
         let return_type = self.return_type.clone();
         let conf = Arc::clone(&self.conf);
+        let artifacts = Arc::clone(&self.artifacts);
         // Each call blocks on its worker, so it runs on one of the pool's call threads, never on the caller
         // (a compute worker). Those threads are bounded by the worker caps (`crate::calls`).
         let submitted = self.pool.submit(
@@ -301,6 +349,7 @@ impl PreparedUdf for Prepared {
                         &pool,
                         &owner,
                         &registered,
+                        &artifacts,
                         &args,
                         &conf,
                         &return_type,
@@ -327,33 +376,40 @@ impl PreparedUdf for Prepared {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one scalar call's parts, moved onto its call thread"
+)]
 fn run(
     pool: &Pool,
     owner: &Owner,
     registered: &Registered,
+    artifacts: &ArtifactSet,
     args: &RecordBatch,
     conf: &BTreeMap<String, String>,
     return_type: &DataType,
     call: &Mutex<CallState>,
 ) -> Result<ArrayRef, KrishivError> {
     let max_result = pool.max_result_bytes();
-    with_worker(pool, owner, registered, call, |worker| {
+    with_worker(pool, owner, registered, artifacts, call, |worker| {
         worker.run_batch(registered.id, args, conf, return_type, max_result)
     })
 }
 
-/// Runs `body` on a worker of `owner` that has `registered` loaded, for the call `call`: a cancel kills the
+/// Runs `body` on a worker of `owner` that has `registered` loaded and reads `artifacts`, for the call `call`: a
+/// cancel kills the
 /// worker while it starts or while `body` runs, and a worker killed so is never given back (the call then
 /// ends with `OPERATION_CANCELED`). The worker is given back (or stopped) before this returns.
 pub(crate) fn with_worker<T>(
     pool: &Pool,
     owner: &Owner,
     registered: &Registered,
+    artifacts: &ArtifactSet,
     call: &Mutex<CallState>,
     body: impl FnOnce(&mut Worker) -> Result<T, KrishivError>,
 ) -> Result<T, KrishivError> {
     let lock = || call.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut lease = match pool.checkout(owner, &registered.payload.python_ver, call) {
+    let mut lease = match pool.checkout(owner, &registered.payload.python_ver, artifacts, call) {
         Ok(lease) => lease,
         Err(e) => {
             // A start that failed (or was killed by the cancel) left its pidfd behind; that worker is reaped.
@@ -399,7 +455,6 @@ mod tests {
     use arrow_schema::{Field, Schema};
     use krishiv_common::error::ErrorClass;
     use krishiv_exec::python_relation::RunnerConf;
-    use krishiv_plan::function::PythonEvalType;
     use krishiv_types::DataType as SparkType;
 
     use super::*;
@@ -518,5 +573,33 @@ mod tests {
             "{e}"
         );
         assert!(e.message().contains("registered with eval type 201"), "{e}");
+    }
+
+    /// The scalar set is exactly what `pool_worker.py`'s `make_wrapper` runs (`worker.py` `SQL_BATCHED_UDF`,
+    /// `SQL_ARROW_BATCHED_UDF`, `SQL_SCALAR_PANDAS_UDF`, `SQL_SCALAR_ARROW_UDF`): a new scalar kind in
+    /// `PythonEvalType` needs a wrapper there too (review N7d-1).
+    #[test]
+    fn the_scalar_eval_types_are_the_worker_s_wrappers() {
+        let worker = include_str!("../worker/krishiv/_udf/worker.py");
+        let mut wrapped: Vec<i32> = [
+            "SQL_BATCHED_UDF",
+            "SQL_ARROW_BATCHED_UDF",
+            "SQL_SCALAR_PANDAS_UDF",
+            "SQL_SCALAR_ARROW_UDF",
+        ]
+        .into_iter()
+        .map(|name| {
+            let prefix = format!("{name} = ");
+            worker
+                .lines()
+                .find_map(|l| l.strip_prefix(prefix.as_str()))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or_else(|| panic!("worker.py defines {name}"))
+        })
+        .collect();
+        wrapped.sort_unstable();
+        let derived: Vec<i32> = (0..400).filter(|c| runs_as_scalar(*c)).collect();
+        assert_eq!(derived, wrapped);
+        assert_eq!(derived, [100, 101, 200, 250]);
     }
 }

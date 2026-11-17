@@ -210,6 +210,20 @@ fn insufficient_permissions_is_permission_denied() {
     assert_eq!(info.metadata["sqlState"], "42501");
 }
 
+/// P3-T061 §4.2 rule 1: a refused act-as request is `PERMISSION_DENIED` too.
+#[test]
+fn impersonation_denied_is_permission_denied() {
+    let e: KrishivError = krishiv_common::error::KrishivAuthImpersonationDenied {}.into();
+    let status = status_of(&e);
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let (_, info) = details(&status);
+    assert_eq!(
+        info.metadata["errorClass"],
+        "KRISHIV_AUTH_IMPERSONATION_DENIED"
+    );
+    assert_eq!(info.metadata["sqlState"], "42501");
+}
+
 #[test]
 fn a_python_udf_error_is_sparks_python_exception_and_a_crash_a_spark_exception() {
     use krishiv_common::error::{KrishivPythonWorkerExited, PythonException};
