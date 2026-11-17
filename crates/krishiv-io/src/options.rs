@@ -235,7 +235,22 @@ impl OptionSchema {
         let mut file_source = FileSourceFlags::default();
         for (key, value) in user {
             if let Some(spec) = self.spec(key) {
-                values.insert(spec.name, self.typed(spec, key, value)?);
+                // A format that declares a framework flag itself (CSV and
+                // JSON declare `ignoreCorruptFiles` for inference) reads it
+                // as the framework does and still gives the scan its
+                // per-read value.
+                let typed = if key.eq_ignore_ascii_case("ignoreCorruptFiles") {
+                    let b = self.flag(key, value)?;
+                    file_source.ignore_corrupt_files = Some(b);
+                    Value::Bool(b)
+                } else if key.eq_ignore_ascii_case("ignoreMissingFiles") {
+                    let b = self.flag(key, value)?;
+                    file_source.ignore_missing_files = Some(b);
+                    Value::Bool(b)
+                } else {
+                    self.typed(spec, key, value)?
+                };
+                values.insert(spec.name, typed);
             } else if is_store_option(key) {
                 // Object-store configuration (`fs.s3a.*`, `fs.gs.*`,
                 // `fs.azure.*`): resolved by the store layer from the same
@@ -379,12 +394,17 @@ impl OptionSchema {
         }
     }
 
-    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`).
+    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`),
+    /// read as Spark's `FileSourceOptions` does (Scala's `toBoolean`): any
+    /// case, but not trimmed, so `" true "` is refused (Spark 4.2.0:
+    /// `IllegalArgumentException: For input string: " true "`). The SQL conf
+    /// of the same name is trimmed, as Spark's `booleanConf` is; it reaches a
+    /// read already typed by the config registry.
     fn flag(&self, key: &str, value: &OptionValue) -> Result<bool> {
         let Some(raw) = value.as_plain() else {
             return Err(self.invalid(key, "<secret>", "a secret is not allowed here"));
         };
-        match raw.trim() {
+        match raw {
             s if s.eq_ignore_ascii_case("true") => Ok(true),
             s if s.eq_ignore_ascii_case("false") => Ok(false),
             _ => Err(self.invalid(key, raw, "expected `true` or `false`")),

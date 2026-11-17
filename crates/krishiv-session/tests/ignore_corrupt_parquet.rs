@@ -142,7 +142,11 @@ fn read(s: &Session, dir: &Path) -> Result<(i64, i64), String> {
             b[0].column(0).as_primitive::<Int64Type>().value(0),
             b[0].column(1).as_primitive::<Int64Type>().value(0),
         )),
-        Err(e) => Err(e.error_class().name().to_owned()),
+        // The class, then its cause's (Spark prints the cause too).
+        Err(e) => Err(match e.cause() {
+            Some(c) => format!("{} <- {}", e.error_class().name(), c.error_class().name()),
+            None => e.error_class().name().to_owned(),
+        }),
     }
 }
 
@@ -169,7 +173,9 @@ fn without_the_key_a_corrupt_footer_fails_as_in_spark() {
         &[("a.parquet", half), ("b.parquet", &good)],
     );
     let footer = Err("FAILED_READ_FILE.CANNOT_READ_FILE_FOOTER".to_owned());
-    let no_hint = Err("FAILED_READ_FILE.NO_HINT".to_owned());
+    // The scan's error carries the footer error as its cause.
+    let no_hint =
+        Err("FAILED_READ_FILE.NO_HINT <- FAILED_READ_FILE.CANNOT_READ_FILE_FOOTER".to_owned());
     for merge in [false, true] {
         block_on(s.sql(&format!("SET spark.sql.parquet.mergeSchema = {merge}"))).unwrap();
         let want = if merge {
@@ -324,6 +330,48 @@ fn a_broken_gzip_csv_keeps_the_lines_decoded_before_the_cut() {
                     }
                 }
             }
+        }
+    }
+}
+
+/// The read's own `ignoreCorruptFiles` option wins over the SQL conf (Spark's
+/// `FileSourceOptions`), in inference and in the scan.
+#[test]
+fn the_read_option_ignore_corrupt_files_wins_over_the_conf() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/spark-4.2.0/ignore-corrupt-csv");
+    let good = std::fs::read(fixtures.join("good.csv.gz")).unwrap();
+    let cut = std::fs::read(fixtures.join("truncated.csv.gz")).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = layout(
+        tmp.path(),
+        "opt",
+        &[("a.csv.gz", good.as_slice()), ("b.csv.gz", cut.as_slice())],
+    );
+    let s = Session::new().unwrap();
+    for (conf, option, rows) in [("false", "true", Some(1474)), ("true", "false", None)] {
+        block_on(s.sql(&format!("SET spark.sql.files.ignoreCorruptFiles = {conf}"))).unwrap();
+        let df = s
+            .read()
+            .format("csv")
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .option("ignoreCorruptFiles", option)
+            .load([dir.to_str().unwrap()]);
+        let got = block_on(async {
+            df.create_or_replace_temp_view("o").await?;
+            s.sql("SELECT count(*) FROM o").await?.collect().await
+        });
+        let got = got
+            .map(|b| b[0].column(0).as_primitive::<Int64Type>().value(0))
+            .map_err(|e| e.error_class().name().to_owned());
+        match rows {
+            Some(n) => assert_eq!(got, Ok(n), "conf={conf} option={option}"),
+            None => assert_eq!(
+                got,
+                Err("FAILED_READ_FILE.NO_HINT".to_owned()),
+                "conf={conf} option={option}"
+            ),
         }
     }
 }

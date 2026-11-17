@@ -201,3 +201,47 @@ fn an_inference_error_names_the_broken_file() {
         );
     }
 }
+
+#[test]
+fn a_reads_ignore_corrupt_files_option_reaches_the_scan_of_csv_and_json() {
+    // CSV and JSON declare `ignoreCorruptFiles` themselves (inference reads
+    // it); the scan still takes the read's value over the session conf.
+    let mut on = Config::new();
+    on.set("spark.sql.files.ignoreCorruptFiles", "true")
+        .expect("set");
+    let user = |v: Option<&str>| {
+        v.map(|v| {
+            (
+                "ignoreCorruptFiles".to_owned(),
+                OptionValue::from_user("ignoreCorruptFiles", v.to_owned()),
+            )
+        })
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+    };
+    for format in [&CsvFormat as &dyn FileFormat, &crate::json::JsonFormat] {
+        for (given, session, want) in [
+            (Some("false"), &on, false),
+            (Some("true"), &Config::new(), true),
+            (None, &on, true),
+            (None, &Config::new(), false),
+        ] {
+            let o = format
+                .options()
+                .parse(&user(given), session)
+                .expect("options")
+                .0;
+            let s = crate::scan::ScanOptions::for_read(session, &o);
+            assert_eq!(s.ignore_corrupt_files, want, "{given:?}");
+        }
+        // Read as the framework reads it: not trimmed (Spark 4.2.0).
+        let e = format
+            .options()
+            .parse(&user(Some(" true ")), &Config::new())
+            .expect_err("padded");
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
+        );
+    }
+}
