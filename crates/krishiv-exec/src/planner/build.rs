@@ -113,6 +113,7 @@ fn plan_once(
         .map(|(key, _)| key.clone())
         .collect();
     let mut shared = std::mem::take(&mut planner.shared);
+    planner.shared_reads.strip_dead(&mut shared);
     let fuse = planner.fuse_probe_select();
     attach_runtime_filters(
         &mut planner.scan_filters,
@@ -319,6 +320,8 @@ pub(crate) struct Planner<'a> {
     /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
     /// order.
     pub(super) observers: u32,
+    /// Which shared plans each read of one is under (live, or a `LIMIT 0`'s).
+    shared_reads: super::observe::SharedReads,
 }
 
 impl<'a> Planner<'a> {
@@ -356,6 +359,7 @@ impl<'a> Planner<'a> {
             unseeded_samples: 0,
             unobserved: 0,
             observers: 0,
+            shared_reads: super::observe::SharedReads::default(),
         }
     }
 
@@ -782,6 +786,9 @@ impl<'a> Planner<'a> {
     /// A reference read from the definition's shared plan.
     fn shared_read(&mut self, r: &krishiv_plan::CteRef) -> Result<Planned> {
         let (id, schema) = self.shared_plan(&r.source, &r.name)?;
+        // Read live unless under a `LIMIT 0` (Spark prunes that read, so nothing it alone reads
+        // is observed).
+        self.shared_reads.read(id, self.unobserved == 0);
         let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
         let explain = ExplainNode::leaf(
             "SharedRead",
@@ -823,7 +830,15 @@ impl<'a> Planner<'a> {
         let output = def
             .resolved_output()
             .ok_or_else(|| internal("a CTE without output"))?;
-        let planned = self.plan(&def)?;
+        // Planned once, with its observed nodes, whichever reference reads it first: a read under
+        // a `LIMIT 0` is not a second copy of the body (the body would run twice). Where only
+        // such reads reach it, the nodes are stripped afterwards (`SharedReads::strip_dead`).
+        let outer = std::mem::take(&mut self.unobserved);
+        self.shared_reads.begin();
+        let planned = self.plan(&def);
+        self.unobserved = outer;
+        let reads = self.shared_reads.finish();
+        let planned = planned?;
         // Exactly the definition's columns, in its order.
         let planned = select(planned, &output, "CteRef")?;
         let ordered = ends_in_sort(&planned.node);
@@ -838,11 +853,8 @@ impl<'a> Planner<'a> {
             deterministic: krishiv_optimizer::plan_is_deterministic(&def),
             ordered,
         });
-        // Planned under a `LIMIT 0`, the definition lost its observed nodes: that copy is the
-        // zero-row reference's own, and a live reference plans (and shares) one that observes.
-        if self.unobserved == 0 {
-            self.shared_ids.insert(source.to_vec(), id);
-        }
+        self.shared_reads.record(id, reads);
+        self.shared_ids.insert(source.to_vec(), id);
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
     }
