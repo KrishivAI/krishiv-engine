@@ -64,11 +64,17 @@ pub(crate) struct DeltaReads {
     /// Scans do not use it: their engine is bound to the running query's cancellation
     /// (`DeltaEngine::for_query`). Reads built inside an action are also cancelled with it
     /// (`action::cancelled`), so an interrupt during analysis ends their kernel calls even while
-    /// a frame still holds the reads. Limits: the watcher task starts with the reads, even
-    /// when the query opens no Delta table; it watches only the innermost action that built
-    /// them, so reads a cached analysis hands to a later action still follow the first one,
-    /// and cancelling only an outer action reaches them through the dropped work alone.
+    /// a frame still holds the reads. The action is subscribed when the reads are built (in its
+    /// scope), but the watcher task starts only at the first planning kernel call
+    /// ([`engine`](Self::engine)), so a query that opens no Delta table, or a caller that only
+    /// reads the config, spawns nothing. Limits: it watches only the innermost action that
+    /// built them, so reads a cached analysis hands to a later action still follow the first
+    /// one, and cancelling only an outer action reaches them through the dropped work alone.
     cancel: Arc<CancellationToken>,
+    /// The action's interrupt watcher, not started yet (`None` outside an action, or once
+    /// started): it cancels [`cancel`](Self::cancel) when the action is interrupted and ends
+    /// when the token fires, so it never outlives the reads (their drop cancels the token).
+    watcher: Mutex<Option<futures::future::BoxFuture<'static, ()>>>,
     opened: Mutex<Vec<(String, Arc<DeltaTable>)>>,
 }
 
@@ -89,17 +95,17 @@ impl Drop for DeltaReads {
 impl DeltaReads {
     pub(crate) fn new(inputs: DeltaInputs) -> Self {
         let cancel = Arc::new(CancellationToken::new());
-        if crate::action::in_action() {
-            // Subscribed here, in the action's scope; the task ends when either fires, so it
-            // never outlives the reads (their drop cancels the token).
+        // Subscribed here, in the action's scope; spawned by the first `engine` call.
+        let watcher = crate::action::in_action().then(|| {
             let interrupted = crate::action::cancelled();
             let token = Arc::clone(&cancel);
-            drop(inputs.runtime.spawn(async move {
+            let watch: futures::future::BoxFuture<'static, ()> = Box::pin(async move {
                 let own = token.cancelled();
                 futures::future::select(std::pin::pin!(interrupted), std::pin::pin!(own)).await;
                 token.cancel();
-            }));
-        }
+            });
+            watch
+        });
         Self {
             io: inputs.io,
             paths: inputs.paths,
@@ -108,8 +114,40 @@ impl DeltaReads {
             cache: inputs.cache,
             credential: inputs.credential,
             cancel,
+            watcher: Mutex::new(watcher),
             opened: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Starts the action's interrupt watcher, once (nothing outside an action). It is polled
+    /// once here first, so an action interrupted before this call has cancelled the token before
+    /// the caller's first kernel call, not a scheduling round-trip later.
+    fn start_watcher(&self) {
+        let watch = self
+            .watcher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(mut watch) = watch
+            && futures::FutureExt::now_or_never(&mut watch).is_none()
+        {
+            drop(self.runtime.spawn(watch));
+        }
+    }
+
+    /// Whether the planning kernel calls' cancellation has fired (tests).
+    #[cfg(test)]
+    pub(super) fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Whether the interrupt watcher is still waiting to start (tests).
+    #[cfg(test)]
+    pub(super) fn watcher_pending(&self) -> bool {
+        self.watcher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(String, Arc<DeltaTable>)>> {
@@ -160,6 +198,7 @@ impl DeltaReads {
     }
 
     pub(super) fn engine(&self, store: StoreId, root: Url) -> Result<DeltaEngine, KrishivError> {
+        self.start_watcher();
         DeltaEngine::new(
             self.io.clone(),
             store,
