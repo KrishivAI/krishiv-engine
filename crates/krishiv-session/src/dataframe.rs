@@ -34,6 +34,7 @@ mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod count;
 mod metadata;
 mod traced;
 
@@ -1331,60 +1332,6 @@ impl DataFrame {
             out.push(batch?);
         }
         Ok(out)
-    }
-
-    /// The number of result rows.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![3, 1, 2]))]).unwrap();
-    /// # s.register_batches("t", schema, vec![batch])?;
-    /// assert_eq!(futures::executor::block_on(s.table("t").count())?, 3);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// As [`Self::collect`].
-    pub async fn count(&self) -> Result<u64, KrishivError> {
-        // As Spark's `Dataset.count` (`groupBy().count()`): an aggregate over the frame, so column pruning
-        // leaves the scan reading no column of its own (a count of a JSON/CSV read of only the corrupt-record
-        // column is a count, not Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
-        let mut frame = self.agg([crate::functions::count_star()]);
-        // Still the frame's statement: its text (a run-time error's SQL context, `system.queries`), class,
-        // row and span. The count frame is analyzed in the action, as any frame is.
-        frame.trace.clone_from(&self.trace);
-        frame.statement = self
-            .analysis
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|a| Arc::clone(&a.env))
-            .or_else(|| self.statement.clone());
-        let mut stream = frame.execute_stream().await?;
-        let mut rows = 0_u64;
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            if batch.num_rows() == 0 {
-                continue;
-            }
-            let counted = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow_array::Int64Array>()
-                .map(|a| a.value(0));
-            let counted = counted.ok_or_else(|| {
-                KrishivError::from(krishiv_common::error::InternalError {
-                    message: "count(*) did not give a bigint".to_owned(),
-                })
-            })?;
-            rows += u64::try_from(counted).map_err(|_| {
-                KrishivError::from(krishiv_common::error::InternalError {
-                    message: format!("count(*) gave a negative count {counted}"),
-                })
-            })?;
-        }
-        Ok(rows)
     }
 
     /// Caches this frame's rows (PySpark's `cache`, at
