@@ -340,7 +340,8 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   it. Spark completes an observation only when an execution of the query ends (Spark 4.2:
   `SQLExecution.withNewExecutionId0` calls `ObservationManager.tryComplete` as it finishes; 3.5 to 4.1:
   the session's `QueryExecutionListener`, on success and failure alike), with the metrics it collected,
-  or (4.1, 4.2) an empty row when it has none. An action that fails before an execution starts leaves
+  or (4.1, 4.2) an empty row when it has none (4.2 also completes it with a failure when collecting the
+  metrics fails: `Try(qe.observedMetrics)`), never with the action's own error. An action that fails before an execution starts leaves
   it pending, and a later action can still complete it. In the engine the first action, failed or
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.

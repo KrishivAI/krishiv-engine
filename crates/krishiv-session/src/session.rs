@@ -1750,7 +1750,8 @@ impl Session {
     ///
     /// Every run completes the frame's observations: a delivered stream as it ends, a run that
     /// fails before it has one (closed session, refused admission, failed submit) with its
-    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
+    /// error, and a run dropped during the setup with the reason it was dropped for (the action's
+    /// cancellation, a panic, else the caller giving up: `OPERATION_CANCELED`).
     async fn run_on_query_logged(
         &self,
         physical: &PhysicalPlan,

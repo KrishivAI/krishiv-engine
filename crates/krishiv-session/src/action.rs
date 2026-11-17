@@ -392,8 +392,15 @@ pub(crate) fn current_reason() -> Option<CancelReason> {
 pub(crate) fn current_error() -> Option<KrishivError> {
     CURRENT
         .try_with(|action| {
-            let reason = action.lock().reason?;
-            Some(reason.error(action.operation.as_deref().unwrap_or(NOT_STARTED), None))
+            // The innermost action cancelled: a cancel or timeout can select an outer one.
+            let mut next = Some(action);
+            while let Some(a) = next {
+                if let Some(reason) = a.lock().reason {
+                    return Some(reason.error(a.operation.as_deref().unwrap_or(NOT_STARTED), None));
+                }
+                next = a.parent.as_ref();
+            }
+            None
         })
         .ok()
         .flatten()
@@ -532,6 +539,30 @@ mod tests {
         let out = out.unwrap();
         assert!(out.ids.is_empty());
         assert_eq!(out.rows, vec![(1, Arc::<str>::from("row"))]);
+    }
+
+    #[test]
+    fn a_nested_action_reads_the_error_of_the_outer_action_that_was_cancelled() {
+        let actions = Arc::new(Actions::default());
+        let outer = actions.begin(1, Some("outer"));
+        let a = Arc::clone(&actions);
+        let err = block(outer.run(async move {
+            let inner = a.begin(1, Some("inner"));
+            let a2 = Arc::clone(&a);
+            let seen = inner
+                .run(async move {
+                    // Only the outer action is selected.
+                    let _ = a2.cancel_where(CancelReason::Admin, &|_, op| op == "outer");
+                    Ok::<_, KrishivError>(current_error())
+                })
+                .await?;
+            Ok::<_, KrishivError>(seen)
+        }));
+        let e = err
+            .unwrap()
+            .expect("the outer cancel is read from the nested action");
+        assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
+        assert!(e.to_string().contains("outer"), "{e}");
     }
 
     #[test]

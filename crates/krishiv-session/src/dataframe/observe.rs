@@ -304,3 +304,30 @@ impl Drop for Delivering {
         self.complete();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A setup that panics leaves its observations completed with an internal error, not
+    /// pending (and not the caller-gave-up `OPERATION_CANCELED`).
+    #[test]
+    fn a_panic_in_the_setup_completes_the_observation_with_an_internal_error() {
+        let obs = Observation::new();
+        obs.shared.bind().unwrap();
+        let mut observers = Observers::default();
+        observers.observations.push(Arc::clone(&obs.shared));
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            let _pending = PendingObservations::new(&observers);
+            resume_unwind(Box::new("the setup panicked"));
+        }));
+        assert!(unwound.is_err());
+        let err = obs
+            .get_timeout(Duration::from_secs(5))
+            .expect_err("completed with an error");
+        assert_eq!(err.error_class().name(), "INTERNAL_ERROR", "{err}");
+    }
+}
