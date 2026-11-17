@@ -305,6 +305,8 @@ fn quiet_trials_leave_no_trace() {
         "EXPLAIN FORMATTED SELECT 1",
         "EXPLAIN CODEGEN SELECT 1",
         "EXPLAIN COST SELECT 1",
+        "EXPLAIN ANALYZE SELECT 1",
+        "EXPLAIN VERBOSE SELECT 1",
         "EXPLAIN FORMAT JSON SELECT 1",
         "EXPLAIN SET",
     ] {
