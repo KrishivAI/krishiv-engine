@@ -1,12 +1,12 @@
 [package]
 name = "krishiv-catalogs"
-description = "External catalogs: Hive metastore and Unity Catalog (read-only)"
+description = "External catalogs behind the Krishiv catalog trait: embedded SQLite, Hive metastore, Iceberg REST"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [lints]
 workspace = true
@@ -17,14 +17,14 @@ hive = ["dep:thrift", "dep:krishiv-plan", "dep:krishiv-types", "dep:krishiv-stor
 # The Iceberg REST catalog client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
 # egress policy client). Off by default.
 iceberg-rest = [
-  "dep:reqwest",
-  "dep:serde_json",
-  "dep:tokio",
-  "dep:url",
-  "tokio/time",
-  "tokio/sync",
-  "dep:krishiv-store",
-  "krishiv-store/cloud",
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:url",
+    "tokio/time",
+    "tokio/sync",
+    "dep:krishiv-store",
+    "krishiv-store/cloud",
 ]
 # The catalog factories of the session's registry (design P3-T067 §2.3): `iceberg-rest` declared catalogs.
 session = ["iceberg-rest", "dep:krishiv-session", "dep:krishiv-plan", "tokio/rt"]

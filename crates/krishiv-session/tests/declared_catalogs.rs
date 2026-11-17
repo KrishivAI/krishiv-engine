@@ -256,7 +256,15 @@ fn catalog_hidden_from_other_tenant() {
         }
         assert_eq!(strings(&s, "SHOW CATALOGS", 0), ["spark_catalog", "system"]);
         assert!(strings(&s, "SELECT name FROM system.catalogs", 0).is_empty());
-        assert!(block_on(s.catalog().set_current_catalog("lake")).is_err());
+        // The Catalog API answers as for an undeclared name too, whatever the case.
+        let set_err = |name: &str| {
+            let e = block_on(s.catalog().set_current_catalog(name)).unwrap_err();
+            format!("{}: {}", e.error_class().name(), e).replace(name, "<c>")
+        };
+        for name in ["lake", "LAKE"] {
+            assert_eq!(set_err(name), set_err("nope"), "{who}: {name}");
+        }
+        assert_eq!(s.catalog().list_catalogs(), ["spark_catalog"], "{who}");
     }
 }
 
