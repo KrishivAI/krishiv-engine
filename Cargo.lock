@@ -3553,6 +3553,7 @@ dependencies = [
  "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet 60.1.0",
  "prost",
  "tempfile",
  "tokio",
