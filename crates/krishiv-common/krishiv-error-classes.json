@@ -92,6 +92,13 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_GRANTS_STORE_FAILURE" : {
+    "message" : [
+      "The grants store cannot be <operation>: <reason>. No grant was changed and access is denied until an administrator restores the store."
+    ],
+    "sqlState" : "58030",
+    "audience" : "operator"
+  },
   "KRISHIV_ICEBERG_INVALID_DELETES" : {
     "message" : [
       "<message>"
@@ -275,6 +282,24 @@
       "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
     ],
     "sqlState" : "53400"
+  },
+  "KRISHIV_ROLE_ALREADY_EXISTS" : {
+    "message" : [
+      "The role <role> already exists. Choose another name, or drop the role first."
+    ],
+    "sqlState" : "42710"
+  },
+  "KRISHIV_ROLE_CYCLE" : {
+    "message" : [
+      "Granting role <role> to <grantee> would make a role a member of itself. Roles cannot be granted in a cycle."
+    ],
+    "sqlState" : "42P17"
+  },
+  "KRISHIV_ROLE_NOT_FOUND" : {
+    "message" : [
+      "The role <role> does not exist. Create it with CREATE ROLE first."
+    ],
+    "sqlState" : "42704"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [

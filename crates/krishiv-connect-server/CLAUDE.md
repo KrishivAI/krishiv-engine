@@ -82,13 +82,14 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `register_function` with a Python
-  UDF runs and exactly `Command{ml_command{clean_cache}}` (PySpark's exit cleanup) succeeds, both operations with no
-  response but `ResultComplete` (`Work::NoResult`; Spark's `ml_command_result` is not sent); other commands are 56K00
-  until T012; a drop guard (`Unsettled`) settles an
-  operation whose encoder task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream
-  waits on an orphan; `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per
-  operation id, used by `src/execute/fault_tests.rs`;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
+  `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
+  them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
+  store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md); `clean_cache` (PySpark's exit cleanup) and a `register_function` that ran end
+  through `Work::NoResult` (only `ResultComplete`); a drop guard (`Unsettled`) settles an operation whose encoder
+  task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream waits on an orphan;
+  `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per operation id, used by
+  `src/execute/fault_tests.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on

@@ -10,7 +10,8 @@ use std::time::Duration;
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
     build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
-    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
+    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
@@ -20,10 +21,14 @@ pub use python::{
     PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
     UDF_SANDBOX,
 };
+mod access;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
 mod server;
+pub use access::{
+    ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+};
 pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
@@ -65,6 +70,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_AGG_DIRECT_KEYS,
+    &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -146,7 +152,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
     &IO_LOCAL_ALLOWED_ROOTS,
+    &ACCESS_PROVIDER,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
+    &IO_EGRESS_PRIVATE_ADDRESSES,
+    &IO_EGRESS_ALLOWED_CIDRS,
+    &IO_EGRESS_PROXY,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,

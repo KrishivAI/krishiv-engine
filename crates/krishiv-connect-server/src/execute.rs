@@ -29,14 +29,16 @@
 //! responses before them. An interrupted operation ends with
 //! `OPERATION_CANCELED`; an encoder that panics ends it with
 //! `INTERNAL_ERROR` (Spark's `ExecuteThreadRunner` catches every
-//! `Throwable`), so no stream waits on an orphan. Commands answer
-//! `CONNECT_INVALID_PLAN` (56K00) until P3-T012, after the check of their
-//! ADR 0046 §3b class (`crate::auth::check_command`): a caller without the
-//! privilege a command needs is refused with 42501 first. The exception is
-//! `ml_command.clean_cache`: PySpark sends it when its process exits, and
-//! with no ML cache there is nothing to clean, so it is an operation with no
-//! response but `result_complete` (when reattachable). Spark sends an
-//! `ml_command_result` whose shape is unverified; Krishiv sends none.
+//! `Throwable`), so no stream waits on an orphan. A `sql_command`
+//! (`spark.sql()`) answers one `sql_command_result` (`execute::sql_command`);
+//! the other commands answer `CONNECT_INVALID_PLAN` (56K00) until P3-T012.
+//! Every command is checked for its ADR 0046 §3b class first
+//! (`crate::auth::check_command`): a caller without the privilege a command
+//! needs is refused with 42501. The exception is `ml_command.clean_cache`:
+//! PySpark sends it when its process exits, and with no ML cache there is
+//! nothing to clean, so it is an operation with no response but
+//! `result_complete` (when reattachable). Spark sends an `ml_command_result`
+//! whose shape is unverified; Krishiv sends none.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
@@ -47,6 +49,7 @@ pub mod arrow;
 pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
+mod sql_command;
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -57,8 +60,8 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
     ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    ConnectInvalidPlanPlanSizeLargerThanMax, InternalError, InvalidCursorNotReattachable,
-    KrishivError, OperationCanceled,
+    ConnectInvalidPlanNotFoundCachedLocalRelation, ConnectInvalidPlanPlanSizeLargerThanMax,
+    InternalError, InvalidCursorNotReattachable, KrishivError, OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -68,8 +71,8 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{
-    Command as RunCommand, TranslateConf, UdfHost as TranslateHost, command_not_supported,
-    translate_command, translate_relation_with,
+    Command as RunCommand, LocalRelations, LocalRequest, TranslateConf, UdfHost as TranslateHost,
+    command_not_supported, translate_command, translate_relation_with,
 };
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
@@ -335,26 +338,49 @@ pub async fn execute_plan(
         let prepared = until_cancelled(&op, async {
             #[cfg(test)]
             hooks::preparing(id.as_str()).await;
+            // `spark.sql()`: a command runs now, a query is analyzed; neither returns rows.
+            if let Some(command) = sql_command::of(plan, limits).await? {
+                // The command's ADR 0046 §3b class is checked before it runs, as for any command.
+                let wrapped = pb::Command {
+                    command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+                };
+                crate::auth::enforce(&check_command(&wrapped), session).await?;
+                let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type
+                else {
+                    return Err(InternalError {
+                        message: "a sql_command lost its variant".to_owned(),
+                    }
+                    .into());
+                };
+                let answer = sql_command::run(
+                    session,
+                    &command,
+                    query_options.clone(),
+                    limits.max_batch_size,
+                )
+                .await?;
+                return Ok(Prepared::Command(answer));
+            }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
             match execution_plan(entry, plan, limits).await? {
                 Executed::Relation(logical) => {
                     let df = session.from_plan_with(&logical, query_options)?;
                     let schema = df.schema().await?;
                     let schema_response = schema::proto_schema(&schema)?;
-                    Ok(Some((
+                    Ok(Prepared::Rows(
                         df,
                         schema,
                         schema_response,
                         observed::plan_ids(logical.root()),
-                    )))
+                    ))
                 }
                 // A command that ran (`register_function`): no response but the end.
-                Executed::Command => Ok(None),
+                Executed::Command => Ok(Prepared::Done),
             }
         })
         .await;
         match settle_preparation(&op, registered, prepared)? {
-            (Some((df, schema, schema_response, plan_ids)), registered) => {
+            (Prepared::Rows(df, schema, schema_response, plan_ids), registered) => {
                 let query = Query {
                     df,
                     schema,
@@ -364,27 +390,14 @@ pub async fn execute_plan(
                 };
                 (Work::Query(Box::new(query)), registered)
             }
-            (None, registered) => (Work::NoResult, registered),
+            (Prepared::Command(answer), registered) => {
+                (Work::Command(Box::new(answer)), registered)
+            }
+            (Prepared::Done, registered) => (Work::NoResult, registered),
         }
     };
 
-    let sender = Sender {
-        ahead: Arc::new(Semaphore::new(
-            limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
-        )),
-        ahead_cap: limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
-        budget: budget.clone(),
-        footprint: limits.ahead_bytes.saturating_add(if opts.reattachable {
-            limits.retry_buffer_size
-        } else {
-            0
-        }),
-        consumer: ConsumerHandle::register(session.runtime().memory(), "connect_responses", None),
-        op: Arc::clone(&op),
-        session_id: request.session_id.clone(),
-        server_side_session_id: entry.server_side_id().to_owned(),
-        errors: Arc::clone(entry.errors()),
-    };
+    let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
     // Attached before the encoder starts: the operation is never detached
     // before its first stream.
     let stream = sender::attach(
@@ -397,6 +410,44 @@ pub async fn execute_plan(
     registered.keep();
     tokio::spawn(encode(sender, work));
     Ok(stream)
+}
+
+/// What a request's plan prepared.
+enum Prepared {
+    /// A relation: its frame, schema, schema response and the plan ids of its observed nodes,
+    /// streamed as batches.
+    Rows(DataFrame, SchemaRef, pb::DataType, BTreeMap<String, i64>),
+    /// A `sql_command`: the relation it answers.
+    Command(sql_command::Answer),
+    /// A command that ran (`register_function`): no response but the end.
+    Done,
+}
+
+/// The producing side of `op`.
+fn new_sender(
+    session: &krishiv_session::Session,
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
+    entry: &SessionEntry,
+    op: &Arc<Operation>,
+    (limits, budget, opts): (&ExecuteLimits, &ResponseBudget, &Options),
+) -> Sender {
+    Sender {
+        ahead: Arc::new(Semaphore::new(
+            limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
+        )),
+        ahead_cap: limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
+        budget: budget.clone(),
+        footprint: limits.ahead_bytes.saturating_add(if opts.reattachable {
+            limits.retry_buffer_size
+        } else {
+            0
+        }),
+        consumer: ConsumerHandle::register(session.runtime().memory(), "connect_responses", None),
+        op: Arc::clone(op),
+        session_id: request.session_id.clone(),
+        server_side_session_id: entry.server_side_id().to_owned(),
+        errors: Arc::clone(entry.errors()),
+    }
 }
 
 /// Whether `plan` is exactly `Command{ml_command{clean_cache}}`, the ML
@@ -467,6 +518,8 @@ fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
             .conf()
             .get("spark.sql.sources.default")
             .unwrap_or_else(|| TranslateConf::default().default_data_source),
+        parser: session.parser_options(),
+        local_relations: LocalRelations::default(),
     }
 }
 
@@ -488,12 +541,7 @@ async fn execution_plan(
     let session = entry.session();
     let decompressed = decompressed(plan, limits).await?;
     let mut udfs = InlineUdfs::execution(entry.python());
-    match translate_plan(
-        plan,
-        decompressed.as_deref(),
-        &translate_conf(session),
-        &mut udfs,
-    )? {
+    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
         Translated::Relation(logical) => {
             if udfs.seen() {
                 crate::auth::enforce(&crate::auth::client_code(), session).await?;
@@ -532,12 +580,7 @@ pub(crate) async fn request_plan(
     let decompressed = decompressed(plan, limits).await?;
     // Inline Python UDFs are typed, never registered: analysis runs no client code.
     let mut udfs = InlineUdfs::analysis(entry.python());
-    match translate_plan(
-        plan,
-        decompressed.as_deref(),
-        &translate_conf(session),
-        &mut udfs,
-    )? {
+    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
         Translated::Relation(logical) => Ok(logical),
         // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
         // takes a plan.
@@ -573,6 +616,69 @@ async fn decompressed(
     })
 }
 
+/// The plan translated, with its local relations (`createDataFrame`) built by an async pre-pass, as
+/// the translator is synchronous: a first translation records what the plan needs, the relations are
+/// built, and a second translation uses them. A plan without any is translated once.
+async fn translate_locals(
+    entry: &SessionEntry,
+    plan: &pb::Plan,
+    decompressed: Option<&[u8]>,
+    udfs: &mut dyn TranslateHost,
+) -> Result<Translated, KrishivError> {
+    let translate = translate_conf(entry.session());
+    let collecting = LocalRelations::collecting();
+    let first = TranslateConf {
+        local_relations: collecting.clone(),
+        ..translate.clone()
+    };
+    let translated = translate_plan(plan, decompressed, &first, udfs)?;
+    // Drained, not copied: the recorded inline data is the one copy, and each request is consumed
+    // (and freed) by its build below.
+    let requests = collecting.take_requests();
+    drop(first);
+    drop(collecting);
+    if requests.is_empty() || !matches!(translated, Translated::Relation(_)) {
+        return Ok(translated);
+    }
+    drop(translated);
+    let mut built = Vec::with_capacity(requests.len());
+    for request in requests {
+        built.push(build_local_relation(entry, request).await?);
+    }
+    let second = TranslateConf {
+        local_relations: LocalRelations::resolved(built),
+        ..translate
+    };
+    translate_plan(plan, decompressed, &second, udfs)
+}
+
+/// The relation of one request of the translator's first pass: an inline one through
+/// `Session::local_relation` (the IPC data decoded, a user schema applied eagerly, the batches
+/// held once in the session's relation store); a cached one through the artifact store.
+///
+/// The artifact store is not on this branch (T011/T015b), so no hash is ever found:
+/// `CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION`, as Spark's block read of an unknown
+/// `cache/<hash>` (golden-pending: Spark's `CANNOT_FIND_CACHED_LOCAL_RELATION` for a hash the
+/// artifact manager never registered).
+async fn build_local_relation(
+    entry: &SessionEntry,
+    request: LocalRequest,
+) -> Result<krishiv_plan::LocalRelation, KrishivError> {
+    match request {
+        LocalRequest::Inline { data, schema } => {
+            entry
+                .session()
+                .local_relation(data.as_deref(), schema)
+                .await
+        }
+        LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
+            hash,
+            session_u_u_i_d: entry.server_side_id().to_owned(),
+        }
+        .into()),
+    }
+}
+
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
 /// one decompressed first; a command is returned as decoded.
 fn translate_plan(
@@ -593,22 +699,10 @@ fn translate_plan(
                     translate_relation_with(&*wire::decode_relation(bytes)?, conf, udfs)
                         .map(Translated::Relation)
                 }
-                Ok(CompressedOpType::Command) => {
-                    // Decoded through the bounded decoder as the `command`
-                    // field (2) of a `Plan`, which `wire` can start from.
-                    let mut wrapped = Vec::with_capacity(bytes.len() + 11);
-                    prost::encoding::encode_key(
-                        2,
-                        prost::encoding::WireType::LengthDelimited,
-                        &mut wrapped,
-                    );
-                    prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
-                    wrapped.extend_from_slice(bytes);
-                    match &wire::decode_plan(&wrapped)?.op_type {
-                        Some(OpType::Command(command)) => Ok(Translated::command(command)),
-                        _ => Ok(Translated::command(&pb::Command::default())),
-                    }
-                }
+                Ok(CompressedOpType::Command) => match &decode_command(bytes)?.op_type {
+                    Some(OpType::Command(command)) => Ok(Translated::command(command)),
+                    _ => Ok(Translated::command(&pb::Command::default())),
+                },
                 _ => {
                     // Spark's `PlanCompressionUtils` re-throws what parsing
                     // the operation raised as `CANNOT_PARSE` (v4.3.0).
@@ -630,6 +724,16 @@ fn translate_plan(
         }
         .into()),
     }
+}
+
+/// A decompressed `Command`, decoded through the bounded decoder as the `command` field (2) of a
+/// `Plan`, which `wire` can start from.
+fn decode_command(bytes: &[u8]) -> Result<wire::Decoded<pb::Plan>, KrishivError> {
+    let mut wrapped = Vec::with_capacity(bytes.len() + 11);
+    prost::encoding::encode_key(2, prost::encoding::WireType::LengthDelimited, &mut wrapped);
+    prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
+    wrapped.extend_from_slice(bytes);
+    wire::decode_plan(&wrapped)
 }
 
 /// Spark's `PlanCompressionUtils.decompressBytesWithZstd`: the frame's
@@ -821,8 +925,11 @@ enum Work {
     /// A query's result: schema, batches, metrics, then `result_complete`
     /// when reattachable.
     Query(Box<Query>),
-    /// A command with no result (`ml_command.clean_cache`): only
-    /// `result_complete`, when reattachable.
+    /// A `sql_command`: the `sql_command_result` relation it answers.
+    Command(Box<sql_command::Answer>),
+    /// A command with no result (`ml_command.clean_cache`, a
+    /// `register_function` that ran): only `result_complete`, when
+    /// reattachable.
     NoResult,
 }
 
@@ -837,7 +944,7 @@ struct Query {
 }
 
 impl Work {
-    async fn produce(&self, sender: &Sender) -> Result<(), Stop> {
+    async fn produce(self, sender: &Sender) -> Result<(), Stop> {
         match self {
             Self::Query(q) => {
                 produce(
@@ -850,6 +957,7 @@ impl Work {
                 )
                 .await
             }
+            Self::Command(answer) => sql_command::produce(sender, *answer).await,
             Self::NoResult => {
                 sender.admit().await?;
                 complete(sender).await
@@ -910,10 +1018,9 @@ async fn encode(sender: Sender, work: Work) {
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
+        // The query's stream goes with `produce`, which owns the work.
         r = work.produce(&sender) => r,
     };
-    // The query's stream is gone by now (dropped with `produce`).
-    drop(work);
     guard.settle(outcome);
 }
 

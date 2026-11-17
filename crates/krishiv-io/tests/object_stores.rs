@@ -17,7 +17,14 @@
 //!   does).
 //! - Azurite: `KRISHIV_TEST_AZURE_ENDPOINT=http://127.0.0.1:10000/devstoreaccount1`,
 //!   container `krishiv-test`
-//!   (`az storage container create --name krishiv-test --connection-string ...`).
+//!   (`az storage container create --name krishiv-test --connection-string ...`), and for the
+//!   SAS read `KRISHIV_TEST_AZURE_SAS`, a container SAS with read and list permissions
+//!   (`az storage container generate-sas`; `tests/scripts/object_store_emulators.sh` makes both).
+//! - Azurite in OAuth mode (`--oauth basic`, https) for the bearer-token read:
+//!   `KRISHIV_TEST_AZURE_OAUTH_ENDPOINT=https://127.0.0.1:<port>/devstoreaccount1`, container
+//!   `krishiv-test`, the tokens `KRISHIV_TEST_AZURE_BEARER` (Azure Storage's audience) and
+//!   `KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE`, and `SSL_CERT_FILE` naming a bundle that trusts the
+//!   emulator's certificate (the script makes all of them).
 //!
 //! Every byte goes through the layer's wrappers ([`IoContext`](krishiv_io::IoContext)):
 //! the round-trip writes with [`put_object`](krishiv_io::IoContext::put_object),
@@ -148,6 +155,11 @@ async fn write_then_read(config: Arc<Config>, bucket_url: &str) {
 
 /// The non-empty value of an emulator endpoint variable, if set.
 fn endpoint(name: &str) -> Option<String> {
+    env_nonempty(name)
+}
+
+/// The non-empty value of the environment variable `name`, if set.
+fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
@@ -322,6 +334,217 @@ async fn azure_round_trip() {
         "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net",
     )
     .await;
+}
+
+/// The `(id, name)` rows of a CSV file read through the CSV format with a header and a user
+/// schema (`spark.read.schema("id INT, name STRING").option("header", true).csv(url)`).
+async fn read_csv(config: Arc<Config>, url: &str) -> (Vec<i32>, Vec<Option<String>>) {
+    use arrow_array::Array;
+    use krishiv_common::secret::OptionValue;
+    use krishiv_io::{ByteRange, CsvFormat, FileFormat, ScanOptions, ScanRequest, ScanStream};
+    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(Arc::clone(&config));
+    let (store, path, _) = register(&sched, &registry, url).unwrap();
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    let file = FileRef::from_meta(store, &meta);
+    let user = std::collections::BTreeMap::from([(
+        "header".to_owned(),
+        OptionValue::Plain("true".to_owned()),
+    )]);
+    let options = CsvFormat.options().parse(&user, &config).unwrap().0;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let root = TreePool::new(&MemoryConfig::default());
+    let pool: Arc<dyn MemoryPool> = root.child("query", None);
+    let id = pool.register("FileScan", None);
+    let mut stream = ScanStream::open(
+        &io,
+        &CsvFormat,
+        file.clone(),
+        ByteRange::whole(file.size),
+        &ScanRequest::all(schema),
+        &options,
+        Reservation::new(Arc::clone(&pool), id),
+        ScanOptions::default(),
+    )
+    .await
+    .unwrap();
+    let (mut ids, mut names) = (Vec::new(), Vec::new());
+    while let Some(batch) = stream.next_batch().await.unwrap() {
+        let id = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let name = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for i in 0..batch.num_rows() {
+            ids.push(id.value(i));
+            names.push(name.is_valid(i).then(|| name.value(i).to_owned()));
+        }
+    }
+    (ids, names)
+}
+
+/// Azurite's published development account key (public, fixed by Microsoft; not a secret).
+const AZURITE_KEY: &str =
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+/// A raw CSV file on `abfss://` (lakehouse benchmark gate 2): written with the account key, read
+/// back through the CSV format with a header and a schema, signed with a container SAS given by
+/// the Hadoop ABFS keys `fs.azure.account.auth.type.<host> = SAS` and
+/// `fs.azure.sas.fixed.token.<host>`. The bearer-token read is
+/// `azure_csv_reads_with_a_bearer_token`.
+#[tokio::test]
+async fn azure_csv_reads_with_a_sas() {
+    let host = "devstoreaccount1.dfs.core.windows.net";
+    let (auth_key, sas_key, account_key) = (
+        format!("fs.azure.account.auth.type.{host}"),
+        format!("fs.azure.sas.fixed.token.{host}"),
+        format!("fs.azure.account.key.{host}"),
+    );
+    let (Some(endpoint), Some(sas)) = (
+        endpoint("KRISHIV_TEST_AZURE_ENDPOINT"),
+        env_nonempty("KRISHIV_TEST_AZURE_SAS"),
+    ) else {
+        // Offline: a SAS store builds without I/O, and the ambient environment plays no part.
+        let config = test_config(&[
+            ("fs.azure.endpoint", "http://127.0.0.1:1/devstoreaccount1"),
+            (auth_key.as_str(), "SAS"),
+            (sas_key.as_str(), "sv=2024-01-01&sig=c2ln"),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let url = format!("abfss://krishiv-test@{host}/a.csv");
+        let (_, path, display) = register(&sched, &registry, &url).unwrap();
+        assert_eq!(path.as_ref(), "a.csv");
+        assert_eq!(display, url);
+        return;
+    };
+    let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
+    let writer = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (account_key.as_str(), AZURITE_KEY),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&writer));
+    let registry = StoreRegistry::new(Arc::clone(&writer));
+    let (store, path, _) = register(&sched, &registry, &url).unwrap();
+    sched
+        .context()
+        .put_object(
+            &store,
+            &path,
+            Bytes::from_static(b"id,name\n1,a\n2,\n3,c\n"),
+        )
+        .await
+        .unwrap();
+    let reader = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (auth_key.as_str(), "SAS"),
+        (sas_key.as_str(), sas.as_str()),
+    ]);
+    let (ids, names) = read_csv(reader, &url).await;
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(
+        names,
+        vec![Some("a".to_owned()), None, Some("c".to_owned())]
+    );
+    sched.context().delete(&store, &path).await.unwrap();
+}
+
+/// A raw CSV file on `abfss://` read with only an Azure bearer token (lakehouse benchmark gate 2):
+/// written with the account key, read through the Hadoop ABFS keys
+/// `fs.azure.account.auth.type.<host> = OAuth` and `fs.azure.account.oauth2.access.token.<host>`
+/// against Azurite in OAuth mode (`--oauth basic`, https). Azurite checks the token's audience,
+/// so a token for another audience is refused: the read depends on the bearer token, not on an
+/// open emulator. `tests/scripts/object_store_emulators.sh` starts that Azurite, makes both tokens
+/// and the `krishiv-test` container, and trusts its certificate through `SSL_CERT_FILE`.
+#[tokio::test]
+async fn azure_csv_reads_with_a_bearer_token() {
+    let host = "devstoreaccount1.dfs.core.windows.net";
+    let (auth_key, token_key, account_key) = (
+        format!("fs.azure.account.auth.type.{host}"),
+        format!("fs.azure.account.oauth2.access.token.{host}"),
+        format!("fs.azure.account.key.{host}"),
+    );
+    let (Some(endpoint), Some(token), Some(other_audience)) = (
+        endpoint("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT"),
+        env_nonempty("KRISHIV_TEST_AZURE_BEARER"),
+        env_nonempty("KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE"),
+    ) else {
+        // Offline: a bearer-token store builds without I/O.
+        let config = test_config(&[
+            ("fs.azure.endpoint", "https://127.0.0.1:1/devstoreaccount1"),
+            (auth_key.as_str(), "OAuth"),
+            (token_key.as_str(), "header.payload.signature"),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let url = format!("abfss://krishiv-test@{host}/a.csv");
+        let (_, path, display) = register(&sched, &registry, &url).unwrap();
+        assert_eq!(path.as_ref(), "a.csv");
+        assert_eq!(display, url);
+        return;
+    };
+    let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
+    let writer = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (account_key.as_str(), AZURITE_KEY),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&writer));
+    let registry = StoreRegistry::new(Arc::clone(&writer));
+    let (store, path, _) = register(&sched, &registry, &url).unwrap();
+    sched
+        .context()
+        .put_object(
+            &store,
+            &path,
+            Bytes::from_static(b"id,name\n1,a\n2,\n3,c\n"),
+        )
+        .await
+        .unwrap();
+    let bearer = |token: &str| {
+        test_config(&[
+            ("fs.azure.endpoint", endpoint.as_str()),
+            (auth_key.as_str(), "OAuth"),
+            (token_key.as_str(), token),
+        ])
+    };
+    let (ids, names) = read_csv(bearer(&token), &url).await;
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(
+        names,
+        vec![Some("a".to_owned()), None, Some("c".to_owned())]
+    );
+    // A token for another audience is refused by the emulator, so the read above used the token.
+    let refused = bearer(&other_audience);
+    let refused_sched = IoScheduler::new(IoConfig::from_config(&refused));
+    let refused_registry = StoreRegistry::new(Arc::clone(&refused));
+    let (refused_store, refused_path, _) =
+        register(&refused_sched, &refused_registry, &url).unwrap();
+    let refused_error = refused_sched
+        .context()
+        .head(&refused_store, &refused_path)
+        .await
+        .expect_err("a token for another audience must not read the file");
+    // Azurite answers 403 (object_store's `PermissionDenied`), not a transport failure.
+    assert_eq!(
+        refused_error.error_class(),
+        ErrorClass::KrishivObjectStoreRequestFailed
+    );
+    let shown = refused_error.to_string();
+    assert!(
+        shown.contains("lacked the necessary privileges") && shown.contains("403 Forbidden"),
+        "{shown}"
+    );
+    sched.context().delete(&store, &path).await.unwrap();
 }
 
 /// A one-file web server on loopback that honours `Range`, logging each

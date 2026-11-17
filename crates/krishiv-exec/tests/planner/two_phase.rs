@@ -27,7 +27,10 @@ fn rows_of(plan: &Runnable, root: &TreePool) -> (Vec<String>, usize, u64) {
     let sinks = metrics
         .operators
         .values()
-        .filter(|o| o.name == "HashAggregate" && o.role == OperatorRole::Sink)
+        .filter(|o| {
+            matches!(o.name.as_ref(), "HashAggregate" | "DistinctCount")
+                && o.role == OperatorRole::Sink
+        })
         .count();
     let files = metrics
         .operators
@@ -96,7 +99,9 @@ fn distinct_has_a_partial_merge_and_placed_inputs_keep_one_aggregate() {
         "SELECT a, count(DISTINCT b), sum(b) FROM t GROUP BY a",
     );
     assert_eq!(rows.len(), 9, "{rows:?}");
-    assert_eq!((fused, written), (2, 3));
+    // Fused, the single `count(DISTINCT)` is one breaker counting at the
+    // merge (`krishiv.exec.agg.distinctCountAtMerge`).
+    assert_eq!((fused, written), (1, 3));
     let (rows, ..) = both(&env, "SELECT count(DISTINCT a), max(s) FROM t");
     assert_eq!(rows, ["8|s9"]);
     let plan = explain(
@@ -255,4 +260,75 @@ fn a_fused_aggregate_reports_its_exchange() {
             .values()
             .all(|o| o.extra("exchange_rows").is_none())
     );
+}
+
+/// `krishiv.exec.agg.distinctCountAtMerge=false` from the worker's config
+/// keeps the two aggregations on every path that builds a distinct plan:
+/// the fused one, the aggregate as written, and an aggregate whose input is
+/// already placed on its keys (one node, no partial phase). On four
+/// threads the default counts at the merge on each of them.
+#[test]
+fn distinct_count_at_merge_false_is_honoured_on_every_path() {
+    use std::sync::Arc;
+    // Placed on `a` by the inner aggregate: one `HashAggregate` node with
+    // its distinct flag.
+    const PLACED: &str = "SELECT a, count(DISTINCT b), count(*) \
+                          FROM (SELECT a, sum(b) AS b FROM t GROUP BY a) GROUP BY a";
+    let env = env();
+    let executor = krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 2,
+        io_blocking_threads: 2,
+    };
+    let counted = |plan: &Runnable| {
+        let root = TreePool::new(&MemoryConfig::default());
+        let (out, query) = super::run_on(plan, &root, &executor);
+        let mut rows: Vec<String> = Vec::new();
+        for b in &out.unwrap_or_else(|e| panic!("{plan}: {e}")) {
+            for r in 0..b.num_rows() {
+                let cells: Vec<String> = b.columns().iter().map(|c| cell(c.as_ref(), r)).collect();
+                rows.push(cells.join("|"));
+            }
+        }
+        rows.sort();
+        assert_eq!(root.reserved(), 0, "the pool is empty at the end");
+        let n = query
+            .metrics()
+            .operators
+            .values()
+            .filter(|o| o.name == "DistinctCount" && o.role == OperatorRole::Sink)
+            .count();
+        (rows, n)
+    };
+    let mut off = krishiv_common::config::Config::new();
+    off.set("krishiv.exec.agg.distinctCountAtMerge", "false")
+        .unwrap();
+    let off = Arc::new(off);
+    let on = Arc::new(krishiv_common::config::Config::new());
+    for sql in [
+        "SELECT a, count(DISTINCT b), sum(b) FROM t GROUP BY a",
+        "SELECT a, count(DISTINCT b) FROM (SELECT a, b FROM t GROUP BY a, b) GROUP BY a",
+        PLACED,
+    ] {
+        for fuse in [true, false] {
+            let plan = || {
+                env.plan(sql)
+                    .unwrap_or_else(|e| panic!("{sql}: {e}"))
+                    .with_worker(|w| w.with_fused_aggregates(fuse))
+            };
+            let (want, n_off) = counted(&plan().with_worker(|w| w.with_config(Arc::clone(&off))));
+            assert_eq!(
+                n_off, 0,
+                "{sql}, fused {fuse}: config false still counted at the merge"
+            );
+            let (got, n_on) = counted(&plan().with_worker(|w| w.with_config(Arc::clone(&on))));
+            assert_eq!(got, want, "{sql}, fused {fuse}");
+            // The placed input's single aggregate counts at the merge either
+            // way (it is never written out as phases).
+            if sql == PLACED {
+                assert_eq!(n_on, 1, "{sql}, fused {fuse}");
+            }
+        }
+    }
 }
