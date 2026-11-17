@@ -1401,19 +1401,19 @@ fn late_payload_join_defaults_on_and_parses() {
 }
 
 #[test]
-fn payload_above_aggregate_defaults_off_and_parses() {
+fn payload_above_aggregate_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
         c.get(&PAYLOAD_ABOVE_AGGREGATE)
             .and_then(ConfigValue::as_bool),
-        Some(false)
+        Some(true)
     );
-    c.set("krishiv.optimizer.payloadAboveAggregate", "true")
+    c.set("krishiv.optimizer.payloadAboveAggregate", "false")
         .unwrap();
     assert_eq!(
         c.get(&PAYLOAD_ABOVE_AGGREGATE)
             .and_then(ConfigValue::as_bool),
-        Some(true)
+        Some(false)
     );
     assert!(
         c.set("krishiv.optimizer.payloadAboveAggregate", "maybe")
@@ -1422,7 +1422,7 @@ fn payload_above_aggregate_defaults_off_and_parses() {
 }
 
 #[test]
-fn discover_keys_entries_default_off_and_parse() {
+fn discover_keys_entries_default_on_and_parse() {
     let mut c = Config::new();
     let get = |c: &Config| {
         (
@@ -1431,11 +1431,11 @@ fn discover_keys_entries_default_off_and_parse() {
                 .and_then(ConfigValue::as_duration),
         )
     };
-    assert_eq!(get(&c), (Some(false), Some(Duration::from_secs(60))));
-    c.set("krishiv.optimizer.discoverKeys", "true").unwrap();
+    assert_eq!(get(&c), (Some(true), Some(Duration::from_secs(60))));
+    c.set("krishiv.optimizer.discoverKeys", "false").unwrap();
     c.set("krishiv.optimizer.discoverKeys.timeout", "250ms")
         .unwrap();
-    assert_eq!(get(&c), (Some(true), Some(Duration::from_millis(250))));
+    assert_eq!(get(&c), (Some(false), Some(Duration::from_millis(250))));
     assert!(c.set("krishiv.optimizer.discoverKeys", "maybe").is_err());
     assert!(
         c.set("krishiv.optimizer.discoverKeys.timeout", "soon")

@@ -164,8 +164,8 @@ fn q10_groups_by_the_order_s_customer_and_joins_customer_and_nation_above() {
     assert!(agg.contains("Aggregate [o_custkey#9], "), "{agg}");
 }
 
-/// No TPC-H plan changes with the switch off (its default), and without key
-/// facts none changes with it on.
+/// Without key facts no TPC-H plan changes, with the switch on (its default)
+/// or off.
 #[test]
 fn tpch_plans_do_not_change_off_or_without_facts() {
     let stats = Keyed::new(fixture(), &[]);
@@ -432,14 +432,14 @@ fn without_a_fact_the_rule_refuses() {
 }
 
 #[test]
-fn the_switch_off_leaves_the_plan() {
+fn the_switch_off_leaves_the_plan_and_is_on_by_default() {
     let plan = resolve(PLAIN);
     let (off, notes) = optimized(&plan, &facts(), false);
     assert!(notes.is_empty(), "{notes:?}");
-    let default = optimize_with_udfs(&plan, &facts(), &UdfLibrary::new(), &Config::new()).unwrap();
-    assert!(off.structurally_eq(&default));
     let (on, _) = optimized(&plan, &facts(), true);
     assert!(!on.structurally_eq(&off));
+    let default = optimize_with_udfs(&plan, &facts(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(default.structurally_eq(&on), "{}", default.root());
 }
 
 #[test]

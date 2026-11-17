@@ -184,7 +184,7 @@ pub struct Options {
     /// aggregate grouping by a dimension's key and payload groups by the
     /// other side's key, and the dimension joins above it. Needs statistics
     /// and a session configuration with
-    /// `krishiv.optimizer.payloadAboveAggregate` on (off by default).
+    /// `krishiv.optimizer.payloadAboveAggregate` on (on by default).
     pub payload_above_aggregate: bool,
     /// Subquery as window (`win_magic`, P3 W1 shape (a)): a correlated
     /// aggregate subquery over the outer block's own join runs as a window.
