@@ -137,9 +137,27 @@ impl Planner<'_> {
         if let Grouping::GroupBy(keys) = grouping {
             self.request_moves(node, input, aggregates, true, keys.clone());
         }
+        let many_keys = self.many_group_keys(input, grouping);
         let planned = self.plan(input)?;
         let aggregates = self.moved_exprs(node, aggregates);
-        self.aggregate(planned, grouping, &aggregates)
+        self.aggregate(planned, grouping, &aggregates, many_keys)
+    }
+
+    /// Whether the group keys of an aggregate over `input` hold at least
+    /// [`ROUTE_MIN_KEYS`](crate::physical::ROUTE_MIN_KEYS) distinct values
+    /// for sure: one bare-column key's floor (`AttrStats::ndv_floor`, a
+    /// lower bound that the estimator never overstates) bounds the key
+    /// tuples' from below.
+    fn many_group_keys(&self, input: &Arc<LogicalPlan>, grouping: &Grouping) -> bool {
+        let (Grouping::GroupBy(keys), Some(est)) = (grouping, self.stats.get(input)) else {
+            return false;
+        };
+        keys.iter()
+            .filter_map(|k| match &k.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => est.cols.get(&c.id),
+                _ => None,
+            })
+            .any(|c| c.ndv_floor >= crate::physical::ROUTE_MIN_KEYS)
     }
 
     /// Leaves a request at the inner join under `input`, if there is one

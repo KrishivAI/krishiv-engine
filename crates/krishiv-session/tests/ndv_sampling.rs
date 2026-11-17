@@ -354,3 +354,46 @@ fn group_keys_of_a_one_table_distinct_count_are_sampled() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("orders`: status: sampled "), "{lines:?}");
 }
+
+/// The sampled group keys gate key-routed pairs (design P3-A 1d): a string
+/// key the sample saw 5,000 values of routes (`EXPLAIN` prints
+/// `pairs=routed`), the three statuses do not, and the rows are the same with
+/// `krishiv.exec.agg.distinctRouted` off.
+#[test]
+fn a_sampled_key_with_many_values_routes_the_distinct_pairs() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let words = dir.path().join("words");
+    let w = block_on(s.sql(
+        "SELECT concat('w', CAST(id % 5000 AS STRING)) AS w, id % 777 AS u FROM range(20000)",
+    ))
+    .unwrap();
+    block_on(w.write().parquet(words.to_str().unwrap())).unwrap();
+    let many = format!(
+        "SELECT w, count(DISTINCT u) AS c FROM {} WHERE w <> '' GROUP BY w",
+        table(dir.path(), "words")
+    );
+    let few = format!(
+        "SELECT status, count(DISTINCT id) FROM {} GROUP BY status",
+        table(dir.path(), "orders")
+    );
+    assert!(
+        explain(&s, "", &many).contains("pairs=routed"),
+        "{}",
+        explain(&s, "", &many)
+    );
+    assert!(!explain(&s, "", &few).contains("pairs=routed"));
+    let rows = |s: &Session| {
+        let batches = block_on(async { s.sql(&many).await.unwrap().collect().await.unwrap() });
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>()
+    };
+    let on = rows(&s);
+    s.conf()
+        .set("krishiv.exec.agg.distinctRouted", "false")
+        .unwrap();
+    assert_eq!(rows(&s), on);
+    assert_eq!(on, 5_000);
+}

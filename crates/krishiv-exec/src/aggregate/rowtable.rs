@@ -122,6 +122,8 @@ mod local;
 pub(crate) const RADIX_BITS: u32 = 4;
 /// Most radix partitions of a table.
 pub(crate) const PARTS: usize = 1 << RADIX_BITS;
+// A routed row layout's top hash bits are exactly the radix partition's.
+const _: () = assert!(crate::rows::ROUTE_BITS == RADIX_BITS);
 /// How a table's `u32` row references split into partition and row: the
 /// top `bits` bits are the partition, the rest the row, so a table of one
 /// partition holds up to 2^32 groups as before and a partitioned one up to

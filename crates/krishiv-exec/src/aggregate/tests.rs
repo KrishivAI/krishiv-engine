@@ -545,6 +545,7 @@ fn picks() -> Vec<(AggregateFunction, usize)> {
 mod collect;
 mod disk;
 mod distinct_count;
+mod distinct_routed;
 mod misc;
 mod simple;
 mod spill_writers;

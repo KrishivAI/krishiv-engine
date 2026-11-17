@@ -712,6 +712,10 @@ message AggregateNode {
   repeated AggregateExpr aggregates = 3;
   repeated bool distinct = 4;
   AggregateOutput output = 5;
+  // Key-routed pairs of a lone count(DISTINCT) (design P3-A 1d); written
+  // only when true.
+  // feature: distinct_routed
+  bool route = 6;
 }
 
 enum AggregateOutput {

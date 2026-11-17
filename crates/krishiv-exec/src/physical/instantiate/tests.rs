@@ -162,6 +162,7 @@ fn single() -> super::AggregatePlan {
         ],
         distinct: vec![true, false, false],
         output: AggregateOutput::Final,
+        route: false,
     }
 }
 

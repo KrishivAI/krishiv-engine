@@ -869,7 +869,20 @@ pub struct AggregatePlan {
     pub distinct: Vec<bool>,
     /// Final results or partial states.
     pub output: AggregateOutput,
+    /// Key-routed pairs (design P3-A 1d): a lone `count(DISTINCT v)` in a
+    /// `GROUP BY` counted where its pairs merge, the pairs' radix
+    /// partitions taken from the hash of the group keys alone, under
+    /// `krishiv.exec.agg.distinctRouted`. Set by the planner when the group
+    /// keys hold at least [`ROUTE_MIN_KEYS`] distinct values for sure (a
+    /// sample saw them); results are the same either way.
+    pub route: bool,
 }
+
+/// The fewest distinct group keys (a lower bound, `AttrStats::ndv_floor`)
+/// at which a `count(DISTINCT)`'s pairs are key-routed: below about 1,024
+/// keys routing loses the merge's parallelism (design P3-A 1d, few-key
+/// shapes: 256 keys 1.05x, 1,024 ~1.00x of the two aggregations in series).
+pub const ROUTE_MIN_KEYS: f64 = 1024.0;
 
 /// The conjuncts of a join's residual filter, over probe then build
 /// columns.
@@ -1253,7 +1266,7 @@ plan_data!(
     }
 );
 plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
-plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
+plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output, route });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,

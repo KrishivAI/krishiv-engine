@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
-    distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION,
+    direct_keys::EXEC_AGG_DIRECT_KEYS,
+    distinct_count::{EXEC_AGG_DISTINCT_COUNT_AT_MERGE, EXEC_AGG_DISTINCT_ROUTED},
+    join_cost::JOIN_COST,
     partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
@@ -75,6 +77,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_AGG_DIRECT_KEYS,
     &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    &EXEC_AGG_DISTINCT_ROUTED,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,

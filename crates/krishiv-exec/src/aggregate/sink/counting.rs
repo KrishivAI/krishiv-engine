@@ -1,16 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The hash aggregate's hooks for `count(DISTINCT)` counted at the merge
-//! ([`crate::aggregate::distinct`]): the spillable bytes a breaker over two
-//! aggregates sums, and the pair counter its final phase counts into.
+//! ([`crate::aggregate::distinct`]): the key-routed pairs table, the
+//! spillable bytes a breaker over two aggregates sums, and the pair counter
+//! its final phase counts into.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
 use super::{GlobalState, HashAggregate, Local, LocalState, global, held, internal, lock};
+use crate::aggregate::AggregateSpec;
 use crate::aggregate::distinct::PairCounts;
+use crate::aggregate::table::AggCore;
 use crate::error::Result;
 
 impl HashAggregate {
+    /// [`new`](Self::new) whose row layout takes the radix partition bits
+    /// of each row's hash from its first `prefix` grouping columns alone
+    /// ([`RowLayout::with_route`](crate::rows::RowLayout::with_route)): the
+    /// pairs of one key fall in one partition of every driver's table, so
+    /// one merge task holds them all (design P3-A 1d). The arrow-row tables
+    /// (keys without a row layout) are not routed.
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub(in crate::aggregate) fn routed(spec: AggregateSpec, prefix: usize) -> Result<Arc<Self>> {
+        let mut core = AggCore::new(spec)?;
+        core.rows = core.rows.map(|l| l.with_route(prefix));
+        Ok(Self::of_core(core, None))
+    }
+
+    /// The prefix columns that route this aggregate's row hashes (0: none).
+    #[cfg(test)]
+    pub(in crate::aggregate) fn route(&self) -> usize {
+        self.core
+            .rows
+            .as_ref()
+            .map_or(0, crate::rows::RowLayout::route)
+    }
+
     /// What a spill of this driver's state would free, as `sink` reports it
     /// to the driver's spill signal (`None`: the aggregate does not spill).
     /// A breaker over several aggregates reports their sum.

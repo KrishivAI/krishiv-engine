@@ -210,12 +210,17 @@ impl HashAggregate {
     /// # Errors
     /// Typing errors of the aggregates; `INTERNAL_ERROR` for bad columns.
     pub fn new(spec: AggregateSpec) -> Result<Arc<Self>> {
-        Ok(Arc::new(Self {
-            core: Arc::new(AggCore::new(spec)?),
+        Ok(Self::of_core(AggCore::new(spec)?, None))
+    }
+
+    /// The aggregate over `core`, recording `exchange` statistics when given.
+    pub(super) fn of_core(core: AggCore, exchange: Option<ExchangeStats>) -> Arc<Self> {
+        Arc::new(Self {
+            core: Arc::new(core),
             counters: Arc::default(),
             row_mode: None,
             widen_at: WIDEN_GROUPS,
-            exchange: None,
+            exchange: exchange.map(Mutex::new),
             #[cfg(test)]
             stall_after: None,
             #[cfg(test)]
@@ -224,7 +229,7 @@ impl HashAggregate {
             disk_gate: None,
             #[cfg(test)]
             disk_merged_gate: None,
-        }))
+        })
     }
 
     /// [`new`](Self::new) for a partial and a final phase around an exchange
@@ -234,21 +239,10 @@ impl HashAggregate {
     /// # Errors
     /// As [`new`](Self::new).
     pub fn fused(spec: AggregateSpec) -> Result<Arc<Self>> {
-        Ok(Arc::new(Self {
-            core: Arc::new(AggCore::new(spec)?),
-            counters: Arc::default(),
-            row_mode: None,
-            widen_at: WIDEN_GROUPS,
-            exchange: Some(Mutex::new(ExchangeStats::new(PARTS))),
-            #[cfg(test)]
-            stall_after: None,
-            #[cfg(test)]
-            output_gate: None,
-            #[cfg(test)]
-            disk_gate: None,
-            #[cfg(test)]
-            disk_merged_gate: None,
-        }))
+        Ok(Self::of_core(
+            AggCore::new(spec)?,
+            Some(ExchangeStats::new(PARTS)),
+        ))
     }
 
     /// The statistics of the exchange this breaker stands for, merged over

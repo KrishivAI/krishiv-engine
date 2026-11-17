@@ -35,7 +35,7 @@ mod registry_join;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
 pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
-pub use distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE;
+pub use distinct_count::{EXEC_AGG_DISTINCT_COUNT_AT_MERGE, EXEC_AGG_DISTINCT_ROUTED};
 pub use join_cost::JOIN_COST;
 pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;

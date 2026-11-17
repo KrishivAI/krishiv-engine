@@ -110,6 +110,35 @@ pub fn distinct_plan_with(
     distinct: &[bool],
     count_at_merge: bool,
 ) -> Result<Arc<dyn ExecNode>> {
+    distinct_plan_routed(input, spec, distinct, count_at_merge, false)
+}
+
+/// `krishiv.exec.agg.distinctRouted` in `config`, or the entry's default
+/// without one (or without the key set).
+pub(crate) fn distinct_routed(config: Option<&krishiv_common::config::Config>) -> bool {
+    use krishiv_common::config::{ConfigValue, EXEC_AGG_DISTINCT_ROUTED as E};
+    config
+        .map_or(E.default.as_ref(), |c| c.get(&E))
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(false)
+}
+
+/// [`distinct_plan_with`] whose covered `count(DISTINCT)` has, with `routed`,
+/// key-routed pairs (design P3-A 1d;
+/// [`AggregatePlan::route`](crate::physical::AggregatePlan::route) under
+/// `krishiv.exec.agg.distinctRouted`): the pairs of one key fall in one
+/// radix partition, so it is counted at the merge also when it is the only
+/// aggregate. Without `routed` the plan is [`distinct_plan_with`]'s.
+///
+/// # Errors
+/// As [`distinct_plan`].
+pub fn distinct_plan_routed(
+    input: Arc<dyn ExecNode>,
+    spec: AggregateSpec,
+    distinct: &[bool],
+    count_at_merge: bool,
+    routed: bool,
+) -> Result<Arc<dyn ExecNode>> {
     if distinct.len() != spec.aggregates.len()
         || spec.output != AggregateOutput::Final
         || spec.aggregates.iter().any(|a| a.input != AggInput::Raw)
@@ -146,15 +175,20 @@ pub fn distinct_plan_with(
     // `count(DISTINCT)` alone puts every pair through three tables (pairs,
     // a merge task's partition counts, the key table) against two in series
     // (ClickBench q14 shape 1.10x at the merge, q10 shape 0.68x; design
-    // `P3-cb-distinct-in-group`, addendum 2026-11-16).
-    let at_merge = if count_at_merge && spec.aggregates.len() > 1 && covers(&spec, distinct) {
-        Some(DistinctCountNode::new(
-            Arc::clone(&input),
-            DistinctCount::new(&spec, distinct)?,
-        ))
-    } else {
-        None
-    };
+    // `P3-cb-distinct-in-group`, addendum 2026-11-16), unless its pairs are
+    // routed by key: then a merge task's count rows are one per key and the
+    // key table is small (q14 shape 0.63x, design P3-A 1d).
+    let at_merge =
+        if count_at_merge && (spec.aggregates.len() > 1 || routed) && covers(&spec, distinct) {
+            let count = if routed {
+                DistinctCount::routed(&spec, distinct)?
+            } else {
+                DistinctCount::new(&spec, distinct)?
+            };
+            Some(DistinctCountNode::new(Arc::clone(&input), count))
+        } else {
+            None
+        };
     let k = spec.group_by.len();
     let first = AggregateSpec {
         group_by: spec.group_by.iter().chain(&dargs).copied().collect(),

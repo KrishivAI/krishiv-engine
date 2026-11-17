@@ -89,6 +89,9 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert!(plan_features(&zero).is_empty());
     assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
     assert_eq!(message("fused_probe").features, ["fused_probe"]);
+    assert_eq!(message("distinct_routed").features, ["distinct_routed"]);
+    // Unrouted, an aggregate is the baseline (and keeps its bytes).
+    assert!(message("aggregate").features.is_empty());
     assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
     assert_eq!(
         message("legacy_charset_switches").features,
@@ -192,6 +195,7 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
             aggregates: vec![moment()],
             distinct: vec![false],
             output: AggregateOutput::Final,
+            route: false,
         },
     };
     let legacy = || {
@@ -300,6 +304,7 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
                 )],
                 distinct: vec![false],
                 output: AggregateOutput::Final,
+                route: false,
             },
         },
         legacy(),
@@ -657,6 +662,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["fused_probe".to_owned()]
+        }
+    );
+    // A reader without `distinct_routed` refuses a routed aggregate (it
+    // would drop the flag silently).
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "distinct_routed")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["distinct_routed".to_owned()]
         }
     );
     // A reader without `shared_subplan` refuses a plan with shared plans.
@@ -1396,6 +1418,7 @@ fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
                 distinct: vec![false],
                 aggregates: vec![aggregate],
                 output: krishiv_exec::aggregate::AggregateOutput::Partial,
+                route: false,
             },
         }),
         // The plan's output schema.

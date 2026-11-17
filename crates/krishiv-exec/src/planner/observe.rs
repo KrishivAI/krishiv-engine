@@ -45,7 +45,7 @@ impl Planner<'_> {
             placement: Placement::Single,
             ordering: Vec::new(),
         };
-        let measured = self.aggregate(rows, &Grouping::GroupBy(Vec::new()), metrics)?;
+        let measured = self.aggregate(rows, &Grouping::GroupBy(Vec::new()), metrics, false)?;
         if !matches!(measured.node, PhysNode::Project { .. }) {
             return Err(internal("observed metrics did not plan as a projection"));
         }

@@ -129,6 +129,7 @@ registry! {
     (collated_min_max, CollatedMinMax, POST_MIGRATION_READER_VERSION, Semantic, "`max` and `min` of a collated string (`MAX_BY_KEY_FIRST`, `MIN_BY_KEY_FIRST`): the value of the largest or smallest collation key, the first of equal keys kept."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (distinct_routed, DistinctRouted, POST_MIGRATION_READER_VERSION, Optimization, "Key-routed pairs of a lone `count(DISTINCT)` in a `GROUP BY` (`AggregatePlan.route`, design P3-A 1d): the pairs' radix partitions come from the group keys' hash alone and the count is taken where the pairs merge; without it the planner leaves the flag off, which never changes rows."),
     (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
@@ -496,11 +497,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::ReplicateRows { .. }
             | PhysNode::Sort { .. }
             | PhysNode::TopN { .. }
-            | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. } => None,
             PhysNode::Exchange(e) if !e.filters.is_empty() => Some(Feature::ExchangeFilters),
             PhysNode::Exchange(_) => None,
+            PhysNode::Aggregate { aggregate, .. } => {
+                aggregate.route.then_some(Feature::DistinctRouted)
+            }
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,

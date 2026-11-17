@@ -563,6 +563,7 @@ impl Encoder {
                 AggregateOutput::Final => pb::AggregateOutput::Final,
                 AggregateOutput::Partial => pb::AggregateOutput::Partial,
             } as i32,
+            route: plan.route,
         })
     }
 

@@ -46,11 +46,16 @@ struct Call {
 }
 
 impl Planner<'_> {
+    /// Plans an aggregation of `input`; `many_keys` says its group keys
+    /// hold at least [`ROUTE_MIN_KEYS`](crate::physical::ROUTE_MIN_KEYS)
+    /// distinct values for sure, which routes a lone `count(DISTINCT)`'s
+    /// pairs by key ([`AggregatePlan::route`]).
     pub(crate) fn aggregate(
         &mut self,
         input: Planned,
         grouping: &Grouping,
         outputs: &[Arc<Expr>],
+        many_keys: bool,
     ) -> Result<Planned> {
         let Grouping::GroupBy(keys) = grouping else {
             return Err(unsupported("ROLLUP, CUBE and GROUPING SETS"));
@@ -137,11 +142,13 @@ impl Planner<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        let route = many_keys && k > 0 && routable(&aggregates, &distinct);
         let single = AggregatePlan {
             group_by: columns[..k].to_vec(),
             aggregates,
             distinct,
             output: AggregateOutput::Final,
+            route,
         };
         // Phases where rows must move (design P2-T174 §2.1): each task's
         // partial states cross the exchange instead of its rows.
@@ -196,6 +203,7 @@ impl Planner<'_> {
             spec,
             &plan.distinct,
             crate::aggregate::distinct_count_at_merge(None),
+            false,
         )?;
         let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
         layout.extend(calls.iter().map(|c| c.id));
@@ -211,7 +219,15 @@ impl Planner<'_> {
             },
             schema,
             layout,
-            explain: super::explain::ExplainNode::new("HashAggregate", detail, vec![input.explain]),
+            explain: super::explain::ExplainNode::new(
+                "HashAggregate",
+                if route {
+                    format!("{detail}, pairs=routed")
+                } else {
+                    detail
+                },
+                vec![input.explain],
+            ),
             sites,
             placement,
         };
@@ -273,6 +289,7 @@ impl Planner<'_> {
             spec,
             &plan.distinct,
             crate::aggregate::distinct_count_at_merge(None),
+            false,
         )?;
         let k = plan.group_by.len();
         let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
@@ -348,6 +365,7 @@ impl Planner<'_> {
             distinct: vec![false; aggregates.len()],
             aggregates,
             output: AggregateOutput::Partial,
+            route: false,
         };
         let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
@@ -358,6 +376,7 @@ impl Planner<'_> {
             spec,
             &plan.distinct,
             crate::aggregate::distinct_count_at_merge(None),
+            false,
         )?;
         // The optimizer typed the states without the executor's help.
         let produced = schema.fields().iter().skip(k).map(|f| f.data_type());
@@ -423,6 +442,17 @@ impl Planner<'_> {
 
 /// `e` with aggregate calls and computed grouping keys replaced by the
 /// columns holding them.
+/// Whether the pairs of `aggregates` can be key-routed: one `DISTINCT`
+/// aggregate, an unfiltered `count` (the at-merge plan's,
+/// `aggregate/distinct.rs`).
+fn routable(aggregates: &[AggregateExpr], distinct: &[bool]) -> bool {
+    let mut flagged = aggregates.iter().zip(distinct).filter(|(_, d)| **d);
+    matches!(
+        (flagged.next(), flagged.next()),
+        (Some((a, _)), None) if a.function == AggregateFunction::Count && a.mask.is_none()
+    )
+}
+
 fn replace(
     e: &Arc<Expr>,
     keys: &HashMap<String, BoundColumn>,

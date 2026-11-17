@@ -565,6 +565,18 @@ impl DistinctCount {
         Self::with_pairs(spec, distinct, HashAggregate::new)
     }
 
+    /// [`new`](Self::new) with key-routed pairs (design P3-A 1d): the pairs'
+    /// radix partitions come from the hash of the grouping columns alone
+    /// ([`HashAggregate::routed`]), so each merge task holds every pair of
+    /// its keys and queues one count row per key.
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub(crate) fn routed(spec: &AggregateSpec, distinct: &[bool]) -> Result<Arc<Self>> {
+        let k = spec.group_by.len();
+        Self::with_pairs(spec, distinct, |s| HashAggregate::routed(s, k))
+    }
+
     /// [`new`](Self::new) whose pairs aggregate `make` builds (tests force
     /// row modes and early widening).
     pub(crate) fn with_pairs(

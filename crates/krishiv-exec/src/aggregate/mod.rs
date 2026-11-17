@@ -103,8 +103,11 @@ pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_va
 pub(crate) use collect::{collect_set_supported, kept_bytes};
 pub(crate) use hll::precision_for;
 pub(crate) use moments::arity;
-pub(crate) use node::distinct_count_at_merge;
-pub use node::{AggregateNode, PartialNode, distinct_plan, distinct_plan_with, union_distinct};
+pub use node::{
+    AggregateNode, PartialNode, distinct_plan, distinct_plan_routed, distinct_plan_with,
+    union_distinct,
+};
+pub(crate) use node::{distinct_count_at_merge, distinct_routed};
 pub(crate) use observe::{CollectMetrics, Finalizer};
 pub use partial::{BypassPolicy, PartialAggregate};
 pub(crate) use quantile::decimal_to_double;

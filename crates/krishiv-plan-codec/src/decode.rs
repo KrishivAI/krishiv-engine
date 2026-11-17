@@ -1130,6 +1130,7 @@ fn aggregate(a: &pb::AggregateNode) -> Result<AggregatePlan> {
             Final => AggregateOutput::Final,
             Partial => AggregateOutput::Partial,
         })?,
+        route: a.route,
     })
 }
 

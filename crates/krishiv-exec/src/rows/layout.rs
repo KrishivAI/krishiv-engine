@@ -44,6 +44,12 @@ const NULL_HASH: u64 = 0xA5A5_5A5A_C3C3_3C3C;
 /// Odd constants for the hash mix (from the fractional digits of pi and e).
 const MIX: u64 = 0x243F_6A88_85A3_08D3;
 const FINISH: u64 = 0xB7E1_5162_8AED_2A6B;
+/// Top bits of `h` a routed layout takes from its prefix columns alone
+/// ([`RowLayout::with_route`]): the aggregate's radix partition bits
+/// (`aggregate/rowtable.rs` asserts they are equal).
+pub(crate) const ROUTE_BITS: u32 = 4;
+/// The bits of `h` [`ROUTE_BITS`] covers.
+const ROUTE_MASK: u64 = !(u64::MAX >> ROUTE_BITS);
 /// The seed of the stored hash `h`: none (see the module docs).
 const SEEDLESS: u64 = 0;
 /// Odd constant of [`finalize`] (the fractional digits of sqrt(2)).
@@ -144,6 +150,9 @@ pub struct RowLayout {
     validity_at: usize,
     /// The row starts with its hash (a key row); a payload row does not.
     hashed: bool,
+    /// When non-zero, the top [`ROUTE_BITS`] of each row's hash come from
+    /// its first `route` key columns alone ([`with_route`](Self::with_route)).
+    route: usize,
     /// Buffers of encoded batches that were dropped, for the next batch.
     spares: Arc<Spares>,
 }
@@ -315,6 +324,7 @@ impl RowLayout {
             lenient: false,
             validity_at,
             hashed,
+            route: 0,
             spares: Arc::default(),
         })
     }
@@ -516,7 +526,12 @@ impl RowLayout {
             spares: Some(Arc::clone(&self.spares)),
         };
         let strings = foldhash::fast::FixedState::with_seed(SEEDLESS);
-        for (column, array) in self.columns.iter().zip(columns) {
+        // A routed layout's hash of its prefix columns, finished as `h` is.
+        let mut routed: Vec<u64> = Vec::new();
+        for (i, (column, array)) in self.columns.iter().zip(columns).enumerate() {
+            if self.hashed && self.route > 0 && i == self.route {
+                routed.extend(keys.hashes.iter().map(|&h| fold(h, FINISH)));
+            }
             if array.len() != n {
                 return Err(internal("key columns of different lengths".to_owned()));
             }
@@ -546,11 +561,36 @@ impl RowLayout {
         }
         for (i, h) in keys.hashes.iter_mut().enumerate() {
             *h = fold(*h, FINISH);
+            if let Some(&r) = routed.get(i) {
+                *h = (r & ROUTE_MASK) | (*h & !ROUTE_MASK);
+            }
             if self.hashed {
                 keys.rows[i * self.stride..i * self.stride + 8].copy_from_slice(&h.to_le_bytes());
             }
         }
         Ok(keys)
+    }
+
+    /// This layout with the top [`ROUTE_BITS`] of every row's hash taken
+    /// from its first `prefix` key columns alone and the other bits from the
+    /// whole key, as without routing (0, or a prefix of every column, turns
+    /// it off): rows of one prefix value fall in one radix partition, while
+    /// `g = fin(h ^ seed)` still mixes all 64 bits for the index and the
+    /// sketches skip the top bits.
+    #[must_use]
+    pub(crate) fn with_route(mut self, prefix: usize) -> Self {
+        self.route = if prefix < self.columns.len() {
+            prefix
+        } else {
+            0
+        };
+        self
+    }
+
+    /// The prefix columns routing the hash's top bits (0: none).
+    #[cfg(test)]
+    pub(crate) fn route(&self) -> usize {
+        self.route
     }
 
     /// Whether the rows have string or binary views (and so may point into

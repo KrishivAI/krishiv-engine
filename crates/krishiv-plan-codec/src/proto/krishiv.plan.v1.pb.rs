@@ -906,6 +906,11 @@ pub struct AggregateNode {
     pub distinct: ::prost::alloc::vec::Vec<bool>,
     #[prost(enumeration = "AggregateOutput", tag = "5")]
     pub output: i32,
+    /// Key-routed pairs of a lone count(DISTINCT) (design P3-A 1d); written
+    /// only when true.
+    /// feature: distinct_routed
+    #[prost(bool, tag = "6")]
+    pub route: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExpr {
