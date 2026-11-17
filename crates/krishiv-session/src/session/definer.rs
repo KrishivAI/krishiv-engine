@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `SQL SECURITY DEFINER` views (P3-T062 §2.4): a view's query read with its definer's rights.
+//! Stored view reads: `SQL SECURITY DEFINER` views (P3-T062 §2.4), a view's query read with its
+//! definer's rights, and the schema-binding checks of the stored views a query inlined.
 
 use super::*;
 
@@ -68,5 +69,52 @@ impl Session {
             .into();
         };
         e.redacted().without_pending_site()
+    }
+
+    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
+    ///
+    /// # Errors
+    /// What [`crate::view_schema::check_read`] raises.
+    pub(super) async fn check_stored_views(
+        &self,
+        reads: &[crate::view_schema::StoredRead],
+        env: &QueryEnv,
+        analysis: &AnalysisContext,
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
+        let compensation = crate::view_schema::compensation(&env.config);
+        let mut synced = Vec::new();
+        let mut renames = Vec::new();
+        for read in reads {
+            // A view whose query does not analyze alone is left to the outer query.
+            let (query, texts) = crate::view_schema::apply_renames_keeping(
+                &read.query,
+                &renames,
+                &analysis.definer_texts,
+            );
+            let Ok(plan) = Plan::try_new(query) else {
+                continue;
+            };
+            let renamed;
+            let analysis = if renames.is_empty() {
+                analysis
+            } else {
+                let mut ctx = analysis.clone();
+                ctx.definer_texts = texts;
+                renamed = ctx;
+                &renamed
+            };
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, analysis).await else {
+                continue;
+            };
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
+                synced.push((Arc::clone(&read.entry), changed));
+            }
+            renames.extend(check.rename);
+        }
+        Ok((synced, renames))
     }
 }
