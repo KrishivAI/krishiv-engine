@@ -228,6 +228,12 @@ struct Udf {
     gate: Arc<Gate>,
     /// Its tasks fail at their first `EndGroup` (a UDF raising).
     fails_end_group: std::sync::atomic::AtomicBool,
+    /// Its tasks fail once their results are read, instead of ending (a UDF
+    /// raising after it yielded).
+    fails_after_results: std::sync::atomic::AtomicBool,
+    /// An aligned lane's task (a window aggregate, a scalar iterator): its
+    /// result has one row per input row it saw.
+    per_row: bool,
 }
 
 /// Holds every task's sends while closed, as a pool worker's thread that
@@ -268,9 +274,12 @@ impl PreparedRelationUdf for Udf {
             result_rows: self.result_rows,
             twice: self.twice.load(Ordering::SeqCst),
             per_group: self.per_group,
+            per_row: self.per_row,
             groups: Mutex::new(0),
             gate: Arc::clone(&self.gate),
             fails_end_group: self.fails_end_group.load(Ordering::SeqCst),
+            fails_after_results: self.fails_after_results.load(Ordering::SeqCst),
+            seen: Mutex::new(0),
         }))
     }
 
@@ -289,16 +298,24 @@ struct Task {
     result_rows: usize,
     twice: bool,
     per_group: bool,
+    per_row: bool,
     /// `EndGroup` frames taken.
     groups: Mutex<usize>,
     gate: Arc<Gate>,
     fails_end_group: bool,
+    fails_after_results: bool,
+    /// Rows of the `Batch` frames taken.
+    seen: Mutex<usize>,
 }
 
 impl UdfTask for Task {
     fn send(&self, frame: Frame) -> BoxFuture<'_, crate::error::Result<()>> {
         let end = matches!(frame, Frame::End);
         let end_group = matches!(frame, Frame::EndGroup);
+        let batch_rows = match &frame {
+            Frame::Batch { batch, .. } => batch.num_rows(),
+            _ => 0,
+        };
         Box::pin(poll_fn(move |cx| {
             if self.gate.closed.load(Ordering::SeqCst) {
                 self.gate.wakers.lock().unwrap().push(cx.waker().clone());
@@ -312,9 +329,12 @@ impl UdfTask for Task {
             if end_group {
                 *self.groups.lock().unwrap() += 1;
             }
+            *self.seen.lock().unwrap() += batch_rows;
             if end {
                 let rows = if self.per_group {
                     *self.groups.lock().unwrap()
+                } else if self.per_row {
+                    *self.seen.lock().unwrap()
                 } else {
                     self.result_rows
                 };
@@ -357,6 +377,11 @@ impl UdfTask for Task {
             }
             if *self.ended.lock().unwrap() {
                 drop(self.slot.lock().unwrap().take());
+                if self.fails_after_results {
+                    return Poll::Ready(Err(crate::error::internal(
+                        "the task fails after its results on purpose".to_owned(),
+                    )));
+                }
                 Poll::Ready(Ok(None))
             } else {
                 Poll::Pending
@@ -495,6 +520,8 @@ fn rig_opts(
                 per_group: false,
                 gate: Arc::clone(&gate),
                 fails_end_group: std::sync::atomic::AtomicBool::new(false),
+                fails_after_results: std::sync::atomic::AtomicBool::new(false),
+                per_row: false,
             })
         })
         .collect();
@@ -833,6 +860,56 @@ async fn a_combined_result_reserved_by_the_waiting_driver_moves_its_task_on() {
         .expect("the combined task never moved on")
         .unwrap();
     assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+}
+
+/// R7e-1: the lane the waiting driver polls again after reserving a combined
+/// driver's refused result fails in that poll. The failure is the waiting
+/// driver's at once: its `Blocked` future ends in the same poll (not one
+/// self-woken poll later), and its next `sink` returns the error.
+#[tokio::test]
+async fn a_combined_lane_failing_in_the_poll_after_its_reservation_fails_the_waiting_driver() {
+    let r = rig_with(1, 1, 4 << 20, 200_000);
+    r.udfs[0].fails_after_results.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let (ctx_a, _) = driver_ctx(&r, 1);
+    let (ctx_b, owner_b) = driver_ctx(&r, 2);
+    let (ctx_c, _) = driver_ctx(&r, 3);
+    let run = async {
+        let mut a = r.sink.local_state(&ctx_a, &g)?;
+        let mut b = r.sink.local_state(&ctx_b, &g)?;
+        feed(&r, rows(&[1, 2]), &mut a, &g).await?;
+        let SinkStatus::Blocked(mut wait) = r.sink.sink(rows(&[3]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        // As in R3-1: the pool has room for a's result only through b's credit.
+        let b_consumer = Arc::clone(ctx_b.consumer().consumer());
+        owner_b
+            .reserve_for(&b_consumer, 2_000_000, || async {})
+            .await
+            .unwrap();
+        let mut blocker = ctx_c.consumer().consumer().reservation();
+        blocker
+            .try_grow((4 << 20) - 2_000_000 - (768 << 10))
+            .unwrap();
+        r.sink.combine(a, &g)?;
+        assert!(
+            poll_fn(|cx| Poll::Ready(std::future::Future::poll(wait.as_mut(), cx)))
+                .await
+                .is_ready(),
+            "the lane's failure ends the waiting driver's future in the same poll"
+        );
+        drop(blocker);
+        Ok::<_, krishiv_common::error::KrishivError>(r.sink.sink(rows(&[4]), &mut b, &g).err())
+    };
+    let e = tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung")
+        .unwrap()
+        .expect("the combined lane's failure is the waiting driver's");
+    assert!(
+        e.to_string().contains("fails after its results on purpose"),
+        "{e}"
+    );
 }
 
 /// R3-2: a result that fits the memory limit but is refused at first: the
@@ -1389,9 +1466,15 @@ struct Case {
     cancel: Option<(usize, usize)>,
     /// An aggregate (one row per group from each lane) rather than a map.
     aggregate: bool,
+    /// An aligned shape (one value per row from each lane): a window
+    /// aggregate or a scalar iterator.
+    aligned: bool,
     /// The cancel goes through the query (its drivers see it) rather than
     /// by dropping the session's drivers.
     by_query: bool,
+    /// Keys whose groups may span two batches ([`keys`]); round 4's cases
+    /// keep its keys.
+    spanning: bool,
 }
 
 /// A session's relation slots: its `maxPerSession`, within `maxTotal`, less
@@ -1402,8 +1485,8 @@ fn slot_limit(per_session: usize, total: usize) -> usize {
 
 impl Case {
     /// The case of `seed`. The draws of round 4's sweep come first and in
-    /// its order, so `original` gives the very cases it ran (seed 207 hung
-    /// on 1a2e19d04); the rest (shape, lanes within the limit, the way of
+    /// its order, so `original` gives the very cases it drew (seed 207 is
+    /// the case that hung under round 4's harness); the rest (shape, lanes within the limit, the way of
     /// cancelling) are drawn after them.
     fn new(seed: u64, original: bool) -> Self {
         let mut rng = Rng::new(seed);
@@ -1423,7 +1506,9 @@ impl Case {
                 .collect(),
             cancel: (rng.below(5) == 0).then(|| (rng.pick(0, sessions - 1), rng.pick(0, 20))),
             aggregate: false,
+            aligned: false,
             by_query: false,
+            spanning: false,
         };
         if original {
             return case;
@@ -1438,24 +1523,37 @@ impl Case {
             (true, _) => rng.pick(1, limit),
         };
         case.by_query = rng.below(2) == 0;
+        case.spanning = true;
+        // A third of the maps become aligned (PR-26c-3), their lanes within
+        // the limit as an aggregate's mostly are.
+        if !case.aggregate && rng.below(3) == 0 {
+            case.aligned = true;
+            case.lanes = match rng.below(5) {
+                0 => rng.pick(1, 3),
+                _ => rng.pick(1, limit),
+            };
+        }
         case
     }
 
     /// The rows a session's run stores when every task runs to its end
     /// (`None` for a map of several lanes, which no plan makes).
     fn rows(&self, owner: usize) -> Option<usize> {
-        if !self.aggregate && self.lanes > 1 {
+        if !self.aggregate && !self.aligned && self.lanes > 1 {
             return None;
         }
         let rows = (0..self.drivers)
             .map(|d| {
                 let batches = &self.batches[owner * self.drivers + d];
-                if self.aggregate {
+                if self.aligned {
+                    // Every input row, once.
+                    batches.iter().sum::<usize>()
+                } else if self.aggregate {
                     // One row per group: the distinct keys of the driver.
                     let mut keys: Vec<i32> = batches
                         .iter()
                         .enumerate()
-                        .flat_map(|(i, &n)| keys(i, n))
+                        .flat_map(|(i, &n)| keys(i, n, self.spanning))
                         .collect();
                     keys.dedup();
                     keys.len()
@@ -1471,11 +1569,16 @@ impl Case {
     }
 }
 
-/// The keys of batch `i` of a driver's input, `n` rows: ascending across its
-/// batches, two rows per key, so a key's group may span two batches.
-fn keys(i: usize, n: usize) -> Vec<i32> {
+/// The keys of batch `i` of a driver's input, `n` rows (at most 5): two rows
+/// per key, ascending across its batches. When `spanning`, batch `i` starts
+/// at key `5i / 2`, so after a full batch of an even `i` the last key's
+/// group goes on in the next batch (review N6-3: the path where a group
+/// spans two batches); otherwise (round 4's keys) batch `i` starts at key
+/// `5i` and no group spans two.
+fn keys(i: usize, n: usize, spanning: bool) -> Vec<i32> {
+    let first = if spanning { i * 5 } else { i * 10 };
     (0..n)
-        .map(|k| i32::try_from((i * 10 + k) / 2).unwrap())
+        .map(|k| i32::try_from((first + k) / 2).unwrap())
         .collect()
 }
 
@@ -1502,10 +1605,14 @@ fn session(case: &Case, owner: usize, state: &Arc<SlotState>, root: &Arc<TreePoo
                 opened: AtomicUsize::new(0),
                 ends: Arc::new(AtomicUsize::new(0)),
                 result_rows: case.result_rows,
-                twice: std::sync::atomic::AtomicBool::new(!case.aggregate && owner % 2 == 1),
+                twice: std::sync::atomic::AtomicBool::new(
+                    !case.aggregate && !case.aligned && owner % 2 == 1,
+                ),
                 per_group: case.aggregate,
                 gate: Arc::default(),
                 fails_end_group: std::sync::atomic::AtomicBool::new(false),
+                fails_after_results: std::sync::atomic::AtomicBool::new(false),
+                per_row: case.aligned,
             }) as Arc<dyn PreparedRelationUdf>,
             sides: vec![vec![Arc::new(InputColumn {
                 index: 1,
@@ -1516,7 +1623,17 @@ fn session(case: &Case, owner: usize, state: &Arc<SlotState>, root: &Arc<TreePoo
             client: vec![ArrowType::Int64],
         })
         .collect();
-    let (shape, output) = if case.aggregate {
+    let (shape, output) = if case.aligned {
+        let mut fields = vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("v", ArrowType::Int64, true),
+        ];
+        fields.extend((0..case.lanes).map(|i| Field::new(format!("n{i}"), ArrowType::Int64, true)));
+        // A window aggregate's partitions for an even owner, a scalar
+        // iterator's one stream for an odd one.
+        let keys = owner.is_multiple_of(2).then(|| vec![0]);
+        (RelationShape::Aligned { keys }, fields)
+    } else if case.aggregate {
         let mut fields = vec![Field::new("k", ArrowType::Int32, true)];
         fields.extend((0..case.lanes).map(|i| Field::new(format!("n{i}"), ArrowType::Int64, true)));
         (
@@ -1567,6 +1684,7 @@ async fn drive_one(
     g: GlobalState,
     op: u32,
     batches: Vec<usize>,
+    spanning: bool,
 ) -> crate::error::Result<()> {
     let owner = SpillOwner::new();
     let ctx = TaskContext::new(
@@ -1580,7 +1698,7 @@ async fn drive_one(
     for (i, n) in batches.into_iter().enumerate() {
         loop {
             s.query.check_cancelled()?;
-            match s.sink.sink(rows(&keys(i, n)), &mut l, &g)? {
+            match s.sink.sink(rows(&keys(i, n, spanning)), &mut l, &g)? {
                 SinkStatus::Blocked(wait) => {
                     wait.await;
                     break;
@@ -1623,6 +1741,7 @@ async fn run_session(
             Arc::clone(&g),
             u32::try_from(d + 1).unwrap(),
             batches,
+            case.spanning,
         ));
     }
     let mut cancel = case.cancel.filter(|&(victim, _)| victim == owner);
@@ -1665,7 +1784,30 @@ async fn run_session(
         return Err(e);
     }
     s.query.check_cancelled()?;
-    s.sink.finalize(&g, &ctx).await?;
+    // A cancel not reached yet ticks on through `finalize`: the query's
+    // cancel then ends `finalize`'s wait (its `cancelled()` branch), or the
+    // session's run is dropped mid-`finalize` (review N6-3).
+    let finalize = s.sink.finalize(&g, &ctx);
+    tokio::pin!(finalize);
+    loop {
+        tokio::select! {
+            biased;
+            r = &mut finalize => {
+                r?;
+                break;
+            }
+            () = tokio::task::yield_now(), if cancel.is_some() => {
+                ticks += 1;
+                if cancel.is_some_and(|(_, after)| ticks > after) {
+                    cancel = None;
+                    if !case.by_query {
+                        return Ok(None);
+                    }
+                    s.query.cancel();
+                }
+            }
+        }
+    }
     let stored = super::sink::store_state(&g).and_then(|store| crate::shared::memory_rows(&store));
     Ok(Some(stored.unwrap_or(usize::MAX)))
 }
@@ -1777,8 +1919,10 @@ async fn seeded_relation_slot_stress_never_hangs() {
     );
 }
 
-/// Round 4's sweep's cases as it drew them, seed 207 among them (it hung on
-/// 1a2e19d04: a combined driver's ticket held its sibling back).
+/// Round 4's sweep's cases as it drew them, seed 207 among them (the case
+/// that hung under round 4's harness, where a combined driver's ticket held
+/// its sibling back; the deterministic test of that bug is
+/// `a_driver_combining_while_slots_are_full_keeps_no_place_in_the_queue`).
 #[tokio::test(start_paused = true)]
 async fn the_round_four_cases_never_hang() {
     for seed in 0..=255 {
@@ -1790,4 +1934,21 @@ async fn the_round_four_cases_never_hang() {
 #[tokio::test(start_paused = true)]
 async fn round_four_seed_207_never_hangs() {
     run_case(207, Case::new(207, true)).await;
+}
+
+/// A combined driver whose `End` stayed in its backlog (its window was full
+/// when it combined: the open group's last cut, `EndGroup`, `End`) holds the
+/// one slot until that frame goes out; the driver waiting for the slot frames
+/// it (`blocked`, the combined feeds), else `finalize`, which waits for the
+/// waiting driver, never comes. Seed 19 of the sweep, reduced; it hung before
+/// the fix.
+#[tokio::test(start_paused = true)]
+async fn a_combined_driver_s_backlog_is_framed_by_the_driver_waiting_for_its_slot() {
+    let mut c = Case::new(19, false);
+    c.sessions = 1;
+    c.batches = vec![vec![3], vec![2]];
+    c.drivers = 2;
+    assert!(c.aligned && c.total == 1, "{c:?}");
+    let o = run_case(19, c).await;
+    assert_eq!(o.completed, 1);
 }

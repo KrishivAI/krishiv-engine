@@ -407,6 +407,19 @@ pub struct PythonAggregateNode {
     pub calls: ::prost::alloc::vec::Vec<PythonCall>,
     #[prost(uint64, repeated, tag = "5")]
     pub key_values: ::prost::alloc::vec::Vec<u64>,
+    /// feature: python_udf_windows
+    #[prost(message, optional, tag = "6")]
+    pub window: ::core::option::Option<PythonWindow>,
+}
+/// feature: python_udf_windows
+/// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+/// `keys` are the window's partitioning, the output every input row with one
+/// value per call; per call, whether its frame is bounded (its first two
+/// arguments are each row's frame start and end).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonWindow {
+    #[prost(bool, repeated, tag = "1")]
+    pub bounded: ::prost::alloc::vec::Vec<bool>,
 }
 /// feature: python_udf_relations
 /// The Python UDF of a relation node: by name and version, the columns of its

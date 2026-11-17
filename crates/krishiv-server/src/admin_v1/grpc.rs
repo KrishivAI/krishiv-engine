@@ -11,44 +11,111 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tonic::{Code, Status};
 
-use super::rest::{MAX_BODY, bearer, refusal_error};
+use super::core::Core;
+use super::rest::{MAX_BODY, bearer, fresh_request_id, refusal_error};
 use super::{
-    AdminApi, AdminError, AdminService, AdminServiceServer, ErrorKind, GetCapabilitiesRequest,
-    GetCapabilitiesResponse, GetVersionRequest, GetVersionResponse,
+    AdminError, AdminService, AdminServiceServer, Call, CancelQueriesByTagRequest,
+    CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, ErrorKind,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetVersionRequest, GetVersionResponse,
+    KillSessionRequest, KillSessionResponse, ListQueriesRequest, ListQueriesResponse,
+    ListSessionsRequest, ListSessionsResponse,
 };
 use super::{GRPC_PREFIX, Privilege, routes};
-use crate::guard::{Access, Guard, GuardRequest, GuardSurface, peer_leaf_of, peer_of};
+use crate::guard::{Access, Caller, Guard, GuardRequest, GuardSurface, peer_leaf_of, peer_of};
 
 struct Service {
-    api: Arc<dyn AdminApi>,
+    core: Arc<Core>,
+}
+
+impl Service {
+    /// Runs `rpc` for the caller the guard resolved (it put it in the request's extensions).
+    async fn run<Req, Resp>(
+        &self,
+        rpc: &str,
+        request: tonic::Request<Req>,
+    ) -> Result<tonic::Response<Resp>, Status>
+    where
+        Req: prost::Message,
+        Resp: prost::Message + Default,
+    {
+        let Some(caller) = request.extensions().get::<Caller>().cloned() else {
+            return Err(status_of(&AdminError::internal(
+                "the guard resolved no caller",
+            )));
+        };
+        let call = Call {
+            caller,
+            transport: "grpc",
+            request_id: fresh_request_id(),
+        };
+        let bytes = self
+            .core
+            .call(rpc, call, &request.get_ref().encode_to_vec(), None)
+            .await
+            .map_err(|e| status_of(&e))?;
+        let response = Resp::decode(bytes.as_slice()).map_err(|e| {
+            status_of(&AdminError::internal(format!(
+                "a response did not decode: {e}"
+            )))
+        })?;
+        Ok(tonic::Response::new(response))
+    }
 }
 
 #[tonic::async_trait]
 impl AdminService for Service {
     async fn get_version(
         &self,
-        _: tonic::Request<GetVersionRequest>,
+        request: tonic::Request<GetVersionRequest>,
     ) -> Result<tonic::Response<GetVersionResponse>, Status> {
-        Ok(tonic::Response::new(
-            self.api.get_version().await.map_err(|e| status_of(&e))?,
-        ))
+        self.run("GetVersion", request).await
     }
 
     async fn get_capabilities(
         &self,
-        _: tonic::Request<GetCapabilitiesRequest>,
+        request: tonic::Request<GetCapabilitiesRequest>,
     ) -> Result<tonic::Response<GetCapabilitiesResponse>, Status> {
-        Ok(tonic::Response::new(
-            self.api
-                .get_capabilities()
-                .await
-                .map_err(|e| status_of(&e))?,
-        ))
+        self.run("GetCapabilities", request).await
+    }
+
+    async fn list_sessions(
+        &self,
+        request: tonic::Request<ListSessionsRequest>,
+    ) -> Result<tonic::Response<ListSessionsResponse>, Status> {
+        self.run("ListSessions", request).await
+    }
+
+    async fn kill_session(
+        &self,
+        request: tonic::Request<KillSessionRequest>,
+    ) -> Result<tonic::Response<KillSessionResponse>, Status> {
+        self.run("KillSession", request).await
+    }
+
+    async fn list_queries(
+        &self,
+        request: tonic::Request<ListQueriesRequest>,
+    ) -> Result<tonic::Response<ListQueriesResponse>, Status> {
+        self.run("ListQueries", request).await
+    }
+
+    async fn cancel_query(
+        &self,
+        request: tonic::Request<CancelQueryRequest>,
+    ) -> Result<tonic::Response<CancelQueryResponse>, Status> {
+        self.run("CancelQuery", request).await
+    }
+
+    async fn cancel_queries_by_tag(
+        &self,
+        request: tonic::Request<CancelQueriesByTagRequest>,
+    ) -> Result<tonic::Response<CancelQueriesByTagResponse>, Status> {
+        self.run("CancelQueriesByTag", request).await
     }
 }
 
-pub(super) fn router(api: Arc<dyn AdminApi>, guard: Arc<dyn Guard>) -> Router {
-    let server = AdminServiceServer::new(Service { api })
+pub(super) fn router(core: Arc<Core>, guard: Arc<dyn Guard>) -> Router {
+    let server = AdminServiceServer::new(Service { core })
         .max_decoding_message_size(MAX_BODY)
         .max_encoding_message_size(MAX_BODY * 16);
     // `route_service`, not tonic's `Routes`: that router carries a catch-all `unimplemented`
@@ -127,8 +194,12 @@ async fn authorize(State(guard): State<Arc<dyn Guard>>, req: Request, next: Next
         .with_malformed(malformed)
         .with_peer(peer_of(req.extensions()))
         .with_peer_leaf(peer_leaf_of(req.extensions()));
-    match guard.check(request).await {
-        Ok(()) => next.run(req).await,
+    match guard.authenticate(request).await {
+        Ok(caller) => {
+            let mut req = req;
+            req.extensions_mut().insert(caller);
+            next.run(req).await
+        }
         Err(refusal) => status_of(&refusal_error(refusal))
             .into_http::<axum::body::Body>()
             .into_response(),
