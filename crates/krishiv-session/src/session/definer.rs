@@ -62,6 +62,11 @@ impl Session {
             d.path.clone(),
         ));
         ctx.conf.cte_precedence = krishiv_plan::analyzer::CtePrecedencePolicy::Corrected;
+        // All of it is a stored view's text: no variable of the reader's session reads in it (review
+        // r5 Z2), and its calls are those the inlining qualified (Z1).
+        ctx.variables = Arc::new(krishiv_plan::analyzer::VariableSnapshot::default());
+        ctx.stored_view_texts =
+            krishiv_plan::analyzer::views::DefinerTexts::new(vec![Arc::clone(query)]);
         let plan = Plan::try_new(Arc::clone(query))?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &ctx)
@@ -115,10 +120,10 @@ impl Session {
         let mut renames = Vec::new();
         for read in reads {
             // A view whose query does not analyze alone is left to the outer query.
-            let (query, texts) = crate::view_schema::apply_renames_keeping(
+            let (query, mut kept) = crate::view_schema::apply_renames_keeping(
                 &read.query,
                 &renames,
-                &analysis.definer_texts,
+                &[&analysis.definer_texts, &analysis.stored_view_texts],
             );
             let Ok(plan) = Plan::try_new(query) else {
                 continue;
@@ -128,7 +133,8 @@ impl Session {
                 analysis
             } else {
                 let mut ctx = analysis.clone();
-                ctx.definer_texts = texts;
+                ctx.stored_view_texts = kept.pop().unwrap_or_default();
+                ctx.definer_texts = kept.pop().unwrap_or_default();
                 renamed = ctx;
                 &renamed
             };

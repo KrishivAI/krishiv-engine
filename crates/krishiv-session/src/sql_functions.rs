@@ -294,6 +294,10 @@ impl QueryFunctions {
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         let next_source = |views: &ViewSource| (views.next_source)();
+        // The calls of a view a body reads resolve as in any stored view's text (review r5 Z1).
+        let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>]| {
+            self.qualify_calls(e, namespace, path, profile, true)
+        };
         let expansion = match &self.views {
             Some(views) => {
                 let stored = StoredViews {
@@ -310,7 +314,7 @@ impl QueryFunctions {
                         def.path.clone()
                     },
                     next_source: &|| next_source(views),
-                    qualify: None,
+                    qualify: Some(&qualify),
                     namespace: stored_in
                         .clone()
                         .unwrap_or_else(|| self.catalog.current_namespace()),
@@ -392,16 +396,20 @@ impl QueryFunctions {
     /// `body` with each bare call that is not a built-in qualified: by the
     /// first schema of the function's frozen `path` holding a stored function
     /// of that name, else by `namespace`; `None` when nothing changed.
-    /// `temporary_visible` (a view's body, not a stored function's) leaves a
-    /// call a session UDF or temporary function answers bare. Calls
-    /// inside subquery plans are not entered.
+    /// `in_view` (a permanent view's text, not a stored function's body): no temporary function
+    /// or session UDF answers a call, whatever the path or the reader's session holds (review r5
+    /// Z1; Spark v4.2.0 `SessionCatalog.scala` lines 2427-2441). A bare call goes to the first
+    /// catalog schema of the path holding a stored function of its name, else to the path's first
+    /// catalog schema (where it is unresolved), else, for a view stored with no path, to its own
+    /// namespace; with a path of no catalog schema it stays bare and the analyzer refuses it
+    /// (`AnalysisContext::stored_view_texts`). Calls inside subquery plans are not entered.
     pub(crate) fn qualify_calls(
         &self,
         body: &Arc<Expr>,
         namespace: &str,
         path: &[Vec<String>],
         profile: SparkProfile,
-        temporary_visible: bool,
+        in_view: bool,
     ) -> Option<Arc<Expr>> {
         let out = Arc::clone(body)
             .transform_up(
@@ -446,39 +454,6 @@ impl QueryFunctions {
                         }
                         _ => None,
                     });
-                    // The resolver asks the registered functions first, so in a
-                    // view a session UDF answers bare whatever the path holds;
-                    // a stored function's body names its stored routines.
-                    if temporary_visible
-                        && !matches!(
-                            self.base.lookup(std::slice::from_ref(&call.name), profile),
-                            FunctionLookup::NotFound
-                        )
-                    {
-                        return Ok(e);
-                    }
-                    // A temporary function answers bare when the path reaches
-                    // `system.session` before any stored routine of that name.
-                    if temporary_visible && self.map.get(&name).is_some() {
-                        let session_at = path.iter().position(|entry| {
-                            matches!(entry.as_slice(), [s, q]
-                                if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
-                        });
-                        let stored_at = path.iter().position(|entry| match entry.as_slice() {
-                            [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
-                                self.stored.get(&fold(n, self.case_sensitive), &name).is_some()
-                            }
-                            _ => false,
-                        });
-                        let session_first = match (session_at, stored_at) {
-                            (Some(s), Some(t)) => s < t,
-                            (Some(_), None) => true,
-                            (None, _) => path.is_empty(),
-                        };
-                        if session_first {
-                            return Ok(e);
-                        }
-                    }
                     // A routine gone from the frozen path stays unresolved: it
                     // is looked up in the path's first schema, never the
                     // namespace outside the path.
@@ -490,11 +465,18 @@ impl QueryFunctions {
                     });
                     // Only a view is held to the path's first schema; a stored
                     // function's body falls back to its own namespace.
-                    call.qualifier = match from_path.or(first.filter(|_| temporary_visible)) {
+                    call.qualifier = match from_path.or(first.filter(|_| in_view)) {
                         Some(q) => q,
-                        // A view whose path holds no catalog schema keeps the
-                        // call bare, unresolved, not the view's namespace.
-                        None if temporary_visible => return Ok(e),
+                        // A view stored without a path reads its own namespace.
+                        None if in_view && path.is_empty() => {
+                            vec![
+                                crate::catalog::CATALOG.to_owned(),
+                                fold(namespace, self.case_sensitive),
+                            ]
+                        }
+                        // A view whose path holds no catalog schema keeps the call bare: the
+                        // analyzer refuses it in a stored view's text, never the reader's.
+                        None if in_view => return Ok(e),
                         None if self.in_system => {
                             vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()]
                         }

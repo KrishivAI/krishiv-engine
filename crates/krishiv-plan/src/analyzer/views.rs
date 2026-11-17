@@ -43,6 +43,11 @@ impl DefinerTexts {
         self.roots.is_empty()
     }
 
+    /// The inlined queries.
+    pub(crate) fn roots(&self) -> &[std::sync::Arc<LogicalPlan>] {
+        &self.roots
+    }
+
     /// Whether `node` is one of the inlined queries (by address, never by content).
     #[must_use]
     pub fn contains(&self, node: &LogicalPlan) -> bool {

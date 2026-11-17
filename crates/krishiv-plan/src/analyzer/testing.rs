@@ -56,6 +56,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         variables: Arc::new(VariableSnapshot::default()),
         mode: AnalysisMode::Execute,
         definer_texts: super::views::DefinerTexts::default(),
+        stored_view_texts: super::views::DefinerTexts::default(),
     }
 }
 

@@ -138,17 +138,22 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     // reused while `seen` holds it.
     let mut scopes: Vec<Arc<[String]>> = vec![Arc::from(Vec::new())];
     for root in &roots {
-        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), false)];
-        while let Some((node, env, under)) = stack.pop() {
-            if !seen.insert((node.key() as usize, addr(&*env), under)) {
+        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), false, false)];
+        while let Some((node, env, under, in_view)) = stack.pop() {
+            if !seen.insert((node.key() as usize, addr(&*env), under, in_view)) {
                 continue;
             }
             let under = under || matches!(node, Node::Plan(p) if ctx.definer_texts.contains(p));
+            let in_view =
+                in_view || matches!(node, Node::Plan(p) if ctx.stored_view_texts.contains(p));
+            if in_view {
+                check_in_stored_view(ctx, node)?;
+            }
             let mut next = Vec::new();
             visit(node, &env, ctx, &mut next, &mut found)?;
             definer.resize(found.len(), under);
             scopes.extend(next.iter().map(|(_, e)| Arc::clone(e)));
-            stack.extend(next.into_iter().rev().map(|(n, e)| (n, e, under)));
+            stack.extend(next.into_iter().rev().map(|(n, e)| (n, e, under, in_view)));
         }
     }
     // The principal's own reads first, then those only a definer view's text makes: a name both
@@ -374,6 +379,72 @@ fn sql_function_roots(
                 input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
                 exprs,
             })));
+        }
+    }
+    Ok(())
+}
+
+/// A node of a permanent view's text ([`AnalysisContext::stored_view_texts`], review r5 Z1): no
+/// function of the reading session answers in it. The session qualified every call a stored
+/// function of the view's path answers when it inlined the view, so a call still bare that no
+/// built-in answers, or one qualified `session.` / `system.session.`, is an unresolved routine
+/// (Spark v4.2.0 `SessionCatalog.scala` lines 2427-2441: while a permanent view resolves no
+/// temporary function answers); a table function of that shape that is no built-in one is
+/// unresolvable.
+fn check_in_stored_view(ctx: &AnalysisContext, node: Node<'_>) -> Result<(), AnalysisError> {
+    let builtin = |name: &str| {
+        let parts = ["system".to_owned(), "builtin".to_owned(), name.to_owned()];
+        !matches!(
+            ctx.functions.lookup(&parts, ctx.profile),
+            FunctionLookup::NotFound
+        )
+    };
+    match node {
+        Node::Expr(e) => {
+            let ExprNode::Function(f) = &e.node else {
+                return Ok(());
+            };
+            let session = is_session_qualifier(&f.qualifier);
+            let bare = f.qualifier.is_empty()
+                && is_registry_call(&f.name)
+                && !super::ops::is_qualify_wrapper(&f.name)
+                && !f.name.eq_ignore_ascii_case("stack")
+                && !is_grammar_unit_call(&f.name)
+                && !builtin(&f.name);
+            if session || bare {
+                let mut parts = f.qualifier.clone();
+                parts.push(f.name.clone());
+                return Err(AnalysisError::new(
+                    UnresolvedRoutine {
+                        routine_name: quoted(&parts),
+                        search_path: search_path(ctx),
+                    },
+                    e.origin,
+                ));
+            }
+        }
+        Node::Plan(p) => {
+            let PlanNode::TableFunction { name, .. } = &p.node else {
+                return Ok(());
+            };
+            let parts: Vec<String> = name
+                .split(crate::TABLE_FUNCTION_NAME_SEP)
+                .map(str::to_owned)
+                .collect();
+            let session = parts.len() > 1 && is_session_qualifier(&parts[..parts.len() - 1]);
+            let builtin_table = name.eq_ignore_ascii_case("json_tuple")
+                || matches!(
+                    ctx.table_functions.lookup(name, ctx.profile),
+                    super::TableFunctionLookup::Found(_)
+                );
+            if (session || parts.len() == 1) && !builtin_table {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::UnresolvableTableValuedFunction {
+                        name: quoted(&parts),
+                    },
+                    p.origin,
+                ));
+            }
         }
     }
     Ok(())

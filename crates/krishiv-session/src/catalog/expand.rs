@@ -31,6 +31,9 @@ pub(super) struct Expander<'a> {
     /// The definer views whose text the expansion is inside, innermost last (indexes of
     /// [`Self::definers`]): a lookup there is the innermost one's, asked of its definer.
     pub(super) in_definer: Vec<usize>,
+    /// How many stored views' texts the expansion is inside: only their calls are qualified by
+    /// [`StoredViews::qualify`] (a stored function's body, expanded in its namespace, is not one).
+    pub(super) in_stored_view: usize,
     /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
     pub(super) keeps: Vec<Keep>,
 }
@@ -351,7 +354,9 @@ impl Expander<'_> {
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());
+        self.in_stored_view += 1;
         let input = self.go(text, &mut Vec::new());
+        self.in_stored_view -= 1;
         self.view_namespace = previous;
         self.view_path = previous_path;
         self.path.pop();
@@ -470,6 +475,7 @@ impl Expander<'_> {
         let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
         // Inside a stored view the calls of its query resolve through the path it was created under.
         if matches!(expr.node, ExprNode::Function(_))
+            && self.in_stored_view > 0
             && let (Some(qualify), Some(namespace), Some(path)) = (
                 self.stored.and_then(|s| s.qualify),
                 &self.view_namespace,

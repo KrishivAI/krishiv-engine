@@ -1472,6 +1472,7 @@ pub(crate) fn expand_views_in(
         views: Vec::new(),
         definers: Vec::new(),
         in_definer: Vec::new(),
+        in_stored_view: 0,
         keeps: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;

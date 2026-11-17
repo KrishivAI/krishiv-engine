@@ -1296,3 +1296,235 @@ fn a_refused_column_is_named_only_by_a_reference_to_it() {
         assert!(e.contains(named), "{sql}: {e}");
     }
 }
+
+/// The arguments a [`Shadow`] UDF was called with, by test.
+static SHADOWED: std::sync::Mutex<Vec<(&'static str, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// A session UDF named `name` returning `true` for every row, recording each argument under
+/// `test`: a reader's function shadowing a name a view's text calls.
+#[derive(Debug)]
+struct Shadow {
+    name: &'static str,
+    test: &'static str,
+}
+
+impl krishiv_session::ScalarUdf for Shadow {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_session::Signature {
+        static SIG: std::sync::OnceLock<krishiv_session::Signature> = std::sync::OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_session::Signature::Exact(vec![krishiv_session::UdfInputType::Any])
+        })
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_session::ArgField],
+    ) -> Result<krishiv_session::ReturnField, krishiv_session::UdfError> {
+        Ok(krishiv_session::ReturnField {
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: false,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_session::UdfArg<'_>],
+        rows: usize,
+        _: &krishiv_session::InvokeContext,
+    ) -> Result<arrow_array::ArrayRef, krishiv_session::UdfError> {
+        let a = args[0].array();
+        let mut seen = SHADOWED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for i in 0..a.len() {
+            let value = arrow_cast::display::array_value_to_string(&a, i).unwrap_or_default();
+            seen.push((self.test, value));
+        }
+        Ok(Arc::new(arrow_array::BooleanArray::from(vec![true; rows])))
+    }
+}
+
+/// Whether a [`Shadow`] of `test` was ever called.
+fn shadow_called(test: &str) -> bool {
+    SHADOWED.lock().unwrap().iter().any(|(t, _)| *t == test)
+}
+
+/// The first column of every row of `sql`, in order.
+fn column(s: &Session, sql: &str) -> Result<Vec<String>, KrishivError> {
+    block_on(async { values(s.sql(sql).await?).await })
+}
+
+async fn values(df: krishiv_session::DataFrame) -> Result<Vec<String>, KrishivError> {
+    let batches = df.collect().await?;
+    let mut out = Vec::new();
+    for b in &batches {
+        for r in 0..b.num_rows() {
+            out.push(arrow_cast::display::array_value_to_string(b.column(0), r).unwrap());
+        }
+    }
+    Ok(out)
+}
+
+const POLICIES: [&str; 3] = ["CORRECTED", "LEGACY", "EXCEPTION"];
+
+/// root's `t (owner STRING, a INT)` = ana, carl, dave, readable by ana only; ana's stored function
+/// `allowed(o)` (`o = 'ana'`), her definer view `dvf` and invoker view `ivf` filtering `t` by it.
+/// bob may read `dvf` and call `allowed`.
+fn function_world() -> (World, Session, Session) {
+    let w = World::new();
+    let (root, ana) = (w.admin(), w.user("ana"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(
+        &root,
+        "INSERT INTO t VALUES ('ana', 1), ('carl', 2), ('dave', 3)",
+    );
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(
+        &ana,
+        "CREATE FUNCTION allowed(o STRING) RETURNS BOOLEAN RETURN o = 'ana'",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW dvf SQL SECURITY DEFINER AS SELECT owner FROM t WHERE allowed(owner)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW ivf AS SELECT owner FROM t WHERE allowed(owner)",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dvf TO user:bob");
+    ok(&ana, "GRANT SELECT ON FUNCTION allowed TO user:bob");
+    (w, root, ana)
+}
+
+/// Review r5 Z1: a stored view's text never resolves a function of the reading session. Its bare
+/// calls resolve through the built-ins, then the catalog schemas of its frozen path; a reader's
+/// session UDF (Rust, Python) or temporary SQL function of the same name is never called, under
+/// every CTE policy, from SQL or `table()`. Invoker views too: that is Spark's resolution.
+///
+/// Spark v4.2.0 `SessionCatalog.scala` lines 2427-2441 (`handleViewContext`: while a view is
+/// resolved a temporary function answers only if `referredTempFunctionNames` holds it, and that set
+/// is empty for a permanent view, `views.scala` lines 628-650) and lines 2523-2550
+/// (`lookupFunctionInfoByIdentifier`, `resolveScalarFunctionByIdentifier` apply it); functions
+/// registered with `spark.udf.register` are temporary ones.
+#[test]
+fn a_stored_views_text_never_calls_a_readers_session_function() {
+    const TEST: &str = "z1";
+    let (w, _root, ana) = function_world();
+    let ana_only = vec!["ana".to_owned()];
+    // A Rust (or Connect) UDF registered by the reader.
+    let bob = w.user("bob");
+    bob.register_udf(Shadow {
+        name: "allowed",
+        test: TEST,
+    })
+    .unwrap();
+    for policy in POLICIES {
+        bob.conf()
+            .set("spark.sql.legacy.ctePrecedencePolicy", policy)
+            .unwrap();
+        assert_eq!(
+            column(&bob, "SELECT owner FROM default.dvf").unwrap(),
+            ana_only,
+            "{policy}"
+        );
+        assert_eq!(
+            block_on(values(bob.table("default.dvf"))).unwrap(),
+            ana_only,
+            "{policy}: table()"
+        );
+    }
+    // A Python UDF: its runtime is not even set, so a call would fail.
+    let bob_py = w.user("bob");
+    bob_py.register_python_udf(krishiv_session::PythonUdfDef {
+        name: "allowed".to_owned(),
+        eval_type: krishiv_plan::PythonEvalType::ArrowBatched,
+        return_type: krishiv_types::DataType::Boolean,
+        deterministic: true,
+        thread_safe: true,
+    });
+    assert_eq!(
+        column(&bob_py, "SELECT owner FROM default.dvf").unwrap(),
+        ana_only
+    );
+    // A temporary SQL function, whatever the reader's path says.
+    let bob_tmp = w.user("bob");
+    ok(
+        &bob_tmp,
+        "CREATE TEMPORARY FUNCTION allowed(o STRING) RETURNS BOOLEAN RETURN true",
+    );
+    assert_eq!(
+        column(&bob_tmp, "SELECT owner FROM default.dvf").unwrap(),
+        ana_only
+    );
+    ok(&bob_tmp, "SET spark.sql.path.enabled = true");
+    ok(
+        &bob_tmp,
+        "SET PATH = system.session, system.builtin, spark_catalog.default",
+    );
+    assert_eq!(
+        column(&bob_tmp, "SELECT owner FROM default.dvf").unwrap(),
+        ana_only
+    );
+    // The reader's own call still reaches the reader's function.
+    assert_eq!(rows(&bob_tmp, "SELECT allowed('x')"), 1);
+    // An invoker view read by its creator, under her own UDF of the same name: the stored function.
+    ana.register_udf(Shadow {
+        name: "allowed",
+        test: TEST,
+    })
+    .unwrap();
+    assert_eq!(column(&ana, "SELECT owner FROM ivf").unwrap(), ana_only);
+    // A view a stored function's body reads is a stored view's text too.
+    ok(
+        &ana,
+        "CREATE FUNCTION cnt() RETURNS BIGINT RETURN (SELECT count(*) FROM ivf)",
+    );
+    assert_eq!(first(&ana, "SELECT cnt()").unwrap(), "1");
+    assert!(!shadow_called(TEST), "{:?}", SHADOWED.lock().unwrap());
+}
+
+/// Review r5 Z1/Z2: a stored view's text never reads a session variable of the reader. `dvl` read
+/// the column `lim`; once its table no longer has one, the name is unresolved (redacted for the
+/// definer view's reader), never the reader's variable `lim` (Spark: a view resolves only the
+/// variables it referred to at creation, `Analyzer.scala` line 254, none for a permanent view).
+#[test]
+fn a_stored_views_text_never_reads_a_readers_session_variable() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&ana, "CREATE TABLE tl (a INT, lim INT) USING parquet");
+    ok(&ana, "INSERT INTO tl VALUES (1, 2), (5, 2), (9, 2)");
+    ok(
+        &ana,
+        "CREATE VIEW dvl SQL SECURITY DEFINER AS SELECT a FROM tl WHERE a < lim",
+    );
+    ok(&ana, "CREATE VIEW ivl AS SELECT a FROM tl WHERE a < lim");
+    ok(&ana, "GRANT SELECT ON VIEW dvl TO user:bob");
+    assert_eq!(column(&bob, "SELECT a FROM default.dvl").unwrap(), ["1"]);
+    ok(&ana, "DROP TABLE tl");
+    ok(&ana, "CREATE TABLE tl (a INT) USING parquet");
+    ok(&ana, "INSERT INTO tl VALUES (1), (5), (9)");
+    ok(&bob, "DECLARE VARIABLE lim INT DEFAULT 100");
+    let e = column(&bob, "SELECT a FROM default.dvl").unwrap_err();
+    assert!(
+        e.to_string().contains(krishiv_common::secret::REDACTED),
+        "{e}"
+    );
+    ok(&ana, "DECLARE VARIABLE lim INT DEFAULT 100");
+    let e = column(&ana, "SELECT a FROM ivl").unwrap_err();
+    assert!(
+        e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+        "{e}"
+    );
+    // The reader's own text still reads its variable.
+    assert_eq!(column(&bob, "SELECT lim").unwrap(), ["100"]);
+}

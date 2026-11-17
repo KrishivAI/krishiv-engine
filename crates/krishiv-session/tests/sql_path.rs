@@ -342,8 +342,11 @@ fn a_view_on_a_session_only_path_does_not_fall_back_to_its_namespace() {
     assert!(read.is_err(), "{read:?}");
 }
 
+/// Review r5 Z1: a permanent view's text never calls a temporary function (Spark v4.2.0
+/// `SessionCatalog.scala` lines 2427-2441); its bare call goes to the first catalog schema of the
+/// view's path, where none is stored.
 #[test]
-fn a_view_over_a_temporary_function_keeps_calling_it() {
+fn a_view_never_calls_a_temporary_function() {
     let s = session();
     for sql in [
         "CREATE TEMPORARY FUNCTION tmp_pick() RETURNS INT RETURN 7",
@@ -351,7 +354,14 @@ fn a_view_over_a_temporary_function_keeps_calling_it() {
     ] {
         run(&s, sql);
     }
-    assert_eq!(first(&s, "SELECT x FROM default.tmp_view"), "7");
+    let read = block_on(async {
+        s.sql("SELECT x FROM default.tmp_view")
+            .await?
+            .collect()
+            .await
+    });
+    let e = read.unwrap_err();
+    assert_eq!(e.error_class().name(), "UNRESOLVED_ROUTINE", "{e}");
 }
 
 #[test]

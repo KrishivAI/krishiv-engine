@@ -170,35 +170,43 @@ fn read_rename(read: &StoredRead, positions: &[usize], width: usize) -> ReadRena
 }
 
 /// `plan` with the renames of `renames` in place: each `SubqueryAlias` whose input is a rename's query (the same
-/// `Arc`, as inlined) takes the rename's columns; subquery plans included. Also `texts` (the trusted definer view
-/// queries, by node identity; P3-T062 review B1) mapped to the nodes that replace them in the renamed plan.
+/// `Arc`, as inlined) takes the rename's columns; subquery plans included. Also each set of `texts` (queries kept by
+/// node identity: the trusted definer view queries, P3-T062 review B1, and the stored views' texts, review r5 Z1)
+/// mapped to the nodes that replace them in the renamed plan, one set out per set in.
 pub(crate) fn apply_renames_keeping(
     plan: &Arc<LogicalPlan>,
     renames: &[ReadRename],
-    texts: &krishiv_plan::analyzer::views::DefinerTexts,
+    texts: &[&krishiv_plan::analyzer::views::DefinerTexts],
 ) -> (
     Arc<LogicalPlan>,
-    krishiv_plan::analyzer::views::DefinerTexts,
+    Vec<krishiv_plan::analyzer::views::DefinerTexts>,
 ) {
     if renames.is_empty() {
-        return (Arc::clone(plan), texts.clone());
+        return (
+            Arc::clone(plan),
+            texts.iter().map(|t| (*t).clone()).collect(),
+        );
     }
     let mut kept = Kept {
-        texts: Some(texts).filter(|t| !t.is_empty()),
-        found: Vec::new(),
+        texts: texts.to_vec(),
+        found: vec![Vec::new(); texts.len()],
     };
     let out = renamed(plan, renames, &mut kept);
     (
         out,
-        krishiv_plan::analyzer::views::DefinerTexts::new(kept.found),
+        kept.found
+            .into_iter()
+            .map(krishiv_plan::analyzer::views::DefinerTexts::new)
+            .collect(),
     )
 }
 
-/// The rebuilt nodes of the trusted queries a rename walk passes (see [`apply_renames_keeping`]).
+/// The rebuilt nodes of the queries kept by identity a rename walk passes, per set (see
+/// [`apply_renames_keeping`]).
 #[derive(Default)]
 struct Kept<'a> {
-    texts: Option<&'a krishiv_plan::analyzer::views::DefinerTexts>,
-    found: Vec<Arc<LogicalPlan>>,
+    texts: Vec<&'a krishiv_plan::analyzer::views::DefinerTexts>,
+    found: Vec<Vec<Arc<LogicalPlan>>>,
 }
 
 fn renamed(
@@ -207,8 +215,10 @@ fn renamed(
     kept: &mut Kept<'_>,
 ) -> Arc<LogicalPlan> {
     let out = rename_node(plan, renames, kept);
-    if kept.texts.is_some_and(|t| t.contains(plan)) {
-        kept.found.push(Arc::clone(&out));
+    for (texts, found) in kept.texts.iter().zip(kept.found.iter_mut()) {
+        if texts.contains(plan) {
+            found.push(Arc::clone(&out));
+        }
     }
     out
 }

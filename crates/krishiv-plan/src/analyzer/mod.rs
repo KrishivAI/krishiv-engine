@@ -680,6 +680,16 @@ pub struct AnalysisContext {
     /// nodes, so no plan a caller writes (whatever its origins or SQL source numbers) is ever
     /// trusted (review B1). Empty for every other analysis.
     pub definer_texts: views::DefinerTexts,
+    /// The inlined queries of every permanent view of the plan, `INVOKER` and `DEFINER` (review
+    /// r5 Z1, Z2), by node identity as [`Self::definer_texts`]: a stored view's text resolves
+    /// nothing of the reading session. Under one of these subtrees no session variable or script
+    /// local resolves (a name no column has stays unresolved), and a call left bare that no
+    /// built-in answers, a session-qualified call (`session.f`, `system.session.f`) and such a
+    /// table function are unresolved routines: the session qualified every call a stored function
+    /// answers when it inlined the view. Spark v4.2.0: while a permanent view resolves, no
+    /// temporary function or variable answers (`SessionCatalog.scala` lines 2427-2441,
+    /// `Analyzer.scala` lines 252-254). Empty for an analysis that inlined none.
+    pub stored_view_texts: views::DefinerTexts,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,

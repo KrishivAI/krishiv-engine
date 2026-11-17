@@ -1340,6 +1340,8 @@ impl Session {
             mode: krishiv_plan::analyzer::AnalysisMode::Execute,
             // Filled per analysis by `Session::authorize_definer` callers; none by default.
             definer_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
+            // Set per analysis to the permanent views it inlined (review r5 Z1, Z2).
+            stored_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1455,12 +1457,22 @@ impl Session {
             env.withhold_profile
                 .store(true, std::sync::atomic::Ordering::Release);
         }
+        // Every permanent view's text, kept by identity: nothing of the reading session resolves in
+        // it (review r5 Z1, Z2).
+        let stored_texts = krishiv_plan::analyzer::views::DefinerTexts::new(
+            expansion
+                .stored_reads
+                .iter()
+                .map(|r| Arc::clone(&r.query))
+                .collect(),
+        );
         let trusting_views;
-        let views_analysis = if texts.is_empty() {
+        let views_analysis = if texts.is_empty() && stored_texts.is_empty() {
             &env.analysis
         } else {
             let mut ctx = env.analysis.clone();
             ctx.definer_texts = texts.clone();
+            ctx.stored_view_texts = stored_texts.clone();
             trusting_views = ctx;
             &trusting_views
         };
@@ -1479,14 +1491,20 @@ impl Session {
                 }
             };
         // A rename rebuilds the nodes above it: the trusted queries follow their rebuilt nodes.
-        let (renamed, texts) =
-            crate::view_schema::apply_renames_keeping(&expansion.plan, &renames, &texts);
+        let (renamed, mut kept) = crate::view_schema::apply_renames_keeping(
+            &expansion.plan,
+            &renames,
+            &[&texts, &stored_texts],
+        );
+        let stored_texts = kept.pop().unwrap_or_default();
+        let texts = kept.pop().unwrap_or_default();
         let trusting;
-        let analysis = if texts.is_empty() {
+        let analysis = if texts.is_empty() && stored_texts.is_empty() {
             &env.analysis
         } else {
             let mut ctx = env.analysis.clone();
             ctx.definer_texts = texts;
+            ctx.stored_view_texts = stored_texts;
             trusting = ctx;
             &trusting
         };
