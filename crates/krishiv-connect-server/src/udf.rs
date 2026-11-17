@@ -62,7 +62,17 @@ pub(crate) struct PythonArtifacts {
     /// The installed `pyfiles/` files.
     pub(crate) pyfiles: Vec<PathBuf>,
     /// The installed `archives/` files.
-    pub(crate) archives: Vec<PathBuf>,
+    pub(crate) archives: Vec<PythonArchive>,
+}
+
+/// An installed `archives/` artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonArchive {
+    /// The archive file: absolute, no link at or above it.
+    pub path: PathBuf,
+    /// The name's `#fragment`: Spark unpacks the archive into a directory of that name (the file's
+    /// name without one).
+    pub fragment: Option<String>,
 }
 
 /// Where a session runtime reads its runner conf when a call is prepared.
@@ -87,10 +97,12 @@ pub trait SessionUdfRuntime: UdfRuntime {
     /// Stops the session's workers (idle ones now, busy ones when their call ends).
     fn release(&self);
     /// The session's Python artifacts, replacing the whole set: the installed `pyfiles/` and
-    /// `archives/` files (absolute paths, in the order installed; an archive without its `#fragment`).
-    /// Calls prepared afterwards see them; workers started for an earlier set are not reused. The
+    /// `archives/` files (absolute paths with no link in them, in the order installed; each archive
+    /// with its `#fragment`). Calls prepared afterwards see them; workers started for an earlier set are
+    /// not reused. Called on an async worker under a session lock: it must not block (no file I/O; a
+    /// runtime checks the paths when a call is prepared). Never called after [`Self::release`]. The
     /// default ignores them (a runtime that runs no client files).
-    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
         let _ = (pyfiles, archives);
     }
 }
@@ -142,8 +154,17 @@ pub(crate) struct SessionPython {
     /// `None` when the server runs no worker pool: every grant is refused.
     runtime: Option<Arc<dyn SessionUdfRuntime>>,
     state: Mutex<State>,
-    /// Held while the artifact set is read and handed to the runtime.
-    artifacts: Mutex<()>,
+    /// The last artifact set handed to the runtime; held while a set is read and handed over.
+    artifacts: Mutex<Synced>,
+}
+
+/// What [`SessionPython::sync_artifacts`] last did.
+#[derive(Default)]
+struct Synced {
+    /// The set handed over last (none yet: an empty set is not handed over).
+    last: PythonArtifacts,
+    /// The session was released: no set is handed over any more.
+    released: bool,
 }
 
 #[derive(Default, Clone)]
@@ -219,23 +240,34 @@ impl SessionPython {
     }
 
     /// Hands the session's Python artifacts, read from `artifacts` now, to its workers
-    /// (`AddArtifacts`, `CloneSession`): the whole set, which replaces the last one. Read and handed
-    /// over under one lock, so two transfers ending together cannot leave the older set in place. Also
-    /// before the first granted call: `AddArtifacts` passed the same privilege check, and the runtime
-    /// runs nothing until a plan is granted.
+    /// (`AddArtifacts`, after every transfer, whether it succeeded or not: one that fails can still
+    /// have installed some; `CloneSession`, after the copy): the whole set, which replaces the last
+    /// one, when it changed. Read and handed over under one lock, so two transfers ending together
+    /// cannot leave the older set in place, and never after [`Self::release`]. Also before the first
+    /// granted call: `AddArtifacts` passed the same privilege check (`Usage` on `System("udf")`), a
+    /// clone's files are its source's, which passed it, and the runtime runs nothing until a plan of
+    /// the session is granted.
     pub(crate) fn sync_artifacts(&self, artifacts: &SessionArtifacts) {
         if let Some(runtime) = &self.runtime {
-            let _serial = self
+            let mut synced = self
                 .artifacts
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let set = artifacts.python_artifacts();
+            if synced.released || set == synced.last {
+                return;
+            }
+            synced.last = set.clone();
             runtime.set_artifacts(set.pyfiles, set.archives);
         }
     }
 
-    /// Stops the session's workers.
+    /// Stops the session's workers; no artifact set is handed over afterwards.
     pub(crate) fn release(&self) {
+        self.artifacts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .released = true;
         if let Some(runtime) = &self.runtime {
             runtime.release();
         }

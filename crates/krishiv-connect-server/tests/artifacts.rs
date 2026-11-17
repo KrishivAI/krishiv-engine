@@ -30,8 +30,8 @@ use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect::translate::PythonUdf;
 use krishiv_connect_server::artifacts::{ARTIFACT_OVERHEAD, crc32};
 use krishiv_connect_server::{
-    ArtifactLimits, ConnectServer, ConnectServerConfig, RunnerConf, SessionEntry, SessionLimits,
-    SessionManager, SessionUdfRuntime, UdfHost,
+    ArtifactLimits, ConnectServer, ConnectServerConfig, PythonArchive, RunnerConf, SessionEntry,
+    SessionLimits, SessionManager, SessionUdfRuntime, UdfHost,
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_session::Session;
@@ -1286,7 +1286,7 @@ fn shutdown_then_dropping_the_runtime_leaves_no_artifacts() {
 // ------------------------------------------------------ Python artifacts
 
 /// Every artifact set handed to a session's UDF runtime: (session id, pyfiles, archives).
-type Sets = Arc<std::sync::Mutex<Vec<(String, Vec<PathBuf>, Vec<PathBuf>)>>>;
+type Sets = Arc<std::sync::Mutex<Vec<(String, Vec<PathBuf>, Vec<PythonArchive>)>>>;
 
 /// A UDF host that runs nothing and records the artifact sets its runtimes get.
 #[derive(Debug, Default)]
@@ -1308,7 +1308,7 @@ impl UdfRuntime for SpyRuntime {
 impl SessionUdfRuntime for SpyRuntime {
     fn register(&self, _: &str, _: u32, _: &PythonUdf) {}
     fn release(&self) {}
-    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
         self.1
             .lock()
             .expect("spy")
@@ -1322,8 +1322,14 @@ impl UdfHost for ArtifactSpy {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
+fn archive(path: PathBuf, fragment: Option<&str>) -> PythonArchive {
+    PythonArchive {
+        path,
+        fragment: fragment.map(str::to_owned),
+    }
+}
+
+async fn start_spied() -> (Running, Sets) {
     let spy = ArtifactSpy::default();
     let sets = Arc::clone(&spy.0);
     let run = start_on(
@@ -1335,6 +1341,51 @@ async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
         Some(Arc::new(spy)),
     )
     .await;
+    (run, sets)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transfer_that_fails_still_hands_over_what_it_installed() {
+    let (run, sets) = start_spied().await;
+    add(&run, vec![batch(vec![single("pyfiles/a.py", b"A = 1\n")])])
+        .await
+        .expect("add");
+    let dir = run.session_dir();
+    let id = run.entry().session().id().to_owned();
+    assert_eq!(
+        std::mem::take(&mut *sets.lock().expect("spy")),
+        [(id.clone(), vec![dir.join("pyfiles/a.py")], Vec::new())]
+    );
+    // Other bytes under a.py: ARTIFACT_ALREADY_EXISTS, but b.py and the archive are installed.
+    let status = add(
+        &run,
+        vec![batch(vec![
+            single("pyfiles/a.py", b"A = 2\n"),
+            single("pyfiles/b.py", b"B = 1\n"),
+            single("archives/deps.zip", b"PK\x03\x04"),
+        ])],
+    )
+    .await
+    .expect_err("a.py exists");
+    assert_eq!(error_class(&status), "ARTIFACT_ALREADY_EXISTS");
+    assert_eq!(
+        std::mem::take(&mut *sets.lock().expect("spy")),
+        [(
+            id,
+            vec![dir.join("pyfiles/a.py"), dir.join("pyfiles/b.py")],
+            vec![archive(dir.join("archives/deps.zip"), None)]
+        )]
+    );
+    // The same bytes again change nothing: no set is handed over.
+    add(&run, vec![batch(vec![single("pyfiles/b.py", b"B = 1\n")])])
+        .await
+        .expect("same bytes");
+    assert!(sets.lock().expect("spy").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
+    let (run, sets) = start_spied().await;
     let taken = || std::mem::take(&mut *sets.lock().expect("spy"));
     // Files and cached blobs alone hand nothing over.
     add(&run, vec![batch(vec![single("files/a.txt", b"a")])])
@@ -1358,9 +1409,9 @@ async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
         [(
             server_side.clone(),
             vec![dir.join("pyfiles/util.py")],
-            vec![dir.join("archives/env.zip")]
+            vec![archive(dir.join("archives/env.zip"), Some("env"))]
         )],
-        "absolute paths, the fragment left out, files/ not included"
+        "absolute paths, the archive with its fragment, files/ not included"
     );
     // A later transfer hands over the whole set again, in the order installed.
     add(
@@ -1374,7 +1425,7 @@ async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
         [(
             server_side,
             vec![dir.join("pyfiles/util.py"), dir.join("pyfiles/pkg/mod.py")],
-            vec![dir.join("archives/env.zip")]
+            vec![archive(dir.join("archives/env.zip"), Some("env"))]
         )]
     );
     for p in [
@@ -1411,7 +1462,7 @@ async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
                 clone_dir.join("pyfiles/util.py"),
                 clone_dir.join("pyfiles/pkg/mod.py")
             ],
-            vec![clone_dir.join("archives/env.zip")]
+            vec![archive(clone_dir.join("archives/env.zip"), Some("env"))]
         )],
         "the clone's set, on the clone's runtime"
     );

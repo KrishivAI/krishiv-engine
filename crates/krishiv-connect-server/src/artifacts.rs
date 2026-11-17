@@ -78,7 +78,7 @@ use self::dir::{ArtifactRoot, Install, SessionDir};
 use crate::manager::SessionEntry;
 use crate::operation::random_uuid;
 use crate::operation::replay::uuid_text;
-use crate::udf::PythonArtifacts;
+use crate::udf::{PythonArchive, PythonArtifacts};
 
 /// What each artifact counts against the session's quota besides its bytes:
 /// a file system block (the inode and the directory entry of a file, the
@@ -524,8 +524,8 @@ impl SessionArtifacts {
     }
 
     /// The installed `pyfiles/` and `archives/` files as the session's UDF workers take them
-    /// (`SessionPython::set_artifacts`): absolute paths under the session's directory, in the order
-    /// installed, an archive's `#fragment` left out. Empty once closed.
+    /// (`SessionPython::sync_artifacts`): absolute paths under the session's directory, in the order
+    /// installed, each archive with its `#fragment`. Empty once closed.
     pub(crate) fn python_artifacts(&self) -> PythonArtifacts {
         let s = self.lock();
         let mut out = PythonArtifacts::default();
@@ -533,16 +533,19 @@ impl SessionArtifacts {
             return out;
         };
         for file in &s.files {
-            let list = match file.name.kind() {
-                ArtifactKind::PyFiles => &mut out.pyfiles,
-                ArtifactKind::Archives => &mut out.archives,
-                ArtifactKind::Cache | ArtifactKind::Files => continue,
-            };
-            list.push(
+            let path = || {
                 file.name
                     .segments()
-                    .fold(dir.path().to_owned(), |p, seg| p.join(seg)),
-            );
+                    .fold(dir.path().to_owned(), |p, seg| p.join(seg))
+            };
+            match file.name.kind() {
+                ArtifactKind::PyFiles => out.pyfiles.push(path()),
+                ArtifactKind::Archives => out.archives.push(PythonArchive {
+                    path: path(),
+                    fragment: file.name.fragment().map(str::to_owned),
+                }),
+                ArtifactKind::Cache | ArtifactKind::Files => {}
+            }
         }
         out
     }
@@ -1201,17 +1204,12 @@ pub(crate) async fn add_artifacts(
             }
         };
     }
-    let artifacts = blocking(move || transfer.finish())
-        .await
-        .map_err(|e| errors.status(&e))?;
-    // The session's UDF workers get the whole set again when this transfer added to it (Spark's
-    // artifact manager puts `pyfiles/` on the workers' path and unpacks `archives/`).
-    if artifacts
-        .iter()
-        .any(|a| a.name.starts_with("pyfiles/") || a.name.starts_with("archives/"))
-    {
-        entry.python().sync_artifacts(entry.artifacts());
-    }
+    let finished = blocking(move || transfer.finish()).await;
+    // The session's UDF workers get the whole set again when it changed (Spark's artifact manager
+    // puts `pyfiles/` on the workers' path and unpacks `archives/`), also after a failed finish: one
+    // that ends with `ARTIFACT_ALREADY_EXISTS` installed the others.
+    entry.python().sync_artifacts(entry.artifacts());
+    let artifacts = finished.map_err(|e| errors.status(&e))?;
     Ok(pb::AddArtifactsResponse {
         session_id,
         server_side_session_id: entry.server_side_id().to_owned(),
