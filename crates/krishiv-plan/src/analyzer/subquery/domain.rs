@@ -349,9 +349,10 @@ impl Rewriter {
             .iter()
             .zip(&keys)
             .map(|(d, k)| {
-                boolean(
+                keyed_eq(
                     Builtin::EqNullSafe,
-                    vec![col_expr(d, Origin::UNKNOWN), Arc::clone(k)],
+                    col_expr(d, Origin::UNKNOWN),
+                    Arc::clone(k),
                 )
             })
             .collect();
@@ -502,8 +503,11 @@ impl Rewriter {
                 .into_iter()
                 .zip(domain_columns(domain, b));
             for (x, y) in pairs {
-                let args = vec![col_expr(&x, Origin::UNKNOWN), col_expr(&y, Origin::UNKNOWN)];
-                cond.push(boolean(Builtin::EqNullSafe, args));
+                cond.push(keyed_eq(
+                    Builtin::EqNullSafe,
+                    col_expr(&x, Origin::UNKNOWN),
+                    col_expr(&y, Origin::UNKNOWN),
+                ));
             }
         }
         let cond = cond

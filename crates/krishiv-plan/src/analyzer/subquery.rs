@@ -445,6 +445,40 @@ fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool) 
     ))))
 }
 
+/// `a <=> b` (or `=`) over the comparison keys when the values are collated strings (the plain
+/// operator is what the analyzer's guard refuses), else over the values.
+pub(super) fn keyed_eq(op: Builtin, a: Arc<Expr>, b: Arc<Expr>) -> Arc<Expr> {
+    let keyed = |e: Arc<Expr>| -> Arc<Expr> {
+        let Some(t) = typed(&e).0.filter(DataType::is_collated_string) else {
+            return e;
+        };
+        let profile = SparkProfile::ALL.into_iter().max().unwrap_or_default();
+        let krishiv_functions::registry::Lookup::Found(def) =
+            krishiv_functions::registry::builtins().lookup("__collation_key", profile)
+        else {
+            return e;
+        };
+        let name = Arc::new(Expr::new(ExprNode::Literal(Literal::String(t.sql()))));
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Registry {
+                    name: def.name.to_owned(),
+                    id: def.id,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![e, name],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: t.collation_key_type(),
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    };
+    boolean(op, vec![keyed(a), keyed(b)])
+}
+
 pub(super) fn boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
     let nullable = op != Builtin::IsNull && args.iter().any(|a| typed(a).1);
     call(op, args, DataType::Boolean, nullable)
@@ -969,7 +1003,7 @@ impl Rewriter {
             let corr = inner_keys
                 .into_iter()
                 .zip(outer_keys)
-                .map(|(i, o)| boolean(Builtin::EqNullSafe, vec![i, o]))
+                .map(|(i, o)| keyed_eq(Builtin::EqNullSafe, i, o))
                 .collect();
             (inner, corr)
         } else {
@@ -1225,7 +1259,7 @@ impl Rewriter {
             let corr = inner_keys
                 .into_iter()
                 .zip(outer_keys)
-                .map(|(i, o)| boolean(Builtin::EqNullSafe, vec![i, o]))
+                .map(|(i, o)| keyed_eq(Builtin::EqNullSafe, i, o))
                 .collect();
             (inner, corr)
         } else {

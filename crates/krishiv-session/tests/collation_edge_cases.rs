@@ -172,3 +172,33 @@ fn null_safe_equal_over_a_collated_column() {
         "false"
     );
 }
+
+/// A correlated scalar subquery whose correlation is a collated equality runs through the
+/// domain join on the keys: `a` finds `A` and `a`, `b` finds nothing (Spark 4.2.0: `a:2, b:0`).
+#[test]
+fn correlated_scalar_subquery_over_a_collated_equality() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create temporary view cx as select * from (values \
+         (cast('a' as string collate utf8_lcase)), (cast('b' as string collate utf8_lcase))) v(c)",
+        "create temporary view cy as select * from (values \
+         (cast('A' as string collate utf8_lcase)), (cast('a' as string collate utf8_lcase)), \
+         (cast('z' as string collate utf8_lcase))) v(d)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let df = block_on(s.sql(
+        "select cast(c as string) || ':' || cast((select count(*) from cy where cy.d = cx.c) as string) \
+         from cx order by c",
+    ))
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let c = &batches[0].columns()[0];
+    let got: Vec<String> = (0..c.len())
+        .map(|i| match c.as_string_view_opt() {
+            Some(v) => v.value(i).to_owned(),
+            None => c.as_string::<i32>().value(i).to_owned(),
+        })
+        .collect();
+    assert_eq!(got, ["a:2", "b:0"]);
+}
