@@ -17,6 +17,12 @@ ignore = [
     # below); paste is a proc macro, so nothing of it is linked. Drop this with
     # the skip-tree, when iceberg-rust releases on the workspace Arrow major.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade" },
+    # chrono is declared unmaintained (all versions, no safe upgrade) and
+    # humantime wraps it. Both are deep in the tree (arrow, parquet, object
+    # stores, rmcp); replacing them is a dependency decision (jiff is the
+    # advisory's suggestion), not something a PR's gate should force.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; transitive through arrow and others; no safe upgrade" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime wraps unmaintained chrono; no safe upgrade" },
 ]
 
 [licenses]
