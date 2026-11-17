@@ -29,6 +29,21 @@ use crate::sql_functions::SqlFunctions;
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
+/// What [`Session::sql_command`] ran.
+#[cfg(feature = "unstable-ir")]
+#[expect(
+    missing_debug_implementations,
+    reason = "a `DataFrame` has no `Debug`; neither has what holds one"
+)]
+#[non_exhaustive]
+pub enum SqlOutcome {
+    /// A query: analyzed, not run; its rows come from the frame.
+    Query(DataFrame),
+    /// A command (`SET`, `CREATE VIEW`, `INSERT`, `SHOW`, ...), already run; the frame holds its
+    /// result rows.
+    Command(DataFrame),
+}
+
 impl Session {
     /// A session on `runtime` with configuration `config`.
     pub(super) fn on_runtime(
@@ -472,6 +487,45 @@ impl Session {
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
         self.with_options(options)?.sql(query).await
+    }
+
+    /// Runs `query` as [`Self::sql`] does and says what it was: a lazy query, or a command (any
+    /// statement other than a query, which `sql` runs at once, as Spark's eager `Command`s).
+    ///
+    /// Spark Connect's `SqlCommand` needs the difference: a command's result is returned to the
+    /// client as a local relation, a query's as the `SQL` relation to send again.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// use krishiv_session::SqlOutcome;
+    /// let q = futures::executor::block_on(session.sql_command("SELECT 1"))?;
+    /// assert!(matches!(q, SqlOutcome::Query(_)));
+    /// let c = futures::executor::block_on(session.sql_command("SET a.b = 1"))?;
+    /// assert!(matches!(c, SqlOutcome::Command(_)));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::sql`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_command(&self, query: &str) -> Result<crate::SqlOutcome, KrishivError> {
+        Ok(match self.sql_kind(query).await? {
+            (df, false) => crate::SqlOutcome::Query(df),
+            (df, true) => crate::SqlOutcome::Command(df),
+        })
+    }
+
+    /// As [`Self::sql_command`], with per-statement options (as [`Self::sql_with`]).
+    ///
+    /// # Errors
+    /// As [`Self::sql_with`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_command_with(
+        &self,
+        query: &str,
+        options: crate::QueryOptions,
+    ) -> Result<crate::SqlOutcome, KrishivError> {
+        self.with_options(options)?.sql_command(query).await
     }
 
     /// A handle of this session that runs its queries under `options` (the

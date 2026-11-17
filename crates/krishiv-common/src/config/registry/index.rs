@@ -341,6 +341,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "krishiv.exec.agg.distinctCountAtMerge",
+        &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    ),
+    (
         "krishiv.optimizer.ndvSampling.enabled",
         &NDV_SAMPLING_ENABLED,
     ),

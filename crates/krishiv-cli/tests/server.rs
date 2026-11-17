@@ -324,7 +324,13 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
     let mut run = start(spill.path());
     let h = http_get(&run.admin, "/healthz");
     assert!(h.starts_with("HTTP/1.1 200"), "{h}");
-    let r = http_get(&run.admin, "/readyz");
+    // Readiness can follow the printed addresses by a moment (503 `not_ready` until then).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut r = http_get(&run.admin, "/readyz");
+    while r.starts_with("HTTP/1.1 503") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        r = http_get(&run.admin, "/readyz");
+    }
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     assert!(r.ends_with(r#"{"status":"ready"}"#), "{r}");
     // The Connect port accepts connections.
