@@ -40,7 +40,7 @@ fn corpus_goldens() {
             Ok(a) => {
                 let json = a.to_json();
                 assert_valid(&json);
-                writeln!(out, "{}\n", layout(&json)).unwrap();
+                writeln!(out, "{}\n", warehouses_free(&layout(&json))).unwrap();
             }
             Err(e) => writeln!(out, "error {}\n", e.error_class().name()).unwrap(),
         }
@@ -381,12 +381,17 @@ fn local_read_shapes_list_their_reads() {
     let sql = "FROM s INSERT INTO t SELECT a, b, k INSERT INTO u SELECT a, b, k WHERE k > 0";
     let a = block_on(s.analyze(sql)).unwrap();
     assert!(!a.partial);
+    let listed: Vec<String> = uses(&a).iter().map(|u| warehouse_free(u)).collect();
     assert_eq!(
-        uses(&a),
+        listed,
         [
             "SELECT table `spark_catalog`.`default`.`s` [\"a\", \"b\", \"k\"]",
             "MODIFY table `spark_catalog`.`default`.`t` []",
             "MODIFY table `spark_catalog`.`default`.`u` []",
+            "MODIFY path 'file:<warehouse>/t' []",
+            "CREATE path 'file:<warehouse>/t' []",
+            "MODIFY path 'file:<warehouse>/u' []",
+            "CREATE path 'file:<warehouse>/u' []",
         ]
     );
     assert!(block_on(s.statement_info(sql)).is_ok());
@@ -408,7 +413,14 @@ fn execute_immediate_literal_reports_inner_class() {
     assert_eq!(a.output_schema.len(), 1);
     let a = block_on(s.analyze("EXECUTE IMMEDIATE 'DROP TABLE u'")).unwrap();
     assert_eq!(a.info.class, StatementClass::Ddl);
-    assert_eq!(uses(&a), ["DROP table `spark_catalog`.`default`.`u` []"]);
+    let listed: Vec<String> = uses(&a).iter().map(|u| warehouse_free(u)).collect();
+    assert_eq!(
+        listed,
+        [
+            "DROP table `spark_catalog`.`default`.`u` []",
+            "MODIFY path 'file:<warehouse>/u' []"
+        ]
+    );
     let info = block_on(s.statement_info("EXECUTE IMMEDIATE 'CLEAR CACHE'")).unwrap();
     assert_eq!(info.class, StatementClass::Admin);
     assert_eq!(info.securables.len(), 1, "{:?}", info.securables);
@@ -829,6 +841,23 @@ fn asked_by(principal: &str) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+/// `s` with every temporary warehouse directory (`<tmp>/krishiv-warehouse-<n>`) as `<warehouse>`.
+fn warehouses_free(s: &str) -> String {
+    let (mut out, mut rest) = (String::new(), s);
+    while let Some(at) = rest.find("krishiv-warehouse-") {
+        let start = rest[..at].rfind('/').map_or(0, |i| {
+            // The start of the absolute path: after `file:` or a quote.
+            rest[..i].rfind(['\'', '"', ':']).map_or(0, |q| q + 1)
+        });
+        let end = rest[at..].find('/').map_or(rest.len(), |e| at + e);
+        out.push_str(&rest[..start]);
+        out.push_str("<warehouse>");
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `s` with the session's temporary warehouse directory (`<tmp>/krishiv-warehouse-<n>`) as `<warehouse>`.
 fn warehouse_free(s: &str) -> String {
     let Some(at) = s.find("krishiv-warehouse-") else {
@@ -854,10 +883,17 @@ fn warehouse_free(s: &str) -> String {
 /// only `SELECT 1 FROM target` before it fails, not its source, which analyze lists (a follow-up for
 /// when MERGE runs).
 ///
-/// The snapshot pins the known differences: a run of `DROP TABLE`, `INSERT` and `TRUNCATE` on a managed
-/// table also asks for its directory (`table_commands/files.rs`), which analyze does not list: the check
-/// runs only when the directory exists, on its resolved path (documented in the `analyze` module doc and
-/// the schema description).
+/// The snapshot pins the differences that remain. A run of `DROP TABLE`, `INSERT` and `TRUNCATE` on a
+/// managed table also asks for its directory (`table_commands/files.rs`), which analyze lists since T063
+/// N1b (`analyze/dirs.rs`), in the form the run's denial names (the same text here, with no link on the
+/// warehouse path): no difference. The directories of other DDL are not listed yet (`analyze/dirs.rs`
+/// module doc); [`DIRECTORY_CASES`] are statements of that DDL which succeed (each must), so the snapshot
+/// pins each of those differences rather than skipping a failed run.
+///
+/// `EXPLAIN FORMAT JSON` of a write or drop: its run analyzes the statement it explains, which asks the
+/// policy about that statement's targets in a quiet trial before it lists any directory (review B2). The
+/// trial requires nothing (a denial only lists no directory), so analyze of the `EXPLAIN` does not list
+/// them; the snapshot pins those two questions.
 ///
 /// The event stream is not every policy question: `system.*` tables' `Monitor` row filter
 /// (`monitor.rs`) calls the policy's `check` directly, bypassing `authorize()`. It filters rows, it is
@@ -869,13 +905,24 @@ fn securables_equal_what_a_run_authorizes() {
     let mut compared = 0;
     let mut row_level = BTreeSet::new();
     let mut differences = String::new();
-    for (i, (label, sql)) in corpus().into_iter().enumerate() {
+    let extra = DIRECTORY_CASES
+        .iter()
+        .map(|(label, setup, sql)| ((*label).to_owned(), *setup, (*sql).to_owned()));
+    let cases = corpus()
+        .into_iter()
+        .map(|(label, sql)| (label, &[][..], sql))
+        .chain(extra);
+    for (i, (label, setup, sql)) in cases.enumerate() {
         let principal = format!("prop{i}");
         let s = Session::builder()
             .principal(Principal::new(&principal, PrincipalKind::User))
             .build()
             .unwrap();
         corpus_session(&s);
+        for sql in setup {
+            block_on(s.sql(sql)).unwrap();
+        }
+        let must_run = DIRECTORY_CASES.iter().any(|(l, _, _)| *l == label);
         // The setup's own questions are not the statement's.
         asked_by(&principal);
         let Ok(a) = block_on(s.analyze(&sql)) else {
@@ -892,7 +939,7 @@ fn securables_equal_what_a_run_authorizes() {
             .map(|u| {
                 (
                     u.privilege.to_string(),
-                    u.securable.to_string().to_lowercase(),
+                    warehouse_free(&u.securable.to_string().to_lowercase()),
                 )
             })
             .collect();
@@ -908,6 +955,7 @@ fn securables_equal_what_a_run_authorizes() {
             Err(e)
                 if matches!(label.as_str(), "Update" | "Delete")
                     && e.error_class().name() == "UNSUPPORTED_FEATURE.TABLE_OPERATION" => {}
+            Err(e) if must_run => panic!("{label}: {sql}: {e}"),
             Err(_) => continue,
         }
         let ran = asked_by(&principal);
@@ -938,6 +986,25 @@ fn securables_equal_what_a_run_authorizes() {
     );
     insta::assert_snapshot!(differences);
 }
+
+/// Statements of DDL whose run asks about a directory analyze does not list yet (T063 N1b review M1):
+/// (label, setup, statement), each of which succeeds on the corpus session after its setup. `REPLACE TABLE`
+/// of the session catalog's file tables is `UNSUPPORTED_FEATURE.TABLE_OPERATION` today, so it has no case.
+const DIRECTORY_CASES: &[(&str, &[&str], &str)] = &[
+    ("DirCreateTable", &[], "CREATE TABLE c_new (a INT)"),
+    ("DirCtas", &[], "CREATE TABLE c_ctas AS SELECT * FROM t"),
+    ("DirRenameTable", &[], "ALTER TABLE u RENAME TO u_renamed"),
+    (
+        "DirDropNamespaceCascade",
+        &["CREATE TABLE d.dt (a INT)"],
+        "DROP NAMESPACE d CASCADE",
+    ),
+    (
+        "DirAddPartition",
+        &["CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)"],
+        "ALTER TABLE p ADD PARTITION (k = 1)",
+    ),
+];
 
 /// The one `plan` value of `EXPLAIN FORMAT JSON ...` (P3-T063 N2): one row, one string column.
 fn explain_json(s: &Session, sql: &str) -> String {
@@ -1208,5 +1275,395 @@ fn explain_format_json_set_changes_no_conf() {
     assert_eq!(
         s.conf().get("spark.sql.shuffle.partitions").as_deref(),
         Some("7")
+    );
+}
+
+/// The directory securables of `a`, warehouse-free: (privilege, display).
+fn directories(a: &krishiv_session::Analysis) -> Vec<String> {
+    a.info
+        .securables
+        .iter()
+        .filter(|u| matches!(u.securable, Securable::Path(_)))
+        .map(|u| {
+            format!(
+                "{} {}",
+                u.privilege,
+                warehouse_free(&u.securable.to_string())
+            )
+        })
+        .collect()
+}
+
+/// T063 N1b item 1: `DROP TABLE`, `TRUNCATE TABLE` and `INSERT` list the directory a run asks about, after
+/// their targets, and only where the run asks: not for a managed table whose directory is gone, an external
+/// table's drop, a temporary view or a missing table.
+#[test]
+fn writes_and_drops_list_the_directory_a_run_asks() {
+    let s = corpus_ready();
+    let dirs = |sql: &str| directories(&block_on(s.analyze(sql)).unwrap());
+    assert_eq!(dirs("DROP TABLE t"), ["MODIFY path 'file:<warehouse>/t'"]);
+    assert_eq!(
+        dirs("TRUNCATE TABLE t"),
+        ["MODIFY path 'file:<warehouse>/t'"]
+    );
+    assert_eq!(
+        dirs("INSERT INTO t SELECT * FROM s"),
+        [
+            "MODIFY path 'file:<warehouse>/t'",
+            "CREATE path 'file:<warehouse>/t'"
+        ]
+    );
+    assert_eq!(
+        dirs("INSERT OVERWRITE TABLE t SELECT * FROM s"),
+        [
+            "MODIFY path 'file:<warehouse>/t'",
+            "CREATE path 'file:<warehouse>/t'"
+        ]
+    );
+    // Each clause of a multi-table insert, after the targets.
+    let a = block_on(s.analyze("FROM s INSERT INTO t SELECT * INSERT INTO u SELECT *")).unwrap();
+    assert_eq!(
+        directories(&a),
+        [
+            "MODIFY path 'file:<warehouse>/t'",
+            "CREATE path 'file:<warehouse>/t'",
+            "MODIFY path 'file:<warehouse>/u'",
+            "CREATE path 'file:<warehouse>/u'"
+        ]
+    );
+    // The targets come first.
+    let a = block_on(s.analyze("DROP TABLE t")).unwrap();
+    assert!(matches!(
+        a.info.securables[0].securable,
+        Securable::Table(_)
+    ));
+    // Nothing a run would not ask: a missing table, a temporary view, a plain EXPLAIN.
+    assert!(dirs("DROP TABLE IF EXISTS nope").is_empty());
+    assert!(dirs("DROP TABLE v0").is_empty());
+    // A multi-table insert with a missing target: the run resolves every target first and fails, so it
+    // asks about no directory (review m4).
+    assert!(dirs("FROM s INSERT INTO t SELECT * INSERT INTO nope SELECT *").is_empty());
+    assert!(dirs("EXPLAIN INSERT INTO t SELECT * FROM s").is_empty());
+    // A managed table whose directory is gone: DROP and TRUNCATE ask nothing, INSERT still asks.
+    let drop_u = block_on(s.analyze("DROP TABLE u")).unwrap();
+    let dir = drop_u
+        .info
+        .securables
+        .iter()
+        .find_map(|u| match &u.securable {
+            Securable::Path(p) => p.as_plain().map(str::to_owned),
+            _ => None,
+        })
+        .unwrap();
+    let dir = dir.strip_prefix("file:").unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(dirs("DROP TABLE u").is_empty());
+    assert!(dirs("TRUNCATE TABLE u").is_empty());
+    assert_eq!(dirs("INSERT INTO u SELECT * FROM s").len(), 2);
+    // An external table: its drop deletes nothing, so asks nothing; its insert writes its location.
+    let external = tempfile::tempdir().unwrap();
+    let ext = external.path().join("ext");
+    block_on(s.sql(&format!(
+        "CREATE TABLE e (a INT) USING parquet LOCATION '{}'",
+        ext.display()
+    )))
+    .unwrap();
+    assert!(dirs("DROP TABLE e").is_empty());
+    assert_eq!(dirs("INSERT INTO e SELECT a FROM s").len(), 2);
+}
+
+/// T063 N1b item 3: a write of one query has that query's output schema and lineage (the query's own
+/// columns, not the target table's); a multi-table insert and an EXPLAIN of a write have none.
+#[test]
+fn writes_of_one_query_give_its_schema_and_lineage() {
+    let s = corpus_ready();
+    for sql in [
+        "INSERT INTO u SELECT a + 1 AS x, b, k FROM t",
+        "INSERT OVERWRITE TABLE u SELECT a + 1 AS x, b, k FROM t",
+        "CREATE TABLE c2 AS SELECT a + 1 AS x, b, k FROM t",
+    ] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert_valid(&a.to_json());
+        let names: Vec<&str> = a.output_schema.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["x", "b", "k"], "{sql}");
+        let transforms: Vec<&str> = a.lineage.iter().map(|l| l.transform.name()).collect();
+        assert_eq!(transforms, ["expression", "identity", "identity"], "{sql}");
+        let json = a.to_json();
+        assert!(
+            json.contains("{\"ordinal\":0,\"output\":\"x\",\"sources\":[{\"table\":[\"spark_catalog\",\"default\",\"t\"],\"column\":\"a\""),
+            "{sql}: {json}"
+        );
+    }
+    for sql in [
+        "FROM s INSERT INTO t SELECT * INSERT INTO u SELECT *",
+        "EXPLAIN INSERT INTO u SELECT a, b, k FROM t",
+    ] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert!(a.lineage.is_empty(), "{sql}");
+    }
+    let a = block_on(s.analyze("EXPLAIN INSERT INTO u SELECT a, b, k FROM t")).unwrap();
+    let names: Vec<&str> = a.output_schema.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["plan"]);
+}
+
+/// T063 N1b item 4: every securable carries `display`, the 42501 text of it.
+#[test]
+fn securables_carry_their_denial_text() {
+    let s = corpus_ready();
+    let json = block_on(s.analyze("SELECT a FROM t")).unwrap().to_json();
+    assert!(
+        json.contains("\"display\":\"table `spark_catalog`.`default`.`t`\""),
+        "{json}"
+    );
+}
+
+/// Denies the write privileges (`Modify`, `Create`, `Drop`), or with `all` every privilege, once `on`;
+/// counts each question.
+struct DenyTargets {
+    on: std::sync::atomic::AtomicBool,
+    all: bool,
+}
+
+impl AccessPolicy for DenyTargets {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(u64::from(self.on.load(Ordering::SeqCst)))
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        _: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let write = matches!(
+            privilege,
+            Privilege::Modify | Privilege::Create | Privilege::Drop
+        );
+        let d = if self.on.load(Ordering::SeqCst) && (self.all || write) {
+            AccessDecision::Deny {
+                reason: "private".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// T063 N1b review B2: analyze (and `EXPLAIN FORMAT JSON`) reveals nothing about a write target the caller
+/// may not write. Under a policy that denies the target (and under deny-all), `DROP TABLE`, `TRUNCATE
+/// TABLE` and `INSERT ... VALUES` give byte-identical output whether `x` is an existing managed table, a
+/// managed table whose directory is gone, an external table (whose distinctive location never appears),
+/// a missing name, a permanent view or a bucketed table; and the trial writes no audit record (no denial
+/// is counted).
+#[test]
+fn a_denied_target_reveals_nothing() {
+    use krishiv_session::auth::{DeniedCounts, Surface};
+    let external = tempfile::tempdir().unwrap();
+    let location = external.path().join("distinctive-location-q7");
+    let setups: Vec<(&str, Vec<String>)> = vec![
+        (
+            "managed",
+            vec!["CREATE TABLE x (a INT, b INT, k INT)".to_owned()],
+        ),
+        (
+            "managed, no directory",
+            vec!["CREATE TABLE x (a INT, b INT, k INT)".to_owned()],
+        ),
+        (
+            "external",
+            vec![format!(
+                "CREATE TABLE x (a INT, b INT, k INT) USING parquet LOCATION '{}'",
+                location.display()
+            )],
+        ),
+        ("missing", vec![]),
+        (
+            "view",
+            vec!["CREATE VIEW x AS SELECT 1 AS a, 2 AS b, 3 AS k".to_owned()],
+        ),
+        (
+            "bucketed",
+            vec![
+                "CREATE TABLE x (a INT, b INT, k INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS"
+                    .to_owned(),
+            ],
+        ),
+    ];
+    let statements = [
+        "DROP TABLE x",
+        "TRUNCATE TABLE x",
+        "INSERT INTO x VALUES (1, 2, 3)",
+    ];
+    for all in [false, true] {
+        let mut seen: Vec<Option<(String, String)>> = vec![None; statements.len()];
+        for (scenario, setup) in &setups {
+            let warehouse = tempfile::tempdir().unwrap();
+            let policy = Arc::new(DenyTargets {
+                on: std::sync::atomic::AtomicBool::new(false),
+                all,
+            });
+            let s = Session::builder()
+                .principal(Principal::new("ana", PrincipalKind::User))
+                .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+                .config(
+                    "spark.sql.warehouse.dir",
+                    warehouse.path().to_str().unwrap(),
+                )
+                .build()
+                .unwrap();
+            for sql in setup {
+                block_on(s.sql(sql)).unwrap();
+            }
+            if *scenario == "managed, no directory" {
+                std::fs::remove_dir_all(warehouse.path().join("x")).unwrap();
+            }
+            if *scenario == "managed" {
+                // The gate opens for an allowed target: the directory is listed.
+                let a = block_on(s.analyze("DROP TABLE x")).unwrap();
+                assert_eq!(directories(&a).len(), 1, "{scenario}");
+            }
+            policy.on.store(true, Ordering::SeqCst);
+            let counts = Arc::new(DeniedCounts::new());
+            assert!(s.count_denials(Arc::clone(&counts), Surface::Connect));
+            for (i, sql) in statements.iter().enumerate() {
+                let analyzed = block_on(s.analyze(sql)).unwrap().to_json();
+                let explained = explain_json(&s, &format!("EXPLAIN FORMAT JSON {sql}"));
+                for json in [&analyzed, &explained] {
+                    assert!(!json.contains("\"path\""), "{scenario} {sql}: {json}");
+                    assert!(!json.contains("distinctive"), "{scenario} {sql}: {json}");
+                }
+                match &seen[i] {
+                    None => seen[i] = Some((analyzed, explained)),
+                    Some((a, e)) => {
+                        assert_eq!(&analyzed, a, "all={all} {scenario}: {sql}");
+                        assert_eq!(&explained, e, "all={all} {scenario}: {sql}");
+                    }
+                }
+            }
+            assert!(
+                counts.counts().iter().all(|c| c.count == 0),
+                "all={all} {scenario}: analyze counted a denial: {:?}",
+                counts.counts()
+            );
+        }
+    }
+}
+
+/// Denies `Modify` on paths and records every path the policy is asked about.
+#[derive(Default)]
+struct RecordPaths(std::sync::Mutex<Vec<String>>);
+
+impl AccessPolicy for RecordPaths {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let path = matches!(securable, Securable::Path(_));
+        if path {
+            self.0.lock().unwrap().push(securable.to_string());
+        }
+        let d = if path && privilege == Privilege::Modify {
+            AccessDecision::Deny {
+                reason: "private".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// Review m2: under a warehouse reached through a link, analyze lists the path as the caller wrote it
+/// (the text the run's 42501 names), while the policy is asked about it with the link resolved.
+#[cfg(unix)]
+#[test]
+fn a_linked_warehouse_lists_the_path_as_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let policy = Arc::new(RecordPaths::default());
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+        .config("spark.sql.warehouse.dir", link.to_str().unwrap())
+        .build()
+        .unwrap();
+    block_on(s.sql("CREATE TABLE w (a INT)")).unwrap();
+    let real = std::fs::canonicalize(&real).unwrap();
+    for sql in ["INSERT INTO w VALUES (1)", "DROP TABLE w"] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        let listed: Vec<String> = a
+            .info
+            .securables
+            .iter()
+            .filter(|u| matches!(u.securable, Securable::Path(_)))
+            .map(|u| u.securable.to_string())
+            .collect();
+        assert!(!listed.is_empty(), "{sql}");
+        policy.0.lock().unwrap().clear();
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        let text = e.to_string();
+        assert!(
+            text.contains(&format!(" {}", listed[0])),
+            "{sql}: {text}\n{listed:?}"
+        );
+        assert!(
+            listed[0].contains(link.to_str().unwrap()),
+            "{sql}: {listed:?}"
+        );
+        let asked = policy.0.lock().unwrap().clone();
+        assert!(
+            asked.iter().any(|p| p.contains(real.to_str().unwrap())),
+            "{sql}: the policy saw {asked:?}"
+        );
+    }
+}
+
+/// Review m1: an external table on an object store lists the store URL the run's 42501 names (locating
+/// it builds the store, no I/O), not a `file:` path.
+#[cfg(feature = "cloud")]
+#[test]
+fn an_object_store_table_lists_its_url() {
+    let admin = Session::builder()
+        .config("fs.s3a.region", "us-east-1")
+        .build()
+        .unwrap();
+    block_on(admin.sql("CREATE TABLE o (a INT) USING parquet LOCATION 's3://lake/tables/o'"))
+        .unwrap();
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::new(DenyPaths))
+        .config("fs.s3a.region", "us-east-1")
+        .runtime(Arc::clone(admin.runtime()))
+        .build()
+        .unwrap();
+    let sql = "INSERT INTO o VALUES (1)";
+    let a = block_on(s.analyze(sql)).unwrap();
+    let listed: Vec<String> = a
+        .info
+        .securables
+        .iter()
+        .filter(|u| matches!(u.securable, Securable::Path(_)))
+        .map(|u| u.securable.to_string())
+        .collect();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert!(listed[0].contains("s3://lake/tables/o"), "{listed:?}");
+    assert!(!listed[0].contains("file:"), "{listed:?}");
+    let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let text = e.to_string();
+    assert!(
+        text.contains(&format!(" {}", listed[0])),
+        "{text}\n{listed:?}"
     );
 }

@@ -124,7 +124,8 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::Use(_)
             | Statement::DropVariable(_)
             | Statement::AddResource(_)
-            | Statement::ListResource(_) => return Ok(()),
+            | Statement::ListResource(_)
+            | Statement::AccessControl(_) => return Ok(()),
             Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {

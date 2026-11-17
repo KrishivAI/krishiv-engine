@@ -183,28 +183,7 @@ pub fn json_to_ddl(json: &str) -> Result<String, KrishivError> {
     }
 }
 
-/// The planner's `parseDatatypeString` (`SparkConnectPlanner.scala:1511-1528`):
-/// a table schema (`a INT, b STRING`), else a data type (`int`), else the
-/// text as the fields of a struct; the first failure is the error.
-///
-/// Krishiv parses the table schema as the fields of a `STRUCT<...>`, so
-/// clauses only a table schema takes (`DEFAULT`, `GENERATED`) are refused,
-/// and the error is the data type's (Spark reports the table schema's): a
-/// recorded difference.
-///
-/// # Errors
-/// The parse error of the text as a data type.
-pub fn parse_datatype_string(text: &str) -> Result<DataType, KrishivError> {
-    if let Ok(t) = krishiv_types::parse_data_type(&format!("STRUCT<{text}>")) {
-        return Ok(t);
-    }
-    match krishiv_types::parse_data_type(text) {
-        Ok(t) => Ok(t),
-        Err(e) => {
-            krishiv_types::parse_data_type(&format!("STRUCT<{}>", text.trim())).map_err(|_| e)
-        }
-    }
-}
+pub use krishiv_connect::translate::parse_datatype_string;
 
 #[cfg(test)]
 mod tests;

@@ -120,6 +120,18 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::OperationCanceled),
         "org.apache.spark.SparkSQLException"
     );
+    // Spark raises both artifact errors as `SparkRuntimeException`
+    // (PySpark's `SparkRuntimeException`, not `AnalysisException`).
+    for c in [
+        ErrorClass::ArtifactAlreadyExists,
+        ErrorClass::InvalidArtifactPath,
+    ] {
+        assert_eq!(first(c), "org.apache.spark.SparkRuntimeException");
+    }
+    assert_eq!(
+        first(ErrorClass::KrishivArtifactLimit),
+        "org.apache.spark.SparkException"
+    );
     assert_eq!(
         exception_classes(ErrorClass::CastInvalidInput)[1],
         "java.lang.NumberFormatException"
@@ -196,4 +208,37 @@ fn insufficient_permissions_is_permission_denied() {
         "KRISHIV_INSUFFICIENT_PERMISSIONS"
     );
     assert_eq!(info.metadata["sqlState"], "42501");
+}
+
+#[test]
+fn a_python_udf_error_is_sparks_python_exception_and_a_crash_a_spark_exception() {
+    use krishiv_common::error::{KrishivPythonWorkerExited, PythonException};
+    let e: KrishivError = PythonException {
+        msg: "An exception was thrown from the Python worker".to_owned(),
+        traceback: "Traceback (most recent call last):\nValueError: boom".to_owned(),
+    }
+    .into();
+    let status = status_of(&e);
+    assert_eq!(status.code(), Code::Internal);
+    assert!(
+        status.message().starts_with("[PYTHON_EXCEPTION] "),
+        "{}",
+        status.message()
+    );
+    assert!(status.message().contains("ValueError: boom"));
+    let (_, info) = details(&status);
+    assert_eq!(info.reason, "org.apache.spark.api.python.PythonException");
+    assert_eq!(
+        info.metadata["classes"],
+        r#"["org.apache.spark.api.python.PythonException","java.lang.RuntimeException","java.lang.Exception","java.lang.Throwable","java.lang.Object"]"#
+    );
+    assert_eq!(info.metadata["sqlState"], "38000");
+    assert_eq!(info.metadata["errorClass"], "PYTHON_EXCEPTION");
+    let crashed: KrishivError = KrishivPythonWorkerExited {
+        reason: "killed by signal 9".to_owned(),
+    }
+    .into();
+    let (_, info) = details(&status_of(&crashed));
+    assert_eq!(info.reason, "org.apache.spark.SparkException");
+    assert_eq!(info.metadata["errorClass"], "KRISHIV_PYTHON_WORKER_EXITED");
 }

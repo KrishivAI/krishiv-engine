@@ -16,13 +16,15 @@ use krishiv_common::config::{
     PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
     PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
-use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivPythonWorkerLimit, OperationCanceled,
+};
 use krishiv_udf_sandbox::{Capabilities, Limits, SandboxSpec, probe};
 use rustix::net::{AddressFamily, SocketFlags, SocketType};
 use rustix::process::{Resource, getrlimit};
 
 use crate::WORKER_SUBCOMMAND;
-use crate::calls::{CallThreads, Job};
+use crate::calls::{CallThreads, Job, Refused};
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
 use crate::worker::{Started, Worker};
@@ -311,24 +313,87 @@ impl Pool {
             for key in keys {
                 dropped.extend(state.idle.remove(&key).unwrap_or_default());
             }
-            for _ in &dropped {
-                state.forget(owner);
-            }
             if state.per_owner.contains_key(owner) {
                 state.released.insert(owner.clone());
             }
             dropped
         };
-        self.inner.freed.notify_all();
-        drop(dropped);
+        if dropped.is_empty() {
+            self.inner.freed.notify_all();
+            return;
+        }
+        // Dropping a worker kills it and waits for its exit: off the caller, which may be an async worker
+        // thread (a session closed by an RPC or the idle sweep). The owner's slots are freed only once its
+        // workers are gone ([`Released`]), so a new session never runs more than `maxTotal` workers at once.
+        let released = Released {
+            inner: Arc::clone(&self.inner),
+            owner: owner.clone(),
+            workers: dropped,
+        };
+        // If the thread cannot start, `spawn` drops the closure, and with it `released`: the workers are then
+        // stopped, and their slots freed, on the caller's thread.
+        let spawned = std::thread::Builder::new()
+            .name("krishiv-udf-release".to_owned())
+            .spawn(move || drop(released));
+        if let Err(e) = spawned {
+            tracing::warn!("Python UDF workers were stopped on the caller's thread: {e}");
+        }
     }
 
-    /// Runs `job`, a call of `owner`, on one of the pool's call threads (now, or when one is free).
+    /// Runs `job`, a scalar call of `owner`, on one of the pool's call threads (now, or when one is free).
+    ///
+    /// # Errors
+    /// `KRISHIV_PYTHON_WORKER_LIMIT` when `owner`'s only call (`maxPerSession` 1) is a relation task's, which
+    /// may wait for this call's result; `INTERNAL_ERROR` when no call thread can run.
     pub(crate) fn submit(&self, owner: &Owner, job: Job) -> Result<(), KrishivError> {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(internal)
+            .map_err(|r| self.refused(r))
+    }
+
+    /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
+    pub(crate) fn submit_task(&self, owner: &Owner, job: Job) -> Result<(), KrishivError> {
+        self.inner
+            .calls
+            .submit_task(owner.clone(), job)
+            .map_err(|r| self.refused(r))
+    }
+
+    fn refused(&self, refused: Refused) -> KrishivError {
+        match refused {
+            Refused::NoThread(why) => internal(why),
+            Refused::Reserve => {
+                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
+            }
+        }
+    }
+
+    /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
+    /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
+    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+        let config = &self.inner.config;
+        let (setting, value) = if self.inner.calls.threads_bound() {
+            ("krishiv.python.worker.maxTotal", config.max_total)
+        } else {
+            (
+                "krishiv.python.worker.maxPerSession",
+                config.max_per_session,
+            )
+        };
+        KrishivPythonWorkerLimit {
+            operation: operation.to_owned(),
+            needed: needed.to_string(),
+            available: self.inner.calls.slot_limit().to_string(),
+            setting: setting.to_owned(),
+            value: value.to_string(),
+        }
+        .into()
+    }
+
+    /// The pool's call threads (the relation task slots live there).
+    pub(crate) fn calls(&self) -> &CallThreads {
+        &self.inner.calls
     }
 
     /// A worker of `owner` for a client on Python `python_ver`: an idle one of the same key, else a new one
@@ -520,6 +585,28 @@ pub(crate) trait CallWatch {
     /// A worker is starting for the call and has `pidfd`: a cancel from now on kills it. False when the call
     /// was already cancelled; the start is then abandoned (the worker killed and reaped).
     fn starting(&self, pidfd: &Arc<OwnedFd>) -> bool;
+}
+
+/// Idle workers taken from a released owner: dropped, they stop the workers first (each waits for its exit),
+/// then free the owner's slots and wake the waiters, in that order.
+struct Released {
+    inner: Arc<Inner>,
+    owner: Owner,
+    workers: Vec<Idle>,
+}
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        let n = self.workers.len();
+        drop(std::mem::take(&mut self.workers));
+        {
+            let mut state = self.inner.lock();
+            for _ in 0..n {
+                state.forget(&self.owner);
+            }
+        }
+        self.inner.freed.notify_all();
+    }
 }
 
 impl Inner {
