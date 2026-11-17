@@ -78,6 +78,9 @@ fn text(v: &Value) -> String {
     match v {
         Value::Null => "NULL".to_owned(),
         Value::String(s) => s.clone(),
+        Value::Object(o) if o.len() == 1 && o.contains_key("binary") => {
+            o["binary"].as_str().unwrap().to_owned()
+        }
         other => other.to_string(),
     }
 }
@@ -87,7 +90,13 @@ fn assert_rows(o: &Oracle, version: &VersionSpec, columns: &[&str], rows: &[Valu
     let select: Vec<String> = columns
         .iter()
         .enumerate()
-        .map(|(i, c)| format!("CAST({c} AS STRING) AS c{i}"))
+        .map(|(i, c)| {
+            if *c == "bin" {
+                format!("lower(hex({c})) AS c{i}")
+            } else {
+                format!("CAST({c} AS STRING) AS c{i}")
+            }
+        })
         .collect();
     let sql = format!("SELECT {} FROM t ORDER BY id", select.join(", "));
     let s = o.session(version);
@@ -105,7 +114,7 @@ fn assert_rows(o: &Oracle, version: &VersionSpec, columns: &[&str], rows: &[Valu
     assert_eq!(got, want, "{what}");
 }
 
-/// The scalar columns of a table's rows (a binary, struct, list or map value is not compared as text).
+/// The scalar columns of a table's rows (a struct, list or map value is not compared as text).
 fn scalar_columns(exp: &Value, name: &str) -> Vec<String> {
     let rows = exp[name]["rows"].as_array().unwrap();
     exp[name]["columns"]
@@ -114,8 +123,11 @@ fn scalar_columns(exp: &Value, name: &str) -> Vec<String> {
         .iter()
         .map(|c| c.as_str().unwrap().to_owned())
         .filter(|c| {
-            rows.iter()
-                .all(|r| !matches!(r[c], Value::Object(_) | Value::Array(_)))
+            rows.iter().all(|r| match &r[c] {
+                Value::Object(o) => o.len() == 1 && o.contains_key("binary"),
+                Value::Array(_) => false,
+                _ => true,
+            })
         })
         .collect()
 }
@@ -172,7 +184,13 @@ fn spark_evolved_the_schema_and_krishiv_reads_every_snapshot() {
     let exp = expected();
     check_current("evolved");
     let o = open_table("evolved", &exp);
-    for (id, rows) in exp["evolved"]["as_of"].as_object().unwrap() {
+    let as_of = exp["evolved"]["as_of"].as_object().unwrap();
+    assert_eq!(
+        as_of.len(),
+        exp["evolved"]["snapshots"].as_array().unwrap().len(),
+        "every snapshot has a time-travel answer"
+    );
+    for (id, rows) in as_of {
         let rows = rows.as_array().unwrap();
         // The columns of that snapshot's schema, as Spark's `VERSION AS OF` returned them.
         let cols: Vec<&str> = rows[0]
@@ -192,13 +210,22 @@ fn spark_evolved_the_schema_and_krishiv_reads_every_snapshot() {
 }
 
 #[test]
-fn spark_wrote_structs_lists_and_maps() {
+fn spark_wrote_structs() {
     let exp = expected();
     let o = open_table("nested", &exp);
     let s = o.session(&VersionSpec::Current);
-    // Spark's rows: (1, {1, x}), (2, NULL), (3, {NULL, z}).
+    // The struct's fields, from Spark's own rows (a NULL struct reads as NULL fields).
+    let want: Vec<String> = exp["nested"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let st = &r["st"];
+            format!("{}|{}|{}", text(&r["id"]), text(&st["a"]), text(&st["b"]))
+        })
+        .collect();
     assert_eq!(
-        s.rows("SELECT CAST(id AS STRING), CAST(st.a AS STRING), st.b FROM t ORDER BY id"),
-        ["1|1|x", "2|NULL|NULL", "3|NULL|z"]
+        s.rows("SELECT CAST(id AS STRING), CAST(st.a AS STRING), CAST(st.b AS STRING) FROM t ORDER BY id"),
+        want
     );
 }

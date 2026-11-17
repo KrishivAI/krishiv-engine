@@ -9,13 +9,13 @@ output directory as the root of its file system and the paths resolve without re
 Run it from the repository root:
 
     OUT=$(mktemp -d)
-    docker run --rm --user "$(id -u)" -e HOME=/tmp -v "$OUT:/wh" \
+    docker run --rm --user "$(id -u)" -e HOME=/tmp -e TZ=UTC -v "$OUT:/wh" \
         -v "$PWD/tests/scripts:/scripts:ro" --entrypoint /opt/spark/bin/spark-submit \
         apache/spark:4.1.0 \
         --packages org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.12.0 --conf spark.jars.ivy=/tmp/ivy \
         /scripts/gen_iceberg_fixtures.py /wh
 
-then replace ``tests/fixtures/iceberg-1.12.0/`` with ``$OUT`` (the ``wh`` directory the test serves is the output
+then replace ``tests/fixtures/iceberg-1.12.0/wh/`` with ``$OUT`` (the ``wh`` directory the test serves is the output
 directory itself). ``EXPECTED.json`` (next to each table's directory, ``wh/db/<table>.expected.json`` is NOT used:
 one ``EXPECTED.json`` at the root) records for every table the rows Spark reads back, the current metadata file
 and the snapshot ids oldest first, so the test checks what the oracle wrote, never a hand-written value.
