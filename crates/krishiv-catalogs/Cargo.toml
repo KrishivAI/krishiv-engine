@@ -31,7 +31,18 @@ session = ["iceberg-rest", "dep:krishiv-session", "dep:krishiv-plan", "tokio/rt"
 # The Unity Catalog read-only client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
 # egress policy client). Off by default; shares no code with
 # `iceberg-rest`, so either feature builds without the other.
-unity = ["dep:reqwest", "dep:serde_json", "dep:tokio", "dep:url", "dep:krishiv-plan", "dep:krishiv-types", "tokio/time", "tokio/sync", "dep:krishiv-store", "krishiv-store/cloud"]
+unity = [
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:url",
+    "dep:krishiv-plan",
+    "dep:krishiv-types",
+    "tokio/time",
+    "tokio/sync",
+    "dep:krishiv-store",
+    "krishiv-store/cloud",
+]
 
 # The embedded SQLite catalog (`rusqlite` with the bundled C amalgamation: a C build). Off by default.
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]
