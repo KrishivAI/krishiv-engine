@@ -465,9 +465,10 @@ async fn a_repeated_request_id_replays_and_a_reused_one_is_refused() {
     );
 }
 
-/// Collects the `krishiv::admin_action` records of the current thread as `field=value` strings.
+/// Collects the `krishiv::admin_action` records (field 0) and the `krishiv::audit` records (field 1)
+/// as `field=value` strings.
 #[derive(Clone, Default)]
-struct Records(Arc<Mutex<Vec<String>>>);
+struct Records(Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>);
 
 struct Fields(String);
 
@@ -480,7 +481,7 @@ impl tracing::field::Visit for Fields {
 
 impl tracing::Subscriber for Records {
     fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
-        m.target() == "krishiv::admin_action"
+        m.target() == "krishiv::admin_action" || m.target() == "krishiv::audit"
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -490,7 +491,11 @@ impl tracing::Subscriber for Records {
     fn event(&self, e: &tracing::Event<'_>) {
         let mut f = Fields(String::new());
         e.record(&mut f);
-        self.0.lock().unwrap().push(f.0);
+        if e.metadata().target() == "krishiv::audit" {
+            self.1.lock().unwrap().push(f.0);
+        } else {
+            self.0.lock().unwrap().push(f.0);
+        }
     }
     fn enter(&self, _: &tracing::span::Id) {}
     fn exit(&self, _: &tracing::span::Id) {}
@@ -573,6 +578,23 @@ async fn kill_by_tag_and_operator_actions_write_their_records() {
         log[1].contains("rpc=\"KillSession\"") && log[1].contains("result=\"failed\""),
         "{}",
         log[1]
+    );
+    // Audit (ADR 0046, update 2026-11-14): kit's session, held by another principal, writes one
+    // record with the id kind only; the unknown id writes none; no id or owner appears.
+    let audit: Vec<String> = records
+        .1
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("principal=kay "))
+        .cloned()
+        .collect();
+    assert_eq!(audit.len(), 1, "{audit:#?}");
+    assert!(audit[0].contains("id_kind=\"sessions\""), "{}", audit[0]);
+    assert!(
+        !audit[0].contains(&kit) && !audit[0].contains("kit") && !audit[0].contains("no-such"),
+        "{}",
+        audit[0]
     );
     assert!(
         log[2].contains("rpc=\"CancelQueriesByTag\"") && log[2].contains("result=\"ok\""),

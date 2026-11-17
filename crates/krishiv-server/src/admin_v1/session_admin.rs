@@ -184,13 +184,13 @@ impl SessionAdmin {
     ///
     /// An unknown id is only a not-found: no 42501, no audit record, no counter. An id another
     /// principal holds is answered the same way, writes one `krishiv::audit` record with the kind of
-    /// id (`securable`) and never the id or its owner, and does not bump
+    /// id (`id_kind`) and never the id or its owner, and does not bump
     /// `krishiv_auth_denied_total`: no privilege was asked.
     fn denied(
         &self,
         call: &Call,
         rpc: &str,
-        securable: &str,
+        id_kind: &str,
         target: &str,
         exists: bool,
         error: AdminError,
@@ -205,7 +205,7 @@ impl SessionAdmin {
             method = %call.caller.method,
             role = call.caller.role.as_deref().unwrap_or("none"),
             surface = "admin",
-            id_kind = securable,
+            id_kind,
             "id held by another principal"
         );
         self.log(call, rpc, target, false, "denied", &error.error_class);
