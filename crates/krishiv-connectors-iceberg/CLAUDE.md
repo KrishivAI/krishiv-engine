@@ -33,7 +33,34 @@ refused reservation is `UNABLE_TO_ACQUIRE_MEMORY` and a dropped load unregisters
 less applying position deletes and DVs, each once; equality deletes not subtracted), null counts and min/max from
 bounds (no NaN-able float, no possibly truncated string), estimates only · `manifest_cache.rs` decoded manifests as
 `Arc<[LiveEntry]>` keyed by path, length and the inherited list fields, LRU under `krishiv.iceberg.manifestCache.bytes`
-(0 disables), one per storage registration (`Registered`), in memory only · `deletes.rs` reads each position
+(0 disables), one per storage registration (`Registered`), in memory only · `data_file.rs` (PR-36a) a written
+file's manifest entry: `DataLocations` (Java's `LocationProviders` through iceberg-rust's generators: `write.data.path`,
+object storage with hash directories; the deprecated path properties honoured, a divergence), `file_name`,
+`partition_tuple` (transformed values through `plan::bounds` to iceberg literals), `data_file` (an iceberg `DataFile`
+from size, rows and `FileMetrics`; sort order 0 unless claimed); `write_metrics.rs` `WriteMetricsConfig` (Java's
+`MetricsConfig.from`); tests `data_file_tests.rs` (Java's partition paths and hash directories, a built file through a
+manifest and back) · `append.rs` (PR-36a) an append's metadata, as Java's `SnapshotProducer`/`FastAppend`:
+`write_new_manifests` once per write (one manifest per spec, entries with the write's snapshot id and inherited
+sequence numbers), `prepare_attempt` per commit attempt (the list: new manifests reset to unassigned, then the base's;
+sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`, `engine-name`,
+`krishiv.write-id`/`krishiv.query-id`; requirements `assert-table-uuid`/`assert-ref-snapshot-id`, updates
+`add-snapshot`/`set-snapshot-ref`); no manifest split or merge yet; tests `append_tests.rs` (committed as a catalog
+applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused and rebuilt, v3 lineage)
+· `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
+table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
+partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
+one open Parquet file per key (at most `max_open_files`, default 100, oldest-opened closed first), rollover at a
+multiple of 1,000 rows once `write.target-file-size-bytes` is reached (Java's `RollingFileWriter`), Parquet settings
+from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (gzip when unset, Java's fallback; the level is not applied;
+`write.format.default` other than parquet, `uuid`/`fixed`/`variant` columns refused), Java's file names and partition
+directories, a `WrittenDataFile` per file (`file_metrics`, no `split_offsets`); open uploads and the encoders' memory
+charged to one `Reservation`; `finish` failing, `abort` (cancellation-safe: a dropped abort leaves the rest to drop)
+and drop delete the finished files; `TaskIds::attempt_id` must be unique per attempt (Java's `taskAttemptId`), so a
+retry never reuses a failed attempt's names; tests `write_tests.rs`
+(tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
+an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
+abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
+· `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions
 past the end delete nothing, as Java); positions charged per batch · `eq_deletes.rs` reads each equality

@@ -932,17 +932,21 @@ fn warehouse_free(s: &str) -> String {
 /// only `SELECT 1 FROM target` before it fails, not its source, which analyze lists (a follow-up for
 /// when MERGE runs).
 ///
-/// The snapshot pins the differences that remain. A run of `DROP TABLE`, `INSERT` and `TRUNCATE` on a
-/// managed table also asks for its directory (`table_commands/files.rs`), which analyze lists since T063
-/// N1b (`analyze/dirs.rs`), in the form the run's denial names (the same text here, with no link on the
-/// warehouse path): no difference. The directories of other DDL are not listed yet (`analyze/dirs.rs`
-/// module doc); [`DIRECTORY_CASES`] are statements of that DDL which succeed (each must), so the snapshot
-/// pins each of those differences rather than skipping a failed run.
+/// The snapshot pins the differences that remain. A run of `DROP TABLE`, `INSERT`, `TRUNCATE`, `CREATE
+/// TABLE` (CTAS too), `ALTER TABLE ... RENAME TO` and `DROP NAMESPACE ... CASCADE` also asks about
+/// directories (`table_commands/files.rs`), which analyze lists since T063 N1b (`analyze/dirs.rs`), in the
+/// form the run's denial names (the same text here, with no link on the warehouse path): no difference.
+/// [`DIRECTORY_CASES`] are statements of that DDL which succeed (each must), so the property compares
+/// each rather than skipping a failed run. The partition directories of `ADD` and `DROP PARTITION` are
+/// not listed yet (`analyze/dirs.rs` module doc): the snapshot pins those two differences.
 ///
 /// `EXPLAIN FORMAT JSON` of a write or drop: its run analyzes the statement it explains, which asks the
 /// policy about that statement's targets in a quiet trial before it lists any directory (review B2). The
 /// trial requires nothing (a denial only lists no directory), so analyze of the `EXPLAIN` does not list
 /// them; the snapshot pins those two questions.
+///
+/// Analyze of a `DROP NAMESPACE ... CASCADE` asks `BROWSE` on the namespace before it lists the
+/// directories of its tables (review D1); the run does not ask it, so that one question is left out.
 ///
 /// The event stream is not every policy question: `system.*` tables' `Monitor` row filter
 /// (`monitor.rs`) calls the policy's `check` directly, bypassing `authorize()`. It filters rows, it is
@@ -954,9 +958,11 @@ fn securables_equal_what_a_run_authorizes() {
     let mut compared = 0;
     let mut row_level = BTreeSet::new();
     let mut differences = String::new();
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().to_str().unwrap().to_owned();
     let extra = DIRECTORY_CASES
         .iter()
-        .map(|(label, setup, sql)| ((*label).to_owned(), *setup, (*sql).to_owned()));
+        .map(|(label, setup, sql)| ((*label).to_owned(), *setup, sql.replace("{dir}", &dir)));
     let cases = corpus()
         .into_iter()
         .map(|(label, sql)| (label, &[][..], sql))
@@ -977,7 +983,13 @@ fn securables_equal_what_a_run_authorizes() {
         let Ok(a) = block_on(s.analyze(&sql)) else {
             continue;
         };
-        let analyze_asked = asked_by(&principal);
+        let mut analyze_asked = asked_by(&principal);
+        // Review D1: before it lists a `CASCADE`'s table directories, analyze asks `BROWSE` on the
+        // namespace (the right to list its tables), which the run does not ask and analyze does not
+        // list: the one question it may ask beyond the run's.
+        if a_cascade(&sql) {
+            analyze_asked.retain(|(p, s)| !(p == "BROWSE" && s.starts_with("namespace ")));
+        }
         if a.partial {
             continue;
         }
@@ -1002,7 +1014,7 @@ fn securables_equal_what_a_run_authorizes() {
         match block_on(s.sql(&sql)) {
             Ok(_) => {}
             Err(e)
-                if matches!(label.as_str(), "Update" | "Delete")
+                if matches!(label.as_str(), "Update" | "Delete" | "DirReplaceTable")
                     && e.error_class().name() == "UNSUPPORTED_FEATURE.TABLE_OPERATION" => {}
             Err(e) if must_run => panic!("{label}: {sql}: {e}"),
             Err(_) => continue,
@@ -1036,22 +1048,79 @@ fn securables_equal_what_a_run_authorizes() {
     insta::assert_snapshot!(differences);
 }
 
-/// Statements of DDL whose run asks about a directory analyze does not list yet (T063 N1b review M1):
-/// (label, setup, statement), each of which succeeds on the corpus session after its setup. `REPLACE TABLE`
-/// of the session catalog's file tables is `UNSUPPORTED_FEATURE.TABLE_OPERATION` today, so it has no case.
+/// Whether `sql` is a `DROP NAMESPACE ... CASCADE`, whose analysis asks `BROWSE` on the namespace (D1).
+fn a_cascade(sql: &str) -> bool {
+    let sql = sql.to_ascii_uppercase();
+    sql.starts_with("DROP NAMESPACE")
+        || sql.starts_with("DROP SCHEMA")
+        || sql.starts_with("DROP DATABASE")
+}
+
+/// Statements of DDL whose run asks about a directory (T063 N1b review M1): (label, setup, statement), each of
+/// which succeeds on the corpus session after its setup (`{dir}` is a new temporary directory), so the
+/// property test compares what analyze lists with what the run asks for each. `REPLACE TABLE` of the
+/// session catalog's file tables is `UNSUPPORTED_FEATURE.TABLE_OPERATION` today (asked before any
+/// directory), so its case is compared through that error. `ADD PARTITION` and `DROP PARTITION` are not
+/// listed yet (`analyze/dirs.rs`): the snapshot pins their difference.
 const DIRECTORY_CASES: &[(&str, &[&str], &str)] = &[
     ("DirCreateTable", &[], "CREATE TABLE c_new (a INT)"),
+    (
+        "DirCreateTableIn",
+        &[],
+        "CREATE TABLE d.c_new (a INT, k INT) USING parquet PARTITIONED BY (k)",
+    ),
+    (
+        "DirCreateExternal",
+        &[],
+        "CREATE TABLE c_ext (a INT) USING parquet LOCATION '{dir}/e'",
+    ),
+    (
+        "DirCreatePathOption",
+        &[],
+        "CREATE TABLE c_opt (a INT) USING parquet OPTIONS (path '{dir}/o')",
+    ),
+    (
+        "DirCreateStoreOptions",
+        &[],
+        "CREATE TABLE c_so (a INT) USING parquet OPTIONS ('fs.s3a.region' = 'eu-west-1')",
+    ),
     ("DirCtas", &[], "CREATE TABLE c_ctas AS SELECT * FROM t"),
+    (
+        "DirCtasExternal",
+        &[],
+        "CREATE TABLE c_ctas_e USING parquet LOCATION '{dir}/c' AS SELECT * FROM t",
+    ),
+    ("DirReplaceTable", &[], "CREATE OR REPLACE TABLE t (a INT)"),
     ("DirRenameTable", &[], "ALTER TABLE u RENAME TO u_renamed"),
     (
         "DirDropNamespaceCascade",
-        &["CREATE TABLE d.dt (a INT)"],
+        &[
+            "CREATE TABLE d.dt (a INT)",
+            "CREATE TABLE d.da (a INT)",
+            "CREATE VIEW d.dv AS SELECT 1 AS a",
+        ],
         "DROP NAMESPACE d CASCADE",
     ),
     (
         "DirAddPartition",
         &["CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)"],
         "ALTER TABLE p ADD PARTITION (k = 1)",
+    ),
+    (
+        "DirDropPartition",
+        &[
+            "CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)",
+            "ALTER TABLE p ADD PARTITION (k = 1)",
+        ],
+        "ALTER TABLE p DROP PARTITION (k = 1)",
+    ),
+    (
+        "DirSetPartitionLocation",
+        &[
+            "CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)",
+            "ALTER TABLE p ADD PARTITION (k = 1)",
+        ],
+        "ALTER TABLE p PARTITION (k = 1) SET LOCATION '{dir}/l'",
     ),
 ];
 
@@ -1421,6 +1490,212 @@ fn writes_and_drops_list_the_directory_a_run_asks() {
     assert_eq!(dirs("INSERT INTO e SELECT a FROM s").len(), 2);
 }
 
+/// The directories of DDL (T063 N1b review M1): `CREATE TABLE` (managed and with a location), CTAS,
+/// `ALTER TABLE ... RENAME TO` and `DROP NAMESPACE ... CASCADE` list the directories their run asks about,
+/// after their targets, in the run's order and in the form its denial names; nothing where the run fails
+/// before it asks (the table or the location already exists, `REPLACE`, a namespace that is not dropped
+/// with its tables). A partition's `SET LOCATION` asks only its target (the location as written).
+#[test]
+fn ddl_lists_the_directories_a_run_asks() {
+    let s = corpus_ready();
+    let dirs = |sql: &str| directories(&block_on(s.analyze(sql)).unwrap());
+    let none: [&str; 0] = [];
+    assert_eq!(
+        dirs("CREATE TABLE c_new (a INT)"),
+        ["CREATE path 'file:<warehouse>/c_new'"]
+    );
+    // The namespace's `CREATE` (the target) comes first.
+    let a = block_on(s.analyze("CREATE TABLE c_new (a INT)")).unwrap();
+    assert!(matches!(
+        a.info.securables[0].securable,
+        Securable::Namespace(_)
+    ));
+    assert_eq!(
+        dirs("CREATE TABLE d.c_new (a INT, k INT) USING parquet PARTITIONED BY (k)"),
+        ["CREATE path 'file:<warehouse>/d.db/c_new'"]
+    );
+    assert_eq!(
+        dirs("CREATE TABLE c_ctas AS SELECT * FROM t"),
+        [
+            "MODIFY path 'file:<warehouse>/c_ctas'",
+            "CREATE path 'file:<warehouse>/c_ctas'"
+        ]
+    );
+    // The table exists: the run fails (or, `IF NOT EXISTS`, does nothing) before it asks.
+    for sql in [
+        "CREATE TABLE t (a INT)",
+        "CREATE TABLE IF NOT EXISTS t (a INT)",
+        "CREATE TABLE t AS SELECT 1 AS a",
+        "CREATE TABLE IF NOT EXISTS t AS SELECT 1 AS a",
+        // Refused before any directory (`UNSUPPORTED_FEATURE.TABLE_OPERATION`).
+        "CREATE OR REPLACE TABLE t (a INT)",
+        "REPLACE TABLE t (a INT) USING parquet",
+        "CREATE OR REPLACE TABLE c_new AS SELECT 1 AS a",
+        // A missing namespace, a managed table without columns, a temporary table.
+        "CREATE TABLE nope.c (a INT)",
+        "CREATE TABLE c_none USING parquet",
+        // A layout the run refuses: every column a partition column.
+        "CREATE TABLE c_all (a INT) USING parquet PARTITIONED BY (a)",
+        "ALTER TABLE u RENAME TO t",
+        "ALTER TABLE nope RENAME TO c_x",
+        "ALTER TABLE v RENAME TO c_x",
+        "DROP NAMESPACE d",
+        "DROP NAMESPACE nope CASCADE",
+    ] {
+        assert_eq!(dirs(sql), none, "{sql}");
+    }
+    // A managed table whose directory is already there: `LOCATION_ALREADY_EXISTS` before the question.
+    let taken = block_on(s.analyze("DROP TABLE t")).unwrap();
+    let t_dir = taken
+        .info
+        .securables
+        .iter()
+        .find_map(|u| match &u.securable {
+            Securable::Path(p) => p.as_plain().map(str::to_owned),
+            _ => None,
+        })
+        .unwrap();
+    let warehouse = std::path::PathBuf::from(
+        t_dir
+            .strip_prefix("file:")
+            .unwrap()
+            .strip_suffix("/t")
+            .unwrap(),
+    );
+    std::fs::create_dir(warehouse.join("c_taken")).unwrap();
+    assert_eq!(dirs("CREATE TABLE c_taken (a INT)"), none);
+    assert_eq!(dirs("CREATE TABLE c_taken AS SELECT 1 AS a"), none);
+    // With a location: `CREATE` on it after its `MODIFY` target, as the run asks it.
+    let external = tempfile::tempdir().unwrap();
+    let ext = external.path().join("e");
+    let ext = ext.display();
+    assert_eq!(
+        dirs(&format!(
+            "CREATE TABLE c_e (a INT) USING parquet LOCATION '{ext}'"
+        )),
+        [
+            format!("MODIFY path 'file:{ext}'"),
+            format!("CREATE path 'file:{ext}'")
+        ]
+    );
+    assert_eq!(
+        dirs(&format!(
+            "CREATE TABLE c_e (a INT) USING parquet OPTIONS (path '{ext}/../o')"
+        )),
+        [format!(
+            "CREATE path 'file:{}'",
+            external.path().join("o").display()
+        )]
+    );
+    assert_eq!(
+        dirs(&format!(
+            "CREATE TABLE c_e USING parquet LOCATION '{ext}' AS SELECT * FROM t"
+        )),
+        [
+            format!("MODIFY path 'file:{ext}'"),
+            format!("CREATE path 'file:{ext}'")
+        ]
+    );
+    // A relative location is qualified against the working directory, as the run's 42501 names it
+    // (review N3); an object store's location is its URL.
+    let cwd = std::env::current_dir().unwrap();
+    let listed = dirs("CREATE TABLE c_rel (a INT) USING parquet LOCATION 'rel-q3/d'");
+    assert_eq!(
+        listed.last().map(String::as_str),
+        Some(format!("CREATE path 'file:{}/rel-q3/d'", cwd.display()).as_str()),
+        "{listed:?}"
+    );
+    assert_eq!(
+        dirs("CREATE TABLE c_s3 (a INT) USING parquet LOCATION 's3a://lake/tables/c_s3'"),
+        [
+            "MODIFY path 's3a://lake/tables/c_s3'",
+            "CREATE path 's3a://lake/tables/c_s3'"
+        ]
+    );
+    // Server-scoped store options (review D2): the run asks `MANAGE` on the cluster after the targets,
+    // before the location.
+    let a = block_on(s.analyze(
+        "CREATE TABLE c_so (a INT) USING parquet OPTIONS ('fs.s3a.region' = 'eu-west-1')",
+    ))
+    .unwrap();
+    let listed: Vec<String> = uses(&a).iter().map(|u| warehouse_free(u)).collect();
+    assert_eq!(
+        listed,
+        [
+            "CREATE namespace `spark_catalog`.`default` []",
+            "MANAGE system `cluster` []",
+            "CREATE path 'file:<warehouse>/c_so' []"
+        ]
+    );
+    // A rename moves a managed table's directory: `MODIFY` on it, then `CREATE` on the new one.
+    assert_eq!(
+        dirs("ALTER TABLE u RENAME TO u_renamed"),
+        [
+            "MODIFY path 'file:<warehouse>/u'",
+            "CREATE path 'file:<warehouse>/u_renamed'"
+        ]
+    );
+    // `CASCADE` deletes the directory of every managed table in the namespace (not an external
+    // table's, not a view's), in the run's order.
+    for sql in [
+        "CREATE TABLE d.b2 (a INT)".to_owned(),
+        "CREATE TABLE d.a1 (a INT)".to_owned(),
+        format!("CREATE TABLE d.ext (a INT) USING parquet LOCATION '{ext}'"),
+        "CREATE VIEW d.dv AS SELECT 1 AS a".to_owned(),
+    ] {
+        block_on(s.sql(&sql)).unwrap();
+    }
+    assert_eq!(
+        dirs("DROP NAMESPACE d CASCADE"),
+        [
+            "MODIFY path 'file:<warehouse>/d.db/a1'",
+            "MODIFY path 'file:<warehouse>/d.db/b2'"
+        ]
+    );
+    // A partition's `SET LOCATION` changes the catalog only: its target, nothing more.
+    block_on(s.sql("CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)")).unwrap();
+    block_on(s.sql("ALTER TABLE p ADD PARTITION (k = 1)")).unwrap();
+    assert_eq!(
+        dirs(&format!(
+            "ALTER TABLE p PARTITION (k = 1) SET LOCATION '{ext}'"
+        )),
+        [format!("MODIFY path 'file:{ext}'")]
+    );
+}
+
+/// Review D3: analyze never makes the runtime's own warehouse directory; it lists the path a run then
+/// makes and asks about.
+#[test]
+fn analyze_makes_no_warehouse_directory() {
+    let s = Session::new().unwrap();
+    let a = block_on(s.analyze("CREATE TABLE w_new (a INT)")).unwrap();
+    let listed: Vec<String> = a
+        .info
+        .securables
+        .iter()
+        .filter_map(|u| match &u.securable {
+            Securable::Path(p) => p.as_plain().map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    let dir = std::path::PathBuf::from(listed[0].strip_prefix("file:").unwrap());
+    let warehouse = dir.parent().unwrap();
+    assert!(
+        warehouse
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("krishiv-warehouse-"),
+        "{listed:?}"
+    );
+    assert!(!warehouse.exists(), "analyze made {}", warehouse.display());
+    // The run makes the same directory.
+    block_on(s.sql("CREATE TABLE w_new (a INT)")).unwrap();
+    assert!(dir.is_dir(), "{}", dir.display());
+}
+
 /// T063 N1b item 3: a write of one query has that query's output schema and lineage (the query's own
 /// columns, not the target table's); a multi-table insert and an EXPLAIN of a write have none.
 #[test]
@@ -1501,7 +1776,8 @@ impl AccessPolicy for DenyTargets {
 
 /// T063 N1b review B2: analyze (and `EXPLAIN FORMAT JSON`) reveals nothing about a write target the caller
 /// may not write. Under a policy that denies the target (and under deny-all), `DROP TABLE`, `TRUNCATE
-/// TABLE` and `INSERT ... VALUES` give byte-identical output whether `x` is an existing managed table, a
+/// TABLE`, every form of `INSERT` (review r2-n2) and the DDL whose directories are listed (`CREATE TABLE`,
+/// CTAS, `REPLACE`, `RENAME TO`, `DROP NAMESPACE ... CASCADE`, review M1) give byte-identical output whether `x` is an existing managed table, a
 /// managed table whose directory is gone, an external table (whose distinctive location never appears),
 /// a missing name, a permanent view or a bucketed table; and the trial writes no audit record (no denial
 /// is counted).
@@ -1539,11 +1815,37 @@ fn a_denied_target_reveals_nothing() {
             ],
         ),
     ];
+    // Review r2-n2: the other INSERT forms; review M1: the DDL whose directories are listed. `DROP
+    // NAMESPACE default CASCADE` varies with `x` too (its run asks about every managed table in it
+    // before it refuses the default namespace).
     let statements = [
         "DROP TABLE x",
         "TRUNCATE TABLE x",
         "INSERT INTO x VALUES (1, 2, 3)",
-    ];
+        "INSERT OVERWRITE TABLE x VALUES (1, 2, 3)",
+        "INSERT INTO x SELECT 1, 2, 3",
+        "FROM (SELECT 1 AS a, 2 AS b, 3 AS k) q INSERT INTO x SELECT * INSERT OVERWRITE TABLE x SELECT *",
+        "CREATE TABLE x (a INT, b INT, k INT)",
+        "CREATE TABLE IF NOT EXISTS x (a INT, b INT, k INT)",
+        "CREATE TABLE x AS SELECT 1 AS a, 2 AS b, 3 AS k",
+        "CREATE OR REPLACE TABLE x (a INT, b INT, k INT)",
+        "ALTER TABLE x RENAME TO x_renamed",
+        "DROP NAMESPACE default CASCADE",
+    ]
+    .map(str::to_owned);
+    // Review N2: a location the caller supplies is not echoed under a denied namespace `CREATE`.
+    let elsewhere = external.path().join("distinctive-elsewhere-q8");
+    let elsewhere = elsewhere.display();
+    let statements: Vec<String> = statements
+        .into_iter()
+        .chain([
+            format!("CREATE TABLE x (a INT, b INT, k INT) USING parquet LOCATION '{elsewhere}'"),
+            format!("CREATE TABLE x (a INT, b INT, k INT) USING parquet OPTIONS (path '{elsewhere}')"),
+            format!(
+                "CREATE TABLE x USING parquet LOCATION '{elsewhere}' AS SELECT 1 AS a, 2 AS b, 3 AS k"
+            ),
+        ])
+        .collect();
     for all in [false, true] {
         let mut seen: Vec<Option<(String, String)>> = vec![None; statements.len()];
         for (scenario, setup) in &setups {
@@ -1569,19 +1871,53 @@ fn a_denied_target_reveals_nothing() {
             }
             if *scenario == "managed" {
                 // The gate opens for an allowed target: the directory is listed.
-                let a = block_on(s.analyze("DROP TABLE x")).unwrap();
-                assert_eq!(directories(&a).len(), 1, "{scenario}");
+                for (sql, listed) in [
+                    ("DROP TABLE x", 1),
+                    ("ALTER TABLE x RENAME TO x_renamed", 2),
+                    ("DROP NAMESPACE default CASCADE", 1),
+                ] {
+                    let a = block_on(s.analyze(sql)).unwrap();
+                    assert_eq!(directories(&a).len(), listed, "{scenario}: {sql}");
+                }
+            }
+            if *scenario == "missing" {
+                for (sql, listed) in [
+                    ("CREATE TABLE x (a INT, b INT, k INT)", 1),
+                    ("CREATE TABLE x AS SELECT 1 AS a, 2 AS b, 3 AS k", 2),
+                ] {
+                    let a = block_on(s.analyze(sql)).unwrap();
+                    assert_eq!(directories(&a).len(), listed, "{scenario}: {sql}");
+                }
             }
             policy.on.store(true, Ordering::SeqCst);
             let counts = Arc::new(DeniedCounts::new());
             assert!(s.count_denials(Arc::clone(&counts), Surface::Connect));
             for (i, sql) in statements.iter().enumerate() {
-                let analyzed = block_on(s.analyze(sql)).unwrap().to_json();
+                let analysis = block_on(s.analyze(sql)).unwrap();
+                let analyzed = analysis.to_json();
                 let explained = explain_json(&s, &format!("EXPLAIN FORMAT JSON {sql}"));
+                // A `LOCATION` is a target (`MODIFY`, the caller's own text): listed, nothing more.
+                let own = sql.contains("distinctive-elsewhere");
                 for json in [&analyzed, &explained] {
-                    assert!(!json.contains("\"path\""), "{scenario} {sql}: {json}");
-                    assert!(!json.contains("distinctive"), "{scenario} {sql}: {json}");
+                    assert!(
+                        own || !json.contains("\"path\""),
+                        "{scenario} {sql}: {json}"
+                    );
+                    assert!(
+                        !json.contains("distinctive-location"),
+                        "{scenario} {sql}: {json}"
+                    );
                 }
+                assert!(
+                    analysis
+                        .info
+                        .securables
+                        .iter()
+                        .filter(|u| matches!(u.securable, Securable::Path(_)))
+                        .all(|u| u.privilege == Privilege::Modify && sql.contains("LOCATION")),
+                    "{scenario} {sql}: {:?}",
+                    uses(&analysis)
+                );
                 match &seen[i] {
                     None => seen[i] = Some((analyzed, explained)),
                     Some((a, e)) => {
@@ -1596,6 +1932,87 @@ fn a_denied_target_reveals_nothing() {
                 counts.counts()
             );
         }
+    }
+}
+
+/// Allows everything but `BROWSE` on a namespace (and `SELECT`, its fallback): `DROP` without listing.
+struct NoBrowse;
+
+impl AccessPolicy for NoBrowse {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let d = if matches!(securable, Securable::Namespace(_))
+            && matches!(privilege, Privilege::Browse | Privilege::Select)
+        {
+            AccessDecision::Deny {
+                reason: "private".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// Review D1: `DROP NAMESPACE ... CASCADE` lists its tables' directories only to a caller who may list
+/// the namespace's tables (`BROWSE`, as `SHOW TABLES IN` asks): under a policy that grants `DROP` but
+/// not `BROWSE`, the output is the same whether the namespace holds tables or not, and the trial
+/// counts no denial.
+#[test]
+fn cascade_lists_no_directory_without_browse() {
+    use krishiv_session::auth::{DeniedCounts, Surface};
+    let sql = "DROP NAMESPACE d CASCADE";
+    let mut seen: Option<(String, String)> = None;
+    for tables in [false, true] {
+        let warehouse = tempfile::tempdir().unwrap();
+        let s = Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(Arc::new(NoBrowse))
+            .config(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .build()
+            .unwrap();
+        block_on(s.sql("CREATE NAMESPACE d")).unwrap();
+        if tables {
+            block_on(s.sql("CREATE TABLE d.a1 (a INT)")).unwrap();
+            block_on(s.sql("CREATE TABLE d.b2 (a INT)")).unwrap();
+        }
+        // The policy does refuse the listing.
+        let listed = block_on(async { s.sql("SHOW TABLES IN d").await?.collect().await });
+        assert!(listed.is_err(), "tables={tables}");
+        let counts = Arc::new(DeniedCounts::new());
+        assert!(s.count_denials(Arc::clone(&counts), Surface::Connect));
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert!(
+            directories(&a).is_empty(),
+            "tables={tables}: {:?}",
+            uses(&a)
+        );
+        let analyzed = a.to_json();
+        let explained = explain_json(&s, &format!("EXPLAIN FORMAT JSON {sql}"));
+        assert!(!analyzed.contains("\"path\""), "{analyzed}");
+        match &seen {
+            None => seen = Some((analyzed, explained)),
+            Some((a, e)) => {
+                assert_eq!(&analyzed, a);
+                assert_eq!(&explained, e);
+            }
+        }
+        assert!(
+            counts.counts().iter().all(|c| c.count == 0),
+            "tables={tables}: analyze counted a denial: {:?}",
+            counts.counts()
+        );
     }
 }
 
