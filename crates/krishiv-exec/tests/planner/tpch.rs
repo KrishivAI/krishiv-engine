@@ -205,12 +205,26 @@ impl Tpch {
         self.plan_sql_in(text, order, None)
     }
 
-    /// `text` parsed, analyzed and optimized (joins ordered by `order`).
-    pub(crate) fn optimized(&self, text: &str, order: Order) -> Result<Plan, KrishivError> {
+    /// `text` parsed and analyzed, not optimized.
+    pub(crate) fn analyzed(&self, text: &str) -> Result<Plan, KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
-        let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
+        Ok(block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan)
+    }
+
+    /// The physical plan of an already optimized `plan`, ready to run.
+    pub(crate) fn runnable(&self, plan: &Plan) -> Result<Runnable, KrishivError> {
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        Ok(Runnable::new(
+            DefaultPlanner.plan(plan, &cx)?,
+            Arc::clone(&self.tables) as _,
+        ))
+    }
+
+    /// `text` parsed, analyzed and optimized (joins ordered by `order`).
+    pub(crate) fn optimized(&self, text: &str, order: Order) -> Result<Plan, KrishivError> {
+        let plan = self.analyzed(text)?;
         Ok(match order {
             Order::Statistics => {
                 let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
@@ -253,11 +267,7 @@ impl Tpch {
         spill: Option<&SpillScope>,
     ) -> Result<Runnable, KrishivError> {
         let plan = self.optimized(text, order)?;
-        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
-        let mut runnable = Runnable::new(
-            DefaultPlanner.plan(&plan, &cx)?,
-            Arc::clone(&self.tables) as _,
-        );
+        let mut runnable = self.runnable(&plan)?;
         if let Some(scope) = spill {
             runnable = runnable.with_spill(scope.clone());
         }

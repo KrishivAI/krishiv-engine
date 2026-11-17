@@ -1776,7 +1776,7 @@
     ]
   },
   "from_avro#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
     "ok": false
   },
   "from_csv#1": {
@@ -2135,12 +2135,16 @@
     ]
   },
   "is_valid_variant#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "is_valid_variant#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "is_variant_null#1": {
     "ok": true,

@@ -3,10 +3,10 @@ krishiv-types
 krishiv-kernels
 krishiv-udf-sdk
 krishiv-udf-sandbox
-krishiv-functions
 krishiv-memory
 krishiv-store
 krishiv-io
+krishiv-functions
 krishiv-plan
 krishiv-optimizer
 krishiv-exec

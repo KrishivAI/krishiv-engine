@@ -16,13 +16,15 @@ use krishiv_common::config::{
     PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
     PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
-use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivPythonWorkerLimit, OperationCanceled,
+};
 use krishiv_udf_sandbox::{Capabilities, Limits, SandboxSpec, probe};
 use rustix::net::{AddressFamily, SocketFlags, SocketType};
 use rustix::process::{Resource, getrlimit};
 
 use crate::WORKER_SUBCOMMAND;
-use crate::calls::{CallThreads, Job};
+use crate::calls::{CallThreads, Job, Refused};
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
 use crate::worker::{Started, Worker};
@@ -338,12 +340,60 @@ impl Pool {
         }
     }
 
-    /// Runs `job`, a call of `owner`, on one of the pool's call threads (now, or when one is free).
+    /// Runs `job`, a scalar call of `owner`, on one of the pool's call threads (now, or when one is free).
+    ///
+    /// # Errors
+    /// `KRISHIV_PYTHON_WORKER_LIMIT` when `owner`'s only call (`maxPerSession` 1) is a relation task's, which
+    /// may wait for this call's result; `INTERNAL_ERROR` when no call thread can run.
     pub(crate) fn submit(&self, owner: &Owner, job: Job) -> Result<(), KrishivError> {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(internal)
+            .map_err(|r| self.refused(r))
+    }
+
+    /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
+    pub(crate) fn submit_task(&self, owner: &Owner, job: Job) -> Result<(), KrishivError> {
+        self.inner
+            .calls
+            .submit_task(owner.clone(), job)
+            .map_err(|r| self.refused(r))
+    }
+
+    fn refused(&self, refused: Refused) -> KrishivError {
+        match refused {
+            Refused::NoThread(why) => internal(why),
+            Refused::Reserve => {
+                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
+            }
+        }
+    }
+
+    /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
+    /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
+    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+        let config = &self.inner.config;
+        let (setting, value) = if self.inner.calls.threads_bound() {
+            ("krishiv.python.worker.maxTotal", config.max_total)
+        } else {
+            (
+                "krishiv.python.worker.maxPerSession",
+                config.max_per_session,
+            )
+        };
+        KrishivPythonWorkerLimit {
+            operation: operation.to_owned(),
+            needed: needed.to_string(),
+            available: self.inner.calls.slot_limit().to_string(),
+            setting: setting.to_owned(),
+            value: value.to_string(),
+        }
+        .into()
+    }
+
+    /// The pool's call threads (the relation task slots live there).
+    pub(crate) fn calls(&self) -> &CallThreads {
+        &self.inner.calls
     }
 
     /// A worker of `owner` for a client on Python `python_ver`: an idle one of the same key, else a new one
