@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Plan-time distinct-value samples of the file columns a query compares
 //! with values (P2-T164 unit U6), and of its group keys while
-//! `krishiv.optimizer.groupKeyCode` is on (design P2b D2): which columns
-//! ([`compared_columns`], [`grouped_columns`]) and the call into each opened
+//! `krishiv.optimizer.groupKeyCode` is on (design P2b D2) and of the group
+//! keys of a one-table `count(DISTINCT)` (design P3-A 1d): which columns
+//! ([`compared_columns`], [`grouped_columns`], [`distinct_grouped_columns`]) and the call into each opened
 //! [`FileTable`](krishiv_exec::planner::FileTable).
 
 use std::sync::Arc;
@@ -64,6 +65,9 @@ impl QueryCatalog {
                 }
             }
         }
+        // Key-routed pairs (design P3-A 1d) route a `count(DISTINCT)` only
+        // on the distinct values a sample of its group keys saw.
+        compared.extend(distinct_grouped_columns(plan));
         if compared.is_empty() {
             return;
         }
@@ -203,6 +207,64 @@ fn grouped_columns(plan: &LogicalPlan) -> Vec<GroupKeys> {
         visit(&p, &mut stack);
     }
     out
+}
+
+/// The bare-column group keys of each `GROUP BY` aggregate of `plan`
+/// (subquery plans included) over one scan that has a `count(DISTINCT ..)`
+/// among its outputs: the columns whose sampled distinct values decide
+/// whether its pairs are key-routed (design P3-A 1d).
+fn distinct_grouped_columns(plan: &LogicalPlan) -> Vec<krishiv_plan::AttrId> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<Arc<LogicalPlan>> = Vec::new();
+    let mut out = Vec::new();
+    let mut visit = |p: &LogicalPlan, stack: &mut Vec<Arc<LogicalPlan>>| {
+        if !seen.insert(std::ptr::from_ref(p)) {
+            return;
+        }
+        if let PlanNode::Aggregate {
+            input,
+            grouping: krishiv_plan::Grouping::GroupBy(keys),
+            aggregates,
+        } = &p.node
+            && !keys.is_empty()
+            && aggregates.iter().any(|e| has_distinct_count(e))
+            && let [scan] = scans_below(input).as_slice()
+        {
+            out.extend(keys.iter().filter_map(|k| match &k.node {
+                ExprNode::Resolved(krishiv_plan::ResolvedExpr::Column(c))
+                    if scan.output.iter().any(|o| o.id == c.id) =>
+                {
+                    Some(c.id)
+                }
+                _ => None,
+            }));
+        }
+        p.for_each_expr(&mut |e| subquery_plans(e, stack));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    };
+    visit(plan, &mut stack);
+    while let Some(p) = stack.pop() {
+        visit(&p, &mut stack);
+    }
+    out
+}
+
+/// Whether `e` calls `count(DISTINCT ..)`.
+fn has_distinct_count(e: &Expr) -> bool {
+    let mut found = false;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        if let ExprNode::Resolved(krishiv_plan::ResolvedExpr::Function(f)) = &x.node
+            && f.distinct
+            && f.kind == krishiv_plan::FunctionKind::Aggregate
+            && f.id.name() == "count"
+        {
+            found = true;
+            break;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    found
 }
 
 /// [`grouped_columns`] of one aggregate over `input` grouped by `keys`.

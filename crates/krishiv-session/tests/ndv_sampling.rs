@@ -334,3 +334,23 @@ fn group_keys_inside_a_subquery_are_sampled() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
 }
+
+/// The group keys of a one-table aggregate with a `count(DISTINCT)` are
+/// sampled (their sample's distinct values gate key-routed pairs, design
+/// P3-A 1d) whatever `krishiv.optimizer.groupKeyCode` says; without a
+/// distinct count they are not.
+#[test]
+fn group_keys_of_a_one_table_distinct_count_are_sampled() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCode", "false")
+        .unwrap();
+    let orders = table(dir.path(), "orders");
+    let plain = format!("SELECT status, count(*) FROM {orders} GROUP BY status");
+    assert!(sample_lines(&explain(&s, "COST", &plain)).is_empty());
+    let distinct = format!("SELECT status, count(DISTINCT id) FROM {orders} GROUP BY status");
+    let lines = sample_lines(&explain(&s, "COST", &distinct));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("orders`: status: sampled "), "{lines:?}");
+}
