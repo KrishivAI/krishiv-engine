@@ -9,11 +9,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 8 done, 6 partial, 44 missing, 4 out of scope.
+62 arms: 10 done, 6 partial, 42 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
-| 2 | read | partial | DataSource.schema, predicates (JDBC) and is_streaming | Read(ReadSource::{Table,Files}); user schema on ReadSource::Files; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE) | P3-T012 | 1 |
+| 2 | read | partial | DataSource.predicates (JDBC) and is_streaming | Read(ReadSource::{Table,Files}); DataSource.schema → ReadSource::Files schema (DDL or JSON, a non-struct is INVALID_SCHEMA_NON_STRUCT_TYPE); predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE) | P3-T012 | 1 |
 | 3 | project | done |  | Project; missing input → OneRowRelation | P3-T012 | 1 |
 | 4 | filter | done |  | Filter | P2-T091a | 0 |
 | 5 | join | partial | join_data_type (joinWith, typed) | Join; join_data_type is Scala joinWith only → unsupported row | P3-T012 | 1 |
@@ -22,12 +22,12 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 8 | limit | done |  | Limit | P2-T091a | 0 |
 | 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
-| 11 | local_relation | missing |  | InlineTable from the Arrow IPC data plus the DDL or JSON schema (createDataFrame); a size limit on the data | P3-T012 | 1 |
+| 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | missing |  | new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order) | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
 | 14 | deduplicate | missing |  | lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
-| 16 | subquery_alias | partial | qualifier | SubqueryAlias with the qualifier | P3-T012 | 1 |
+| 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
 | 18 | to_df | missing |  | lowering: Project of Alias (positional) | P3-T012 | 4 |
 | 19 | with_columns_renamed | missing |  | lowering: Project | P3-T012 | 4 |
@@ -47,7 +47,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 33 | with_watermark | out of scope |  | P4 |  | 0 |
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
-| 36 | cached_local_relation | missing |  | InlineTable from the artifact cache (AddArtifacts cache/<hash>, T011); errors NOT_FOUND_CACHED_LOCAL_RELATION | P3-T083 | 7 |
+| 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
 | 37 | cached_remote_relation | missing |  | the session's cached-DataFrame registry (T083) | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
@@ -78,14 +78,14 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 3 done, 5 partial, 13 missing, 1 out of scope.
+22 arms: 4 done, 6 partial, 11 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
-| 1 | literal | partial | Array, Map, Struct, SpecializedArray, Time | Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist | P3-T012 | 1 |
+| 1 | literal | partial | Time | Literal/TypedLiteral; nested literals are Literal::{Array,KeyValueMap,Struct}; nanosecond timestamps are refused until the types exist | P3-T012 | 1 |
 | 2 | unresolved_attribute | partial | is_metadata_column | Column; metadata columns (_metadata) → the scan's metadata columns | P3-T012 | 1 |
 | 3 | unresolved_function | partial | is_user_defined_function (qualified names) and is_internal | Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function | P3-T012 | 1 |
-| 4 | expression_string | missing |  | the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session) | P3-T012 | 1 |
+| 4 | expression_string | done |  | krishiv_sql::parse_and_lower_named_expression, as Session::select_expr and Session::expr (parser options from TranslateConf) | P3-T012a | 1 |
 | 5 | unresolved_star | done |  | Star | P2-T091a | 0 |
 | 6 | alias | partial | metadata and several names | Alias; several names → MultiAlias (exists) | P3-T012 | 1 |
 | 7 | cast | done |  | Cast | P2-T091a | 0 |
@@ -96,7 +96,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
-| 15 | common_inline_user_defined_function | missing |  | Python UDF call (T014); Scala/Java → UNSUPPORTED_USER_DEFINED_FUNCTION_IMPLEMENTATION (T081) | P3-T014 | 6 |
+| 15 | common_inline_user_defined_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Function over the session's encoded name of an unregistered Python UDF (PythonUdf), its payload registered with the session's UDF workers; Usage on System(udf) before any worker starts | P3-T014 | 6 |
 | 16 | call_function | done |  | Function (as #3, by name) | P3-T012 | 1 |
 | 17 | named_argument_expression | partial | outside a function call's arguments | FunctionCall.arg_names | P3-T012 | 1 |
 | 19 | merge_action | missing |  | MERGE actions for merge_into_table_command (T023, T021, T027) | P3-T023 | 11 |
@@ -107,15 +107,15 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 0 done, 0 partial, 14 missing, 6 out of scope.
+20 arms: 0 done, 2 partial, 12 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
-| 1 | register_function | missing |  | Python UDF registration (T014); JVM → T081's class | P3-T014 | 6 |
+| 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
 | 2 | write_operation | missing |  | DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023 | P3-T023 | 11 |
 | 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
 | 4 | write_operation_v2 | missing |  | DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023 | P3-T023 | 11 |
-| 5 | sql_command | missing |  | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Without it no spark.sql test passes | P3-T012 | 1 |
+| 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |
 | 7 | streaming_query_command | out of scope |  | P4 |  | 0 |
 | 8 | get_resources_command | missing |  | an empty resource map (single node, no executors) | P3-T012 | 4 |
@@ -177,7 +177,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.Literal.literal_type
 
-24 arms: 17 done, 0 partial, 7 missing, 0 out of scope.
+24 arms: 21 done, 0 partial, 3 missing, 0 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -198,11 +198,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 19 | calendar_interval | done |  | Literal / TypedLiteral | P2-T091a | 1 |
 | 20 | year_month_interval | done |  | Literal / TypedLiteral | P2-T091a | 1 |
 | 21 | day_time_interval | done |  | Literal / TypedLiteral | P2-T091a | 1 |
-| 22 | array | missing |  | nested and TIME literals wait for IR values | P3-T012 | 1 |
-| 23 | map | missing |  | nested and TIME literals wait for IR values | P3-T012 | 1 |
-| 24 | struct | missing |  | nested and TIME literals wait for IR values | P3-T012 | 1 |
-| 25 | specialized_array | missing |  | nested and TIME literals wait for IR values | P3-T012 | 1 |
-| 26 | time | missing |  | nested and TIME literals wait for IR values | P3-T012 | 1 |
+| 22 | array | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
+| 23 | map | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
+| 24 | struct | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
+| 25 | specialized_array | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
+| 26 | time | missing |  | TIME literals wait for an IR value | P3-T012 | 1 |
 | 29 | timestamp_ntz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
 | 30 | timestamp_ltz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
 

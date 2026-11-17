@@ -212,6 +212,28 @@ fn shared_broadcast_bytes_parses_and_defaults_to_no_cap() {
 }
 
 #[test]
+fn bloom_at_scale_is_on_by_default_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&RUNTIME_FILTER_BLOOM_AT_SCALE)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.runtimeFilter.bloom.atScale", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.atScale", "sometimes")
+            .is_err()
+    );
+    // The experimental key it graduated from never shipped and is not registered.
+    assert!(
+        c.set("krishiv.experimental.runtimeFilterBloomAtScale", "true")
+            .is_err()
+    );
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -906,6 +928,23 @@ fn group_key_code_force_is_experimental_and_off() {
 }
 
 #[test]
+fn semi_anti_join_order_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.semiAntiJoinOrder";
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(SEMI_ANTI_JOIN_ORDER.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set(key, "sometimes").is_err());
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
@@ -1294,6 +1333,23 @@ fn direct_agg_keys_default_on_and_parse_booleans() {
 }
 
 #[test]
+fn distinct_count_at_merge_defaults_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_AGG_DISTINCT_COUNT_AT_MERGE)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.agg.distinctCountAtMerge", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.agg.distinctCountAtMerge", "sometimes")
+            .is_err()
+    );
+}
+
+#[test]
 fn join_idle_spill_after_parses_and_defaults() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -1436,6 +1492,19 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn access_provider_is_unset_and_startup_only() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&ACCESS_PROVIDER), None);
+    assert_eq!(ACCESS_PROVIDER.scope, Scope::Cluster);
+    assert_eq!(ACCESS_PROVIDER.settable_by, SettableBy::Startup);
+    c.set("krishiv.access.provider", "grants").unwrap();
+    assert_eq!(
+        c.get(&ACCESS_PROVIDER).and_then(ConfigValue::as_str),
+        Some("grants")
+    );
+}
+
+#[test]
 fn path_confinement_entries_default_to_empty_and_are_startup_only() {
     let mut c = Config::new();
     for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
@@ -1452,6 +1521,32 @@ fn path_confinement_entries_default_to_empty_and_are_startup_only() {
         c.get(&IO_OBJECT_STORE_ALLOWED_PREFIXES)
             .and_then(ConfigValue::as_str),
         Some("s3://lake/data, gs://shared")
+    );
+}
+
+#[test]
+fn egress_entries_are_startup_only_and_parse() {
+    let mut c = Config::new();
+    for entry in [
+        &IO_EGRESS_PRIVATE_ADDRESSES,
+        &IO_EGRESS_ALLOWED_CIDRS,
+        &IO_EGRESS_PROXY,
+    ] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set("krishiv.io.egress.privateAddresses", "deny").unwrap();
+    assert!(
+        c.set("krishiv.io.egress.privateAddresses", "maybe")
+            .is_err()
+    );
+    c.set("krishiv.io.egress.allowedCidrs", "10.0.0.0/8")
+        .unwrap();
+    assert_eq!(
+        c.get(&IO_EGRESS_ALLOWED_CIDRS)
+            .and_then(ConfigValue::as_str),
+        Some("10.0.0.0/8")
     );
 }
 
@@ -1725,10 +1820,24 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     assert!(c.set("krishiv.delta.logThreads", "0").is_err());
     assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
     assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    let cache = |c: &Config| {
+        c.get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+    };
+    assert_eq!(cache(&c), Some(64 << 20));
+    c.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    assert_eq!(cache(&c), Some(0));
+    c.set("krishiv.iceberg.manifestCache.bytes", "1g").unwrap();
+    assert_eq!(cache(&c), Some(1 << 30));
+    assert!(
+        c.set("krishiv.iceberg.manifestCache.bytes", "lots")
+            .is_err()
+    );
     for e in [
         &DELTA_LOG_THREADS,
         &CATALOG_MAX_METADATA_BYTES,
         &CATALOG_MAX_COLUMNS,
+        &ICEBERG_MANIFEST_CACHE_BYTES,
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
