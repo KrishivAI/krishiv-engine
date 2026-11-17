@@ -52,9 +52,7 @@ use arrow_array::{
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
-use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, UnsupportedFeatureQueryOnlyCorruptRecordColumn,
-};
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::runtime_filter::ScanFilter;
 use krishiv_io::split::{
     FilePartition, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
@@ -254,6 +252,19 @@ fn unsupported(feature: String) -> KrishivError {
 impl ScanPushdown for FileScan {
     fn table_schema(&self) -> SchemaRef {
         Arc::clone(&self.table)
+    }
+
+    /// Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN` rule: a JSON or CSV read whose referenced data
+    /// columns (partition columns left out; `_metadata` and the row index are not columns of the
+    /// table) are exactly the corrupt-record column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let Some(corrupt) = self.format.corrupt_record_column(&self.format_options) else {
+            return false;
+        };
+        let mut data = referenced
+            .iter()
+            .filter(|n| !self.partition_columns.iter().any(|p| p.name() == **n));
+        data.next().is_some_and(|n| *n == corrupt) && data.next().is_none()
     }
 
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
@@ -610,58 +621,11 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
             scan.format.name()
         )));
     }
-    check_corrupt_only(scan, p)?;
     if p.row_id && (any_metadata(&p.metadata) || !scan.supports_take()) {
         return Err(internal(format!(
             "a row id over this scan of the {} format",
             scan.format.name()
         )));
-    }
-    Ok(())
-}
-
-/// Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: a JSON or CSV scan whose data
-/// read schema (the projection less the partition columns) is exactly the
-/// corrupt-record column. `_metadata` and the row index are not data columns
-/// (Spark's `requiredSchema` leaves them out); a count reads no column and is
-/// fine.
-fn check_corrupt_only(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
-    let Some(corrupt) = scan.format.corrupt_record_column(&scan.format_options) else {
-        return Ok(());
-    };
-    let is_partition = |name: &str| scan.partition_columns.iter().any(|f| f.name() == name);
-    let mut data: Vec<&str> = Vec::new();
-    match &p.projection {
-        Some(cols) => {
-            for c in cols {
-                if !is_partition(c.root()) && !data.contains(&c.root()) {
-                    data.push(c.root());
-                }
-            }
-        }
-        None => data.extend(
-            scan.table
-                .fields()
-                .iter()
-                .map(|f| f.name().as_str())
-                .filter(|n| !is_partition(n)),
-        ),
-    }
-    // The filters above the scan read their columns from it too (Spark's
-    // `requiredSchema` counts them); a filter with no typed form hides its
-    // columns, so the check is skipped rather than risk refusing a valid query.
-    for f in &p.filters {
-        let Some(expr) = &f.expr else {
-            return Ok(());
-        };
-        for c in expr.columns() {
-            if !is_partition(c.root()) && !data.contains(&c.root()) {
-                data.push(c.root());
-            }
-        }
-    }
-    if data == [corrupt.as_str()] {
-        return Err(UnsupportedFeatureQueryOnlyCorruptRecordColumn {}.into());
     }
     Ok(())
 }

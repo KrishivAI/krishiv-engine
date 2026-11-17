@@ -203,6 +203,14 @@ fn run(fmt: &str, file: &str) {
         rows(cached().and_then(|d| d.select_expr(["_corrupt_record"]))),
     );
 
+    // The renamed corrupt column first in the schema: a count and a filtered count (the filter reads it, so Spark
+    // raises) behave as for the default name.
+    view(&s, fmt, &path, "_bad STRING, a INT", bad);
+    put("renamed.first.count", count(&s, "v"));
+    assert!(
+        count(&s, "v WHERE _bad IS NOT NULL").is_err_and(|e| e.0 == QUERY_ONLY),
+        "{fmt}: a filter on the renamed column"
+    );
     view(&s, fmt, &path, sch2, bad);
     put("renamed.select_bad", rows(sql(&s, "SELECT _bad FROM v")));
     put(
@@ -280,6 +288,13 @@ fn run(fmt: &str, file: &str) {
     drop(put);
     let mut failures = Vec::new();
     for (label, got) in &out {
+        if label.ends_with("renamed.first.count") {
+            let want = g["probes"][format!("{fmt}.count").as_str()]["value"]
+                .as_str()
+                .unwrap();
+            assert_eq!(got.as_deref(), Ok(want), "{label}");
+            continue;
+        }
         let known = KNOWN.iter().find(|(l, _)| l == label);
         let mut f = Vec::new();
         check(&g, &mut f, label, got);
@@ -332,16 +347,17 @@ fn a_parquet_directory_read_as_json_is_refused_whenever_its_rows_are_read() {
     ] {
         check(&g, &mut failures, label, &got);
     }
-    // KNOWN DIFFERENCE: Spark's `count()` reads no column and returns the number of newline-separated "lines" of
-    // the one binary part file (2). A scan here keeps one column to carry the row count, and the only column is
-    // the corrupt-record one, so a count of such a read is refused as well (before this change it returned a
-    // per-file number, also not Spark's). A count over a read with any other column works (`count` probes above).
-    let n = count(&s, &format!("json.`{path}`"));
-    assert_eq!(
-        n.as_ref().map_err(|e| e.0.as_str()),
-        Err(QUERY_ONLY),
-        "pq_as_json.count (Spark: {})",
-        g["probes"]["pq_as_json.count"]["value"]
-    );
+    // `count()` reads no column, so it is not refused (Spark: the number of newline-separated "lines" of the one
+    // binary part file, 2). Krishiv's count is whatever its line splitting gives; the difference is recorded, not
+    // asserted, as the brief allows.
+    let n = count(&s, &format!("json.`{path}`"))
+        .expect("a count of the only-corrupt-column read works");
+    let spark = g["probes"]["pq_as_json.count"]["value"].as_str().unwrap();
+    if n != spark {
+        eprintln!(
+            "KNOWN DIFFERENCE pq_as_json.count: Spark {spark} (lines of the binary file), here {n} (the lines of Krishiv's own Parquet file: a different file, so not comparable)"
+        );
+    }
+    assert!(n.parse::<u64>().is_ok(), "{n}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

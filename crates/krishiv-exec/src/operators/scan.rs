@@ -157,6 +157,14 @@ pub trait ScanPushdown: Send + Sync {
     /// How far a scan built with `filter` honours it. The planner keeps the
     /// `Filter` above the scan unless this is [`FilterPushdown::Exact`].
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown;
+    /// Whether a query that references exactly the table columns `referenced` (the columns the plan
+    /// above the scan reads, not the one a scan keeps only to count rows) reads nothing but the
+    /// JSON/CSV corrupt-record column, which Spark refuses (`QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+    /// The default is false: only JSON and CSV file scans have such a column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let _ = referenced;
+        false
+    }
     /// Whether [`ScanPushdowns::selection`] is honoured.
     fn supports_selection(&self) -> bool {
         false
