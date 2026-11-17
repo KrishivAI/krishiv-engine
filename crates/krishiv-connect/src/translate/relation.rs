@@ -4,9 +4,10 @@
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
 //! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
-//! `WithColumns` and `Range`. The `plan_id` of a relation's `RelationCommon` becomes the
-//! `Origin` of the node it translates to, as Spark tags the plan it builds
-//! for the relation; `df["a"]` references name that id.
+//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`).
+//! The `plan_id` of a relation's `RelationCommon` becomes the `Origin` of
+//! the node it translates to, as Spark tags the plan it builds for the
+//! relation; `df["a"]` references name that id.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -86,6 +87,9 @@ impl Translator<'_> {
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            RelType::MapPartitions(m) => self.map_partitions(m)?,
+            RelType::GroupMap(g) => self.group_map(g)?,
+            RelType::CoGroupMap(g) => self.cogroup_map(g)?,
             RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
                 self.local_relation(|| super::local::inline_request(l))?,
             )),

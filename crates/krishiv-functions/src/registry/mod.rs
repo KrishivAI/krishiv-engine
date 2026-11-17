@@ -17,6 +17,7 @@ mod array_edit;
 mod array_scan;
 mod array_set;
 mod array_shape;
+mod avro;
 mod bitwise;
 mod catalog;
 mod collection;
@@ -368,7 +369,11 @@ impl Registry {
                     // `aes_encrypt` stays as the catalog lists it (a real
                     // Spark run accepts it inside `count(DISTINCT ...)`);
                     // the engine still draws an IV per row.
-                    deterministic: row.deterministic.unwrap_or(false),
+                    // `from_avro` and `to_avro` are deterministic in Spark (their catalog row says `unknown` only because
+                    // the probe image had no `spark-avro` module): `count(from_avro(..))` must analyze.
+                    deterministic: row
+                        .deterministic
+                        .unwrap_or(matches!(spec.name, "from_avro" | "to_avro")),
                     since: row.since,
                     arity: row.arity.clone(),
                     inputs: spec.inputs,

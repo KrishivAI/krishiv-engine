@@ -834,6 +834,21 @@ fn call_threads() -> usize {
         .count()
 }
 
+/// The call threads added since `before`, once every thread has its own name: a worker starts on a call thread,
+/// which spawns the worker's `krishiv-udf-stderr` reader, and on Linux a new thread carries its parent's name until
+/// it sets its own, so for a moment `/proc` counts the reader as a call thread (merge-queue flake 2026-11-16, run
+/// 43858094536). Waits up to 2 s for at most `limit`; N calls on N threads would still fail.
+fn added_call_threads(before: usize, limit: usize) -> usize {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let added = call_threads().saturating_sub(before);
+        if added <= limit || std::time::Instant::now() >= deadline {
+            return added;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn concurrent_calls_share_the_pools_threads() {
     // Review 2026-11-13 n2: N concurrent calls used to make N threads.
@@ -860,7 +875,7 @@ fn concurrent_calls_share_the_pools_threads() {
     let alone = std::env::var("NEXTEST_EXECUTION_MODE").is_ok_and(|m| m == "process-per-test");
     let before = call_threads();
     let calls: Vec<_> = (0..12).map(|i| prepared.call(longs(&[Some(i)]))).collect();
-    let added = call_threads().saturating_sub(before);
+    let added = added_call_threads(before, 2);
     assert!(!alone || added <= 2, "{added} call threads");
     let results = block_on(futures::future::join_all(calls));
     for (i, r) in results.into_iter().enumerate() {
@@ -869,7 +884,7 @@ fn concurrent_calls_share_the_pools_threads() {
             [Some(i64::try_from(i).expect("small"))]
         );
     }
-    let added = call_threads().saturating_sub(before);
+    let added = added_call_threads(before, 2);
     assert!(!alone || added <= 2, "{added} call threads");
     assert!(pool.live_workers() <= 2);
 }

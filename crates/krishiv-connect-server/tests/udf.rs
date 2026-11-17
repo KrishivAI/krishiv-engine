@@ -740,6 +740,78 @@ async fn a_refused_caller_registers_nothing_and_gets_no_runtime() {
     );
 }
 
+/// `range(end).mapInPandas(f, "x bigint")`: a `MapPartitions` over a Python UDF of eval type 205 (never
+/// unpickled: the pool runs no relation yet).
+fn map_in_pandas(end: i64) -> pb::Plan {
+    let schema = pb::DataType {
+        kind: Some(Kind::Struct(pb::data_type::Struct {
+            fields: vec![pb::data_type::StructField {
+                name: "x".to_owned(),
+                data_type: Some(pb::DataType { kind: Some(long()) }),
+                nullable: true,
+                metadata: None,
+            }],
+            type_variation_reference: 0,
+        })),
+    };
+    let func = pb::CommonInlineUserDefinedFunction {
+        function_name: "f".to_owned(),
+        deterministic: true,
+        arguments: vec![id()],
+        function: Some(Function::PythonUdf(pb::PythonUdf {
+            output_type: Some(schema),
+            eval_type: 205,
+            command: b"not a pickle: a map".to_vec(),
+            python_ver: "3.12".to_owned(),
+            additional_includes: Vec::new(),
+        })),
+        is_distinct: false,
+    };
+    root(relation(RelType::MapPartitions(Box::new(
+        pb::MapPartitions {
+            input: Some(Box::new(range(end))),
+            func: Some(func),
+            is_barrier: None,
+            profile_id: None,
+        },
+    ))))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relation_udf_is_client_code_and_does_not_run_yet() {
+    let spy = Spy::default();
+    let log = Arc::clone(&spy.0);
+    let run = start_with(None, Some(Arc::new(spy))).await;
+    for token in [VIEWER, OPERATOR] {
+        let s = execute(&run.channel, map_in_pandas(3), token)
+            .await
+            .expect_err("a relation UDF is client code (ADR 0046 N1)");
+        assert_eq!(s.code(), Code::PermissionDenied);
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        // Typing it runs no client code: the schema needs no privilege.
+        let schema = analyze_schema(&run.channel, map_in_pandas(3), token)
+            .await
+            .expect("a relation UDF is typed without running it");
+        assert!(schema.result.is_some());
+        release(&run.channel, token).await;
+    }
+    assert!(
+        log.lock().expect("spy").is_empty(),
+        "nothing registered or prepared for a refused caller: {:?}",
+        log.lock().expect("spy")
+    );
+    // The admin passes the check; the pool cannot run a relation yet (no `prepare_relation`, PR-26c-2).
+    let s = execute(&run.channel, map_in_pandas(3), ADMIN)
+        .await
+        .expect_err("relations do not run yet");
+    assert_eq!(error_class(&s), "KRISHIV_UDF_NOT_AVAILABLE", "{s:?}");
+    let seen = log.lock().expect("spy").clone();
+    assert!(
+        seen.iter().any(|e| e.starts_with("register f@")),
+        "{seen:?}"
+    );
+}
+
 async fn semantic_hash(channel: &Channel, plan: pb::Plan) -> i32 {
     let request = pb::AnalyzePlanRequest {
         session_id: SESSION.to_owned(),

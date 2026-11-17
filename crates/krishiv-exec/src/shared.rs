@@ -65,6 +65,21 @@ impl Segment {
     }
 }
 
+/// The rows of a finalized shared plan's list held in memory; `None` before
+/// it finalized or when a part of it is on disk (tests count results).
+#[cfg(test)]
+pub(crate) fn memory_rows(state: &GlobalState) -> Option<usize> {
+    let sink = state.downcast_ref::<SinkGlobal>()?;
+    let output = sink.done.get()?;
+    let segments = lock(&output.state);
+    segments.iter().try_fold(0, |n, s| match s {
+        Segment::Memory { batches, .. } => {
+            Some(n + batches.iter().map(Batch::num_rows).sum::<usize>())
+        }
+        Segment::File(_) => None,
+    })
+}
+
 /// What one driver collected: spilled segments first, then the batches in
 /// memory.
 struct SinkLocal {

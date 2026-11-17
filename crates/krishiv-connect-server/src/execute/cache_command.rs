@@ -9,15 +9,13 @@
 //! not an error). Neither answers a schema, rows or metrics: the stream is the result, then
 //! `result_complete` for a reattachable operation.
 
-use std::sync::Arc;
-
 use krishiv_common::error::{KrishivError, OperationCanceled};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_response::{ResponseType, ResultComplete};
 use krishiv_connect::translate::CheckpointSpec;
 use krishiv_session::DataFrame;
 
-use super::{Sender, Stop, settle};
+use super::{Sender, Stop};
 use crate::cache::storage_level_of;
 use crate::operation::{random_uuid, replay::uuid_text};
 
@@ -47,29 +45,16 @@ pub(super) async fn checkpoint(
 }
 
 /// Streams the answer of a `checkpoint_command` (the id the result is held under) and ends the
-/// operation; `None` is a command that answers nothing but the end.
-pub(super) async fn encode(sender: Sender, id: Option<String>) {
-    let op = Arc::clone(&sender.op);
-    let outcome = tokio::select! {
-        biased;
-        () = op.closed() => Err(Stop::Gone),
-        () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, id) => r,
-    };
-    settle(&op, outcome);
-}
-
-async fn produce(sender: &Sender, id: Option<String>) -> Result<(), Stop> {
+/// operation (`Work::Checkpoint`).
+pub(super) async fn produce(sender: &Sender, relation_id: String) -> Result<(), Stop> {
     sender.admit().await?;
-    if let Some(relation_id) = id {
-        sender
-            .send(sender.response(Some(ResponseType::CheckpointCommandResult(
-                pb::CheckpointCommandResult {
-                    relation: Some(pb::CachedRemoteRelation { relation_id }),
-                },
-            ))))
-            .await?;
-    }
+    sender
+        .send(sender.response(Some(ResponseType::CheckpointCommandResult(
+            pb::CheckpointCommandResult {
+                relation: Some(pb::CachedRemoteRelation { relation_id }),
+            },
+        ))))
+        .await?;
     // As the batches' `produce` ends: atomic with interrupts.
     if !sender.op.finish() {
         return Err(Stop::Failed(OperationCanceled {}.into()));
