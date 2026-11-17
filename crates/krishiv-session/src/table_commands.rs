@@ -508,6 +508,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         if v.global && v.using.is_none() {
             return self.create_global_temp_view(v, &env, ids).await;
         }
@@ -674,6 +675,8 @@ impl Session {
                 // `SQL SECURITY DEFINER` reads as its creator (P3-T062 §2.4).
                 definer: matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer))
                     .then(|| self.state.principal.name.clone()),
+                // Spark captures the session's SQL configs with the view (`views.scala` line 557).
+                cte_precedence: Some(cte_precedence),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -987,6 +990,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         let frozen_path = env.catalog.sql_path_snapshot();
         let frozen_namespace = env
             .catalog
@@ -1072,6 +1076,8 @@ impl Session {
                         .as_ref()
                         .and_then(|v| v.definer.as_ref())
                         .map(|_| self.state.principal.name.clone()),
+                    // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
+                    cte_precedence: Some(cte_precedence),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

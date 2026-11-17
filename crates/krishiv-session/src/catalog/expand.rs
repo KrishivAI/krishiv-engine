@@ -266,7 +266,10 @@ impl Expander<'_> {
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.
                 if self.deferred.is_none() {
-                    self.deferred_in_definer = !self.in_definer.is_empty();
+                    // A failure of a definer view's own text (its `WITH`s under its policy, a name in it) is
+                    // the definer's too, though its text is no longer on the path once it fails.
+                    self.deferred_in_definer =
+                        !self.in_definer.is_empty() || view.definer.is_some();
                     self.deferred = Some(e);
                 }
                 Ok(plan)
@@ -316,6 +319,16 @@ impl Expander<'_> {
             &view.identifier_spans,
         )
         .map_err(|e| e.error)?;
+        // The view's own `WITH`s resolve under the policy captured with it, in its text alone, before
+        // expansion (review r4 Y1; Spark: `View.effectiveSQLConf(viewSQLConfigs, ..)`): no reader's policy
+        // or definition changes what its text reads, and a read the text's own policy leaves to a table is
+        // qualified to the view's namespace below like any other.
+        let text = krishiv_plan::analyzer::inline_view_ctes(
+            lowered.root(),
+            view.cte_precedence.unwrap_or_default(),
+            stored.cte_precedence,
+            self.case_sensitive,
+        )?;
         let name = vec![
             CATALOG.to_owned(),
             namespace.to_owned(),
@@ -336,7 +349,7 @@ impl Expander<'_> {
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());
-        let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
+        let input = self.go(text, &mut Vec::new());
         self.view_namespace = previous;
         self.view_path = previous_path;
         self.path.pop();
@@ -344,13 +357,6 @@ impl Expander<'_> {
             self.in_definer.pop();
         }
         let mut input = input?;
-        // Under `LEGACY` the reader's plan has its `WITH`s inlined before binding, where an outer definition wins.
-        // Every stored view's query has its own inlined here, alone, as Spark analyzes a view's text apart from
-        // the query that reads it (review r3 M2): no definition of the reader's replaces one of the view's, and a
-        // definer's query keeps the node trusted below through the reader's pass (review r2 R2).
-        if stored.legacy_ctes {
-            input = krishiv_plan::analyzer::inline_legacy_ctes(&input, self.case_sensitive)?;
-        }
         if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
             d.query = Some(Arc::clone(&input));
             d.view = self.views.len();

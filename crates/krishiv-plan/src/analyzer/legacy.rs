@@ -46,7 +46,7 @@ pub(crate) struct CtePolicy {
 
 /// Runs `f` on a fresh stack every [`STEP`] levels, so no pass over a plan
 /// needs more than `STEP` frames of the caller's stack.
-fn hop<T: Send>(
+pub(crate) fn hop<T: Send>(
     depth: usize,
     f: impl FnOnce() -> Result<T, KrishivError> + Send,
 ) -> Result<T, KrishivError> {

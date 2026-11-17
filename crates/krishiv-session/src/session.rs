@@ -1410,8 +1410,7 @@ impl Session {
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
                 in_system: env.catalog.in_system(),
-                legacy_ctes: env.analysis.conf.cte_precedence
-                    == krishiv_plan::analyzer::CtePrecedencePolicy::Legacy,
+                cte_precedence: env.analysis.conf.cte_precedence,
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)

@@ -1418,10 +1418,12 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) binding_enabled: bool,
     /// Whether `system` was the current catalog as the query snapshot saw it.
     pub(crate) in_system: bool,
-    /// `spark.sql.legacy.ctePrecedencePolicy=LEGACY` in the query's snapshot: every stored view's query has its
-    /// `WITH` definitions inlined on its own (review r3 M2), a definer view's before it is trusted by identity
-    /// (review r2 R2).
-    pub(crate) legacy_ctes: bool,
+    /// `spark.sql.legacy.ctePrecedencePolicy` in the query's snapshot. A stored view's text resolves its own
+    /// `WITH`s under the policy captured with the view, never this one (review r4 Y1): unless both are
+    /// `CORRECTED` they are inlined in the text alone before it is expanded
+    /// (`krishiv_plan::analyzer::inline_view_ctes`), so the reader's pass over the whole plan finds none of
+    /// them (review r3 M2) and a definer view's query is trusted by identity as built (review r2 R2).
+    pub(crate) cte_precedence: krishiv_plan::analyzer::CtePrecedencePolicy,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.

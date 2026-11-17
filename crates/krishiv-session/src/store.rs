@@ -135,6 +135,11 @@ pub(crate) struct ViewDef {
     /// creator, or whoever last replaced the query); `None` for `INVOKER`, the default, read with
     /// the rights of whoever reads the view.
     pub(crate) definer: Option<String>,
+    /// `spark.sql.legacy.ctePrecedencePolicy` when the view was created or its query last
+    /// replaced (Spark captures the session's SQL configs with a view, `view.sqlConfig.*`, and
+    /// resolves its text under them): the view's own `WITH`s resolve under it, never the reader's
+    /// (review r4 Y1). `None` (a view stored without it) reads as `CORRECTED`, Spark's default.
+    pub(crate) cte_precedence: Option<krishiv_plan::analyzer::CtePrecedencePolicy>,
 }
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).

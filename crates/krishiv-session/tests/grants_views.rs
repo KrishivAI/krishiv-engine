@@ -1095,3 +1095,107 @@ fn a_views_own_cte_is_its_own_under_legacy_precedence() {
         );
     }
 }
+
+/// The first value of the first row `sql` returns, printed.
+fn first(s: &Session, sql: &str) -> Result<String, KrishivError> {
+    block_on(async {
+        let batches = s.sql(sql).await?.collect().await?;
+        let b = batches
+            .iter()
+            .find(|b| b.num_rows() > 0)
+            .unwrap_or_else(|| panic!("{sql}: no row"));
+        Ok(arrow_cast::display::array_value_to_string(b.column(0), 0).unwrap())
+    })
+}
+
+/// Review r4 Y1: a stored view's text is analyzed under the CTE precedence policy captured when
+/// the view was created (CORRECTED when none was), never the reader's. `dvc`'s nested definition
+/// `e` reads the outer `c`: under the reader's `LEGACY` the view's `c` went dead and the bare read
+/// `c` bound in the reader's namespace with the definer's rights (55 from `default.c`, 77 from
+/// `ns2.c`, neither of them readable by bob).
+///
+/// Spark v4.2.0: a view's text is resolved under `View.effectiveSQLConf(view.desc.viewSQLConfigs,
+/// ..)` (`ViewResolution.scala` lines 46-52; `basicLogicalOperators.scala` lines 920-939: a new
+/// `SQLConf` holding only the captured configs and those `retainResolutionConfigsForAnalysis`
+/// keeps, the binding-policy `SESSION` ones, which `spark.sql.legacy.ctePrecedencePolicy`,
+/// `SQLConf.scala` lines 5948-5956, is not). The captured configs are the session's modified
+/// ones when the view was created (`CapturesConfig.scala` lines 66-78, stored by `views.scala`
+/// line 557 under `view.sqlConfig.`, read back by `CatalogTable.viewSQLConfigs`,
+/// `interface.scala` lines 537-545).
+#[test]
+fn a_stored_views_text_reads_under_the_cte_policy_it_was_created_with() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(&root, "CREATE TABLE c (a INT) USING parquet");
+    ok(&root, "INSERT INTO c VALUES (55)");
+    ok(&root, "GRANT SELECT ON TABLE c TO user:ana");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "CREATE TABLE ns2.c (a INT) USING parquet");
+    ok(&root, "INSERT INTO ns2.c VALUES (77)");
+    ok(&root, "CREATE TABLE ns2.pub (a INT) USING parquet");
+    ok(&root, "GRANT SELECT ON TABLE ns2.c TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE ns2.pub TO user:bob");
+    ok(&root, "GRANT USAGE ON CATALOG spark_catalog TO user:bob");
+    let text = "WITH c AS (SELECT a FROM t), \
+                d AS (WITH e AS (SELECT * FROM c) SELECT * FROM e) SELECT * FROM d";
+    ok(
+        &ana,
+        &format!("CREATE VIEW dvc SQL SECURITY DEFINER AS {text}"),
+    );
+    ok(&ana, &format!("CREATE VIEW ivc AS {text}"));
+    ok(&ana, "GRANT SELECT ON VIEW dvc TO user:bob");
+    // Created under LEGACY: the nested main query `SELECT * FROM c` reads the outer `c` (1);
+    // under CORRECTED it would read the inner one (5).
+    let shadowing = "WITH c AS (SELECT a FROM t), \
+                     d AS (WITH c AS (SELECT 5 AS a) SELECT * FROM c) SELECT * FROM d";
+    ok(&ana, &format!("CREATE VIEW ivk AS {shadowing}"));
+    ana.conf()
+        .set("spark.sql.legacy.ctePrecedencePolicy", "LEGACY")
+        .unwrap();
+    ok(&ana, &format!("CREATE VIEW ivl AS {shadowing}"));
+    for policy in ["CORRECTED", "LEGACY", "EXCEPTION"] {
+        for s in [&ana, &bob] {
+            s.conf()
+                .set("spark.sql.legacy.ctePrecedencePolicy", policy)
+                .unwrap();
+        }
+        for ns in ["default", "ns2"] {
+            ok(&bob, &format!("USE {ns}"));
+            ok(&ana, &format!("USE {ns}"));
+            let at = format!("{policy} in {ns}");
+            assert_eq!(
+                first(&bob, "SELECT * FROM default.dvc").unwrap(),
+                "1",
+                "{at}"
+            );
+            assert_eq!(
+                first(&bob, "WITH c AS (SELECT 9 AS a) SELECT * FROM default.dvc").unwrap(),
+                "1",
+                "{at}"
+            );
+            assert_eq!(
+                first(&ana, "SELECT * FROM default.ivc").unwrap(),
+                "1",
+                "{at}"
+            );
+            assert_eq!(
+                first(&ana, "SELECT * FROM default.ivk").unwrap(),
+                "5",
+                "{at}"
+            );
+            assert_eq!(
+                first(&ana, "SELECT * FROM default.ivl").unwrap(),
+                "1",
+                "{at}"
+            );
+        }
+        // A temporary view named like the view's definition never reaches its text either.
+        ok(&bob, "CREATE OR REPLACE TEMP VIEW c AS SELECT 9 AS a");
+        assert_eq!(
+            first(&bob, "SELECT * FROM default.dvc").unwrap(),
+            "1",
+            "{policy}"
+        );
+        ok(&bob, "DROP VIEW c");
+    }
+}

@@ -131,6 +131,7 @@ mod unexecutable;
 mod unpivot;
 mod variables;
 mod variant;
+mod view_ctes;
 pub mod views;
 mod windows;
 mod written;
@@ -168,6 +169,7 @@ pub use table_change::{
     TableChange, TypeWidening, apply_changes,
 };
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
+pub use view_ctes::inline_view_ctes;
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 

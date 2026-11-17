@@ -303,7 +303,7 @@ impl QueryFunctions {
                     binding_enabled: false,
                     in_system: self.in_system,
                     // A body's definer views are not trusted by identity (no `DefinerTexts`).
-                    legacy_ctes: false,
+                    cte_precedence: krishiv_plan::analyzer::CtePrecedencePolicy::Corrected,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {
