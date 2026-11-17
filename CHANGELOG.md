@@ -16,6 +16,9 @@ A patch release: packaging, documentation and the fixes found by acceptance test
 
 ### Changed
 
+- **`https://` reads are refused, as in Spark.** The 0.2.0 entry for object stores named `https://` reads; Spark has no
+  working `https://` file system either (`FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`), and Krishiv refuses the location the
+  same way. `hf://datasets/...` reads work in the wheels from PyPI. See the Data sources guide.
 - **`pyarrow>=16` is now a required dependency** of the Python package, so a bare `pip install krishiv` can `collect()` and
   `show()`. `krishiv[pyarrow]` still works as an alias.
 - The PyPI page (`krishiv` and `krishiv-compat`) now has a description (`python/PYPI.md`), keywords, classifiers and project URLs.
@@ -63,7 +66,7 @@ The first release is the embedded core: the engine runs in your process, from Py
 - Spark SQL coverage: window functions with `ROWS` and `RANGE` frames (day-time and year-month interval bounds
   too), `GROUPING SETS`/`CUBE`/`ROLLUP`, lateral joins, generators in `FROM`, recursive CTEs, and the JSON, CSV and
   XML functions with Spark's option names (the legacy `FastDateFormat` patterns included).
-- Reads over `https://` and `hf://`, and credential refresh and per-location scopes for object stores.
+- Reads over `hf://` (Hugging Face datasets), and credential refresh and per-location scopes for object stores.
 - Telemetry: OTLP export of query spans and engine metrics behind the `telemetry-otlp` feature.
 - Optimizer: eager aggregation below joins.
 - Results checked against real Spark runs: division and remainder evaluate their operands in Spark's order, `atan2` is
