@@ -521,3 +521,84 @@ async fn every_mutating_call_writes_one_action_record_and_a_replay_says_so() {
         "a record never holds the token"
     );
 }
+
+/// The same rules over gRPC on a real socket: the caller comes from the `authorization` metadata.
+#[tokio::test]
+async fn grpc_applies_the_same_ownership_rules_as_rest() {
+    use krishiv_server::admin_v1::{
+        CancelQueryRequest, CancelQueryResponse, ListQueriesRequest, ListQueriesResponse,
+    };
+
+    let f = fixture();
+    let (a, b) = (f.session("gail"), f.session("gus"));
+    let _ta = f.start(&a, 1, &[]);
+    let tb = f.start(&b, 2, &[]);
+    f.gate.queued(2).await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = f.app.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+
+    fn request<T>(message: T, who: &str) -> tonic::Request<T> {
+        let mut r = tonic::Request::new(message);
+        r.metadata_mut()
+            .insert("authorization", format!("Bearer {who}").parse().unwrap());
+        r
+    }
+
+    let mut grpc = tonic::client::Grpc::new(channel);
+    grpc.ready().await.unwrap();
+    let listed: tonic::Response<ListQueriesResponse> = grpc
+        .unary(
+            request(ListQueriesRequest::default(), "gail:viewer"),
+            "/krishiv.admin.v1.AdminService/ListQueries"
+                .parse()
+                .unwrap(),
+            tonic_prost::ProstCodec::default(),
+        )
+        .await
+        .unwrap();
+    let seen: Vec<String> = listed
+        .get_ref()
+        .queries
+        .iter()
+        .map(|q| q.query_id.clone())
+        .collect();
+    assert_eq!(seen, [qid(1)], "a viewer sees only its own");
+
+    let cancel = |id: u8, who: &'static str| {
+        let mut grpc = grpc.clone();
+        async move {
+            grpc.ready().await.unwrap();
+            grpc.unary::<_, CancelQueryResponse, _>(
+                request(
+                    CancelQueryRequest {
+                        query_id: qid(id),
+                        request_id: String::new(),
+                    },
+                    who,
+                ),
+                "/krishiv.admin.v1.AdminService/CancelQuery"
+                    .parse()
+                    .unwrap(),
+                tonic_prost::ProstCodec::default(),
+            )
+            .await
+        }
+    };
+    let refused = cancel(2, "gail:viewer").await.unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::NotFound);
+    let missing = cancel(99, "gail:viewer").await.unwrap_err();
+    assert_eq!(refused.code(), missing.code());
+    assert_eq!(refused.message().is_empty(), missing.message().is_empty());
+    assert!(!tb.is_finished());
+    cancel(2, "olga:operator").await.unwrap();
+    assert!(tb.await.unwrap().is_err());
+    server.abort();
+}
