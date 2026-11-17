@@ -1447,14 +1447,19 @@ fn describing_a_view_needs_the_view_securable() {
             .await
     })
     .map(|b| b.iter().map(RecordBatch::num_rows).sum::<usize>());
-    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok()
-        && block_on(async {
-            s.sql("SHOW TABLE EXTENDED LIKE 'pt'")
+    // The table's own entry, exactly (review M4: a filter that drops every row must fail here).
+    let extended = |pattern: &str| {
+        block_on(async {
+            s.sql(&format!("SHOW TABLE EXTENDED LIKE '{pattern}'"))
                 .await?
                 .collect()
                 .await
         })
-        .is_ok();
+        .map(|b| extended_names(&b))
+    };
+    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok()
+        && extended("pt").ok() == Some(vec!["pt".to_owned()])
+        && extended("p*").ok() == Some(vec!["pt".to_owned()]);
     DENY_VIEWS.store(false, std::sync::atomic::Ordering::SeqCst);
     for (sql, c) in denied.iter().zip(&results) {
         assert_eq!(c, DENIED, "{sql}");
@@ -1465,6 +1470,66 @@ fn describing_a_view_needs_the_view_securable() {
         "SHOW TABLE EXTENDED LIKE 'pv' lists nothing"
     );
     assert!(table_ok, "the table itself stays readable");
+}
+
+/// The `tableName` column of `SHOW TABLE EXTENDED` rows.
+fn extended_names(batches: &[RecordBatch]) -> Vec<String> {
+    let mut out = Vec::new();
+    for b in batches {
+        let column = arrow_cast::display::ArrayFormatter::try_new(
+            b.column_by_name("tableName").unwrap().as_ref(),
+            &arrow_cast::display::FormatOptions::default(),
+        )
+        .unwrap();
+        for i in 0..b.num_rows() {
+            out.push(column.value(i).to_string());
+        }
+    }
+    out
+}
+
+static BROWSE_ONLY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn browse_only_views(securable: &Securable, p: Privilege) -> AccessDecision {
+    if BROWSE_ONLY_VIEWS.load(std::sync::atomic::Ordering::SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::View(_))
+    {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// Review M5: a view the principal may list (`Browse`) but not read (`Select`) is left out of
+/// `SHOW TABLE EXTENDED`, whose entry holds the view's text; the statement still lists the rest.
+#[test]
+fn show_table_extended_leaves_out_a_view_it_may_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(browse_only_views));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE qt (a INT) USING parquet",
+        "CREATE VIEW qv AS SELECT a FROM qt",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    BROWSE_ONLY_VIEWS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let listed = block_on(async {
+        s.sql("SHOW TABLE EXTENDED LIKE 'q*'")
+            .await?
+            .collect()
+            .await
+    })
+    .map(|b| extended_names(&b));
+    let views = block_on(async { s.sql("SHOW VIEWS LIKE 'qv'").await?.collect().await })
+        .map(|b| b.iter().map(RecordBatch::num_rows).sum::<usize>());
+    BROWSE_ONLY_VIEWS.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(listed.unwrap(), vec!["qt".to_owned()]);
+    // It is still listed where no text is shown.
+    assert_eq!(views.unwrap(), 1);
 }
 
 /// An access policy whose rules and version change while a session lives.
@@ -2047,10 +2112,12 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     );
     // The view has no user properties; its `view.*` entries (where the text lives) are not shown.
     assert!(cells(&s, "SHOW TBLPROPERTIES pv").is_empty());
+    // A listing leaves the entry (which holds the text) out instead of failing as a whole
+    // (review M5): no row, so no text.
+    assert!(cells(&s, "SHOW TABLE EXTENDED LIKE 'pv'").is_empty());
     for sql in [
         "SHOW CREATE TABLE pv",
         "DESCRIBE TABLE EXTENDED pv",
-        "SHOW TABLE EXTENDED LIKE 'pv'",
         "SELECT * FROM pv",
     ] {
         assert_eq!(class(block_on(s.sql(sql))), DENIED, "{sql}");
