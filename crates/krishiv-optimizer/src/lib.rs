@@ -106,6 +106,7 @@ pub use group_limit::{
 };
 pub use join_order::DP_LIMIT;
 pub use limit::TopN;
+pub use narrow::selectivity_is_guessed;
 pub use plan_stats::PlanStats;
 pub use stats::{
     AttrStats, ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, RelStats, StatSource,

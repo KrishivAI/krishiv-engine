@@ -48,8 +48,19 @@
 //! subquery: `filtered_aggregate`) counts as at most `bloom.maxItems`
 //! rows for both tests, so its Bloom form is planned and its actual keys
 //! decide (TPC-H q18; DuckDB also picks the form from the built table's
-//! count, `JoinFilterPushdownInfo::FinalizeFilters`). Spark's size guards are not used:
-//! they are tuned for clusters.
+//! count, `JoinFilterPushdownInfo::FinalizeFilters`). The same cap applies
+//! to a build whose input is cut anywhere below by a predicate the
+//! estimator cannot model (`LIKE`, `RLIKE`, a string function, a UDF:
+//! [`krishiv_optimizer::selectivity_is_guessed`], in a `Filter`, a filter
+//! pushed into a scan or one fused into a hash probe: `guessed_filter`):
+//! its estimate rests on the default selectivity (TPC-H q20's `p_name LIKE
+//! 'forest%'`: 0.2 guessed, about 0.01 actual, a build estimated at 16M
+//! keys that holds 869K at SF100). A build whose key rows exceed
+//! `bloom.maxItems` publishes no Bloom form (`KeyFilterBuilder::add` and
+//! `merge` in `krishiv_io::runtime_filter` drop the hashes past it), so a
+//! wrong guess costs only the hashing until then. Whether the scan
+//! waits for the filter ([`scan_waits`]) still reads the uncapped
+//! estimate. Spark's size guards are not used: they are tuned for clusters.
 
 use std::sync::Arc;
 
@@ -255,8 +266,12 @@ impl Planner<'_> {
                 // Bloom (TPC-H q18: estimated 150M, holds 6,398 at SF100).
                 // Past `bloom.maxItems` it publishes none, so the guess is
                 // capped there for the scan-size test and the planned size.
+                // So is a build cut by a predicate the estimator cannot
+                // model (TPC-H q20's `LIKE`: estimated 16M, holds 869K).
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
-                let rows = if s.bloom_max_items > 0 && filtered_aggregate(build) {
+                let rows = if s.bloom_max_items > 0
+                    && (filtered_aggregate(build) || guessed_filter(build))
+                {
                     build_rows.min(s.bloom_max_items as f64)
                 } else {
                     build_rows
@@ -335,6 +350,27 @@ fn filtered_aggregate(node: &PhysNode) -> bool {
             _ => return false,
         }
     }
+}
+
+/// Whether a predicate anywhere in `node`'s plan (a `Filter`, a filter
+/// pushed into a scan, a filter fused into a hash probe), through joins,
+/// projections, exchanges and aggregates, is one whose selectivity the
+/// estimator guesses ([`krishiv_optimizer::selectivity_is_guessed`]): the
+/// estimate of `node`'s rows then rests on the default selectivity. A
+/// shared plan read through `SharedRead` is not looked into.
+fn guessed_filter(node: &PhysNode) -> bool {
+    let own = match node {
+        PhysNode::Filter { predicate, .. } => Some(predicate),
+        PhysNode::Scan(s) => s.filter.as_ref().map(|f| &f.predicate),
+        PhysNode::HashJoin(j) => j
+            .select
+            .as_ref()
+            .and_then(|s| s.filter.as_ref())
+            .map(|f| &f.predicate),
+        _ => None,
+    };
+    own.is_some_and(|p| krishiv_optimizer::selectivity_is_guessed(p))
+        || node.children().into_iter().any(guessed_filter)
 }
 
 /// How many times the build must be smaller than a scan of the build's own
