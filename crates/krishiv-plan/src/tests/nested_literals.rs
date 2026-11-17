@@ -133,17 +133,17 @@ fn the_constructors_check_element_types_and_counts() {
         StructField::new("a", DataType::Integer, false),
         StructField::new("b", DataType::String, true),
     ]);
-    assert!(Literal::struct_value(ty.clone(), vec![Literal::Integer(1)]).is_err());
-    assert!(
-        Literal::struct_value(
-            ty.clone(),
-            vec![
-                Literal::Null(Some(DataType::Integer)),
-                Literal::Null(Some(DataType::String))
-            ]
-        )
-        .is_err()
-    );
+    let short = Literal::struct_value(ty.clone(), vec![Literal::Integer(1)]).unwrap_err();
+    assert_eq!(class(&short), "INTERNAL_ERROR");
+    let null_in_required = Literal::struct_value(
+        ty.clone(),
+        vec![
+            Literal::Null(Some(DataType::Integer)),
+            Literal::Null(Some(DataType::String)),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(class(&null_in_required), "INTERNAL_ERROR");
     assert!(
         Literal::struct_value(
             ty,

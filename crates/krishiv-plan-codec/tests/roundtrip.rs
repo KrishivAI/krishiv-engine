@@ -45,6 +45,7 @@ variants!(
     ReplicateRows,
     Generate,
     PythonEval,
+    CollectMetrics,
     PythonMap,
     PythonGroupMap,
     PythonCoGroupMap,
@@ -81,6 +82,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::PythonEval { .. } => Variant::PythonEval,
+        PhysNode::CollectMetrics { .. } => Variant::CollectMetrics,
         PhysNode::PythonMap { .. } => Variant::PythonMap,
         PhysNode::PythonGroupMap { .. } => Variant::PythonGroupMap,
         PhysNode::PythonCoGroupMap { .. } => Variant::PythonCoGroupMap,
@@ -642,6 +644,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
+            | "observe"
             | "aggregate_collects"
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"

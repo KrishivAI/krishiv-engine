@@ -9,8 +9,14 @@
 //! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
 //! (with the replay buffer, sender caps and detach of PR-15a, design
 //! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
-//! (`crate::config`) and `Interrupt` (`crate::interrupt`); the rest answer
-//! `UNIMPLEMENTED` until PR-15.
+//! (`crate::config`) and `Interrupt` (`crate::interrupt`). PR-15b adds
+//! `AddArtifacts` and `ArtifactStatus` (`crate::artifacts`) and
+//! `FetchErrorDetails` (`crate::errors`); an error sent once a session is
+//! known carries an `errorId` (`SessionEntry::errors`). PR-15c adds
+//! `CloneSession` (`SessionManager::clone_session`) and `GetStatus`
+//! (`crate::get_status`). The RPCs that change a session's state hold its
+//! statement gate shared (`SessionEntry::shared`) while they do, so a clone
+//! never copies a session in the middle of one.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,14 +32,16 @@ use krishiv_session::auth::Authenticated;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::{Check, ConnectAuth, Rpc, check_rpc};
+use crate::artifacts::{self, ArtifactLimits, ArtifactStore};
+use crate::auth::{Check, ConnectAuth, Rpc, check_rpc, enforce};
 use crate::codec::WireCodec;
 use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
+use crate::operation::{random_uuid, replay::uuid_text};
 use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
-use crate::{analyze, config, execute, interrupt};
+use crate::{analyze, config, errors, execute, get_status, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -81,6 +89,7 @@ pub struct ConnectService {
     auth: Arc<ConnectAuth>,
     limits: ExecuteLimits,
     budget: ResponseBudget,
+    artifacts: Arc<ArtifactStore>,
 }
 
 impl ConnectService {
@@ -94,7 +103,22 @@ impl ConnectService {
             auth: Arc::new(ConnectAuth::off()),
             budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
+            artifacts: Arc::new(ArtifactStore::new(ArtifactLimits::default())),
         }
+    }
+
+    /// This service with the artifact quotas `limits`
+    /// (`krishiv.connect.artifacts.*`).
+    #[must_use]
+    pub fn with_artifacts(mut self, limits: ArtifactLimits) -> Self {
+        self.artifacts = Arc::new(ArtifactStore::new(limits));
+        self
+    }
+
+    /// The server's artifact store.
+    #[must_use]
+    pub fn artifacts(&self) -> &Arc<ArtifactStore> {
+        &self.artifacts
     }
 
     /// This service authenticating every RPC with `auth`.
@@ -150,16 +174,28 @@ impl ConnectService {
     /// effect) is refused until the RPC that needs it applies it: fail
     /// closed, so a newly implemented RPC cannot skip its check.
     fn caller<T>(&self, request: &Request<T>, rpc: Rpc) -> Result<Authenticated, Status> {
+        match self.caller_checked(request, rpc)? {
+            (caller, Check::OwnSession | Check::Plan) => Ok(caller),
+            (
+                _,
+                Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_),
+            ) => Err(Status::unimplemented(format!(
+                "{rpc:?} is not supported by this server yet"
+            ))),
+        }
+    }
+
+    /// [`Self::caller`] for an RPC that applies its class itself: the caller
+    /// and the class, which the handler enforces on the session (`enforce`)
+    /// before it reads anything more of the request.
+    fn caller_checked<T>(
+        &self,
+        request: &Request<T>,
+        rpc: Rpc,
+    ) -> Result<(Authenticated, Check), Status> {
         self.admit()?;
         let caller = self.auth.caller(request)?;
-        match check_rpc(rpc) {
-            Check::OwnSession | Check::Plan => Ok(caller),
-            Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
-                Err(Status::unimplemented(format!(
-                    "{rpc:?} is not supported by this server yet"
-                )))
-            }
-        }
+        Ok((caller, check_rpc(rpc)))
     }
 
     /// The session `session_id` of `caller`, created if needed, its server-side id checked
@@ -176,16 +212,6 @@ impl ConnectService {
         self.manager
             .get_or_create(caller, session_id, observed, user)
             .map_err(|e| status_of(&e))
-    }
-
-    /// `UNIMPLEMENTED`, once `request` is admitted and authenticated: an
-    /// unauthenticated client learns nothing about what the server
-    /// implements.
-    fn unimplemented<T>(&self, request: &Request<T>, rpc: Rpc) -> Status {
-        match self.caller(request, rpc) {
-            Err(s) => s,
-            Ok(_) => Status::unimplemented(format!("{rpc:?} is not supported by this server yet")),
-        }
     }
 }
 
@@ -216,13 +242,16 @@ impl SparkConnectService for ConnectService {
             && entry.operations().get(id).is_none()
             && self.manager.is_abandoned(&caller, &request.session_id, id)
         {
-            return Err(status_of(
-                &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
-            ));
+            return Err(entry
+                .errors()
+                .status(&InvalidHandleOperationAbandoned { handle: id.clone() }.into()));
         }
+        // Until the query is started (the encoder runs without it).
+        let gate = entry.shared().await;
         let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget, &inbound)
             .await
-            .map_err(|e| status_of(&e))?;
+            .map_err(|e| entry.errors().status(&e))?;
+        drop(gate);
         Ok(Response::new(stream))
     }
 
@@ -241,10 +270,11 @@ impl SparkConnectService for ConnectService {
             request.user_context.as_ref(),
         )?;
         observe(&entry, request.client_type.as_deref());
+        let _gate = entry.shared().await;
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| entry.errors().status(&e))
     }
 
     /// Spark's `SparkConnectConfigHandler`: the session is looked up or
@@ -262,24 +292,75 @@ impl SparkConnectService for ConnectService {
             request.user_context.as_ref(),
         )?;
         observe(&entry, request.client_type.as_deref());
+        let _gate = entry.shared().await;
         config::config(&entry, &request)
             .await
             .map(Response::new)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| entry.errors().status(&e))
     }
 
+    /// Spark's `SparkConnectAddArtifactsHandler`: the session is looked up
+    /// or created from the first request, then the RPC's class is enforced
+    /// on it (client code: `Usage` on `System("udf")`, ADR 0046 §3b) before
+    /// any artifact is staged (`crate::artifacts`).
     async fn add_artifacts(
         &self,
         request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::AddArtifacts))
+        let (caller, check) = self.caller_checked(&request, Rpc::AddArtifacts)?;
+        let mut stream = request.into_inner();
+        let Some(first) = stream.message().await? else {
+            // Spark fails on an empty stream (no session to answer for).
+            return Err(status_of(
+                &ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                    full_name: "spark.connect.AddArtifactsRequest".to_owned(),
+                    name: "PAYLOAD_NOT_SET".to_owned(),
+                }
+                .into(),
+            ));
+        };
+        let entry = self.session(
+            &caller,
+            &first.session_id,
+            first.client_observed_server_side_session_id.as_deref(),
+            first.user_context.as_ref(),
+        )?;
+        observe(&entry, first.client_type.as_deref());
+        // Only the classes this handler applies are accepted: a class
+        // `enforce` passes through (the write path, a side effect, an
+        // unsupported request) would let every caller in (fail closed).
+        match &check {
+            Check::Privilege { .. } => enforce(&check, entry.session())
+                .await
+                .map_err(|e| entry.errors().status(&e))?,
+            Check::OwnSession => {}
+            Check::Plan | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
+                return Err(Status::unimplemented(
+                    "AddArtifacts is not supported by this server yet",
+                ));
+            }
+        }
+        artifacts::add_artifacts(&entry, &self.artifacts, first, &mut stream)
+            .await
+            .map(Response::new)
     }
 
+    /// Spark's `SparkConnectArtifactStatusesHandler`: the session is looked
+    /// up or created; only a held `cache/<hash>` exists.
     async fn artifact_status(
         &self,
         request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::ArtifactStatus))
+        let caller = self.caller(&request, Rpc::ArtifactStatus)?;
+        let request = request.into_inner();
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        observe(&entry, request.client_type.as_deref());
+        Ok(Response::new(artifacts::artifact_status(&entry, &request)))
     }
 
     /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
@@ -297,7 +378,8 @@ impl SparkConnectService for ConnectService {
             request.user_context.as_ref(),
         )?;
         observe(&entry, request.client_type.as_deref());
-        let response = interrupt::interrupt(&entry, &request).map_err(|e| status_of(&e))?;
+        let response =
+            interrupt::interrupt(&entry, &request).map_err(|e| entry.errors().status(&e))?;
         // An id it did not interrupt that is no operation of this session may be another
         // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).
         if let Some(pb::interrupt_request::Interrupt::OperationId(id)) = &request.interrupt
@@ -346,21 +428,27 @@ impl SparkConnectService for ConnectService {
                         .audit_foreign_operation(&caller, &request.operation_id);
                     InvalidHandleOperationNotFound { handle }.into()
                 };
-            return Err(status_of(&error));
+            return Err(entry.errors().status(&error));
         };
         if !op.reattachable() {
-            return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+            return Err(entry
+                .errors()
+                .status(&InvalidCursorNotReattachable {}.into()));
         }
         // Looked up before attaching: an unknown id leaves the attached
         // sender alone (`ExecuteHolder.runGrpcResponseSender`, lines 192-198).
         let after = match &request.last_response_id {
-            Some(id) => op.replay().index_of(id).map_err(|e| status_of(&e))?,
+            Some(id) => op
+                .replay()
+                .index_of(id)
+                .map_err(|e| entry.errors().status(&e))?,
             None => 0,
         };
         let caps = SenderCaps::of(&op, &self.limits);
         Ok(Response::new(sender::attach(
             op,
             Arc::clone(entry.operations()),
+            Arc::clone(entry.errors()),
             after,
             caps,
         )))
@@ -396,22 +484,23 @@ impl SparkConnectService for ConnectService {
         }
         if let Some(op) = found {
             if !op.reattachable() {
-                return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+                return Err(entry
+                    .errors()
+                    .status(&InvalidCursorNotReattachable {}.into()));
             }
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
                 Some(Release::ReleaseAll(_)) => {
-                    entry.operations().remove(&op);
-                    op.close();
+                    entry.operations().close_and_remove(&op);
                 }
                 Some(Release::ReleaseUntil(until)) => {
                     op.replay()
                         .release_until(&until.response_id)
-                        .map_err(|e| status_of(&e))?;
+                        .map_err(|e| entry.errors().status(&e))?;
                 }
                 // Spark throws a classless UnsupportedOperationException.
                 None => {
-                    return Err(status_of(
+                    return Err(entry.errors().status(
                         &ConnectInvalidPlanInvalidOneOfFieldNotSet {
                             full_name: "spark.connect.ReleaseExecuteRequest".to_owned(),
                             name: "RELEASE_NOT_SET".to_owned(),
@@ -442,24 +531,90 @@ impl SparkConnectService for ConnectService {
         }))
     }
 
+    /// Spark's `SparkConnectFetchErrorDetailsHandler` (v4.3.0 lines 34-58):
+    /// the session is looked up or created; the error kept under the id is
+    /// given out once; an unknown id is an empty response (neither session
+    /// id set, as Spark).
     async fn fetch_error_details(
         &self,
         request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::FetchErrorDetails))
+        let caller = self.caller(&request, Rpc::FetchErrorDetails)?;
+        let request = request.into_inner();
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        observe(&entry, request.client_type.as_deref());
+        let response = entry
+            .errors()
+            .take(&request.error_id)
+            .map(|e| errors::details(&e))
+            .unwrap_or_default();
+        Ok(Response::new(response))
     }
 
+    /// Spark's `SparkConnectCloneSessionHandler` and
+    /// `SparkConnectSessionManager.cloneSession` (`SM.scala` v4.3.0 lines
+    /// 145-205, verified: source lookup, observed-id check, then the target
+    /// checks): the source is looked up (its server-side id checked), the
+    /// target is `new_session_id` or a fresh UUID
+    /// (`SessionManager::clone_session`). **Unverified** (the handler was
+    /// not read; design P3-T011a §3.11 instead): the fresh UUID when
+    /// `new_session_id` is absent, the response's `server_side_session_id`
+    /// being the source's, and errors after the source lookup carrying the
+    /// source session's `errorId`.
     async fn clone_session(
         &self,
         request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::CloneSession))
+        let caller = self.caller(&request, Rpc::CloneSession)?;
+        let request = request.into_inner();
+        let source = self
+            .manager
+            .get(
+                &caller,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        let target = match &request.new_session_id {
+            Some(id) => id.clone(),
+            None => uuid_text(random_uuid().map_err(|e| source.errors().status(&e))?),
+        };
+        let clone = self
+            .manager
+            .clone_session(&self.artifacts, &caller, &source, &target)
+            .await
+            .map_err(|e| source.errors().status(&e))?;
+        Ok(Response::new(pb::CloneSessionResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: source.server_side_id().to_owned(),
+            new_session_id: target,
+            new_server_side_session_id: clone.server_side_id().to_owned(),
+        }))
     }
 
+    /// `GetStatus` (`crate::get_status`): the session is looked up, its
+    /// server-side id checked. **Unverified** against Spark's
+    /// `SparkConnectGetStatusHandler` (not read; design P3-T011a §2.1 and
+    /// §3.12 instead), including the server-side id check.
     async fn get_status(
         &self,
         request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::GetStatus))
+        let caller = self.caller(&request, Rpc::GetStatus)?;
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(
+                &caller,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        Ok(Response::new(get_status::get_status(&entry, &request)))
     }
 }

@@ -9,6 +9,7 @@
 //! `EXCEPT DISTINCT` semi join puts the left side's ids back with both sides' lineage (only its ancestors read
 //! them, ids being unique).
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -36,6 +37,13 @@ pub(super) type Sid = u32;
 pub(super) struct ColInfo {
     pub(super) sources: BTreeSet<Sid>,
     pub(super) transform: Transform,
+}
+
+/// An interned leaf: a source the walk built, or a table column read through no view, as the plan names it
+/// (built into a [`Source`] only when resolved).
+enum Interned<'a> {
+    Source(Source),
+    Column { name: &'a [String], column: &'a str },
 }
 
 /// A shared [`ColInfo`].
@@ -74,9 +82,17 @@ pub(super) struct Walker<'a> {
     loops: IdMap<(u32, u64), Vec<Info>>,
     pub(super) filters: BTreeSet<(FilterKind, Sid)>,
     pub(super) warnings: BTreeSet<LineageWarning>,
-    /// The interned sources, by [`Sid`], and back.
-    sources: Vec<Source>,
+    /// The interned sources, by [`Sid`], and back (but for the plan's own table columns: `tables`).
+    sources: Vec<Interned<'a>>,
     sids: HashMap<Source, Sid>,
+    /// The interned table columns read through no view, by table name (its slot in `columns`) and column
+    /// name, borrowed from the plan: most leaves are these, and most are never resolved, so they are
+    /// interned without building a [`Source`].
+    tables: IdMap<&'a [String], usize>,
+    columns: Vec<IdMap<&'a str, Sid>>,
+    /// Whether `sids` holds a table column read through no view (a `_metadata` field of a table scan):
+    /// a column `tables` misses is looked up there too, so a leaf has one id.
+    owned_columns: bool,
     /// A source re-tagged with an expanded view, by (source, view entry).
     tagged: IdMap<(Sid, usize), Sid>,
     depth: usize,
@@ -171,6 +187,9 @@ pub(super) fn run(analyzed: &AnalyzedPlan) -> Result<(Lineage, Counts), KrishivE
         warnings: BTreeSet::new(),
         sources: Vec::new(),
         sids: HashMap::new(),
+        tables: IdMap::default(),
+        columns: Vec::new(),
+        owned_columns: false,
         tagged: IdMap::default(),
         depth: 0,
         counts: Counts::default(),
@@ -197,7 +216,7 @@ pub(super) fn run(analyzed: &AnalyzedPlan) -> Result<(Lineage, Counts), KrishivE
                 sources: info
                     .sources
                     .iter()
-                    .map(|s| w.resolve(*s).cloned())
+                    .map(|s| w.resolve(*s).map(Cow::into_owned))
                     .collect::<Result<_, _>>()?,
                 transform: info.transform,
             })
@@ -206,7 +225,7 @@ pub(super) fn run(analyzed: &AnalyzedPlan) -> Result<(Lineage, Counts), KrishivE
     let filters = w
         .filters
         .iter()
-        .map(|(k, s)| Ok((*k, w.resolve(*s)?.leaf.clone())))
+        .map(|(k, s)| Ok((*k, w.resolve(*s)?.into_owned().leaf)))
         .collect::<Result<_, KrishivError>>()?;
     Ok((
         Lineage {
@@ -218,24 +237,51 @@ pub(super) fn run(analyzed: &AnalyzedPlan) -> Result<(Lineage, Counts), KrishivE
     ))
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// The interned id of `s`.
     pub(super) fn source(&mut self, s: Source) -> Result<Sid, KrishivError> {
         if let Some(id) = self.sids.get(&s) {
             return Ok(*id);
         }
-        let id = Sid::try_from(self.sources.len()).map_err(|_| internal("too many sources"))?;
-        self.sources.push(s.clone());
+        if let Source {
+            leaf: Leaf::Table { name, column },
+            via_view: None,
+        } = &s
+        {
+            if let Some(id) = self
+                .tables
+                .get(name.as_slice())
+                .and_then(|t| self.columns.get(*t))
+                .and_then(|c| c.get(column.as_str()))
+            {
+                return Ok(*id);
+            }
+            self.owned_columns = true;
+        }
+        let id = self.next_sid()?;
+        self.sources.push(Interned::Source(s.clone()));
         self.sids.insert(s, id);
         Ok(id)
     }
 
+    /// The id the next interned source gets.
+    fn next_sid(&self) -> Result<Sid, KrishivError> {
+        Sid::try_from(self.sources.len()).map_err(|_| internal("too many sources"))
+    }
+
     /// The source interned as `id`.
-    pub(super) fn resolve(&self, id: Sid) -> Result<&Source, KrishivError> {
-        usize::try_from(id)
-            .ok()
-            .and_then(|i| self.sources.get(i))
-            .ok_or_else(|| internal("a source the walk did not intern"))
+    pub(super) fn resolve(&self, id: Sid) -> Result<Cow<'_, Source>, KrishivError> {
+        match usize::try_from(id).ok().and_then(|i| self.sources.get(i)) {
+            Some(Interned::Source(s)) => Ok(Cow::Borrowed(s)),
+            Some(Interned::Column { name, column }) => Ok(Cow::Owned(Source {
+                leaf: Leaf::Table {
+                    name: name.to_vec(),
+                    column: (*column).to_owned(),
+                },
+                via_view: None,
+            })),
+            None => Err(internal("a source the walk did not intern")),
+        }
     }
 
     /// Runs `f` one level deeper: `FAILED_TO_PARSE_TOO_COMPLEX` past [`MAX_DEPTH`], and on a fresh stack
@@ -258,7 +304,7 @@ impl Walker<'_> {
     }
 
     /// The output of `p` under `offset`, computed once per (node, offset).
-    fn plan(&mut self, p: &Arc<LogicalPlan>, offset: u64) -> Result<Out, KrishivError> {
+    fn plan(&mut self, p: &'a Arc<LogicalPlan>, offset: u64) -> Result<Out, KrishivError> {
         let key = (addr(&**p), offset);
         if let Some(out) = self.plans.get(&key) {
             return Ok(Arc::clone(out));
@@ -305,7 +351,7 @@ impl Walker<'_> {
     fn filter_by(
         &mut self,
         kind: FilterKind,
-        e: &Arc<Expr>,
+        e: &'a Arc<Expr>,
         offset: u64,
     ) -> Result<(), KrishivError> {
         let info = self.value(e, offset)?;
@@ -314,7 +360,7 @@ impl Walker<'_> {
     }
 
     /// An output expression of a projection or an aggregate: a column, or an alias.
-    fn output(&mut self, e: &Arc<Expr>, offset: u64) -> Result<(AttrId, Info), KrishivError> {
+    fn output(&mut self, e: &'a Arc<Expr>, offset: u64) -> Result<(AttrId, Info), KrishivError> {
         let id = match &e.node {
             crate::ExprNode::Resolved(
                 crate::ResolvedExpr::Column(c) | crate::ResolvedExpr::Alias { output: c, .. },
@@ -327,7 +373,7 @@ impl Walker<'_> {
     /// The rule of `p`'s kind. A node that passes its input's rows through gives the input's output as it
     /// is (no copy).
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn rule(&mut self, p: &LogicalPlan, offset: u64) -> Result<Rule, KrishivError> {
+    fn rule(&mut self, p: &'a LogicalPlan, offset: u64) -> Result<Rule, KrishivError> {
         match &p.node {
             PlanNode::Scan(s) => self.scan(s, offset).map(Rule::New),
             PlanNode::OneRowRelation => Ok(Rule::New(Vec::new())),
@@ -399,7 +445,9 @@ impl Walker<'_> {
                 bounds: _,
                 seed: _,
             }
-            | PlanNode::ReplicateRows { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
+            | PlanNode::ReplicateRows { input, .. }
+            // `observe` passes its rows through; its metrics are reported apart, not as columns of the output.
+            | PlanNode::CollectMetrics { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
             PlanNode::SubqueryAlias { input, alias, .. } => self.alias(p, input, alias, offset),
             PlanNode::WithCte { input, ctes } => {
                 for c in ctes {
@@ -632,7 +680,7 @@ impl Walker<'_> {
     }
 
     /// The value of a user-defined function over `inputs`: their sources, `opaque` (and its warning).
-    fn opaque<'a>(&mut self, inputs: impl Iterator<Item = &'a Info>) -> Info {
+    fn opaque<'i>(&mut self, inputs: impl Iterator<Item = &'i Info>) -> Info {
         self.warnings.insert(LineageWarning::LineageOpaqueUdf);
         let mut value = literal();
         for i in inputs {
@@ -663,10 +711,10 @@ impl Walker<'_> {
     #[deny(clippy::wildcard_enum_match_arm)]
     fn join(
         &mut self,
-        left: &Arc<LogicalPlan>,
-        right: &Arc<LogicalPlan>,
+        left: &'a Arc<LogicalPlan>,
+        right: &'a Arc<LogicalPlan>,
         kind: JoinKind,
-        condition: &JoinCondition,
+        condition: &'a JoinCondition,
         offset: u64,
     ) -> Result<Rule, KrishivError> {
         let l = self.plan(left, offset)?;
@@ -728,8 +776,8 @@ impl Walker<'_> {
     /// is a leaf, and nothing under it is read. Entries of one key that disagree are not expanded.
     fn alias(
         &mut self,
-        p: &LogicalPlan,
-        input: &Arc<LogicalPlan>,
+        p: &'a LogicalPlan,
+        input: &'a Arc<LogicalPlan>,
         alias: &str,
         offset: u64,
     ) -> Result<Rule, KrishivError> {
@@ -794,7 +842,7 @@ impl Walker<'_> {
         if let Some(t) = self.tagged.get(&(s, entry)) {
             return Ok(*t);
         }
-        let leaf = self.resolve(s)?.leaf.clone();
+        let leaf = self.resolve(s)?.into_owned().leaf;
         let t = self.source(Source {
             leaf,
             via_view: Some(name.to_vec()),
@@ -809,8 +857,8 @@ impl Walker<'_> {
     fn union_loop(
         &mut self,
         id: u32,
-        anchor: &Arc<LogicalPlan>,
-        recursive: &Arc<LogicalPlan>,
+        anchor: &'a Arc<LogicalPlan>,
+        recursive: &'a Arc<LogicalPlan>,
         output: &[crate::BoundColumn],
         offset: u64,
     ) -> Result<Vec<(AttrId, Info)>, KrishivError> {
@@ -870,7 +918,7 @@ impl Walker<'_> {
     /// The output of the subquery plan `p` (relation memo and depth as any child).
     pub(super) fn subquery(
         &mut self,
-        p: &Arc<LogicalPlan>,
+        p: &'a Arc<LogicalPlan>,
         offset: u64,
     ) -> Result<Vec<Info>, KrishivError> {
         Ok(self
@@ -963,11 +1011,11 @@ fn grouping_exprs(g: &Grouping) -> Vec<&Arc<Expr>> {
     }
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// A scan's columns: leaves of the table, or of each path read (the `_metadata` column one leaf per
     /// field).
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn scan(&mut self, s: &Scan, offset: u64) -> Result<Vec<(AttrId, Info)>, KrishivError> {
+    fn scan(&mut self, s: &'a Scan, offset: u64) -> Result<Vec<(AttrId, Info)>, KrishivError> {
         let leaves = |column: &str| -> Vec<Leaf> {
             match &s.source {
                 ReadSource::Table { name, .. } => vec![Leaf::Table {
@@ -986,8 +1034,23 @@ impl Walker<'_> {
             }
         };
         let metadata = s.metadata_column().map(|c| c.id);
+        let table = match &s.source {
+            ReadSource::Table { name, .. } => Some(self.table_slot(name)),
+            ReadSource::Files { .. } | ReadSource::Local(_) => None,
+        };
         let mut out = Vec::with_capacity(s.output.len());
         for c in &s.output {
+            if let (Some((table, name)), false) = (table, metadata == Some(c.id)) {
+                let sid = self.table_column(table, name, &c.name)?;
+                out.push((
+                    shifted(c.id, offset)?,
+                    Arc::new(ColInfo {
+                        sources: BTreeSet::from([sid]),
+                        transform: Transform::Identity,
+                    }),
+                ));
+                continue;
+            }
             let found = match (&c.data_type, metadata == Some(c.id)) {
                 (krishiv_types::DataType::Struct(st), true) => st
                     .fields()
@@ -1012,5 +1075,48 @@ impl Walker<'_> {
             ));
         }
         Ok(out)
+    }
+
+    /// The slot of table `name`'s interned columns (made on first use), with the name.
+    fn table_slot(&mut self, name: &'a [String]) -> (usize, &'a [String]) {
+        if let Some(slot) = self.tables.get(name) {
+            return (*slot, name);
+        }
+        let slot = self.columns.len();
+        self.columns.push(IdMap::default());
+        self.tables.insert(name, slot);
+        (slot, name)
+    }
+
+    /// The interned leaf of `column` of the table in `slot` (named `name`), read through no view: the id
+    /// [`Walker::source`] gives its [`Source`], without building one.
+    fn table_column(
+        &mut self,
+        slot: usize,
+        name: &'a [String],
+        column: &'a str,
+    ) -> Result<Sid, KrishivError> {
+        if let Some(sid) = self.columns.get(slot).and_then(|c| c.get(column)) {
+            return Ok(*sid);
+        }
+        let sid = if self.owned_columns
+            && let Some(sid) = self.sids.get(&Source {
+                leaf: Leaf::Table {
+                    name: name.to_vec(),
+                    column: column.to_owned(),
+                },
+                via_view: None,
+            }) {
+            *sid
+        } else {
+            let sid = self.next_sid()?;
+            self.sources.push(Interned::Column { name, column });
+            sid
+        };
+        self.columns
+            .get_mut(slot)
+            .ok_or_else(|| internal("a table slot the walk did not make"))?
+            .insert(column, sid);
+        Ok(sid)
     }
 }

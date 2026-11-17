@@ -1374,6 +1374,7 @@ impl Session {
             // the catalog names an empty location: it is logged at error level with both paths and the
             // statement fails with an internal error; the catalog is never pointed outside the checked paths.
             let source = self.deletable_dir(table).await?;
+            self.allow_managed_location(&renamed.namespace, &renamed.name, &renamed.location);
             let target = self
                 .authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
                 .await?;

@@ -12,7 +12,7 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
@@ -98,52 +98,6 @@ pub(crate) fn plan_reads_only_system(plan: &krishiv_exec::physical::PhysicalPlan
 
 fn table_known(table: &str) -> bool {
     TABLES.iter().any(|t| t.eq_ignore_ascii_case(table))
-}
-
-/// The cargo features this build was made with and whether each is on, set
-/// once by the binary (the library cannot see its dependents' features).
-static BUILD_FEATURES: OnceLock<Vec<(String, bool)>> = OnceLock::new();
-
-/// Records the cargo features of the running binary for
-/// `system.capabilities`: `(name, enabled)` for every feature that can be
-/// switched. The first call wins; later calls change nothing.
-pub fn register_build_features(features: &[(&str, bool)]) {
-    let owned = features
-        .iter()
-        .map(|(name, on)| ((*name).to_owned(), *on))
-        .collect();
-    let _ = BUILD_FEATURES.set(owned);
-}
-
-/// The rows of `system.capabilities`: `(kind, name, value, detail)`.
-fn capability_rows() -> Vec<[String; 4]> {
-    let row = |kind: &str, name: &str, value: &str, detail: &str| {
-        [
-            kind.to_owned(),
-            name.to_owned(),
-            value.to_owned(),
-            detail.to_owned(),
-        ]
-    };
-    let state = |on: bool| if on { "enabled" } else { "disabled" };
-    let mut rows = vec![
-        row("build", "engine", "krishiv", env!("CARGO_PKG_VERSION")),
-        row("build", "spark_versions", "3.5,4.0,4.1,4.2", ""),
-        row("surface", "system_tables", SCHEMA_VERSION, ""),
-        row("surface", "agent_result", "1", ""),
-        row("feature", "cloud", state(cfg!(feature = "cloud")), ""),
-    ];
-    if let Some(features) = BUILD_FEATURES.get() {
-        let mut sorted: Vec<&(String, bool)> = features.iter().collect();
-        sorted.sort();
-        rows.extend(
-            sorted
-                .into_iter()
-                .filter(|(name, _)| name != "cloud")
-                .map(|(name, on)| row("feature", name, state(*on), "")),
-        );
-    }
-    rows
 }
 
 /// What a column holds.
@@ -1588,8 +1542,12 @@ impl Session {
 mod tests;
 
 mod caches;
+mod capabilities;
 mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]
 use text::*;
+
+use capabilities::capability_rows;
+pub use capabilities::{capabilities, register_build_features, register_surface};

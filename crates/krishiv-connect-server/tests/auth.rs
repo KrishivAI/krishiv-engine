@@ -851,3 +851,86 @@ async fn config_refusals_are_counted_like_sql_set() {
     );
     assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
+
+/// One `AddArtifacts` stream of `artifacts` (name, bytes) on `SESSION` as `token`.
+async fn add_artifacts_as(
+    channel: &Channel,
+    artifacts: &[(&str, &[u8])],
+    token: &str,
+) -> Result<pb::AddArtifactsResponse, tonic::Status> {
+    use krishiv_connect::proto::v4_3::add_artifacts_request::{
+        ArtifactChunk, Batch, Payload, SingleChunkArtifact,
+    };
+    let artifacts = artifacts
+        .iter()
+        .map(|(name, data)| SingleChunkArtifact {
+            name: (*name).to_owned(),
+            data: Some(ArtifactChunk {
+                data: data.to_vec(),
+                crc: i64::from(krishiv_connect_server::artifacts::crc32(data)),
+            }),
+        })
+        .collect();
+    let request = pb::AddArtifactsRequest {
+        session_id: SESSION.to_owned(),
+        payload: Some(Payload::Batch(Batch { artifacts })),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.client_streaming(
+        with_token(futures::stream::iter([request]), Some(token)),
+        path("AddArtifacts"),
+        tonic_prost::ProstCodec::<pb::AddArtifactsRequest, pb::AddArtifactsResponse>::default(),
+    )
+    .await
+    .map(tonic::Response::into_inner)
+}
+
+/// ADR 0046 §3b: `AddArtifacts` is client code, `Usage` on `System("udf")` (admin only until
+/// T014b), checked on the session before anything is staged, for every name, `cache/`
+/// included; a refusal is counted like every other denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adding_artifacts_needs_the_udf_privilege() {
+    let run = start().await;
+    let cache: &[(&str, &[u8])] = &[("cache/abc123", b"rows")];
+    let code: &[(&str, &[u8])] = &[("pyfiles/util.py", b"def f(): return 1\n")];
+    for token in [VIEWER, OPERATOR] {
+        for artifacts in [cache, code] {
+            let s = add_artifacts_as(&run.channel, artifacts, token)
+                .await
+                .expect_err("only an admin sends artifacts");
+            assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+            assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        }
+        release_as(&run, token).await;
+    }
+    assert_eq!(
+        denied(&run),
+        [(Surface::Connect, Privilege::Usage, 4)],
+        "each refusal is counted once"
+    );
+    let added = add_artifacts_as(&run.channel, &[cache[0], code[0]], ADMIN)
+        .await
+        .expect("an admin adds artifacts");
+    let names: Vec<&str> = added.artifacts.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["cache/abc123", "pyfiles/util.py"]);
+    assert!(added.artifacts.iter().all(|a| a.is_crc_successful));
+}
+
+/// PySpark's exit-time `ml_command.clean_cache` is `OwnSession` (ADR 0046 §3b): it succeeds for
+/// every role, a viewer included, and is no denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ml_clean_cache_succeeds_for_a_viewer() {
+    let run = start().await;
+    let clean = command(CommandType::MlCommand(Box::new(pb::MlCommand {
+        command: Some(pb::ml_command::Command::CleanCache(
+            pb::ml_command::CleanCache {},
+        )),
+    })));
+    let responses = execute(&run.channel, clean, Some(VIEWER))
+        .await
+        .expect("nothing to clean, for any role");
+    assert!(responses.is_empty(), "{} responses", responses.len());
+    assert!(denied(&run).is_empty(), "{:?}", denied(&run));
+}
