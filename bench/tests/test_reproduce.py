@@ -605,6 +605,7 @@ def test_sequential_query_checks_against_krishiv_when_asked_and_duckdb_has_no_an
     got = entry["engines"]
     assert got["krishiv"]["status"] == "ok"
     assert got["krishiv"]["note"].startswith("unverified")
+    assert got["krishiv"]["verified"] is False
     assert len(got["krishiv"]["samples_s"]) == 2
     assert got["polars-streaming"]["status"] == "ok"
     assert got["polars-streaming"]["reference"].startswith("krishiv")
@@ -614,11 +615,11 @@ def test_sequential_query_checks_against_krishiv_when_asked_and_duckdb_has_no_an
 
 
 class Spilling(Scripted):
-    """A scripted engine whose timed runs write 100, 300, 200 ... bytes to storage."""
+    """A scripted engine whose timed runs write 500 (the untimed baseline), then 300, 200 bytes to storage."""
 
     def timed_run(self, query):
         self.writes = getattr(self, "writes", 0) + 1
-        self.last_write_bytes = [100, 300, 200][(self.writes - 1) % 3]
+        self.last_write_bytes = [500, 300, 200][(self.writes - 1) % 3]
         return super().timed_run(query)
 
 
@@ -633,9 +634,27 @@ def test_sequential_query_records_the_most_one_timed_run_spilled(monkeypatch, ti
         },
         ["duckdb", "krishiv"],
     )
-    # the untimed baseline run wrote 100, the two samples 300 and 200: only the samples count
+    # the untimed baseline run wrote 500, the two samples 300 and 200: only the samples count
     assert entry["engines"]["krishiv"]["spill_bytes_max"] == 300
     assert "spill_bytes_max" not in entry["engines"]["duckdb"]  # no write figure measured
+
+
+def test_sequential_query_fails_the_others_when_neither_duckdb_nor_krishiv_answers(monkeypatch, tiny):
+    rows = [(1,), (2,)]
+    engines = {
+        "duckdb": lambda: Scripted("duckdb", setup_exc=EngineCrashed("worker died")),
+        "krishiv": lambda: Scripted("krishiv", setup_exc=EngineCrashed("worker died")),
+        "polars-streaming": lambda: Scripted("polars-streaming", rows, checksum=True),
+    }
+    names = ["duckdb", "krishiv", "polars-streaming"]
+    Scripted.instances = []
+    monkeypatch.setattr(reproduce, "ProcessEngine", lambda run_name, *a, **k: engines[run_name]())
+    qm = {n: q("SELECT a FROM t") for n in names}
+    entry, _ = reproduce.sequential_query(qm, names, tiny, 1, 1, None, 2, 60, krishiv_reference=True)
+    got = entry["engines"]
+    assert got["krishiv"]["status"] != "ok"
+    assert got["polars-streaming"]["status"] == "error"
+    assert "no DuckDB reference" in got["polars-streaming"]["reason"]
 
 
 def test_sequential_query_runs_polars_again_with_the_streaming_engine_after_a_crash(monkeypatch, tiny):

@@ -389,6 +389,8 @@ def sequential_query(
         # Polars' streaming engine ("polars-streaming") and the result says so.
         attempts = [name, "polars-streaming"] if name == "polars" else [name]
         for attempt, run_name in enumerate(attempts):
+            peaks.pop(name, None)  # a crashed attempt's figures are not the retry's
+            writes.pop(name, None)
             eng = ProcessEngine(run_name, threads, memory_gb, timeout_s, cap_gb=cap_gb)
             phase = "answer"
             crashed = False
@@ -402,7 +404,7 @@ def sequential_query(
                     verdicts[name] = {"status": "ok"}
                 elif REFERENCE not in rows and krishiv_reference and name == "krishiv":
                     nrows = result_rows(qm[name], rows[name])
-                    verdicts[name] = {"status": "ok", "note": KRISHIV_UNVERIFIED}
+                    verdicts[name] = {"status": "ok", "verified": False, "note": KRISHIV_UNVERIFIED}
                 elif REFERENCE not in rows and krishiv_reference and verdicts.get("krishiv", {}).get("status") == "ok":
                     verdicts[name] = judge(name, rows[name], rows["krishiv"], qm, {})
                     verdicts[name]["reference"] = "krishiv (DuckDB gave no answer)"

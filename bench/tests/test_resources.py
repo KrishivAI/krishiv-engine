@@ -469,3 +469,16 @@ def test_a_cpu_delta_needs_a_reading_taken_after_the_baseline():
     finally:
         p.kill()
         p.wait()
+
+
+def test_workers_spill_to_the_data_root_unless_told_otherwise(monkeypatch, tmp_path):
+    from krishiv_bench.adapters.process import worker_env
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("POLARS_TEMP_DIR", raising=False)
+    env = worker_env()
+    assert env["TMPDIR"] == env["POLARS_TEMP_DIR"] == str(tmp_path / "tmp" / "spill")
+    assert (tmp_path / "tmp" / "spill").is_dir()
+    monkeypatch.setenv("POLARS_TEMP_DIR", "/elsewhere")
+    assert worker_env()["POLARS_TEMP_DIR"] == "/elsewhere"

@@ -28,8 +28,9 @@ def _status_kb(text: str, key: str) -> int:
 class IoCounters:
     """Cumulative ``/proc/<pid>/io`` counters: ``rchar`` bytes asked of read-like syscalls (page cache included),
     ``read_bytes`` bytes fetched from the storage layer (a page-cache hit adds nothing), ``syscr`` read syscalls,
-    ``write_bytes`` bytes the process caused to be sent to the storage layer (the engines under test write only their
-    spill files, so this is their spill; a file deleted before writeback still counts)."""
+    ``write_bytes`` bytes the process caused to be sent to the storage layer: for the engines under test this is almost
+    all spill (Krishiv's adapter also writes its small result files), a file deleted before writeback still counts,
+    and writes to tmpfs never count (``worker_env`` keeps spill off tmpfs). 0 when the kernel has no I/O accounting."""
 
     rchar: int = 0
     read_bytes: int = 0
