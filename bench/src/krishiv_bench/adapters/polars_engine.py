@@ -15,6 +15,20 @@ from .base import Dataset, Engine, Query, table_path
 from .proc_mem import SelfTreeMeasure
 
 
+def polars_runtime() -> str:
+    """The Polars runtime package that loaded: ``64`` (64-bit row index, needed past 2^32-1 rows in one frame),
+    ``32`` (the default) or ``compat``; from the module ``polars._plr`` resolved to."""
+    import sys
+
+    import polars  # noqa: F401  # loads the runtime
+
+    mod = getattr(sys.modules.get("polars._plr"), "__name__", "")
+    for variant in ("64", "32", "compat"):
+        if mod.startswith(f"_polars_runtime_{variant}"):
+            return variant
+    return mod or "unknown"
+
+
 class PolarsEngine(SelfTreeMeasure, Engine):
     name = "polars"
 
@@ -42,6 +56,7 @@ class PolarsEngine(SelfTreeMeasure, Engine):
             "memory_limit": None,
             "api": "lazy: scan_parquet + SQLContext",
             "engine": "streaming" if self.streaming else "default",
+            "runtime": polars_runtime(),
         }
 
     def setup(self, dataset: Dataset) -> None:

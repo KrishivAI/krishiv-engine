@@ -633,7 +633,7 @@ impl Session {
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, query, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => {
