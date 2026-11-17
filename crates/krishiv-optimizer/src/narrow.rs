@@ -233,11 +233,15 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
             let sel = 1.0 / ci.ndv.max(cj.ndv).max(1.0);
             let (lo, hi) = (max_of(ci.min, cj.min), min_of(ci.max, cj.max));
             let (ndv, source) = (ci.ndv.min(cj.ndv), ci.source.min(cj.source));
+            // Each column takes the other's bounds, so an estimated range
+            // (a `count`'s) makes both estimates (review #835 B1).
+            let estimated = ci.range_estimated || cj.range_estimated;
             for id in [i, j] {
                 v.update(id, |c| {
                     c.ndv = ndv;
                     c.source = source;
                     cut(c, lo, hi);
+                    c.range_estimated |= estimated;
                     if op == Builtin::Eq {
                         c.null_frac = 0.0;
                     }

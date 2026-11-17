@@ -423,6 +423,30 @@ fn a_count_range_is_an_estimate_and_proves_nothing_under_ansi() {
     );
 }
 
+/// A column equal to a count, through a join or a filter, takes the count's
+/// estimated range: no proof under ANSI either (review #835 B1). `v` has no
+/// statistics of its own, so only the count's range could bound it.
+#[test]
+fn a_column_equal_to_a_count_takes_its_estimated_range() {
+    let join = "SELECT a.v, a.v + 9223372026854775807 AS m FROM h AS a \
+                JOIN (SELECT c, count(*) AS n FROM h GROUP BY c) s ON a.v = s.n \
+                GROUP BY a.v, a.v + 9223372026854775807";
+    let filter = "SELECT v, v + 9223372026854775807 AS m FROM \
+                  (SELECT c, v, count(*) AS n FROM h GROUP BY c, v) WHERE v = n \
+                  GROUP BY v, v + 9223372026854775807";
+    for sql in [join, filter] {
+        let ansi = run_over(sql, FOOTER, true, false);
+        assert!(!ansi.moved(), "{sql}\n{}", ansi.text());
+        assert!(
+            ansi.notes
+                .iter()
+                .any(|n| n.contains("the range of v is an estimate")),
+            "{sql}\n{:?}",
+            ansi.notes
+        );
+    }
+}
+
 /// A range that reaches the type's end is no proof; wrapping needs none.
 #[test]
 fn a_key_at_int_max_rewrites_only_without_ansi() {
