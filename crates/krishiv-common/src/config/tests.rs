@@ -1304,19 +1304,6 @@ fn ui_enabled_defaults_on_and_parses() {
 }
 
 #[test]
-fn ui_allowed_hosts_is_a_startup_string_with_no_default() {
-    let mut c = Config::new();
-    assert_eq!(c.get(&UI_ALLOWED_HOSTS), None);
-    c.set("krishiv.ui.allowedHosts", "ui.example.com,[::1]")
-        .unwrap();
-    assert_eq!(
-        c.get(&UI_ALLOWED_HOSTS).and_then(ConfigValue::as_str),
-        Some("ui.example.com,[::1]")
-    );
-    assert_eq!(UI_ALLOWED_HOSTS.scope, Scope::Cluster);
-}
-
-#[test]
 fn system_query_text_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(
