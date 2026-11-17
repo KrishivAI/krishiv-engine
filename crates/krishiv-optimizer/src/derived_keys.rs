@@ -138,19 +138,10 @@ fn at_aggregate(p: Arc<LogicalPlan>, cx: &mut Context<'_>) -> Arc<LogicalPlan> {
     else {
         return p;
     };
-    let keys = match grouping {
-        Grouping::GroupBy(keys) => keys,
-        Grouping::Rollup(keys)
-        | Grouping::Cube(keys)
-        | Grouping::GroupingSets { exprs: keys, .. } => {
-            if keys.iter().any(|k| !is_column(k)) {
-                cx.note(
-                    "kept the group keys of a grouping sets, rollup or cube aggregate".to_owned(),
-                );
-            }
-            return p;
-        }
-        _ => return p,
+    // The analyzer expands ROLLUP, CUBE and GROUPING SETS into an Expand under
+    // a plain GROUP BY, so only that form reaches here.
+    let Grouping::GroupBy(keys) = grouping else {
+        return p;
     };
     // The columns the project below defines (they leave the keys when they
     // move) and the bare keys it merely passes through.
@@ -348,10 +339,6 @@ fn column_of(e: &Expr) -> Option<&BoundColumn> {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
         _ => None,
     }
-}
-
-fn is_column(e: &Expr) -> bool {
-    column_of(e).is_some()
 }
 
 /// Whether `e` reads one of `columns` or holds one of `exprs` outside an
