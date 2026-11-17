@@ -745,7 +745,7 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.table, &env)?;
-        let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
+        let table = self.table_for_read_command(&name, "ANALYZE TABLE", &env)?;
         if let Some(spec) = &a.partition {
             if !matches!(a.columns, AnalyzeColumns::All) {
                 return Err(unsupported("ANALYZE TABLE ... PARTITION ... FOR COLUMNS"));

@@ -1409,10 +1409,6 @@ impl TableProviderResolver for QueryCatalog {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
                     TempTable::Provider { table, .. } => Ok(Arc::clone(table)),
-                    #[cfg(feature = "delta")]
-                    TempTable::Files { source, .. } if crate::delta::is_delta(source) => {
-                        self.delta.provider(source)
-                    }
                     TempTable::Files {
                         known,
                         permanent,
@@ -1422,9 +1418,18 @@ impl TableProviderResolver for QueryCatalog {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(
-                            &reference_key(key, *known, *permanent, source, options).0,
-                        )
+                        // The source `file_scans` opened: a permanent table's
+                        // reference options are merged in, and for a cloud
+                        // path they are part of the store's key.
+                        let (key, effective) =
+                            reference_key(key, *known, *permanent, source, options);
+                        #[cfg(feature = "delta")]
+                        if crate::delta::is_delta(&effective) {
+                            return self.delta.provider(&effective);
+                        }
+                        #[cfg(not(feature = "delta"))]
+                        let _ = effective;
+                        self.files_provider(&key)
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.

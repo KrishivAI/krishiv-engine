@@ -4,22 +4,45 @@
 use super::*;
 
 impl Session {
-    /// The permanent table `name` for a command that writes it.
+    /// The permanent table `name` for a command that writes it. A Delta table is refused by name
+    /// until PR-37a.
     pub(crate) fn table_for_write(
         &self,
         name: &TableName,
         operation: &str,
         env: &QueryEnv,
     ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Write)
+    }
+
+    /// The permanent table `name` for a command that only reads it (`ANALYZE TABLE`): refused as
+    /// [`Self::table_for_write`] refuses, except that a Delta table is returned.
+    pub(crate) fn table_for_read_command(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Read)
+    }
+
+    fn stored_table_for(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+        access: Access,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
         if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name)
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // Reading a Delta table to analyze it is no write; everything else waits for PR-37a.
                 #[cfg(feature = "delta")]
-                if is_delta_table(&table) && operation != "ANALYZE TABLE" {
+                if access == Access::Write && is_delta_table(&table) {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }
+                #[cfg(not(feature = "delta"))]
+                let _ = access;
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
@@ -729,4 +752,13 @@ impl Session {
             .check_save(&table.location.display().to_string())
             .await
     }
+}
+
+/// What a table command does to the stored table it names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Only reads it (`ANALYZE TABLE`).
+    Read,
+    /// Writes or changes it.
+    Write,
 }
