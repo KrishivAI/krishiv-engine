@@ -2576,3 +2576,39 @@ fn partition_errors_list_a_spec_as_written() {
     assert_eq!(rows(&s, "show partitions c"), ["p=10/s=c", "p=9/s=b"]);
     assert!(dir.path().join("c").join("p=10").join("s=c").is_dir());
 }
+
+/// A filter that compares a partition column with a value reads only the files of the partitions it keeps (P3-T025:
+/// static partition pruning, so partitioning by an advised column cuts the bytes scanned).
+#[test]
+fn an_equality_on_a_partition_column_opens_only_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE pp USING parquet PARTITIONED BY (k) AS SELECT id, CAST(id % 4 AS INT) AS k FROM range(0, 400)",
+    );
+    let decoded = |sql: &str| -> String {
+        let plan = rows(&s, sql).join("\n");
+        let at = plan.find("scan_rows_decoded=").expect(&plan);
+        plan[at + "scan_rows_decoded=".len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect()
+    };
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k = 2"),
+        "100"
+    );
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k IN (1, 3)"),
+        "200"
+    );
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k > 5 OR id = 7"),
+        "400"
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(sum(id) AS STRING) FROM pp WHERE k = 2"),
+        ["20000"]
+    );
+}

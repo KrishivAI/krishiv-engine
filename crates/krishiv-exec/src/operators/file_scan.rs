@@ -59,9 +59,10 @@ use krishiv_io::split::{
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
-    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
-    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScalarValue,
+    ScanOptions, ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
 };
+use krishiv_io::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
 
@@ -498,6 +499,9 @@ pub struct FileScanSource {
     /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
     /// (of one split, or of splits that do not start at byte 0) are read.
     opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
+    /// The pushed filters that read a partition column, as the typed trees they are: a file whose partition
+    /// values none of them can match is never opened (static partition pruning, P3-T025).
+    static_partition: Vec<PushdownExpr>,
     /// Whether the row id ends the output.
     row_id: bool,
     /// One morsel per partition, its batches tagged with the partition's
@@ -615,6 +619,26 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// The one value of a partition column in a file, for the types partitions are made of.
+fn partition_scalar(array: &dyn Array) -> Option<ScalarValue> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Date32Type, Int8Type, Int16Type, Int32Type, Int64Type};
+    if array.is_empty() || array.is_null(0) {
+        return None;
+    }
+    Some(match array.data_type() {
+        DataType::Boolean => ScalarValue::Boolean(array.as_boolean().value(0)),
+        DataType::Int8 => ScalarValue::Int8(array.as_primitive::<Int8Type>().value(0)),
+        DataType::Int16 => ScalarValue::Int16(array.as_primitive::<Int16Type>().value(0)),
+        DataType::Int32 => ScalarValue::Int32(array.as_primitive::<Int32Type>().value(0)),
+        DataType::Int64 => ScalarValue::Int64(array.as_primitive::<Int64Type>().value(0)),
+        DataType::Date32 => ScalarValue::Date32(array.as_primitive::<Date32Type>().value(0)),
+        DataType::Utf8 => ScalarValue::Utf8(array.as_string::<i32>().value(0).to_owned()),
+        DataType::Utf8View => ScalarValue::Utf8(array.as_string_view().value(0).to_owned()),
+        _ => return None,
+    })
 }
 
 /// Whether the typed tree of `filter` reads a partition column of `scan`
@@ -838,6 +862,12 @@ impl FileScanSource {
             partition_fields,
             layout,
         } = table_request(scan, &p)?;
+        let static_partition = p
+            .filters
+            .iter()
+            .filter(|f| reads_partition_column(scan, f))
+            .filter_map(|f| f.expr.clone())
+            .collect();
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -856,6 +886,7 @@ impl FileScanSource {
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             opened_files: Arc::default(),
+            static_partition,
             row_id: p.row_id,
             partition_order: p.partition_order,
         })
@@ -1000,10 +1031,7 @@ impl FileScanSource {
                     return None;
                 }
                 let file = self.files.get(s.file)?;
-                let dropped = !partition_filters.is_empty()
-                    && self
-                        .partition_values(file)
-                        .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+                let dropped = self.drops_file(partition_filters, file);
                 if dropped {
                     splits.push(Vec::new());
                     continue;
@@ -1065,11 +1093,7 @@ impl FileScanSource {
         if let Some(file) = self.files.get(wanted) {
             // A file its partition's filter drops is never opened. (An error
             // reading its path is reported by the open.)
-            let dropped = !partition_filters.is_empty()
-                && self
-                    .partition_values(file)
-                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
-            if dropped {
+            if self.drops_file(partition_filters, file) {
                 return;
             }
             let fut = self.io.prefetch_metadata(
@@ -1100,6 +1124,14 @@ impl FileScanSource {
         // Dynamic partition pruning: no row of the file passes.
         if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
             filter.filter().stats().add_split(range.len());
+            return Ok(());
+        }
+        // Static partition pruning: the filters on partition columns rule the file out.
+        if self.statically_dropped(&partition_values) {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .units_pruned += 1;
             return Ok(());
         }
         if let Some((f, _)) = &local.ahead
@@ -1247,6 +1279,38 @@ impl FileScanSource {
     }
 
     /// The values of `file`'s partition columns, one row each.
+    /// Whether a runtime filter or a filter on a partition column rules out the file: it is never opened.
+    fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
+        (!partition_filters.is_empty() || !self.static_partition.is_empty())
+            && self.partition_values(file).is_ok_and(|v| {
+                dropping_filter(partition_filters, &v).is_some() || self.statically_dropped(&v)
+            })
+    }
+
+    /// Whether the pushed filters on partition columns cannot match any row of a file with these partition values
+    /// (each is the one value of its column in the file, so `prune` decides exactly; a null or an unhandled type
+    /// is unknown and keeps the file).
+    fn statically_dropped(&self, values: &[ArrayRef]) -> bool {
+        if self.static_partition.is_empty() {
+            return false;
+        }
+        let mut stats = FileStatistics::unknown();
+        stats.rows = Precision::Exact(1);
+        for (field, array) in self.partition_fields.iter().zip(values) {
+            let Some(value) = partition_scalar(array.as_ref()) else {
+                continue;
+            };
+            let mut column = ColumnStatistics::new(ColumnPath::new(field.name()));
+            column.null_count = Precision::Exact(0);
+            column.min = Precision::Exact(value.clone());
+            column.max = Precision::Exact(value);
+            stats.columns.push(column);
+        }
+        self.static_partition
+            .iter()
+            .any(|e| prune(e, &stats) == TriState::False)
+    }
+
     fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
         if self.layout.is_empty() {
             return Ok(Vec::new());

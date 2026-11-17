@@ -18,6 +18,7 @@ use crate::metrics::{
     Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics, QueryMetrics,
 };
 use crate::physical::{ExprEnv, PhysNode};
+use krishiv_plan::{Expr, ExprNode};
 
 fn env() -> ExprEnv {
     ExprEnv {
@@ -702,6 +703,14 @@ fn schema_matches_the_writer() {
         principal: "user:a".into(),
         tags: [("team".to_owned(), "x".to_owned())].into(),
     });
+    profile.scans = vec![ProfileScan {
+        table: "c.s.t".to_owned(),
+        rows: Some(10),
+        equality: vec![ScanColumn {
+            name: "d".to_owned(),
+            distinct: Some(3),
+        }],
+    }];
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -891,4 +900,167 @@ fn a_profile_without_usage_still_reads_with_no_identity() {
     v.as_object_mut().expect("object").remove("usage");
     let back = QueryProfile::from_json(&v.to_string()).expect("an older document reads");
     assert!(back.identity.is_none());
+}
+
+/// A resolved call of a canonical operator.
+fn call(b: krishiv_plan::Builtin, args: Vec<Expr>) -> Expr {
+    use krishiv_plan::{FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction};
+    Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: FunctionId::Builtin(b),
+            kind: FunctionKind::Scalar,
+            args: args.into_iter().map(Arc::new).collect(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: true,
+            deterministic: true,
+        },
+    )))
+}
+
+fn col(id: u64, name: &str) -> krishiv_plan::BoundColumn {
+    krishiv_plan::BoundColumn {
+        id: krishiv_plan::AttrId(id),
+        name: name.to_owned(),
+        data_type: krishiv_types::DataType::Long,
+        nullable: true,
+    }
+}
+
+fn col_expr(id: u64, name: &str) -> Expr {
+    Expr::new(ExprNode::Resolved(krishiv_plan::ResolvedExpr::Column(col(
+        id, name,
+    ))))
+}
+
+fn lit(v: i64) -> Expr {
+    Expr::literal(krishiv_plan::Literal::Long(v))
+}
+
+fn scan_of(table: &str, cols: &[(u64, &str)], filter: Option<Expr>) -> PhysNode {
+    use crate::physical::{ScanFilter, ScanId, ScanNode};
+    PhysNode::Scan(ScanNode {
+        id: ScanId(0),
+        scan: krishiv_plan::Scan {
+            source: krishiv_plan::ReadSource::Table {
+                name: table.split('.').map(str::to_owned).collect(),
+                options: std::collections::BTreeMap::new(),
+            },
+            output: cols.iter().map(|(i, n)| col(*i, n)).collect(),
+            version: None,
+        },
+        projection: Vec::new(),
+        filter: filter.map(|p| ScanFilter {
+            layout: cols.iter().map(|(i, _)| krishiv_plan::AttrId(*i)).collect(),
+            predicate: Arc::new(p),
+            exact: false,
+        }),
+        runtime_filters: Vec::new(),
+        row_stage: crate::operators::RowStageSettings::default(),
+        row_id: false,
+    })
+}
+
+fn plan_of(root: PhysNode) -> PhysicalPlan {
+    PhysicalPlan::new(
+        root,
+        Arc::new(Schema::empty()),
+        ExplainNode::leaf("Scan", ""),
+        env(),
+    )
+}
+
+#[test]
+fn scans_name_the_tables_and_the_columns_compared_with_values() {
+    use krishiv_plan::Builtin;
+    // `d = 1 AND c IN (1, 2) AND e > 3 AND f = d` over `t`, the first two in a Filter node, `e = 5` pushed into the scan.
+    let cols = [(1, "d"), (2, "c"), (3, "e"), (4, "f"), (5, "g")];
+    let pushed = call(Builtin::Eq, vec![col_expr(5, "g"), lit(5)]);
+    let filter = PhysNode::Filter {
+        input: Box::new(scan_of("cat.db.t", &cols, Some(pushed))),
+        layout: Vec::new(),
+        predicate: Arc::new(call(
+            Builtin::And,
+            vec![
+                call(Builtin::Eq, vec![lit(1), col_expr(1, "d")]),
+                call(
+                    Builtin::And,
+                    vec![
+                        call(Builtin::In, vec![col_expr(2, "c"), lit(1), lit(2)]),
+                        call(
+                            Builtin::And,
+                            vec![
+                                call(Builtin::Gt, vec![col_expr(3, "e"), lit(3)]),
+                                call(Builtin::Eq, vec![col_expr(4, "f"), col_expr(1, "d")]),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )),
+        subqueries: Vec::new(),
+    };
+    let stats = |_: &krishiv_plan::Scan| {
+        Some(krishiv_optimizer::TableStats {
+            rows: 1000,
+            columns: [(
+                "d".to_owned(),
+                krishiv_optimizer::ColumnStats {
+                    distinct: Some(365),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        })
+    };
+    let scans = profile_scans(&plan_of(filter), &stats);
+    assert_eq!(
+        scans,
+        vec![ProfileScan {
+            table: "cat.db.t".to_owned(),
+            rows: Some(1000),
+            equality: vec![
+                ScanColumn {
+                    name: "c".to_owned(),
+                    distinct: None
+                },
+                ScanColumn {
+                    name: "d".to_owned(),
+                    distinct: Some(365)
+                },
+                ScanColumn {
+                    name: "g".to_owned(),
+                    distinct: None
+                },
+            ],
+        }]
+    );
+}
+
+#[test]
+fn scans_round_trip_and_an_older_document_has_none() {
+    let mut profile = QueryProfile::new(&plan(matching()), metrics(), false);
+    assert!(profile.to_json_value().get("scans").is_none());
+    profile.scans = vec![ProfileScan {
+        table: "a.b".to_owned(),
+        rows: None,
+        equality: vec![ScanColumn {
+            name: "d".to_owned(),
+            distinct: Some(7),
+        }],
+    }];
+    let back = QueryProfile::from_json(&profile.to_json()).unwrap();
+    assert_eq!(back.scans, profile.scans);
+    // A document of minor 5 has no `scans`.
+    let mut v = profile.to_json_value();
+    v.as_object_mut().unwrap().remove("scans");
+    v["minor"] = 5.into();
+    assert!(
+        QueryProfile::from_json(&v.to_string())
+            .unwrap()
+            .scans
+            .is_empty()
+    );
 }

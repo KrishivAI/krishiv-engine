@@ -117,6 +117,7 @@ them as written, for tests), whose drivers record the `ExchangeStats` (`exchange
 partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
+- `src/profile/scans.rs` `profile_scans`: the named tables a plan scans and the columns its filters compare with values by `=`/`IN` (with the statistics a caller supplies); the profile's `scans` member (minor 6), the partition advisor's input (P3-T025)
 Paths are relative to this crate.
 - `src/carrier.rs` moves a value between decimal carriers and between the calendar struct and `Interval(MonthDayNano)` (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`

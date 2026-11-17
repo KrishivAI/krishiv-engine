@@ -156,6 +156,7 @@ fn capabilities_has_one_row_per_fact() {
         )),
         sessions: Arc::default(),
         groups: None,
+        history: None,
     };
     assert!(provider("capabilities", &sources).unwrap().is_some());
     assert!(provider("nope", &sources).unwrap().is_none());

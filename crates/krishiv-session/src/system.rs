@@ -43,12 +43,13 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 8] = [
+const TABLES: [&str; 9] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
+    "partition_advice",
     "queries",
     "resource_groups",
     "sessions",
@@ -233,6 +234,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("partial", Flag, false),
             ("delegated_by", Text, true),
         ],
+        "partition_advice" => crate::partition_advice::layout(),
         "resource_groups" => crate::system_groups::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
@@ -504,6 +506,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("sessions") {
         return crate::sessions::columns(sources);
     }
+    if table.eq_ignore_ascii_case("partition_advice") {
+        return crate::partition_advice::columns(sources);
+    }
     if table.eq_ignore_ascii_case("resource_groups") {
         return crate::system_groups::columns(sources);
     }
@@ -635,6 +640,8 @@ pub(crate) struct Sources {
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
     /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
     pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
+    /// The persisted query history (`krishiv.history.path`), when one is kept: `partition_advice` reads it.
+    pub(crate) history: Option<Arc<crate::profile_history::ProfileHistory>>,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1345,9 +1352,15 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators", "sessions", "resource_groups"]
-                .iter()
-                .any(|t| id.name.eq_ignore_ascii_case(t))
+            if [
+                "queries",
+                "operators",
+                "sessions",
+                "resource_groups",
+                "partition_advice",
+            ]
+            .iter()
+            .any(|t| id.name.eq_ignore_ascii_case(t))
             {
                 self.monitor.decide().await;
             }
