@@ -467,6 +467,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths,
             options: std::collections::BTreeMap::new(),
+            schema: None,
         }))
     };
     let key = [("l_orderkey", DataType::Long)];
@@ -512,6 +513,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths: path(),
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,
@@ -622,8 +624,13 @@ fn pins_securables_and_fingerprint() {
         used["table `spark_catalog`.`default`.`supplier`"],
         ["s_name", "s_nationkey", "s_suppkey"]
     );
-    // `EXISTS (SELECT * FROM lineitem ...)` references every column.
-    assert_eq!(used["table `spark_catalog`.`default`.`lineitem`"].len(), 16);
+    // The columns the final plan reads (P3-T062 review B1): `EXISTS (SELECT * FROM lineitem
+    // ...)` becomes a semi join that reads only its keys and predicate columns, and the three
+    // uses of lineitem (instances of one scan) count together.
+    assert_eq!(
+        used["table `spark_catalog`.`default`.`lineitem`"],
+        ["l_commitdate", "l_orderkey", "l_receiptdate", "l_suppkey"]
+    );
     let q6 = run(QUERIES[5](), &ctx()).unwrap();
     assert_eq!(
         q6.securables[0].columns.iter().collect::<Vec<_>>(),
@@ -814,6 +821,7 @@ fn unsupported_inputs_fail_explicitly() {
         format: "parquet".to_owned(),
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
+        schema: None,
     }));
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sentences", vec![c("b")])]);
     for plan in [files, sha] {
@@ -874,6 +882,7 @@ fn unsupported_inputs_fail_explicitly() {
             format: "parquet".to_owned(),
             paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,

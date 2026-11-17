@@ -70,7 +70,7 @@ fn non_loopback_requires_auth() {
             .expect("run krishiv server");
         assert_eq!(out.status.code(), Some(1), "{host}");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("without authentication"), "{err}");
+        assert!(err.contains("needs an authentication method"), "{err}");
         assert!(err.contains("--host"), "{err}");
         assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
     }
@@ -101,7 +101,7 @@ fn non_loopback_requires_auth() {
         .output()
         .expect("run krishiv server");
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("without authentication"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("needs an authentication method"));
 }
 
 /// A running server and the addresses it printed; killed and reaped on
@@ -151,11 +151,14 @@ fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
             .next()
             .expect("server printed its addresses")
             .expect("utf-8");
-        if let Some(a) = line.strip_prefix("krishiv server: admin on http://") {
+        if let Some(a) = line
+            .strip_prefix("krishiv server: admin on http://")
+            .or_else(|| line.strip_prefix("krishiv server: admin on https://"))
+        {
             admin = Some(a.to_owned());
         }
         if let Some(a) = line.strip_prefix("krishiv server: Spark Connect on sc://") {
-            connect = Some(a.to_owned());
+            connect = Some(a.trim_end_matches("/;use_ssl=true").to_owned());
         }
     }
     Running {
@@ -168,6 +171,22 @@ fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
 
 fn http_get(addr: &str, path: &str) -> String {
     http_get_as(addr, path, None)
+}
+
+/// `GET path` with the given `Host` and, when given, a bearer token.
+fn http_get_host(addr: &str, path: &str, host: &str, token: Option<&str>) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n"
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
 }
 
 /// `GET path` with `Authorization: Bearer token` when `token` is given.
@@ -207,7 +226,13 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
     let mut run = start(spill.path());
     let h = http_get(&run.admin, "/healthz");
     assert!(h.starts_with("HTTP/1.1 200"), "{h}");
-    let r = http_get(&run.admin, "/readyz");
+    // Readiness can follow the printed addresses by a moment (503 `not_ready` until then).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut r = http_get(&run.admin, "/readyz");
+    while r.starts_with("HTTP/1.1 503") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        r = http_get(&run.admin, "/readyz");
+    }
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     assert!(r.ends_with(r#"{"status":"ready"}"#), "{r}");
     // The Connect port accepts connections.
@@ -342,6 +367,63 @@ fn pyspark_stream_cap_reattach() {
     );
 }
 
+/// Design P3-T011a §3.9 with the stock client: `addArtifacts` of a Python
+/// file succeeds, the same file again is a no-op, other bytes under the same
+/// name are `ARTIFACT_ALREADY_EXISTS`, and a cached blob answers
+/// `ArtifactStatus`.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_add_artifacts_pyfile() {
+    pyspark(
+        "import os, tempfile\n\
+         from pyspark.sql import SparkSession\n\
+         from pyspark.errors import SparkRuntimeException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         d = tempfile.mkdtemp()\n\
+         p = os.path.join(d, 'helper_mod.py')\n\
+         open(p, 'w').write('def f():\\n    return 1\\n')\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         open(p, 'w').write('def f():\\n    return 2\\n')\n\
+         try:\n\
+         \x20   s.addArtifacts(p, pyfile=True)\n\
+         \x20   raise AssertionError('no error')\n\
+         except SparkRuntimeException as e:\n\
+         \x20   assert e.getCondition() == 'ARTIFACT_ALREADY_EXISTS', e\n\
+         h = s._client._artifact_manager.cache_artifact(b'x' * 100000)\n\
+         assert s._client._artifact_manager.is_cached_artifact(h)\n\
+         assert not s._client._artifact_manager.is_cached_artifact('0' * 64)\n\
+         s.stop()\n",
+    );
+}
+
+/// Design P3-T011a §3.10 with the stock client: a failing query's status
+/// carries an `errorId`, the client fetches the details (`FetchErrorDetails`;
+/// its server stack trace is then the root error's class line, without
+/// frames), and raises the exception with the class and parameters.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_fetches_error_details() {
+    pyspark(
+        "from pyspark.sql import SparkSession\n\
+         from pyspark.errors import AnalysisException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         \x20   raise AssertionError('no error')\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getCondition().startswith('UNRESOLVED_COLUMN'), e.getCondition()\n\
+         \x20   assert e.getMessageParameters().get('objectName') == '`nope`', e.getMessageParameters()\n\
+         \x20   assert e.getStackTrace() == 'org.apache.spark.sql.AnalysisException', e.getStackTrace()\n\
+         s.conf.set('spark.sql.connect.enrichError.enabled', 'false')\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getStackTrace() is None, e.getStackTrace()\n\
+         s.stop()\n",
+    );
+}
+
 #[test]
 #[ignore = "needs SqlCommand (P3-T012) and a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn server_sessions_are_isolated() {
@@ -418,4 +500,227 @@ fn configured_tokens_guard_the_admin_routes() {
     assert!(ui.starts_with(expected), "{ui}");
     let probe = http_get(&server.admin, "/healthz");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
+    // ADR 0046 §8: the refusals above are on `/metrics` (the counters ride on the engine's).
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    assert!(
+        scrape.contains(r#"krishiv_auth_failed_total{surface="metrics",method="none"} 1"#),
+        "{scrape}"
+    );
+    if cfg!(feature = "ui") {
+        assert!(
+            scrape.contains(r#"krishiv_auth_denied_total{surface="ui",privilege="MONITOR"} 1"#),
+            "{scrape}"
+        );
+    }
+}
+
+/// `krishiv.admin.v1` on the admin listener (design P3-T066 PR-52a): any authenticated caller
+/// reads the version and the capabilities, which list the surface and its revision; a request
+/// without a token is 401, and a `Host` outside the loopback names is 421.
+#[test]
+fn the_admin_v1_surface_is_served_behind_the_guard() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "admin-v1-viewer-token-0123456789abcdef";
+    let path = dir.path().join("viewer");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.v.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.v.principal=viewer-service".to_owned(),
+        "krishiv.auth.tokens.v.role=viewer".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let none = http_get_host(&server.admin, "/api/admin/v1/version", "localhost", None);
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+    let version = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "localhost",
+        Some(token),
+    );
+    assert!(version.starts_with("HTTP/1.1 200"), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"1\""), "{version}");
+    let caps = http_get_host(
+        &server.admin,
+        "/api/admin/v1/capabilities",
+        "localhost",
+        Some(token),
+    );
+    assert!(caps.contains("\"admin.v1\""), "{caps}");
+    let rebound = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "evil.example",
+        Some(token),
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+    // The old route stays, marked deprecated, and names its successor.
+    let old = http_get_host(&server.admin, "/api/v1/version", "localhost", Some(token));
+    assert!(old.to_ascii_lowercase().contains("deprecation: @"), "{old}");
+    // With authentication configured the alias needs the credential too (design D6).
+    let open = http_get_host(&server.admin, "/api/v1/version", "localhost", None);
+    assert!(open.starts_with("HTTP/1.1 401"), "{open}");
+    // An unknown path is a 404 of the server's own, not a gRPC status, and the server started
+    // with the UI router and the admin routes merged.
+    let missing = http_get_host(&server.admin, "/api/nowhere", "localhost", Some(token));
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+}
+
+#[cfg(unix)]
+#[test]
+fn tokens_on_a_public_address_need_tls() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    std::fs::write(&path, "public-address-token-0123456789abcdef").expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let out = krishiv()
+        .args([
+            "server",
+            "--port",
+            "0",
+            "--connect-port",
+            "0",
+            "--host",
+            "0.0.0.0",
+        ])
+        .arg("--conf")
+        .arg(format!(
+            "krishiv.auth.tokens.a.secret=file:{}",
+            path.display()
+        ))
+        .args(["--conf", "krishiv.auth.tokens.a.principal=a"])
+        .args(["--conf", "krishiv.auth.tokens.a.role=viewer"])
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("need TLS"), "{err}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
+}
+
+#[cfg(unix)]
+/// The TLS fixtures of `krishiv-session` (`tests/fixtures/tls/README.md`).
+fn tls_fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-session/tests/fixtures/tls")
+        .join(name)
+}
+
+/// A TLS connection to `addr`, trusting the test CA, with its handshake done.
+#[cfg(unix)]
+fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+    use rustls::pki_types::pem::PemObject as _;
+    use rustls::pki_types::{CertificateDer, ServerName};
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_file(tls_fixture("ca.pem")).expect("ca"))
+        .expect("add ca");
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let name = ServerName::try_from("localhost").expect("name");
+    let mut conn =
+        rustls::ClientConnection::new(std::sync::Arc::new(config), name).expect("client");
+    let mut tcp = TcpStream::connect(addr).expect("connect");
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp).expect("handshake");
+    }
+    rustls::StreamOwned::new(conn, tcp)
+}
+
+/// The leaf certificate the server presented on `tls`, and the response to `GET /healthz` over
+/// that connection.
+#[cfg(unix)]
+fn tls_healthz_on(
+    mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
+) -> (Vec<u8>, String) {
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .expect("write");
+    let mut out = Vec::new();
+    // The server may close without `close_notify`; keep what came.
+    let _ = tls.read_to_end(&mut out);
+    let leaf = tls
+        .conn
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .expect("server certificate")
+        .to_vec();
+    (leaf, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`tls_healthz_on`] over a new connection to `addr`.
+#[cfg(unix)]
+fn tls_healthz(addr: &str) -> (Vec<u8>, String) {
+    tls_healthz_on(tls_connect(addr))
+}
+
+#[cfg(unix)]
+#[test]
+fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (cert, key) = (dir.path().join("server.pem"), dir.path().join("server.key"));
+    std::fs::copy(tls_fixture("server.pem"), &cert).expect("cert");
+    std::fs::copy(tls_fixture("server.key"), &key).expect("key");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.server.tls.certFile={}", cert.display()),
+        format!("krishiv.server.tls.keyFile={}", key.display()),
+    ];
+    let mut server = start_with(dir.path(), &conf);
+    let (leaf, answer) = tls_healthz(&server.admin);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let first = std::fs::read(tls_fixture("server.der")).expect("der");
+    assert_eq!(leaf, first);
+    // Plain HTTP on the TLS port gets no HTTP answer.
+    let mut plain = TcpStream::connect(&server.admin).expect("connect");
+    plain
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut out = Vec::new();
+    let _ = plain.read_to_end(&mut out);
+    assert!(
+        !out.starts_with(b"HTTP/"),
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
+    // SIGHUP: the second certificate is served to new connections; one opened before keeps
+    // its handshake and is served.
+    let before = tls_connect(&server.admin);
+    std::fs::copy(tls_fixture("server2.pem"), &cert).expect("cert 2");
+    std::fs::copy(tls_fixture("server2.key"), &key).expect("key 2");
+    // `copy` gives the file the fixture's mode; a key readable by others is refused.
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let second = std::fs::read(tls_fixture("server2.der")).expect("der 2");
+    let hup = Command::new("kill")
+        .args(["-HUP", &server.child.id().to_string()])
+        .status()
+        .expect("kill -HUP");
+    assert!(hup.success());
+    let start = Instant::now();
+    loop {
+        let (leaf, answer) = tls_healthz(&server.admin);
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        if leaf == second {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "no reload after SIGHUP"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (leaf, answer) = tls_healthz_on(before);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert_eq!(leaf, first, "the old connection keeps its certificate");
+    let _ = server.child.kill();
 }

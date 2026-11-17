@@ -15,6 +15,7 @@ use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect_server::{ConnectServer, ConnectServerConfig, SessionLimits, SessionManager};
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tonic::Code;
@@ -95,7 +96,7 @@ fn release(session_id: &str, allow_reconnect: bool) -> pb::ReleaseSessionRequest
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn release_session_frees_state() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let local = Principal::local_user();
+    let local = local_caller();
     let entry = run
         .manager
         .get_or_create(&local, ID, None, "someone")
@@ -142,19 +143,25 @@ async fn release_session_frees_state() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rpcs_of_later_tasks_are_unimplemented() {
+async fn an_unknown_rpc_is_unimplemented() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let e = unary::<_, pb::FetchErrorDetailsResponse>(
+    // GetStatus only looks a session up: an unknown one is not created.
+    let e = unary::<_, pb::GetStatusResponse>(
         &run.channel,
-        "FetchErrorDetails",
-        pb::FetchErrorDetailsRequest {
+        "GetStatus",
+        pb::GetStatusRequest {
             session_id: ID.to_owned(),
             ..Default::default()
         },
     )
     .await
     .unwrap_err();
-    assert_eq!(e.code(), Code::Unimplemented);
+    assert_eq!(e.code(), Code::Internal);
+    assert!(
+        e.message().contains("INVALID_HANDLE.SESSION_NOT_FOUND"),
+        "{e:?}"
+    );
+    assert_eq!(run.manager.counts().live, 0);
     let e = unary::<_, pb::ReleaseSessionResponse>(&run.channel, "NoSuchRpc", release(ID, false))
         .await
         .unwrap_err();
@@ -230,7 +237,7 @@ async fn shutdown_cancels_a_stuck_query_at_the_timeout_and_closes_every_session(
         SessionLimits::default(),
     )
     .await;
-    let local = Principal::local_user();
+    let local = local_caller();
     let entry = run
         .manager
         .get_or_create(&local, ID, None, "u")
@@ -269,7 +276,7 @@ async fn shutdown_cancels_a_stuck_query_at_the_timeout_and_closes_every_session(
 async fn shutdown_with_nothing_running_returns_at_once() {
     let mut run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
     run.manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     run.stop.take().expect("stop").send(()).expect("send");
     // Well inside the 30 s grace period: no query to wait for.
@@ -296,7 +303,7 @@ async fn the_idle_sweeper_runs_on_the_maintenance_interval() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while run.manager.counts().live > 0 {
@@ -316,7 +323,7 @@ async fn a_session_with_a_running_query_is_not_swept() {
         },
     );
     let entry = manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     let session = entry.session().clone();
     let df = session
@@ -412,7 +419,7 @@ async fn shutdown_then_dropping_the_runtime_leaves_no_spill_directory() {
         .expect("session");
     let manager = Arc::new(SessionManager::from_base(base, SessionLimits::default()));
     let entry = manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     // A sort larger than the pool spills, which makes the spill directory.
     let rows = entry
@@ -539,10 +546,9 @@ fn decoded<T: krishiv_connect::wire::Request>() -> krishiv_connect::wire::Decode
     krishiv_connect::wire::decode_request::<T>(&T::default().encode_to_vec()).expect("decode")
 }
 
-/// Every RPC a later task implements answers `UNIMPLEMENTED` naming the RPC,
-/// and `UNAVAILABLE` once the server drains.
+/// Every RPC answers `UNAVAILABLE` once the server drains.
 #[tokio::test]
-async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
+async fn every_rpc_is_unavailable_once_the_server_drains() {
     use krishiv_connect_server::service::SparkConnectService;
     use tonic::Request;
     let manager = Arc::new(SessionManager::from_base(
@@ -553,23 +559,11 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
     let service =
         krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
     assert!(Arc::ptr_eq(service.manager(), &manager));
-    for (drain, code) in [(false, Code::Unimplemented), (true, Code::Unavailable)] {
-        draining.store(drain, Ordering::Release);
+    // No artifact directory until an artifact is written.
+    assert!(service.artifacts().root_path().is_none());
+    {
+        draining.store(true, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
-            (
-                "ArtifactStatus",
-                service
-                    .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "FetchErrorDetails",
-                service
-                    .fetch_error_details(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
             (
                 "CloneSession",
                 service
@@ -585,9 +579,17 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
                     .unwrap_err(),
             ),
         ];
-        if drain {
-            // The RPCs T011a and PR-11b implement refuse too while draining.
+        {
+            // The other RPCs refuse too while draining.
             for e in [
+                service
+                    .artifact_status(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+                service
+                    .fetch_error_details(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
                 service
                     .analyze_plan(Request::new(decoded()))
                     .await
@@ -619,15 +621,8 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
             assert_eq!(e.code(), Code::Unavailable);
         }
         for (rpc, status) in results {
-            assert_eq!(status.code(), code, "{rpc}");
-            if drain {
-                assert_eq!(status.message(), "server shutting down", "{rpc}");
-            } else {
-                assert_eq!(
-                    status.message(),
-                    format!("{rpc} is not supported by this server yet")
-                );
-            }
+            assert_eq!(status.code(), Code::Unavailable, "{rpc}");
+            assert_eq!(status.message(), "server shutting down", "{rpc}");
         }
     }
 }
@@ -648,4 +643,9 @@ async fn a_connection_cap_past_the_semaphore_limit_is_clamped() {
             .await
             .expect("release");
     assert_eq!(response.session_id, ID);
+}
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
 }

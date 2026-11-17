@@ -71,6 +71,19 @@ impl Parser<'_> {
                 "ANALYZE" => Some(ExplainMode::Analyze),
                 // A syntax error in Spark; Krishiv's `EXPLAIN VERBOSE`.
                 "VERBOSE" => Some(ExplainMode::Verbose),
+                // Krishiv's `EXPLAIN FORMAT JSON` (a syntax error in Spark):
+                // only with `JSON` next, so any other `FORMAT` starts the
+                // explained statement and fails as in Spark.
+                "FORMAT" if self.kw_at(1, "JSON") => {
+                    // `FORMAT JSON PHYSICAL` is reserved for a plan tree.
+                    if self.kw_at(2, "PHYSICAL") {
+                        let end = self.tok(2).map_or(self.src.len(), |t| t.span.end);
+                        let from = self.tok(0).map_or(end, |t| t.span.start);
+                        return Self::fatal(error::explain_json_physical(Span::new(from, end)));
+                    }
+                    self.bump();
+                    Some(ExplainMode::Json)
+                }
                 _ => None,
             };
             let logical = word == "LOGICAL";
@@ -99,6 +112,9 @@ impl Parser<'_> {
             } else {
                 self.set_command()?
             }
+        } else if explains.is_empty() && self.at_access_control() {
+            // Krishiv's access-control statements (P3-T062): never explained.
+            self.access_control_command()?
         } else if explains.is_empty() && self.kw_at(0, "BEGIN") && self.in_script == 0 {
             self.script_command()?
         } else if self.kw_at(0, "EXECUTE") && self.kw_at(1, "IMMEDIATE") {
@@ -123,7 +139,7 @@ impl Parser<'_> {
             &[
                 "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
                 "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
-                "ADD", "LIST", "COMMENT",
+                "ADD", "LIST", "COMMENT", "LOAD",
             ],
         ) {
             self.command_statement()?

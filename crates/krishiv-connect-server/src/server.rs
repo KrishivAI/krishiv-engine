@@ -7,6 +7,12 @@
 //! RPCs get `UNAVAILABLE`, no new connection is accepted), running queries
 //! get up to [`ConnectServerConfig::shutdown_timeout`] to finish, then every
 //! session is closed, which cancels what is left.
+//!
+//! TLS ([`ConnectServer::with_tls`], design P3-T002 §3.5): each accepted
+//! connection finishes its handshake on a task of its own within
+//! [`ConnectServerConfig::handshake_timeout`] before tonic sees it; the
+//! verified client certificate rides on the connection ([`PeerInfo`]) for
+//! the authenticator.
 
 use std::future::Future;
 use std::io;
@@ -28,9 +34,14 @@ use krishiv_common::error::KrishivError;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::server::TlsStream;
 use tonic::transport::Server;
-use tonic::transport::server::{Connected, TcpConnectInfo};
+use tonic::transport::server::Connected;
 
+use crate::artifacts::ArtifactLimits;
+use crate::auth::{AuthLayer, ConnectAuth};
 use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
@@ -75,6 +86,8 @@ pub struct ConnectServerConfig {
     pub shutdown_timeout: Duration,
     /// The limits of `ExecutePlan`.
     pub execute: ExecuteLimits,
+    /// The artifact quotas (`krishiv.connect.artifacts.*`).
+    pub artifacts: ArtifactLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -91,6 +104,7 @@ impl Default for ConnectServerConfig {
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             execute: ExecuteLimits::default(),
+            artifacts: ArtifactLimits::default(),
         }
     }
 }
@@ -142,6 +156,7 @@ impl ConnectServerConfig {
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
             execute: ExecuteLimits::from_config(config),
+            artifacts: ArtifactLimits::from_config(config),
         }
     }
 }
@@ -167,11 +182,14 @@ pub struct ConnectServer {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     config: ConnectServerConfig,
+    auth: Arc<ConnectAuth>,
+    tls: Option<Arc<ServerConfig>>,
     budget: ResponseBudget,
 }
 
 impl ConnectServer {
-    /// A server over `manager`.
+    /// A server over `manager`, with authentication off (loopback only:
+    /// `krishiv server` refuses another address without it).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, config: ConnectServerConfig) -> Self {
         Self {
@@ -179,7 +197,28 @@ impl ConnectServer {
             draining: Arc::new(AtomicBool::new(false)),
             budget: ResponseBudget::new(config.execute.max_response_bytes),
             config,
+            auth: Arc::new(ConnectAuth::off()),
+            tls: None,
         }
+    }
+
+    /// This server speaking TLS with `config` (`krishiv_session::auth::ServerTls`): every
+    /// connection completes a TLS handshake before its first request. The ALPN list is set to
+    /// `h2` (gRPC); the certificate resolver is shared, so a reload of the server's TLS
+    /// material reaches new handshakes here too.
+    #[must_use]
+    pub fn with_tls(mut self, config: &ServerConfig) -> Self {
+        let mut config = config.clone();
+        config.alpn_protocols = vec![b"h2".to_vec()];
+        self.tls = Some(Arc::new(config));
+        self
+    }
+
+    /// This server authenticating every RPC with `auth` (P3-T002).
+    #[must_use]
+    pub fn with_auth(mut self, auth: ConnectAuth) -> Self {
+        self.auth = Arc::new(auth);
+        self
     }
 
     /// The server's response budget (`krishiv.connect.maxResponseBytes`),
@@ -211,7 +250,8 @@ impl ConnectServer {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` before serving when the `ExecutePlan`
-    /// limits do not fit together ([`ExecuteLimits::validate`]);
+    /// limits do not fit together ([`ExecuteLimits::validate`]) or the
+    /// artifact limits do not ([`ArtifactLimits::validate`]);
     /// `INTERNAL_ERROR` for a transport failure.
     pub async fn serve(
         self,
@@ -222,12 +262,18 @@ impl ConnectServer {
             manager,
             draining,
             config,
+            auth,
+            tls,
             budget,
         } = self;
         config.execute.validate()?;
+        config.artifacts.validate()?;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
+            .with_auth(Arc::clone(&auth))
             .with_limits(config.execute.clone())
-            .with_budget(budget);
+            .with_budget(budget)
+            .with_artifacts(config.artifacts.clone());
+        let artifacts = Arc::clone(service.artifacts());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);
@@ -243,6 +289,8 @@ impl ConnectServer {
             .http2_keepalive_interval(keepalive_interval)
             .http2_keepalive_timeout(keepalive_timeout)
             .tcp_nodelay(true)
+            // Authentication runs on the headers, before the body is decoded.
+            .layer(AuthLayer::new(Arc::clone(&auth)))
             .add_service(service);
 
         // Aborted on drop, so a caller that cancels `serve` leaves no task
@@ -256,7 +304,12 @@ impl ConnectServer {
             config.execute.maintenance_interval,
             config.execute.detached_timeout,
         )));
-        let incoming = capped(listener, config.max_connections, config.handshake_timeout);
+        let incoming = capped(
+            listener,
+            config.max_connections,
+            config.handshake_timeout,
+            tls.map(TlsAcceptor::from),
+        );
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = router.serve_with_incoming_shutdown(incoming, async {
             let _ = stop_rx.await;
@@ -307,6 +360,9 @@ impl ConnectServer {
             }
         };
         manager.close_all();
+        // The artifact root goes before `serve` returns: a removal queued on
+        // the blocking pool may never run once the runtime is dropped.
+        artifacts.shutdown().await;
         result.map_err(|e| transport_error(&e))
     }
 }
@@ -362,15 +418,19 @@ async fn abandon_loop(manager: Arc<SessionManager>, every: Duration, timeout: Du
 /// first byte only: a client that sends one byte and stalls keeps its slot
 /// until the established-connection idle timeout exists (T011a). Accepting runs on a task of its own, aborted when the
 /// stream is dropped; each new connection waits for its first byte on a
-/// task of its own, so one slow client delays no other.
+/// task of its own, so one slow client delays no other. With `tls`, the
+/// whole TLS handshake must also finish within `handshake`.
 fn capped(
     listener: TcpListener,
     max: usize,
     handshake: Duration,
+    tls: Option<TlsAcceptor>,
 ) -> impl futures::Stream<Item = io::Result<CappedStream>> + Send + 'static {
     let permits = Arc::new(Semaphore::new(max.clamp(1, Semaphore::MAX_PERMITS)));
     let (tx, rx) = tokio::sync::mpsc::channel::<io::Result<CappedStream>>(64);
-    let acceptor = AbortOnDrop(tokio::spawn(accept_loop(listener, permits, tx, handshake)));
+    let acceptor = AbortOnDrop(tokio::spawn(accept_loop(
+        listener, permits, tx, handshake, tls,
+    )));
     futures::stream::unfold((rx, acceptor), |(mut rx, acceptor)| async move {
         rx.recv().await.map(|item| (item, (rx, acceptor)))
     })
@@ -381,15 +441,16 @@ async fn accept_loop(
     permits: Arc<Semaphore>,
     tx: tokio::sync::mpsc::Sender<io::Result<CappedStream>>,
     handshake: Duration,
+    tls: Option<TlsAcceptor>,
 ) {
     let mut backoff = Duration::from_millis(10);
     loop {
         let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
             return;
         };
-        let stream = loop {
+        let (stream, remote) = loop {
             match listener.accept().await {
-                Ok((stream, _)) => break stream,
+                Ok(accepted) => break accepted,
                 // A failed accept (the peer reset before it was taken, too
                 // many open files) does not stop the server; back off, as
                 // every retry fails while file descriptors are out.
@@ -403,26 +464,53 @@ async fn accept_loop(
         backoff = Duration::from_millis(10);
         let _ = stream.set_nodelay(true);
         let sender = tx.clone();
+        let tls = tls.clone();
         tokio::spawn(async move {
-            let mut first = [0_u8; 1];
+            let opened = async {
+                let mut first = [0_u8; 1];
+                match stream.peek(&mut first).await {
+                    Ok(n) if n > 0 => {}
+                    // Closed or failed.
+                    _ => return None,
+                }
+                Some(match tls {
+                    None => (Conn::Plain(stream), None),
+                    Some(acceptor) => match acceptor.accept(stream).await {
+                        Ok(tls) => {
+                            let leaf = verified_leaf(&tls);
+                            (Conn::Tls(Box::new(tls)), leaf)
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "krishiv::connect",
+                                peer = %remote,
+                                error = %e,
+                                "TLS handshake failed"
+                            );
+                            return None;
+                        }
+                    },
+                })
+            };
             // A zero deadline means none (as `0s` for the session idle
             // timeout).
-            let peeked = if handshake.is_zero() {
-                Ok(stream.peek(&mut first).await)
+            let opened = if handshake.is_zero() {
+                Ok(opened.await)
             } else {
-                tokio::time::timeout(handshake, stream.peek(&mut first)).await
+                tokio::time::timeout(handshake, opened).await
             };
-            match peeked {
-                Ok(Ok(n)) if n > 0 => {
-                    let _ = sender
-                        .send(Ok(CappedStream {
-                            inner: stream,
-                            _permit: permit,
-                        }))
-                        .await;
-                }
-                // Silent, closed or failed: drop it and its permit.
-                _ => {}
+            // Silent, closed, failed or a failed handshake: drop it and its permit.
+            if let Ok(Some((inner, leaf))) = opened {
+                let _ = sender
+                    .send(Ok(CappedStream {
+                        inner,
+                        info: PeerInfo {
+                            remote: Some(remote),
+                            leaf,
+                        },
+                        _permit: permit,
+                    }))
+                    .await;
             }
         });
         if tx.is_closed() {
@@ -431,19 +519,62 @@ async fn accept_loop(
     }
 }
 
+/// The verified client leaf certificate of a TLS connection (rustls checked
+/// its chain against the client CA at the handshake), if the client sent one.
+fn verified_leaf(tls: &TlsStream<TcpStream>) -> Option<Arc<[u8]>> {
+    tls.get_ref()
+        .1
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .map(|c| Arc::from(c.as_ref()))
+}
+
+/// What a connection tells the authenticator: the peer's address (the
+/// throttle's key) and, over TLS, the client certificate rustls verified.
+#[derive(Debug, Clone, Default)]
+pub struct PeerInfo {
+    /// The peer's address.
+    pub remote: Option<SocketAddr>,
+    /// The verified client leaf certificate (DER), if the client sent one.
+    pub leaf: Option<Arc<[u8]>>,
+}
+
+/// A plain or TLS connection.
+#[derive(Debug)]
+enum Conn {
+    Plain(TcpStream),
+    Tls(Box<TlsStream<TcpStream>>),
+}
+
 /// A connection that holds one of the listener's permits until it closes.
 #[derive(Debug)]
 pub struct CappedStream {
-    inner: TcpStream,
+    inner: Conn,
+    info: PeerInfo,
     _permit: OwnedSemaphorePermit,
 }
 
 impl Connected for CappedStream {
-    type ConnectInfo = TcpConnectInfo;
+    type ConnectInfo = PeerInfo;
 
-    fn connect_info(&self) -> TcpConnectInfo {
-        self.inner.connect_info()
+    fn connect_info(&self) -> PeerInfo {
+        self.info.clone()
     }
+}
+
+macro_rules! conn {
+    ($self:expr, $s:ident => $e:expr) => {
+        match &mut $self.inner {
+            Conn::Plain($s) => {
+                let $s = Pin::new($s);
+                $e
+            }
+            Conn::Tls($s) => {
+                let $s = Pin::new($s.as_mut());
+                $e
+            }
+        }
+    };
 }
 
 impl AsyncRead for CappedStream {
@@ -452,7 +583,7 @@ impl AsyncRead for CappedStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
+        conn!(self, s => s.poll_read(cx, buf))
     }
 }
 
@@ -462,15 +593,15 @@ impl AsyncWrite for CappedStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        conn!(self, s => s.poll_write(cx, buf))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        conn!(self, s => s.poll_flush(cx))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+        conn!(self, s => s.poll_shutdown(cx))
     }
 
     fn poll_write_vectored(
@@ -478,10 +609,13 @@ impl AsyncWrite for CappedStream {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+        conn!(self, s => s.poll_write_vectored(cx, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
+        match &self.inner {
+            Conn::Plain(s) => s.is_write_vectored(),
+            Conn::Tls(s) => s.is_write_vectored(),
+        }
     }
 }

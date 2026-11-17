@@ -18,7 +18,7 @@ SELECT table `spark_catalog`.`default`.`orders`: o_custkey, o_orderdate, o_order
 SELECT table `spark_catalog`.`default`.`lineitem`: l_discount, l_extendedprice, l_orderkey, l_shipdate
 
 q04
-SELECT table `spark_catalog`.`default`.`lineitem`: l_comment, l_commitdate, l_discount, l_extendedprice, l_linenumber, l_linestatus, l_orderkey, l_partkey, l_quantity, l_receiptdate, l_returnflag, l_shipdate, l_shipinstruct, l_shipmode, l_suppkey, l_tax
+SELECT table `spark_catalog`.`default`.`lineitem`: l_commitdate, l_orderkey, l_receiptdate
 SELECT table `spark_catalog`.`default`.`orders`: o_orderdate, o_orderkey, o_orderpriority
 
 q05
@@ -109,11 +109,11 @@ SELECT table `spark_catalog`.`default`.`supplier`: s_address, s_name, s_nationke
 SELECT table `spark_catalog`.`default`.`nation`: n_name, n_nationkey
 
 q21
-SELECT table `spark_catalog`.`default`.`lineitem`: l_comment, l_commitdate, l_discount, l_extendedprice, l_linenumber, l_linestatus, l_orderkey, l_partkey, l_quantity, l_receiptdate, l_returnflag, l_shipdate, l_shipinstruct, l_shipmode, l_suppkey, l_tax
+SELECT table `spark_catalog`.`default`.`lineitem`: l_commitdate, l_orderkey, l_receiptdate, l_suppkey
 SELECT table `spark_catalog`.`default`.`supplier`: s_name, s_nationkey, s_suppkey
 SELECT table `spark_catalog`.`default`.`orders`: o_orderkey, o_orderstatus
 SELECT table `spark_catalog`.`default`.`nation`: n_name, n_nationkey
 
 q22
 SELECT table `spark_catalog`.`default`.`customer`: c_acctbal, c_custkey, c_phone
-SELECT table `spark_catalog`.`default`.`orders`: o_clerk, o_comment, o_custkey, o_orderdate, o_orderkey, o_orderpriority, o_orderstatus, o_shippriority, o_totalprice
+SELECT table `spark_catalog`.`default`.`orders`: o_custkey

@@ -32,13 +32,14 @@ use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
     ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
-    SpillWriter,
+    SpillWriter, Spillable as _,
 };
 use krishiv_types::batch::{Batch, Weights};
 
+use super::distinct::PairCounts;
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
-use super::{AggregateSpec, is_order_sensitive, unsupported};
+use super::{AggregateSpec, observes_order, unsupported};
 use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
@@ -47,8 +48,13 @@ use crate::hash::{HashSeed, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
+pub(super) use counting::set_pair_counter;
+use held::{charged_to_writer, lend_headroom, regrow, reserve_to, shrink_to, take_bytes};
 
+mod combined;
+mod counting;
 mod disk;
+mod held;
 mod parallel;
 mod parts;
 #[cfg(test)]
@@ -429,6 +435,12 @@ impl HashAggregate {
         // transient bytes may use it.
         let want = l.table.projected(&p)? + self.headroom().max(l.table.transient(&p));
         if let Err(bytes) = reserve_to(&mut l.reservation, want) {
+            // The driver's self-spill reads this signal: tables other
+            // drivers combined since the last apply (charged to a consumer
+            // whose spill hook has gone with its driver) count now, or a
+            // self-spill after an earlier one asks for 0 bytes.
+            // `spill_makes_room` judges by this same value.
+            self.publish_spillable(l)?;
             return Ok(Some(bytes));
         }
         l.table.apply(&p)?;
@@ -441,34 +453,48 @@ impl HashAggregate {
         let r = &mut l.reservation;
         l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
         shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
+        self.publish_spillable(l)?;
+        Ok(None)
+    }
+
+    /// Publishes what this driver's spill frees: its table and the tables
+    /// finished drivers combined (`spill` writes both).
+    fn publish_spillable(&self, l: &Local) -> Result<()> {
         if self.core.spec.spill.is_some() {
             let combined = global(&l.global)?.combined.load(AtomicOrdering::Relaxed);
             l.signal
                 .set_spillable_bytes(l.table.memory_size() + combined);
         }
-        Ok(None)
+        Ok(())
     }
 
     /// Whether the driver's self-spill would free the `missing` bytes a
     /// slice was refused: a spilling aggregate whose table and combined
-    /// tables (what that spill writes, as `set_spillable_bytes` counts them)
-    /// hold at least that much spills rather than applies smaller slices. A
+    /// tables (what that spill writes, as the refusal published them on
+    /// its signal) hold at least that much spills rather than applies smaller slices. A
     /// table a spill would not shrink (a global aggregate's one group) slices.
     fn spill_makes_room(&self, l: &Local, missing: usize) -> bool {
         if self.core.spec.spill.is_none() || l.table.not_worth_spilling() {
             return false;
         }
-        let combined = global(&l.global).map_or(0, |g| g.combined.load(AtomicOrdering::Relaxed));
-        l.table.memory_size().saturating_add(combined) >= missing
+        // What the refused slice published: one read of `combined`, so a
+        // combine in between cannot make the driver ask for a spill its
+        // signal does not offer.
+        l.signal.spillable_bytes() >= missing
     }
 
     fn spiller(&self, ctx: &TaskContext) -> Option<Spiller> {
+        self.spiller_for(ctx, Arc::clone(ctx.consumer().consumer()))
+    }
+
+    /// A [`Spiller`] whose writers' scratch is `consumer`'s.
+    fn spiller_for(&self, ctx: &TaskContext, consumer: Arc<ConsumerHandle>) -> Option<Spiller> {
         Some(Spiller {
             core: Arc::clone(&self.core),
             counters: Arc::clone(&self.counters),
             query: Arc::clone(ctx.query()),
             scope: self.core.spec.spill.clone()?,
-            consumer: Arc::clone(ctx.consumer().consumer()),
+            consumer,
             batch_size: ctx.query().config().batch_size.max(1),
         })
     }
@@ -673,8 +699,9 @@ struct Run {
     /// ([`u32::MAX`] for runs of many partitions, which keep their
     /// insertion order). Runs merge grouped by hash partition, runs of
     /// one partition in this order, so order-sensitive aggregates
-    /// (`collect_*`, the vector ones) merge partitions in partition-index
-    /// order whatever thread spilled first.
+    /// ([`observes_order`]: `collect_*`, the vector ones, `first`,
+    /// `last`, the ties of `max_by`/`min_by`, float `max`/`min`) merge partitions in
+    /// partition-index order whatever thread spilled first.
     partition: u32,
 }
 
@@ -738,6 +765,10 @@ struct Inner {
     /// The disk phase's parallel tasks run: `spill_global` asks them
     /// through `spill_asked`.
     disk_merge: bool,
+    /// `finalize` has begun: the combined tables' hook frees nothing.
+    finalizing: bool,
+    /// The combined tables' hook is writing them (`finalize` waits).
+    hook_writing: bool,
 }
 
 /// Whether the row tables' parallel merge is running (tests time spill
@@ -1072,8 +1103,17 @@ struct Global {
     direct: bool,
     /// Bytes of the combined tables, before `finalize`.
     combined: AtomicUsize,
+    /// The combined tables' own consumer and spill hook (with a spill
+    /// scope; see [`combined`]).
+    spill_combined: Option<combined::Combined>,
+    /// The combined tables' hook finished a write.
+    changed: Event,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
+    /// The pairs table of a `count(DISTINCT)` counted at the merge
+    /// ([`super::distinct`]): each in-memory final-phase task counts its
+    /// finished table here instead of publishing it.
+    counter: OnceLock<Arc<PairCounts>>,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -1107,74 +1147,6 @@ fn batch_id(b: &Batch) -> BatchId {
 pub(super) fn resumes_at(l: &LocalState) -> Option<usize> {
     l.downcast_ref::<Local>()
         .and_then(|l| l.applied.map(|(_, at)| at))
-}
-
-/// Grows `r` to `want` bytes; `Err(missing)` if the pool refuses.
-fn reserve_to(r: &mut Reservation, want: usize) -> Result<(), usize> {
-    let need = want.saturating_sub(r.size());
-    if need > 0 && r.try_grow(need).is_err() {
-        return Err(need);
-    }
-    Ok(())
-}
-
-/// Up to `bytes` taken from the end of `from`: whole reservations, then a
-/// split of the next one.
-fn take_bytes(from: &mut Vec<Reservation>, mut bytes: usize) -> Vec<Reservation> {
-    let mut out = Vec::new();
-    while bytes > 0 {
-        let Some(r) = from.last_mut() else { break };
-        if r.size() <= bytes {
-            bytes -= r.size();
-            out.extend(from.pop());
-        } else {
-            out.push(r.split(bytes));
-            bytes = 0;
-        }
-    }
-    out
-}
-
-fn shrink_to(r: &mut Reservation, keep: usize) {
-    r.shrink(r.size().saturating_sub(keep));
-}
-
-/// Moves the combined tables' bytes to the spilling driver's consumer
-/// (another driver's, combined into the global state, without passing
-/// through the pool) and marks that consumer as writing until the returned
-/// guard drops: until the tables are freed, their bytes count as about to
-/// be released, so another driver's round that cannot spill waits for them
-/// instead of failing (`ConsumerHandle::spilling`). Take it only for a
-/// write with no arbitration inside (a blocking job). A table whose
-/// transfer is refused keeps its consumer and is freed all the same.
-fn charged_to_writer(
-    tables: &mut [(u32, Table, Reservation)],
-    ctx: &TaskContext,
-) -> krishiv_memory::SpillWriting {
-    let own = ctx.consumer().consumer();
-    for (_, _, r) in tables.iter_mut() {
-        if r.consumer() != own.id() {
-            let _ = r.transfer_to(own);
-        }
-    }
-    own.spilling()
-}
-
-/// Releases the headroom of `r` for a spill file's scratch memory (see
-/// [`HEADROOM`]); the writer or reader of the same consumer reserves it
-/// right after.
-fn lend_headroom(r: &mut Reservation) -> usize {
-    let lent = HEADROOM.min(r.size());
-    r.shrink(lent);
-    lent
-}
-
-/// Takes back `lent` bytes of headroom after spill I/O, if the pool still
-/// has them (the next `reserve_to` asks again otherwise).
-fn regrow(r: &mut Reservation, lent: usize) {
-    if r.try_grow(lent).is_err() {
-        // Not fatal: the headroom is requested again with the next batch.
-    }
 }
 
 fn no_memory(bytes: usize) -> KrishivError {
@@ -1285,14 +1257,9 @@ impl HashAggregate {
             return self.must_free(inner, ctx, 0);
         }
         let tables = &mut inner.tables;
-        // Order-sensitive aggregates merge in driver-partition order (see
-        // [`Run::partition`]), not biggest-first.
-        let ordered = self
-            .core
-            .spec
-            .aggregates
-            .iter()
-            .any(|a| is_order_sensitive(&a.function));
+        // Aggregates that observe order ([`observes_order`]) merge in
+        // driver-partition order (see [`Run::partition`]), not biggest-first.
+        let ordered = self.core.spec.aggregates.iter().any(observes_order);
         if !ordered
             && inner.merged == 0
             && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len())
@@ -1460,7 +1427,14 @@ impl Sink for HashAggregate {
                 .row_layout
                 .store(true, AtomicOrdering::Relaxed);
         }
-        Ok(Arc::new(Global {
+        let spilling = self.core.spec.spill.is_some();
+        Ok(Arc::new_cyclic(|me: &Weak<Global>| Global {
+            spill_combined: spilling
+                .then(|| {
+                    combined::Combined::register(ctx, Weak::clone(me), |c| self.spiller_for(ctx, c))
+                })
+                .flatten(),
+            changed: Event::default(),
             seed: HashSeed::new(config.seed),
             rows,
             row_bits: rows.map_or(0, |m| m.radix_bits(threads)),
@@ -1471,6 +1445,7 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
+            counter: OnceLock::new(),
         }))
     }
 
@@ -1586,11 +1561,18 @@ impl Sink for HashAggregate {
         let mut inner = lock(&g.inner);
         g.combined
             .fetch_add(reservation.size(), AtomicOrdering::Relaxed);
-        // Earlier drivers have ended: charge their tables to this one, so the
-        // arbitrator sees them as this consumer's spillable bytes (the last
-        // driver to combine finalizes and spills through `spill_global`).
-        for (_, _, r) in &mut inner.tables {
-            r.transfer_to(&consumer).map_err(KrishivError::from)?;
+        if let Some(c) = &g.spill_combined {
+            // This driver ends: its table goes to the combined tables'
+            // consumer, whose hook any arbitration round can ask.
+            reservation
+                .transfer_to(&c.consumer)
+                .map_err(KrishivError::from)?;
+        } else {
+            // Earlier drivers have ended: charge their tables to this one
+            // (the last driver to combine finalizes them).
+            for (_, _, r) in &mut inner.tables {
+                r.transfer_to(&consumer).map_err(KrishivError::from)?;
+            }
         }
         // Tables merge in driver-partition order (see [`Run::partition`]),
         // not in the order drivers combine.
@@ -1598,7 +1580,13 @@ impl Sink for HashAggregate {
         inner.tables.insert(at, (partition, table, reservation));
         // The last driver's signal stays live through `finalize`.
         let spillable = self.core.spec.spill.is_some();
-        signal.set_spillable_bytes(if spillable { held(&inner) } else { 0 });
+        if let Some(c) = &g.spill_combined {
+            // The tables are the combined consumer's: its hook offers them.
+            signal.set_spillable_bytes(0);
+            c.hook.set_spillable_bytes(held(&inner));
+        } else {
+            signal.set_spillable_bytes(if spillable { held(&inner) } else { 0 });
+        }
         Ok(())
     }
 
@@ -1609,14 +1597,30 @@ impl Sink for HashAggregate {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global(g)?;
-            {
+            loop {
                 // The finalizing driver is not necessarily the last one to
-                // combine: charge the tables to its live spill hook.
-                let mut inner = lock(&g.inner);
-                let to = ctx.consumer().consumer();
-                for (_, _, r) in &mut inner.tables {
-                    r.transfer_to(to).map_err(KrishivError::from)?;
+                // combine: charge the tables to its live spill hook, once
+                // the combined tables' hook is not writing them (its runs
+                // are in `runs` then).
+                let written = g.changed.listen();
+                {
+                    let mut inner = lock(&g.inner);
+                    if !inner.hook_writing {
+                        inner.finalizing = true;
+                        let to = ctx.consumer().consumer();
+                        for (_, _, r) in &mut inner.tables {
+                            r.transfer_to(to).map_err(KrishivError::from)?;
+                        }
+                        break;
+                    }
                 }
+                written.await;
+            }
+            // A failed hook write lost the tables it took: the query failed,
+            // and no result may be read without them.
+            ctx.query().check_cancelled()?;
+            if let Some(c) = &g.spill_combined {
+                c.hook.set_spillable_bytes(0);
             }
             // Row tables hold partial duplicates: they merge partition by
             // partition, in parallel, unless they spilled.
@@ -1657,6 +1661,14 @@ impl Sink for HashAggregate {
             let mut combined = {
                 let mut inner = lock(&g.inner);
                 g.combined.store(0, AtomicOrdering::Relaxed);
+                // Under the lock: a `combine` after it publishes its own.
+                if let Some(c) = g
+                    .spill_combined
+                    .as_ref()
+                    .filter(|_| !inner.tables.is_empty())
+                {
+                    c.hook.set_spillable_bytes(0);
+                }
                 std::mem::take(&mut inner.tables)
             };
             let freed_combined: usize = combined.iter().map(|(_, _, r)| r.size()).sum();
@@ -1727,7 +1739,10 @@ impl Sink for HashAggregate {
                     inner.spill_asked = true;
                     return Ok(0);
                 }
-                if inner.busy || g.done.get().is_some() {
+                // A write of the combined tables' hook is in flight: its
+                // runs are not in `runs` yet, and a free job would start
+                // the disk phase without them.
+                if inner.busy || inner.hook_writing || g.done.get().is_some() {
                     return Ok(0);
                 }
                 let before = held(&inner);
@@ -1862,6 +1877,12 @@ impl Source for HashAggregate {
             .ok()
             .and_then(|g| g.done.get())
             .map_or(1, |f| f.chunks.max(1))
+    }
+
+    /// A global aggregate's final row is Spark's `SinglePartition`.
+    fn single_partition(&self, _g: &GlobalState) -> bool {
+        self.core.spec.group_by.is_empty()
+            && matches!(self.core.spec.output, super::AggregateOutput::Final)
     }
 
     fn local_state(&self, ctx: &TaskContext, _g: &GlobalState) -> Result<LocalState> {

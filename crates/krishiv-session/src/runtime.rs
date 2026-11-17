@@ -70,6 +70,8 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
+    pub(crate) profile_history: Option<Arc<crate::profile_history::ProfileHistory>>,
     /// The result cache: the process-wide one for a private runtime (sessions
     /// built alone share it, as before), a store of its own for a supplied
     /// runtime (ADR 0037 §6 holds per runtime).
@@ -89,6 +91,8 @@ pub struct EngineRuntime {
     /// session of the runtime so the group limits hold across them (`None` when the key is unset:
     /// every query is admitted at once).
     pub(crate) admission: Option<Arc<dyn crate::admission::AdmissionController>>,
+    /// The same controller as `admission`, kept by its own type for `system.resource_groups`.
+    pub(crate) resource_groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
     /// The session actions running now, cancellable before their query exists.
@@ -99,6 +103,9 @@ pub struct EngineRuntime {
     /// id, so sessions with different settings never share a store or a cache
     /// entry (`krishiv_store::StoreRegistry`).
     pub(crate) io: Arc<IoScheduler>,
+    /// The egress policy fixed at startup (design P3-T067 §5): the store clients apply it, and
+    /// catalog clients (HMS, REST) take their own scopes of it.
+    egress: Arc<krishiv_io::egress::EgressPolicy>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
@@ -198,6 +205,54 @@ impl EngineRuntimeBuilder {
 }
 
 impl EngineRuntime {
+    /// The runtime's I/O scheduler; with an enforcing egress policy its stores connect only
+    /// through policy clients scoped to the admin-set store endpoints (design P3-T067 §5.2).
+    fn io_scheduler(
+        config: &Config,
+        executor: &Arc<dyn Executor>,
+        egress: &Arc<krishiv_io::egress::EgressPolicy>,
+    ) -> Result<Arc<IoScheduler>, KrishivError> {
+        // Checked in every build: a refused admin endpoint fails startup.
+        let store_scope = crate::egress::store_scope(egress, config)?;
+        let io_config = IoConfig::from_config(config);
+        let handle = executor.io_handle().clone();
+        if !egress.enforced() {
+            return Ok(IoScheduler::with_runtime(io_config, handle));
+        }
+        #[cfg(feature = "cloud")]
+        {
+            let proxy = crate::egress::egress_proxy(config);
+            if proxy.is_some() {
+                tracing::info!(
+                    "egress policy: policy clients send through krishiv.io.egress.proxy; the \
+                     proxy decides where requests may go"
+                );
+            }
+            let clients =
+                krishiv_io::SharedHttpClients::with_egress(krishiv_io::PolicyConnector::new(
+                    store_scope,
+                    krishiv_io::Redirects::Checked,
+                    proxy,
+                ));
+            Ok(IoScheduler::with_runtime_and_http_clients(
+                io_config, handle, clients,
+            ))
+        }
+        // Without `cloud` no remote store is built, so no store request leaves the process.
+        #[cfg(not(feature = "cloud"))]
+        {
+            let _ = store_scope;
+            Ok(IoScheduler::with_runtime(io_config, handle))
+        }
+    }
+
+    /// The egress policy fixed at startup (design P3-T067 §5): catalog clients scope it to
+    /// their own declared hosts.
+    #[must_use]
+    pub fn egress_policy(&self) -> &Arc<krishiv_io::egress::EgressPolicy> {
+        &self.egress
+    }
+
     /// A builder with the defaults.
     pub fn builder() -> EngineRuntimeBuilder {
         EngineRuntimeBuilder {
@@ -229,8 +284,10 @@ impl EngineRuntime {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
-        let io =
-            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
+        // The egress policy (design P3-T067 §5): fixed at startup; in force when
+        // `krishiv.io.egress.privateAddresses = deny` (the server's default).
+        let egress = crate::egress::egress_policy(&config, |k| std::env::var(k).ok())?;
+        let io = Self::io_scheduler(&config, &executor, &egress)?;
         io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
         // With `krishiv.io.local.allowedRoots` set (server mode), listings never follow a link
         // out of the roots (ADR 0046 §3a): the policy checks the paths as written, the store
@@ -259,13 +316,34 @@ impl EngineRuntime {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(crate::history::DEFAULT_CAPACITY);
+        let profile_history = match config
+            .get(&krishiv_common::config::HISTORY_PATH)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|p| !p.is_empty())
+        {
+            Some(dir) => {
+                let max = config
+                    .get(&krishiv_common::config::HISTORY_MAX_BYTES)
+                    .and_then(krishiv_common::config::ConfigValue::as_size)
+                    .unwrap_or(256 << 20);
+                Some(Arc::new(crate::profile_history::ProfileHistory::open(
+                    std::path::Path::new(&dir),
+                    max,
+                    config
+                        .get(&krishiv_common::config::HISTORY_LITERALS)
+                        .and_then(|v| v.as_str().map(|m| m != "keep"))
+                        .unwrap_or(true),
+                )?))
+            }
+            None => None,
+        };
         let results = if private {
             Arc::clone(crate::result_cache::global())
         } else {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
-        let admission = match config
+        let resource_groups = match config
             .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
             .and_then(krishiv_common::config::ConfigValue::as_str)
         {
@@ -275,11 +353,13 @@ impl EngineRuntime {
                     .unwrap_or(usize::MAX);
                 Some(Arc::new(crate::resource_groups::ResourceGroups::from_file(
                     path, total,
-                )?)
-                    as Arc<dyn crate::admission::AdmissionController>)
+                )?))
             }
             None => None,
         };
+        let admission = resource_groups
+            .clone()
+            .map(|g| g as Arc<dyn crate::admission::AdmissionController>);
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -292,6 +372,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
             invalidation,
             warehouse: Arc::new(Warehouse::default()),
@@ -300,8 +381,10 @@ impl EngineRuntime {
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
             admission,
+            resource_groups,
             actions: Arc::default(),
             io,
+            egress,
             private,
         };
         runtime.register_gauges()?;
@@ -732,6 +815,12 @@ impl EngineRuntime {
     /// gauge holds the runtime itself, so the runtime can end.
     fn register_gauges(&self) -> Result<(), KrishivError> {
         let metrics = &self.metrics;
+        if let Some(history) = &self.profile_history {
+            let history = Arc::clone(history);
+            metrics.add_gauge("krishiv.history.write_failures", Vec::new(), move || {
+                Some(history.failures())
+            })?;
+        }
         {
             let memory = Arc::clone(&self.memory_tree);
             metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
@@ -791,17 +880,11 @@ impl EngineRuntime {
     }
 }
 
-/// Whether `key` belongs to the runtime rather than to a session: a
-/// cluster-scope entry, or one of the keys fixed when the runtime's
-/// components are built (`krishiv.memory.*`, `krishiv.spill.*`,
-/// `krishiv.io.*`).
+/// Whether `key` belongs to the runtime rather than to a session: a cluster-scope entry (the
+/// memory pool, the spill directory and the I/O scheduler are built from them). A session-scope
+/// key is the session's, whatever its prefix.
 pub(crate) fn runtime_owned(key: &str) -> bool {
-    lookup(key).is_some_and(|entry| {
-        entry.scope == krishiv_common::config::Scope::Cluster
-            || crate::conf::BUILD_TIME
-                .iter()
-                .any(|p| entry.key.starts_with(p))
-    })
+    lookup(key).is_some_and(|entry| entry.scope == krishiv_common::config::Scope::Cluster)
 }
 
 #[cfg(test)]

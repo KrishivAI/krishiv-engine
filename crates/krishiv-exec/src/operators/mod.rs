@@ -37,16 +37,18 @@ mod project;
 mod range;
 mod replicate;
 mod runtime_filter;
+mod sample;
 mod scan;
 pub(crate) mod select;
 mod sort;
 mod spilled_scan;
+pub(crate) mod table_write;
 mod union;
 
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use file_scan::{
-    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, ROW_FILE_COLUMN,
+    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, PathRoots, ROW_FILE_COLUMN,
     ROW_POSITION_COLUMN,
 };
 pub use file_write::{FileWrite, FileWriteSink};
@@ -62,6 +64,7 @@ pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub(crate) use runtime_filter::ScanRows;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub use sample::Sample;
 pub(crate) use scan::scan_metadata;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
@@ -101,11 +104,32 @@ pub(crate) fn no_state() -> LocalState {
 }
 
 /// Per-driver local state of an operator evaluating row expressions: the
-/// driver's partition index (see [`TaskContext::partition`](crate::context::TaskContext::partition)).
+/// driver's partition id (see [`TaskContext::partition`](crate::context::TaskContext::partition))
+/// and the id its input's partitions are numbered from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PartitionState {
-    /// The driver's partition index.
+    /// The driver's partition id.
     pub(crate) partition: u32,
+    /// [`TaskContext::numbering_base`](crate::context::TaskContext::numbering_base).
+    pub(crate) base: u32,
+}
+
+impl PartitionState {
+    /// The state of the operator `ctx` belongs to.
+    pub(crate) fn of(ctx: &crate::context::TaskContext) -> Self {
+        Self {
+            partition: ctx.partition(),
+            base: ctx.numbering_base(),
+        }
+    }
+
+    /// Spark's partition index of a batch tagged `split` (the driver's
+    /// partition when untagged): a stateful function's stream, as the
+    /// operator hosting it is initialised (`UNION ALL` branches number
+    /// their own partitions).
+    pub(crate) fn index(&self, split: Option<u32>) -> u32 {
+        split.unwrap_or(self.partition).wrapping_sub(self.base)
+    }
 }
 
 #[cfg(all(test, not(loom)))]

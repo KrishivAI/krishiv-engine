@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: differences
+---
+Explain::Json: EXPLAIN FORMAT JSON INSERT INTO t SELECT 1
+  analyze only: []
+  run only: [("MODIFY", "table `spark_catalog`.`default`.`t`")]
+Explain::Json: EXPLAIN FORMAT JSON DROP TABLE t
+  analyze only: []
+  run only: [("DROP", "table `spark_catalog`.`default`.`t`")]
+DirCreateTable: CREATE TABLE c_new (a INT)
+  analyze only: []
+  run only: [("CREATE", "path 'file:<warehouse>/c_new'")]
+DirCtas: CREATE TABLE c_ctas AS SELECT * FROM t
+  analyze only: []
+  run only: [("CREATE", "path 'file:<warehouse>/c_ctas'"), ("MODIFY", "path 'file:<warehouse>/c_ctas'")]
+DirRenameTable: ALTER TABLE u RENAME TO u_renamed
+  analyze only: []
+  run only: [("CREATE", "path 'file:<warehouse>/u_renamed'"), ("MODIFY", "path 'file:<warehouse>/u'")]
+DirDropNamespaceCascade: DROP NAMESPACE d CASCADE
+  analyze only: []
+  run only: [("MODIFY", "path 'file:<warehouse>/d.db/dt'")]
+DirAddPartition: ALTER TABLE p ADD PARTITION (k = 1)
+  analyze only: []
+  run only: [("CREATE", "path 'file:<warehouse>/p/k=1'")]

@@ -1,4 +1,51 @@
 {
+  "KRISHIV_ADMIN_INVALID_REQUEST" : {
+    "message" : [
+      "The admin API request is not valid: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
+    "message" : [
+      "The change was refused because the object is not in the state the request expects (<reason>)."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_REQUEST_TOO_LARGE" : {
+    "message" : [
+      "The admin API request body is over <limit> bytes."
+    ],
+    "sqlState" : "54000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_UNAUTHENTICATED" : {
+    "message" : [
+      "A valid credential is required for the admin API."
+    ],
+    "sqlState" : "28000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_UNAVAILABLE" : {
+    "message" : [
+      "The admin API cannot answer now: <reason>."
+    ],
+    "sqlState" : "08004",
+    "audience" : "operator"
+  },
+  "KRISHIV_ARTIFACT_LIMIT" : {
+    "message" : [
+      "Cannot add the artifact <name>: <limitName> allows at most <limit> bytes. Release the session's artifacts (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
+    "message" : [
+      "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
@@ -45,6 +92,20 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_GRANTS_STORE_FAILURE" : {
+    "message" : [
+      "The grants store cannot be <operation>: <reason>. No grant was changed and access is denied until an administrator restores the store."
+    ],
+    "sqlState" : "58030",
+    "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_INVALID_DELETES" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "KD001",
+    "audience" : "operator"
+  },
   "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
     "message" : [
       "The principal <principal> lacks the <privilege> privilege on <securable>."
@@ -56,6 +117,12 @@
       "The Arrow data passed to Krishiv is invalid: <reason>."
     ],
     "sqlState" : "22000"
+  },
+  "KRISHIV_INVALID_ARTIFACT_TRANSFER" : {
+    "message" : [
+      "The transfer of the artifact <name> is invalid: <reason>. The artifact was discarded."
+    ],
+    "sqlState" : "22023"
   },
   "KRISHIV_INVALID_BASE64_INPUT" : {
     "message" : [
@@ -117,6 +184,12 @@
     ],
     "sqlState" : "42501"
   },
+  "KRISHIV_NO_OBSERVE_BEFORE_GET" : {
+    "message" : [
+      "The observation <name> was read before a DataFrame was observed with it. Call `DataFrame.observe` with it first. (PySpark's `NO_OBSERVE_BEFORE_GET`.)"
+    ],
+    "sqlState" : "42K0E"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
@@ -124,17 +197,41 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_OBSERVATION_REUSED" : {
+    "message" : [
+      "The observation <name> already observes a DataFrame: an Observation can be used with a DataFrame only once. (PySpark's `REUSE_OBSERVATION`.)"
+    ],
+    "sqlState" : "42K0E"
+  },
   "KRISHIV_OPERATION_LIMIT" : {
     "message" : [
       "Cannot start a new operation: <limitName> allows at most <limit> live operations per session. Wait for one to finish or release it (ReleaseExecute, or interrupt it in the client), or raise \"<limitName>\"."
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name>@<version> is registered with eval type <registered> but the plan calls it as <called> (eval type <evalType>): register the function on the executing session as the kind of call the query makes."
+    ],
+    "sqlState" : "39000"
+  },
+  "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."
+    ],
+    "sqlState" : "39000"
+  },
   "KRISHIV_PYTHON_WORKER_EXITED" : {
     "message" : [
       "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
     ],
     "sqlState" : "38000"
+  },
+  "KRISHIV_PYTHON_WORKER_LIMIT" : {
+    "message" : [
+      "<operation> needs <needed> Python UDF workers at once, and at most <available> can serve it: \"<setting>\" is <value>, and one of those workers is kept for scalar Python UDFs when there are 2 or more. Raise \"<setting>\", or call fewer Python UDFs in one operator."
+    ],
+    "sqlState" : "54000"
   },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
@@ -179,6 +276,13 @@
     "sqlState" : "22023",
     "audience" : "operator"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY" : {
+    "message" : [
+      "The resource group file <path> cannot be changed here: <reason>."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
   "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
     "message" : [
       "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
@@ -190,6 +294,24 @@
       "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
     ],
     "sqlState" : "53400"
+  },
+  "KRISHIV_ROLE_ALREADY_EXISTS" : {
+    "message" : [
+      "The role <role> already exists. Choose another name, or drop the role first."
+    ],
+    "sqlState" : "42710"
+  },
+  "KRISHIV_ROLE_CYCLE" : {
+    "message" : [
+      "Granting role <role> to <grantee> would make a role a member of itself. Roles cannot be granted in a cycle."
+    ],
+    "sqlState" : "42P17"
+  },
+  "KRISHIV_ROLE_NOT_FOUND" : {
+    "message" : [
+      "The role <role> does not exist. Create it with CREATE ROLE first."
+    ],
+    "sqlState" : "42704"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
@@ -217,6 +339,12 @@
     ],
     "sqlState" : "58030",
     "audience" : "operator"
+  },
+  "KRISHIV_TIME_TRAVEL_NOT_FOUND" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "42K0E"
   },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [

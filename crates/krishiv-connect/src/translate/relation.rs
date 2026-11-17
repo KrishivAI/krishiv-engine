@@ -4,17 +4,18 @@
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
 //! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
-//! `WithColumns` and `Range`. The `plan_id` of a relation's `RelationCommon` becomes the
-//! `Origin` of the node it translates to, as Spark tags the plan it builds
-//! for the relation; `df["a"]` references name that id.
+//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`).
+//! The `plan_id` of a relation's `RelationCommon` becomes the `Origin` of
+//! the node it translates to, as Spark tags the plan it builds for the
+//! relation; `df["a"]` references name that id.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId,
-    PlanNode, ReadSource, SetOperation, SqlArgs,
+    ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
+    Origin, PlanId, PlanNode, ReadSource, SetOperation, SqlArgs,
 };
 
 use super::errors::{
@@ -78,23 +79,32 @@ impl Translator<'_> {
                 offset: Arc::new(Expr::literal(Literal::Integer(o.offset))),
             },
             RelType::Aggregate(a) => self.aggregate(a)?,
-            RelType::SubqueryAlias(a) => {
-                if !a.qualifier.is_empty() {
-                    return Err(unsupported_field(
-                        "SubqueryAlias",
-                        "qualifier",
-                        "relation aliases with a qualifier",
-                    ));
-                }
-                PlanNode::SubqueryAlias {
-                    input: self.input("SubqueryAlias", a.input.as_deref())?,
-                    alias: a.alias.clone(),
-                    columns: Vec::new(),
-                }
-            }
+            RelType::SubqueryAlias(a) => PlanNode::SubqueryAlias {
+                input: self.input("SubqueryAlias", a.input.as_deref())?,
+                alias: alias_name(&a.qualifier, &a.alias)?,
+                columns: Vec::new(),
+            },
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            RelType::MapPartitions(m) => self.map_partitions(m)?,
+            RelType::GroupMap(g) => self.group_map(g)?,
+            RelType::CoGroupMap(g) => self.cogroup_map(g)?,
+            RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
+                self.local_relation(|| super::local::inline_request(l))?,
+            )),
+            RelType::CachedLocalRelation(c) => {
+                PlanNode::Read(ReadSource::Local(self.local_relation(|| {
+                    Ok(super::LocalRequest::Cached {
+                        hash: c.hash.clone(),
+                    })
+                })?))
+            }
+            RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
+                input: self.input("CollectMetrics", c.input.as_deref())?,
+                name: c.name.clone(),
+                metrics: self.expressions(&c.metrics)?,
+            },
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Relation",
@@ -178,6 +188,16 @@ impl Translator<'_> {
         )
     }
 
+    /// The next local relation of the plan, from the host (see [`super::LocalRelations`]).
+    fn local_relation(
+        &mut self,
+        request: impl FnOnce() -> Result<super::LocalRequest>,
+    ) -> Result<krishiv_plan::LocalRelation> {
+        let ordinal = self.locals;
+        self.locals += 1;
+        self.conf.local_relations.get(ordinal, request)
+    }
+
     /// The input relation of `message`, which must be set.
     fn input(&mut self, message: &str, input: Option<&Relation>) -> Result<Arc<LogicalPlan>> {
         match input {
@@ -212,13 +232,11 @@ impl Translator<'_> {
                 options: typed(&t.options),
             },
             ReadType::DataSource(d) => {
-                if d.schema.as_deref().is_some_and(|s| !s.is_empty()) {
-                    return Err(unsupported_field(
-                        "Read.DataSource",
-                        "schema",
-                        "reads with a user-specified schema",
-                    ));
-                }
+                // Spark: a set and non-empty schema is the reader's schema.
+                let schema = match d.schema.as_deref() {
+                    Some(s) if !s.is_empty() => Some(super::schema::parse_table_schema(s)?),
+                    _ => None,
+                };
                 if !d.predicates.is_empty() {
                     return Err(unsupported_field(
                         "Read.DataSource",
@@ -226,17 +244,19 @@ impl Translator<'_> {
                         "reads with predicates",
                     ));
                 }
-                ReadSource::Files {
-                    format: d
-                        .format
+                let source = ReadSource::files(
+                    d.format
                         .clone()
                         .unwrap_or_else(|| self.conf.default_data_source.clone()),
-                    paths: d
-                        .paths
+                    d.paths
                         .iter()
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
-                    options: typed(&d.options),
+                    typed(&d.options),
+                );
+                match schema {
+                    Some(schema) => source.with_schema(schema),
+                    None => source,
                 }
             }
         }))
@@ -352,16 +372,29 @@ impl Translator<'_> {
         let input = self.relation(input)?;
         let keys = self.expressions(&a.grouping_expressions)?;
         let aggregates = self.expressions(&a.aggregate_expressions)?;
+        // The output keeps `expr AS name`; the grouping expressions are the
+        // bare `expr`: an alias is not an input column (PY-009).
+        let bare = |k: &Arc<Expr>| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(k),
+        };
+        let group_keys: Vec<Arc<Expr>> = keys.iter().map(bare).collect();
         let grouping = match GroupType::try_from(a.group_type) {
-            Ok(GroupType::Groupby) => Grouping::GroupBy(keys.clone()),
-            Ok(GroupType::Rollup) => Grouping::Rollup(keys.clone()),
-            Ok(GroupType::Cube) => Grouping::Cube(keys.clone()),
+            Ok(GroupType::Groupby) => Grouping::GroupBy(group_keys),
+            Ok(GroupType::Rollup) => Grouping::Rollup(group_keys),
+            Ok(GroupType::Cube) => Grouping::Cube(group_keys),
             Ok(GroupType::GroupingSets) => Grouping::GroupingSets {
-                exprs: keys.clone(),
+                exprs: group_keys,
                 sets: a
                     .grouping_sets
                     .iter()
-                    .map(|s| self.expressions(&s.grouping_set))
+                    .map(|s| {
+                        Ok(self
+                            .expressions(&s.grouping_set)?
+                            .iter()
+                            .map(bare)
+                            .collect())
+                    })
                     .collect::<Result<_>>()?,
             },
             Ok(GroupType::Pivot) => {
@@ -465,6 +498,24 @@ impl Translator<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
+/// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the
+/// separator could not be told from two parts, so it is refused as `KRISHIV_UNSUPPORTED_FEATURE`
+/// (a deviation from note section 4: 56K00 is for `oneof` arms).
+fn alias_name(qualifier: &[String], alias: &str) -> Result<String> {
+    let parts = || qualifier.iter().map(String::as_str).chain([alias]);
+    if parts().any(|p| p.contains(ALIAS_PART_SEP)) {
+        return Err(unsupported_field(
+            "SubqueryAlias",
+            "qualifier",
+            "relation alias parts holding the control character U+001E",
+        ));
+    }
+    Ok(parts()
+        .collect::<Vec<_>>()
+        .join(&ALIAS_PART_SEP.to_string()))
+}
 
 /// The origin of a relation: its `plan_id`, when the client sent one.
 fn origin_of(rel: &Relation) -> Origin {

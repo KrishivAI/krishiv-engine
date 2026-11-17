@@ -434,7 +434,7 @@
  {
   "file": "q04.sql",
   "line": 5,
-  "name": "from_avro",
+  "name": "bitmap_count",
   "status": "not yet"
  },
  {
@@ -512,7 +512,7 @@
  {
   "file": "q08.sql",
   "line": 3,
-  "name": "is_valid_variant",
+  "name": "java_method",
   "status": "not yet"
  },
  {

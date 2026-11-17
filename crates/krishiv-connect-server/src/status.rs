@@ -5,16 +5,16 @@
 //! `org.apache.spark` naming the exception class and its superclasses, the
 //! SQLSTATE, the error class and its message parameters. PySpark raises the
 //! matching Python exception from that detail. Krishiv's own refusals use
-//! other codes: `RESOURCE_EXHAUSTED` for the session and operation limits,
+//! other codes: `RESOURCE_EXHAUSTED` for the session, operation and artifact limits,
 //! `PERMISSION_DENIED` for `KRISHIV_INSUFFICIENT_PERMISSIONS` (ADR 0046 §8).
 //!
 //! Only the client-safe form of an error leaves ([`KrishivError::for_client`]).
 //! The exception classes are the ones Spark raises where the Connect server
 //! itself throws (`SparkSQLException`, `InvalidPlanInput`), and otherwise
 //! chosen from the error class and SQLSTATE (`exception_classes`) so that
-//! PySpark raises the Python exception Spark's would. `errorId` and
-//! `stackTrace` (Spark's enriched errors and `FetchErrorDetails`) are
-//! PR-15b's (design P3-T011a §3.3, §3.10).
+//! PySpark raises the Python exception Spark's would. An error sent on a
+//! session also carries `errorId` (`crate::errors`, design P3-T011a §3.10);
+//! `stackTrace` is never sent (no JVM).
 
 use std::collections::BTreeMap;
 
@@ -128,6 +128,17 @@ const SPARK_UPGRADE_EXCEPTION: &[&str] = classes!(
     "java.lang.RuntimeException",
 );
 
+/// `PythonException` (`core/.../api/python/PythonRDD.scala` v4.3.0 line 130:
+/// `extends RuntimeException with SparkThrowable`), which Connect sends
+/// unwrapped from the job failure (`ErrorUtils.isPythonExecutionException`,
+/// v4.3.0 lines 283-288, 336-338). PySpark raises its `PythonException`
+/// when the first entry is in `classes` (`errors/exceptions/connect.py`
+/// line 189).
+const PYTHON_EXCEPTION: &[&str] = classes!(
+    "org.apache.spark.api.python.PythonException",
+    "java.lang.RuntimeException",
+);
+
 /// The Java class hierarchy Spark would raise for `class`, as
 /// `ErrorUtils.allClasses` lists it. PySpark 4.3.0
 /// (`pyspark/errors/exceptions/connect.py`, `EXCEPTION_CLASS_MAPPING`) picks
@@ -142,6 +153,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
     let by_prefix: &[(&str, &[&str])] = &[
         ("INVALID_HANDLE.", SPARK_SQL_EXCEPTION),
         ("INVALID_CURSOR.", SPARK_SQL_EXCEPTION),
+        // `SparkConnectSessionManager.validateCloneTargetSession` (v4.3.0
+        // lines 183-205).
+        ("INVALID_CLONE_SESSION_REQUEST.", SPARK_SQL_EXCEPTION),
         (
             "CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX",
             SPARK_SQL_EXCEPTION,
@@ -159,7 +173,17 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ("CANNOT_MODIFY_", ANALYSIS_EXCEPTION),
         ("KRISHIV_SESSION_LIMIT", SPARK_EXCEPTION),
         ("KRISHIV_OPERATION_LIMIT", SPARK_EXCEPTION),
+        ("KRISHIV_ARTIFACT_LIMIT", SPARK_EXCEPTION),
+        // `SparkRuntimeException` in `ArtifactManager.addArtifact` and
+        // `SparkConnectAddArtifactsHandler.StagedArtifact` (v4.3.0).
+        ("ARTIFACT_ALREADY_EXISTS", SPARK_RUNTIME_EXCEPTION),
+        ("INVALID_ARTIFACT_PATH", SPARK_RUNTIME_EXCEPTION),
         ("INTERNAL_ERROR", SPARK_EXCEPTION),
+        // A UDF that raised (38000).
+        ("PYTHON_EXCEPTION", PYTHON_EXCEPTION),
+        // Spark's crashed worker is a classless `SparkException("Python worker exited
+        // unexpectedly (crashed)...")` (`PythonRunner.scala` v4.3.0 lines 1132-1143).
+        ("KRISHIV_PYTHON_WORKER_EXITED", SPARK_EXCEPTION),
         // Spark's `ExecuteThreadRunner` throws a `SparkSQLException`
         // (v4.3.0, lines 105 and 175): PySpark raises `UnknownException`.
         ("OPERATION_CANCELED", SPARK_SQL_EXCEPTION),
@@ -173,6 +197,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ("PARSE_", PARSE_EXCEPTION),
         ("UNSUPPORTED_DATATYPE", PARSE_EXCEPTION),
         ("INVALID_SQL_SYNTAX", PARSE_EXCEPTION),
+        // Spark's unnamed errors: 0xxx are `QueryParsingErrors`, 1xxx `QueryCompilationErrors`.
+        ("_LEGACY_ERROR_TEMP_0", PARSE_EXCEPTION),
+        ("_LEGACY_ERROR_TEMP_1", ANALYSIS_EXCEPTION),
     ];
     if let Some((_, classes)) = by_prefix.iter().find(|(p, _)| name.starts_with(p)) {
         return classes;
@@ -188,10 +215,21 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
     }
 }
 
-/// The gRPC status for `error`, in Spark Connect's shape.
+/// The gRPC status for `error`, in Spark Connect's shape, without an
+/// `errorId` (an error before a session exists; one on a session goes
+/// through `SessionErrors::status`).
 #[must_use]
 pub fn status_of(error: &KrishivError) -> Status {
-    let error = error.for_client();
+    status_with_id(error, None)
+}
+
+/// [`status_of`] with `errorId` set to `error_id` in the `ErrorInfo`
+/// metadata (Spark's enriched errors, `FetchErrorDetails`).
+pub(crate) fn status_with_id(error: &KrishivError, error_id: Option<&str>) -> Status {
+    let error = match error_id {
+        Some(id) => error.for_client_with_id(id),
+        None => error.for_client(),
+    };
     let error = error.error();
     let class = error.error_class();
     let classes = exception_classes(class);
@@ -207,6 +245,9 @@ pub fn status_of(error: &KrishivError) -> Status {
         metadata.insert("errorClass".to_owned(), class.name().to_owned());
         metadata.insert("messageParameters".to_owned(), parameters);
     }
+    if let Some(id) = error_id {
+        metadata.insert("errorId".to_owned(), id.to_owned());
+    }
     let info = ErrorInfo {
         reason: classes.first().copied().unwrap_or_default().to_owned(),
         domain: "org.apache.spark".to_owned(),
@@ -216,9 +257,9 @@ pub fn status_of(error: &KrishivError) -> Status {
     // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED; an
     // authorization refusal is PERMISSION_DENIED (ADR 0046 §8).
     let code = match class {
-        ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit => {
-            Code::ResourceExhausted
-        }
+        ErrorClass::KrishivSessionLimit
+        | ErrorClass::KrishivOperationLimit
+        | ErrorClass::KrishivArtifactLimit => Code::ResourceExhausted,
         ErrorClass::KrishivInsufficientPermissions => Code::PermissionDenied,
         _ => Code::Internal,
     };

@@ -13,7 +13,7 @@ use crate::{
     ColumnRef, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, Origin, Plan, PlanId, PlanNode,
 };
 
-use super::dsl::{add, int};
+use super::dsl::{add, count_star, int};
 
 fn table(cols: &[&str]) -> MemoryCatalog {
     let cols = cols
@@ -266,4 +266,40 @@ fn a_moved_version_is_a_miss() {
         !same(&cache, chain(5), &versioned(8)),
         "version 8 is a miss"
     );
+}
+
+/// A prefix-cache hit keeps the observation names the prefix registered: a second relation may not
+/// reuse one (`DUPLICATED_METRICS_NAME`), warm as cold.
+#[test]
+fn a_warm_start_keeps_observed_names() {
+    let c = ctx(&["a", "b", "c"]);
+    let cache = CachingAnalyzer::new();
+    let metric = || Arc::new(count_star().alias("n"));
+    let observe = |input: LogicalPlan, id: i64| {
+        LogicalPlan::new(PlanNode::CollectMetrics {
+            input: Arc::new(input),
+            name: "dup".to_owned(),
+            metrics: vec![metric()],
+        })
+        .with_origin(Origin::plan(PlanId(id)))
+    };
+    let first = observe(
+        LogicalPlan::table(["t"]).with_origin(Origin::plan(PlanId(0))),
+        1,
+    );
+    assert!(!same(&cache, first.clone(), &c));
+    let other = observe(
+        LogicalPlan::table(["u"]).with_origin(Origin::plan(PlanId(5))),
+        6,
+    );
+    let both = LogicalPlan::new(PlanNode::Join {
+        left: Arc::new(first),
+        right: Arc::new(other),
+        kind: JoinKind::Cross,
+        condition: JoinCondition::None,
+    })
+    .with_origin(Origin::plan(PlanId(9)));
+    let p = Plan::try_new(both).unwrap();
+    let e = block_on(cache.analyze(&p, &c)).expect_err("two relations, one name");
+    assert_eq!(e.error.error_class().name(), "DUPLICATED_METRICS_NAME");
 }

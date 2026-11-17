@@ -10,7 +10,10 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 
 ## Layout (P2-T117)
 `format.rs` FileFormat/FileMetadata/Decoder/Encoder/Capabilities + `AsyncDecoder`/`PushReadAt` bridge ·
-`request.rs` ScanRequest, PushdownExpr, RowSelection, ColumnPath, `project_schema`/`project_batch` · `stats.rs` statistics and
+`request.rs` ScanRequest, PushdownExpr, RowSelection, ColumnPath, `project_schema`/`project_batch`, `FieldMapping`
+(`FieldIdOr(WithoutFieldIds)`: by id, a file with no id read by position, by a name mapping or refused, Iceberg) · `name_mapping.rs` `NameMapping`/`MappedField` (P3-T026 PR-25c): a table format's name mapping applied to a file without ids as Java's `ApplyNameMapping` (mapped ids written onto the file's fields at every depth, list `element`, map `key`/`value`; unmapped fields get none and are not read); the format parses its own text · `constants.rs`
+`FileConstants` (typed per-file constant columns keyed by path: Iceberg identity partitions, Delta partition
+values) and `scalar_column` · `stats.rs` statistics and
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
@@ -18,7 +21,7 @@ re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.
 atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
 `KeyFilterBuilder` (min/max, value set, Bloom filter), `merge.rs` `KeyFilter::merge` (the filter of several producer
 partitions: a superset of every input's keys, order-independent; Blooms OR only at the planned size), `normalize_key_bytes` and `widens_to` (the single key
-normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
+normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes; 32-byte-aligned blocks; past 1 MiB (an L2-resident filter gains nothing) `check_batch` computes the block indices once and prefetches the block 32 hashes ahead through `krishiv_kernels::prefetch_read`, string keys too, study 18 §R4),
 and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache, the cloud stores (URL parsing, `fs.*` keys, store building and `StorePolicy` live in the `krishiv-store` crate, ADR 0044; `stores.rs` re-exports them and holds `register`/`register_with_options`, which put a store from a `StoreRegistry` on the scheduler, and `query_registry`, whose stores connect through the scheduler's `SharedHttpClients` (`IoScheduler::http_clients`, one HTTP client per set of client options for the runtime's life); `cloud` turns on `krishiv-store/cloud`),
@@ -50,7 +53,8 @@ Paths are relative to this crate.
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
 - `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
 - `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it; `src/parquet/index_guard.rs` (P2-T080b) the same for the page index and stored Bloom filters: declared ranges, decoded structure, Bloom header size, sparse page headers; a failure is `Rejected` (the unit is read without the index), never a scan error; `src/parquet/page_stage.rs` (P2-T080b stage 3) the page index as a row selection: the decoder's first step reads the filter columns' column and offset indexes of the units statistics left undecided (`Step::NeedData`, bytes routed to the stage, never to arrow-rs), per-page `prune`, `krishiv.io.parquet.pageIndex.enabled`; byte-array bounds and `_metadata.row_index` scans do not take part; the same first read also fetches the stored Bloom filters (`src/parquet/bloom_probe.rs`, `krishiv.io.parquet.bloomFilter.enabled`) of equality/IN conjuncts on columns with an exact plain encoding (ints, dates, micros timestamps, int-backed decimals, binary-collation strings; never floats), probed with `RuntimeBloom`, and attaches the offset indexes so arrow-rs fetches only the selected pages (all-or-nothing, see decode.rs `attached`); `src/parquet/dict_probe.rs` (stage 2b, P2-T085) prunes by dictionary in the same first read: for equality/IN conjuncts on Bloom-eligible columns whose chunks are all dictionary (`all_dictionary`, from the encoding stats), `dictionary_range` fetches the dictionary page (at most `MAX_DICTIONARY_BYTES`, 16 MiB; no entry cap), `read_dictionary` decodes it after the header guard and `any_entry_in` compares the entries' plain bytes with the literals (`bloom_probe::plain_values`); a unit with no matching entry is skipped (`units_pruned_dictionary`), `krishiv.io.parquet.dictionaryFilter.enabled`; `passes` (a pass mask per entry through `prune`) is kept for other predicates
-- `src/csv/mod.rs` CSV format; `src/text/codec.rs` the Hadoop codecs of CSV/JSON/text files (gzip, deflate, bzip2, lz4, snappy; zstd is not a Spark text codec). Compressed files are read whole by the split at byte 0; fixtures `tests/fixtures/spark-4.2.0/compressed-text/` (`tests/scripts/gen_compressed_text.py`, `check_compressed_text_written.py`)
+- `src/json/` JSON format: `decode.rs` tokenizer (value trees with source spans, Jackson's 1000-level depth) and decoder (top-level arrays as rows), `infer.rs` Spark's `JsonInferSchema` (name-sorted structs, arrays, the corrupt column, canonicalization), `convert.rs` scalar token rules, `nested.rs` structs/arrays/maps with partial results; Spark 4.2.0 goldens `tests/fixtures/spark-4.2.0/json.json` and `json-nested.json` (`tests/scripts/gen_json_goldens.py`, `gen_json_nested_goldens.py`), checked by `src/json/golden_tests.rs`
+- `src/csv/mod.rs` CSV format; `src/text/codec.rs` the Hadoop codecs of CSV/JSON/text files (gzip, deflate, bzip2, lz4, snappy; zstd is not a Spark text codec). Compressed files are read whole by the split at byte 0; a stream that breaks returns its complete lines, then the error (the decoders return the rows read before it first; a lenient reader, schema inference under `ignoreCorruptFiles`, ends there instead), as Hadoop's line reader does (`csv/corrupt_tests.rs`, `json/corrupt_tests.rs`); fixtures `tests/fixtures/spark-4.2.0/compressed-text/` (`tests/scripts/gen_compressed_text.py`, `check_compressed_text_written.py`)
 
 ## Extension points
 - New format: implement `FileFormat` in a module like `src/parquet/`, route all bytes through `IoContext`, and instantiate `krishiv_testkit::file_format_conformance!`.
@@ -79,3 +83,6 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-io --no-tests=pass` · `cargo clippy -p krishiv-io --all-targets -- -D warnings` ·
 conformance: `cargo nextest run -p krishiv-testkit --test file_format_mock` · bench: `cargo bench -p krishiv-io` (targets `io`, `coalesce` and `runtime_filter`)
+
+## Vector carrier (P3-T075)
+Parquet keeps the vector carrier. `schema_map` `Conv::List` accepts a file column stored as a fixed-size list for a `List` table column (`vectors_as_list_parts`); `(List, FixedSizeList)` resolves. `arrow-select` is a regular dependency for it.

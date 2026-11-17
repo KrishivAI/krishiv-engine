@@ -481,7 +481,7 @@ impl Run<'_> {
         }
         let handle = self.handle();
         let env = handle.query_env();
-        let class = krishiv_sql::classify(statement);
+        let class = krishiv_sql::classify_with(statement, &env.parser);
         handle.authorize_statement(statement, class, &env).await?;
         // `EXECUTE IMMEDIATE ... INTO` assigns to locals too, which only this interpreter can do.
         if let Statement::ExecuteImmediate(e) = statement

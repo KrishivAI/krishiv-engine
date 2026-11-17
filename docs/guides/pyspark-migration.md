@@ -8,7 +8,7 @@ description: "Move a PySpark job to Krishiv: unsupported functions, workarounds 
 
 Krishiv keeps the PySpark API: `krishiv.session()` returns a `SparkSession`-style object, and `spark.sql`, `spark.read`,
 DataFrames and `pyspark.sql.functions`-style functions behave as in Spark. This page lists what differs and what to do.
-The tables below are generated from the same data `krishiv check-compat` reads, so they cannot drift from it.
+The tables below are generated from the compatibility data, so they cannot drift from it.
 
 Krishiv needs Python 3.11 or newer, the floor of the Spark 4.3 Python client; the examples here run on 3.11 to 3.14.
 
@@ -30,16 +30,11 @@ out = df.groupBy("region").agg(F.sum("amount").alias("revenue")).orderBy("region
 assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 ```
 
-## Step 2: scan your project
+## Step 2: find the functions your code calls
 
-`krishiv check-compat` reads `.py`, `.sql` and `.ipynb` files without running them and lists the functions below that
-your code calls (see [check-compat](check-compat.md)).
+Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-```bash
-krishiv check-compat .
-```
-
-## Spark functions Krishiv does not run yet (94)
+## Spark functions Krishiv does not run yet (91)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -58,14 +53,12 @@ an empty cell means there is none yet.
 | [`bitmap_or_agg`](../reference/sql/functions/bitmap_or_agg.md) | not yet |  |
 | [`collations`](../reference/sql/functions/collations.md) | not yet |  |
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
-| [`from_avro`](../reference/sql/functions/from_avro.md) | not yet |  |
 | [`from_protobuf`](../reference/sql/functions/from_protobuf.md) | not yet |  |
 | [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet | GROUP BY width_bucket(col, min, max, n) with count(*) gives equal-width bucket counts (bucket numbers, not bin centres; col = max lands in bucket n+1); Spark's adaptive bins are not reproduced |
 | [`hll_sketch_agg`](../reference/sql/functions/hll_sketch_agg.md) | not yet | approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available |
 | [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
 | [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
 | [`hll_union_agg`](../reference/sql/functions/hll_union_agg.md) | not yet |  |
-| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet |  |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
@@ -102,7 +95,6 @@ an empty cell means there is none yet.
 | [`theta_sketch_estimate`](../reference/sql/functions/theta_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available |
 | [`theta_union`](../reference/sql/functions/theta_union.md) | not yet |  |
 | [`theta_union_agg`](../reference/sql/functions/theta_union_agg.md) | not yet |  |
-| [`to_avro`](../reference/sql/functions/to_avro.md) | not yet |  |
 | [`to_protobuf`](../reference/sql/functions/to_protobuf.md) | not yet |  |
 | [`try_reflect`](../reference/sql/functions/try_reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`tuple_difference_double`](../reference/sql/functions/tuple_difference_double.md) | not yet |  |
@@ -149,10 +141,15 @@ Each row links to the full description in [known differences](../concepts/known-
 | --- |
 | [Error ordering between two raising expressions](../concepts/known-differences.md#error-ordering-between-two-raising-expressions) |
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
+| [`EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)](../concepts/known-differences.md#explain-format-json-explain-analyze-explain-verbose-krishiv-extensions) |
+| [Writers leave a `_krishiv_log` directory](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory) |
 | [A malformed value of a Spark config key fails at `SET`](../concepts/known-differences.md#a-malformed-value-of-a-spark-config-key-fails-at-set) |
 | [`DISTRIBUTE BY` under a `LIMIT`, and partition numbers](../concepts/known-differences.md#distribute-by-under-a-limit-and-partition-numbers) |
+| [`TABLESAMPLE` rows follow the input's partitions](../concepts/known-differences.md#tablesample-rows-follow-the-inputs-partitions) |
 | [Filters move below only their deterministic prefix](../concepts/known-differences.md#filters-move-below-only-their-deterministic-prefix) |
 | [PySpark's `VariantVal`](../concepts/known-differences.md#pysparks-variantval) |
+| [`mapInPandas` and `mapInArrow` results unlike the declared schema](../concepts/known-differences.md#mapinpandas-and-mapinarrow-results-unlike-the-declared-schema) |
+| [Python UDF workers per session (server mode)](../concepts/known-differences.md#python-udf-workers-per-session-server-mode) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |
 | [`PIVOT` cases Spark answers from undefined state are refused](../concepts/known-differences.md#pivot-cases-spark-answers-from-undefined-state-are-refused) |
 | [Inferred join filters differ from Spark's](../concepts/known-differences.md#inferred-join-filters-differ-from-sparks) |
@@ -163,11 +160,12 @@ Each row links to the full description in [known differences](../concepts/known-
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 
 ## Where it runs
 
 Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
-Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; see [Deployment](deploy.md).
+Single-node, one `krishiv server` process that PySpark and other clients reach over Spark Connect, is in development: 0.2 has the server's web UI and admin API, not Spark Connect. See [Deployment](deploy.md).
 
 ## Step 3: check the result
 

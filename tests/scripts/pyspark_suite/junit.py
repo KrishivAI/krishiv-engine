@@ -58,3 +58,31 @@ def parse(xml_path: Path, version: str, file: str) -> list[Record]:
                 break
         out.append(Record(version, file, cls, case.get("name") or "", status, ms, reason))
     return out
+
+
+_CONDITIONAL_SKIP = ("jvm", "remote")
+
+
+def _conditional(message: str) -> bool:
+    """A skip that is about the client mode (remote-only, "Requires JVM access"), not a missing optional package."""
+    m = message.lower()
+    return any(k in m for k in _CONDITIONAL_SKIP)
+
+
+def oracle_skips(oracle_dir: Path, version: str) -> set[str]:
+    """Ids the Spark oracle skipped, from the per-file JUnit XML of an oracle run (`<rel with / as __>.xml`).
+
+    These are the conditional skips: tests Spark itself does not run under this client package because of the
+    client mode (remote-only, "Requires JVM access"). A skip for a missing optional package (pandas, pyarrow...)
+    is an incomplete oracle environment and stays in the denominator (design 2, rule 3), as does a failure.
+    """
+    out: set[str] = set()
+    for xml in sorted(oracle_dir.glob("*.xml")):
+        rel = xml.stem.replace("__", "/")
+        skipped = {
+            f"{rel}::{(c.get('classname') or '').rsplit('.', 1)[-1]}::{c.get('name') or ''}"
+            for c in ET.parse(xml).getroot().iter("testcase")
+            if any(k.tag == "skipped" and _conditional(k.get("message") or "") for k in c)
+        }
+        out |= skipped
+    return out

@@ -31,6 +31,7 @@ mod array_edit;
 mod array_scan;
 mod array_set;
 mod array_shape;
+mod avro;
 mod bitwise;
 mod chars;
 mod codec;
@@ -506,6 +507,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (hash::NAMES, hash::bind),
     (aes::NAMES, aes::bind),
     (interval::NAMES, interval::bind),
+    (avro::NAMES, avro::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),

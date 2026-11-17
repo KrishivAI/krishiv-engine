@@ -253,6 +253,38 @@ fn azure_prefixes_hold_their_account() {
     }
 }
 
+/// A OneLake prefix names its host (`workspace@onelake.dfs.fabric.microsoft.com`): it allows
+/// that workspace on OneLake only, never a same-named container of an Azure Storage account
+/// called `onelake`, and a host that is neither is no prefix at all.
+#[test]
+fn onelake_prefixes_hold_their_host() {
+    let p = PathPrefixPolicy::new(Vec::<&str>::new(), Arc::new(AllowAll))
+        .unwrap()
+        .with_object_prefixes(["abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files"])
+        .unwrap();
+    // The `dfs` and `blob` names of the host, in any case, are one store.
+    for path in [
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files/raw/a.csv",
+        "abfss://ws@onelake.blob.fabric.microsoft.com/lh.Lakehouse/Files/raw/a.csv",
+        "abfss://ws@OneLake.DFS.Fabric.Microsoft.com/lh.Lakehouse/Files/raw/a.csv",
+    ] {
+        assert!(decide(&p, path, Privilege::Select), "{path}");
+    }
+    for path in [
+        "abfss://ws@onelake.dfs.core.windows.net/lh.Lakehouse/Files/raw/a.csv",
+        "abfss://other@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files/a.csv",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Tables/t",
+        "abfss://ws@onelake.example.com/lh.Lakehouse/Files/a.csv",
+    ] {
+        assert!(!decide(&p, path, Privilege::Select), "{path}");
+    }
+    let e = PathPrefixPolicy::new(Vec::<&str>::new(), Arc::new(AllowAll))
+        .unwrap()
+        .with_object_prefixes(["abfss://ws@onelake.example.com/lh"])
+        .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+}
+
 /// More prefix shapes: `s3a` and `s3` are one store either way, the scheme's case does not
 /// matter, a bucket name is whole, blank list entries are dropped.
 #[test]
@@ -315,4 +347,36 @@ fn listings_never_follow_a_link_out_of_a_root() {
     std::os::unix::fs::symlink(secret.join("s.csv"), table.join("s.csv")).unwrap();
     let e = run(&s, &read(table.to_str().unwrap())).unwrap_err();
     assert!(e.contains("a link out of the allowed roots"), "{e}");
+}
+
+/// A managed table's own directory is a local path inside the roots: an admin creates, truncates,
+/// renames and drops a managed table whose warehouse is under `krishiv.io.local.allowedRoots` (the
+/// location is asked as a `file:` path, never as an object-store key), and no role can put one
+/// outside them.
+#[test]
+fn managed_tables_inside_the_roots() {
+    let (_tmp, allowed, secret) = dirs();
+    for (warehouse, inside) in [(allowed.join("wh"), true), (secret.join("wh"), false)] {
+        std::fs::create_dir_all(&warehouse).unwrap();
+        let s = Session::builder()
+            .principal(Principal::new("admin", PrincipalKind::User))
+            .access_policy(Arc::new(policy(
+                &config(&[("krishiv.io.local.allowedRoots", allowed.to_str().unwrap())]),
+                Role::Admin,
+            )))
+            .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+            .build()
+            .unwrap();
+        let created = run(&s, "CREATE TABLE t (a INT) USING parquet");
+        if inside {
+            created.unwrap();
+            run(&s, "INSERT INTO t VALUES (1)").unwrap();
+            run(&s, "TRUNCATE TABLE t").unwrap();
+            run(&s, "ALTER TABLE t RENAME TO u").unwrap();
+            run(&s, "DROP TABLE u").unwrap();
+        } else {
+            let e = created.unwrap_err();
+            assert!(e.contains(DENIED), "{e}");
+        }
+    }
 }

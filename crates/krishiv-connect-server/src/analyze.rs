@@ -7,7 +7,7 @@
 //! - `schema`: the analyzed schema, the same `DataType` `ExecutePlan` sends;
 //! - `explain`: `DataFrame::explain` in the requested mode;
 //! - `tree_string`: Spark's `StructType.treeString` (`analyze::types`);
-//! - `is_local`: whether the translated root is an inline table (Spark's
+//! - `is_local`: whether the translated root is a local relation (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
 //! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
@@ -20,6 +20,19 @@
 //!   projects) are not made;
 //! - `persist`, `unpersist`, `get_storage_level`: refused (56K00) until the
 //!   cache arms land (design P3-T083, PR-47).
+//!
+//! Access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`,
+//! `semantic_hash` and `same_semantics` analyze for metadata
+//! (`DataFrame::schema_for_metadata` / `analyzed_for_metadata`): every catalog
+//! table and view the plan reads needs `Browse`, so a viewer may ask them. A
+//! read by path keeps `Select`: its schema is inferred from file contents (CSV
+//! `header=true` column names are the file's first line).
+//! `input_files` lists paths and keeps `Select`. `explain`
+//! (`DataFrame::explain_for_metadata`, P3 PR-14d) is the ordinary text for a
+//! principal whose `Select` check passes; otherwise the plan chosen with no
+//! table statistics and no distinct-value samples, with a note saying so.
+//! Its `cost` mode, a read by path and a permanent view keep `Select` (they
+//! show statistics, contents or a view's text).
 
 pub mod types;
 
@@ -68,13 +81,13 @@ pub async fn analyze_plan(
 /// recurse on the async worker's stack (translation runs a deep plan on a
 /// big stack of its own).
 async fn frame(
-    session: &krishiv_session::Session,
+    entry: &SessionEntry,
     plan: Option<&pb::Plan>,
     limits: &ExecuteLimits,
 ) -> Result<DataFrame, KrishivError> {
     let empty = pb::Plan::default();
-    let logical = request_plan(session, plan.unwrap_or(&empty), limits).await?;
-    Ok(session.from_plan(&logical))
+    let logical = request_plan(entry, plan.unwrap_or(&empty), limits).await?;
+    Ok(entry.session().from_plan(&logical))
 }
 
 async fn analyze(
@@ -91,54 +104,58 @@ async fn analyze(
             .into());
         }
         Some(Analyze::Schema(s)) => {
-            let df = frame(session, s.plan.as_ref(), limits).await?;
+            let df = frame(entry, s.plan.as_ref(), limits).await?;
             res::Result::Schema(res::Schema {
-                schema: Some(schema::proto_schema(&*df.schema().await?)?),
+                schema: Some(schema::proto_schema(&*df.schema_for_metadata().await?)?),
             })
         }
         Some(Analyze::Explain(e)) => {
             // Spark builds the Dataset (translation, analysis) before it
-            // reads the mode.
-            let df = frame(session, e.plan.as_ref(), limits).await?;
-            df.analyzed().await?;
+            // reads the mode: a metadata analysis here (`Browse`), then the
+            // explain a principal may see (see the module docs).
+            let df = frame(entry, e.plan.as_ref(), limits).await?;
+            df.analyzed_for_metadata().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
-                explain_string: df.explain(mode).await?,
+                explain_string: df.explain_for_metadata(mode).await?,
             })
         }
         Some(Analyze::TreeString(t)) => {
-            let df = frame(session, t.plan.as_ref(), limits).await?;
-            let spark = schema::spark_schema(&*df.schema().await?)?;
+            let df = frame(entry, t.plan.as_ref(), limits).await?;
+            let spark = schema::spark_schema(&*df.schema_for_metadata().await?)?;
             res::Result::TreeString(res::TreeString {
                 tree_string: types::tree_string(&spark, t.level),
             })
         }
         Some(Analyze::IsLocal(l)) => {
-            // Spark: the analyzed plan is a `LocalRelation`. Krishiv's
-            // analyzer lowers inline rows to `OneRowRelation` (as for
-            // `SELECT 1`), so the question is asked of the translated plan
-            // (an inline table, as `LocalRelation` will translate in T012);
-            // SQL `VALUES` is SQL text until analysis and answers false.
-            // The plan is still analyzed so that an invalid one fails as in
-            // Spark.
+            // Spark: the analyzed plan is a `LocalRelation`. A `local_relation` translates to
+            // a `Read` of a local relation (its user schema already applied eagerly, so the
+            // analyzed plan is that bare relation either way); Krishiv's analyzer lowers inline
+            // rows to `OneRowRelation` (as for `SELECT 1`), so the question is asked of the
+            // translated plan; SQL `VALUES` is SQL text until analysis and answers false. The
+            // plan is still analyzed so that an invalid one fails as in Spark.
             let empty = pb::Plan::default();
-            let logical = request_plan(session, l.plan.as_ref().unwrap_or(&empty), limits).await?;
-            let is_local = matches!(logical.root().node, PlanNode::InlineTable { .. });
-            session.from_plan(&logical).analyzed().await?;
+            let logical = request_plan(entry, l.plan.as_ref().unwrap_or(&empty), limits).await?;
+            let is_local = matches!(
+                logical.root().node,
+                PlanNode::InlineTable { .. } | PlanNode::Read(ReadSource::Local(_))
+            );
+            session.from_plan(&logical).analyzed_for_metadata().await?;
             res::Result::IsLocal(res::IsLocal { is_local })
         }
         Some(Analyze::IsStreaming(s)) => {
             // Analyzed so that an invalid plan fails as in Spark.
-            frame(session, s.plan.as_ref(), limits)
+            frame(entry, s.plan.as_ref(), limits)
                 .await?
-                .analyzed()
+                .analyzed_for_metadata()
                 .await?;
             res::Result::IsStreaming(res::IsStreaming {
                 is_streaming: false,
             })
         }
         Some(Analyze::InputFiles(f)) => {
-            let analyzed = frame(session, f.plan.as_ref(), limits)
+            // The paths themselves are shown: `Select` on them (ADR 0046 §3b).
+            let analyzed = frame(entry, f.plan.as_ref(), limits)
                 .await?
                 .analyzed()
                 .await?;
@@ -157,15 +174,14 @@ async fn analyze(
             )?)?),
         }),
         Some(Analyze::SameSemantics(s)) => {
-            let target =
-                semantic_hash(frame(session, s.target_plan.as_ref(), limits).await?).await?;
-            let other = semantic_hash(frame(session, s.other_plan.as_ref(), limits).await?).await?;
+            let target = semantic_hash(frame(entry, s.target_plan.as_ref(), limits).await?).await?;
+            let other = semantic_hash(frame(entry, s.other_plan.as_ref(), limits).await?).await?;
             res::Result::SameSemantics(res::SameSemantics {
                 result: target == other,
             })
         }
         Some(Analyze::SemanticHash(s)) => {
-            let hash = semantic_hash(frame(session, s.plan.as_ref(), limits).await?).await?;
+            let hash = semantic_hash(frame(entry, s.plan.as_ref(), limits).await?).await?;
             res::Result::SemanticHash(res::SemanticHash {
                 result: fold_hash(hash),
             })
@@ -208,9 +224,11 @@ fn cache_arm(name: &str, number: u32) -> KrishivError {
     .into()
 }
 
-/// The semantic hash of `df`'s analyzed plan.
+/// The semantic hash of `df`'s analyzed plan (a metadata analysis: `Browse`).
 async fn semantic_hash(df: DataFrame) -> Result<u128, KrishivError> {
-    Ok(krishiv_plan::semantic_plan_hash(&df.analyzed().await?.plan))
+    Ok(krishiv_plan::semantic_plan_hash(
+        &df.analyzed_for_metadata().await?.plan,
+    ))
 }
 
 /// A 128-bit hash folded into the `int32` the response carries.

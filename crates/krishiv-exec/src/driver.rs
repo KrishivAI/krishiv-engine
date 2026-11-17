@@ -37,6 +37,9 @@ pub(crate) struct PipelineRun {
     pub(crate) pipeline: Pipeline,
     /// Per operator: the finalized breaker state it reads, if any.
     pub(crate) operator_deps: Vec<Option<GlobalState>>,
+    /// Per operator, then for the sink: the first partition id it numbers
+    /// its input's partitions from (see `Pipeline::origins`).
+    pub(crate) operator_bases: Vec<u32>,
     /// Per operator: its flush barrier (used if it needs a flush), shared
     /// with the other pipelines of a fan-in that run the operator.
     pub(crate) barriers: Vec<Arc<Barrier>>,
@@ -526,7 +529,8 @@ impl Driver {
             busy: false,
         });
         for (k, (id, op)) in p.operators.iter().enumerate() {
-            let mut c = ctx(*id, op.name());
+            let mut c = ctx(*id, op.name())
+                .with_numbering_base(run.operator_bases.get(k).copied().unwrap_or(base));
             if let Some(Some(state)) = run.operator_deps.get(k) {
                 c = c.with_dependency(Arc::clone(state));
             }
@@ -539,7 +543,14 @@ impl Driver {
             });
         }
         let (sink_id, sink) = &p.sink;
-        let c = Arc::new(ctx(*sink_id, sink.name()));
+        let c = Arc::new(
+            ctx(*sink_id, sink.name()).with_numbering_base(
+                run.operator_bases
+                    .get(p.operators.len())
+                    .copied()
+                    .unwrap_or(base),
+            ),
+        );
         let local = sink.local_state(&c, &run.sink_global)?;
         slots.push(Slot {
             ctx: c,
