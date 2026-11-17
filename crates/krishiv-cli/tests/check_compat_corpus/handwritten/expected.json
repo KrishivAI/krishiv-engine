@@ -6,12 +6,6 @@
   "status": "unknown"
  },
  {
-  "file": "sales_report.sql",
-  "line": 18,
-  "name": "hll_sketch_agg",
-  "status": "not yet"
- },
- {
   "file": "ddl_and_types.sql",
   "line": 16,
   "name": "java_method",
@@ -57,12 +51,6 @@
   "file": "stream_job.py",
   "line": 11,
   "name": "theta_sketch_agg",
-  "status": "not yet"
- },
- {
-  "file": "stream_job.py",
-  "line": 12,
-  "name": "hll_sketch_estimate",
   "status": "not yet"
  },
  {
@@ -113,12 +101,6 @@
   "file": "nested_calls.sql",
   "line": 3,
   "name": "try_reflect",
-  "status": "not yet"
- },
- {
-  "file": "nested_calls.sql",
-  "line": 4,
-  "name": "hll_sketch_agg",
   "status": "not yet"
  },
  {

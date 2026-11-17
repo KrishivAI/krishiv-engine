@@ -643,12 +643,6 @@
  },
  {
   "file": "q21.sql",
-  "line": 5,
-  "name": "hll_sketch_estimate",
-  "status": "not yet"
- },
- {
-  "file": "q21.sql",
   "line": 6,
   "name": "legacy_fn_11",
   "status": "unknown"
