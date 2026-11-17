@@ -150,7 +150,7 @@ def _iter_udfs(api: Api) -> dict[str, Any]:
 
     @F.pandas_udf("long")
     def pandas_not_iterator(it: Iterator[pd.Series]) -> Iterator[pd.Series]:
-        return pd.Series([1, 2])  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
+        return pd.Series([1, 2])  # type: ignore[return-value]
 
     @F.arrow_udf("long")
     def arrow_plus_one(it: Iterator[pa.Array]) -> Iterator[pa.Array]:
