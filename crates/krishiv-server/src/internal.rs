@@ -373,12 +373,10 @@ async fn require_token(
         .with_malformed(malformed)
         .with_peer(peer_of(req.extensions()))
         .with_peer_leaf(peer_leaf_of(req.extensions()));
-    match s.guard.check_caller(request).await {
+    match s.guard.authenticate(request).await {
         Ok(caller) => {
             let mut req = req;
-            if let Some(c) = caller {
-                req.extensions_mut().insert(c);
-            }
+            req.extensions_mut().insert(caller);
             next.run(req).await
         }
         Err(Refusal::Unauthenticated) => {

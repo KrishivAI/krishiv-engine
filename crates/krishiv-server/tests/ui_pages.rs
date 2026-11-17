@@ -657,9 +657,9 @@ async fn a_source_with_only_rows_and_cancel_offers_no_pages_and_a_caller_prints_
     assert!(s.sql_start("SELECT 1", None).await.is_err());
     assert!(s.sql_status("r", None).await.unwrap().is_none());
     assert!(!s.sql_cancel("r", None).await.unwrap());
-    let c = krishiv_server::guard::Caller::new("ann", Arc::new(()));
-    assert_eq!(c.name(), "ann");
-    assert!(format!("{c:?}").contains("ann"));
+    // A caller no guard identified (or the start-up token's local administrator) runs in the ordinary session.
+    let local = krishiv_server::guard::Caller::local_admin();
+    assert!(s.sql_status("r", Some(&local)).await.unwrap().is_none());
 }
 
 #[tokio::test]

@@ -28,7 +28,12 @@ fn caller(name: &str, role: Role, method: Method) -> Caller {
         Some(role),
         method,
     );
-    Caller::new(name, Arc::new(who))
+    Caller {
+        principal: name.to_owned(),
+        role: Some(role.as_str().to_owned()),
+        method: "token".to_owned(),
+        identity: Some(Arc::new(who)),
+    }
 }
 
 fn source(allowed: Option<&std::path::Path>) -> SessionSource {

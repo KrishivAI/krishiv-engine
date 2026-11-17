@@ -131,6 +131,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
         flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails.");
+        conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         flag("columnPruning", None, "Parse only the requested columns (default: `spark.sql.csv.parser.columnPruning.enabled`, off under `multiLine`).");
         conf(COLUMN_PRUNING_CONF, OptionKind::Bool, OptionDefault::None, COLUMN_PRUNING_CONF, "The session's `spark.sql.csv.parser.columnPruning.enabled`, carried apart from `columnPruning` (Spark ANDs it with `!multiLine`).");
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
@@ -189,6 +190,9 @@ pub(crate) struct CsvOptions {
     pub quote_all: bool,
     pub escape_quotes: bool,
     pub column_pruning: bool,
+    /// `ignoreCorruptFiles` (or `spark.sql.files.ignoreCorruptFiles`): inference keeps the lines of a broken
+    /// compressed file.
+    pub ignore_corrupt_files: bool,
 }
 
 /// A single character option (`quote`, `escape`, `comment`): `None` when
@@ -343,6 +347,7 @@ impl CsvOptions {
             column_pruning: o
                 .bool("columnPruning")
                 .unwrap_or_else(|| !multi_line && o.bool(COLUMN_PRUNING_CONF).unwrap_or(true)),
+            ignore_corrupt_files: o.bool("ignoreCorruptFiles").unwrap_or(false),
         })
     }
 }

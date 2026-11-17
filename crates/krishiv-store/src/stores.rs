@@ -266,6 +266,32 @@ pub struct ParsedUrl {
     pub display: String,
 }
 
+impl ParsedUrl {
+    /// The root Spark prints the store's files under (`_metadata.file_path`): the scheme as
+    /// written, lower-cased, and the authority as written, an Azure host lower-cased (Hadoop
+    /// qualifies a path with its file system's URI; Spark 4.2.0 run: `S3A://b/k` prints
+    /// `s3a://b/...`, `abfss://c@Acct.DFS.core.windows.net` prints `abfss://c@acct.dfs...`).
+    /// `None` for `hf://`, which Spark does not read.
+    #[must_use]
+    pub fn spark_root(&self) -> Option<String> {
+        if self.scheme == ObjectScheme::HuggingFace {
+            return None;
+        }
+        let (_, rest) = self.display.split_once("://")?;
+        let authority = rest.split_once('/').map_or(rest, |(a, _)| a);
+        let authority = match (self.scheme, authority.split_once('@')) {
+            (ObjectScheme::Azure, Some((container, host))) => {
+                format!("{container}@{}", host.to_ascii_lowercase())
+            }
+            _ => authority.to_owned(),
+        };
+        Some(format!(
+            "{}://{authority}",
+            self.scheme_text.to_ascii_lowercase()
+        ))
+    }
+}
+
 /// Splits `text` into its cloud store and key.
 ///
 /// # Errors

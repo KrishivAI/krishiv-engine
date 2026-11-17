@@ -392,11 +392,15 @@ impl Encoder {
                 keys,
                 key_values,
                 calls,
+                window,
             } => Kind::PythonAggregate(pb::PythonAggregateNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 keys: indexes(keys),
                 key_values: indexes(key_values),
+                window: window.as_ref().map(|bounded| pb::PythonWindow {
+                    bounded: bounded.clone(),
+                }),
                 calls: calls
                     .iter()
                     .map(|c| {
@@ -1258,6 +1262,7 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
             ..
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         _ => false,
     };
     if invalid {
@@ -1363,6 +1368,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 a,
                 nested,
             ));
+        }
+        AggregateFunction::HistogramNumeric { nb } => {
+            let mut e = percentile_expr(
+                pb::AggregateFunction::HistogramNumeric,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            );
+            e.histogram_bins = *nb;
+            return Ok(e);
         }
         AggregateFunction::ApproxCountDistinct { p } => {
             return Ok(percentile_expr(

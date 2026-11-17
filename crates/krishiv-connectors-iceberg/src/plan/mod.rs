@@ -13,6 +13,7 @@ pub(crate) mod bounds;
 pub(crate) mod deletes;
 pub(crate) mod dv;
 pub(crate) mod entry;
+pub(crate) mod file_metrics;
 pub(crate) mod metrics;
 pub(crate) mod prune;
 pub(crate) mod snapshot;
@@ -20,9 +21,13 @@ pub(crate) mod transform;
 pub(crate) mod types;
 
 #[cfg(test)]
+mod eq_narrow_tests;
+#[cfg(test)]
+mod file_metrics_tests;
+#[cfg(test)]
 mod prop_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use bounds::{decode, encode};
 pub use deletes::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, DeleteIndex, TaskDeletes};

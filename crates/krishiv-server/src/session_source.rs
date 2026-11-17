@@ -62,7 +62,7 @@ struct Run {
     /// The caller the run belongs to (`None` for an unidentified one).
     owner: Option<String>,
     /// The principal name the statement's query is recorded under.
-    principal: Option<String>,
+    principal: Option<Principal>,
     cancel_requested: bool,
     state: &'static str,
     outcome: Option<Value>,
@@ -109,7 +109,7 @@ impl SessionSource {
 
     /// The session `caller` runs statements in, built on first use.
     fn session_of(&self, caller: &Caller) -> Result<(String, Session), UiError> {
-        let Some(who) = caller.identity::<Authenticated>() else {
+        let Some(who) = authenticated(caller) else {
             return Err(UiError::new(
                 "the caller's identity is not one this source knows",
             ));
@@ -438,12 +438,17 @@ impl UiSource for SessionSource {
 
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         Box::pin(async move {
+            let caller = caller.filter(|c| authenticated(c).is_some());
             // The statement runs as the caller, under the caller's policy; an unidentified caller (a server with
             // no authentication) runs in an ordinary session.
             let (owner, session, principal) = match caller {
                 Some(c) => {
                     let (key, session) = self.session_of(c)?;
-                    (Some(key), session, Some(c.name().to_owned()))
+                    (
+                        Some(key),
+                        session,
+                        authenticated(c).map(|a| a.principal.clone()),
+                    )
                 }
                 None => (None, self.anonymous.clone(), None),
             };
@@ -542,7 +547,10 @@ impl UiSource for SessionSource {
             // (the all-powerful start-up token) as an operator's kill, which the run reports as cancelled too.
             match principal {
                 Some(p) => self.runtime.cancel_by_tag(&tag, &p, false),
-                None => self.runtime.cancel_by_tag(&tag, "", true),
+                None => {
+                    self.runtime
+                        .cancel_by_tag(&tag, &Principal::new("", PrincipalKind::User), true)
+                }
             };
             Ok(true)
         })
@@ -559,7 +567,7 @@ impl SessionSource {
     }
 
     fn owner_key(&self, caller: &Caller) -> Option<String> {
-        let who = caller.identity::<Authenticated>()?;
+        let who = authenticated(caller)?;
         // What a Connect session is bound to (`SessionOwner`): the method, the principal's kind, tenant and name, so
         // a static token and an OIDC subject of the same name share neither a session nor a run.
         Some(format!(
@@ -567,6 +575,12 @@ impl SessionSource {
             who.method, who.principal.kind, who.principal.tenant, who.principal.name
         ))
     }
+}
+
+/// The session guard's record of `caller`; `None` for a caller a guard let through without identifying a principal
+/// (the start-up token's local administrator, an anonymous one): such a caller runs in the ordinary session.
+fn authenticated(caller: &Caller) -> Option<&Authenticated> {
+    caller.identity.as_deref()?.downcast_ref()
 }
 
 /// The UI over stored profiles, with no engine (`krishiv ui --profiles <dir>`, P3-T050): the pages that read the

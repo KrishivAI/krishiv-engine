@@ -69,69 +69,75 @@ fn surface(s: GuardSurface) -> Surface {
     }
 }
 
-impl SessionGuard {
-    /// Authenticates the request and checks its role against the matrix.
-    async fn decide(&self, request: GuardRequest<'_>) -> Result<Authenticated, Refusal> {
-        let surface = surface(request.surface);
-        let Some(peer) = request.peer else {
-            tracing::error!(
-                target: "krishiv::auth",
-                surface = surface.as_str(),
-                "no peer address recorded for an authenticated route; refusing"
-            );
-            return Err(Refusal::Misconfigured);
-        };
-        let mut credentials = Credentials::new(peer, surface);
-        credentials.malformed = request.malformed;
-        credentials.peer_leaf = request.peer_leaf.as_deref();
-        if let Some(token) = request.token {
-            credentials = credentials.with_bearer(token);
-        }
-        let authenticated = match self.auth.authenticate(&credentials).await {
-            Ok(a) => a,
-            Err(f) if f.is_retryable() => return Err(Refusal::Unavailable),
-            Err(_) => return Err(Refusal::Unauthenticated),
-        };
-        let Some((securable, privilege)) = requirement(request.access) else {
-            return Ok(authenticated);
-        };
-        // Client code is not reachable from these routes, so the UDF role does not matter;
-        // the strictest value keeps it from ever widening a decision.
-        let policy = RolePolicy::new(authenticated.role, Role::Admin, PolicyVersion(0));
-        if policy.allows(&securable, privilege) {
-            return Ok(authenticated);
-        }
-        tracing::warn!(
-            target: "krishiv::audit",
-            principal = %authenticated.principal.name,
-            role = authenticated.role.map_or("none", Role::as_str),
-            surface = surface.as_str(),
-            securable = %securable,
-            privilege = %privilege,
-            error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
-            "access denied"
-        );
-        if let Some(d) = &self.denials {
-            d.record(surface, privilege);
-        }
-        Err(Refusal::Denied)
+impl Guard for SessionGuard {
+    fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+        Box::pin(async move { self.run(request).await.map(|_| ()) })
+    }
+
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        Box::pin(async move {
+            let authenticated = self.run(request).await?;
+            Ok(Caller {
+                principal: authenticated.principal.name.clone(),
+                role: authenticated.role.map(|r| r.as_str().to_owned()),
+                method: format!("{:?}", authenticated.method).to_ascii_lowercase(),
+                identity: Some(Arc::new(authenticated)),
+            })
+        })
     }
 }
 
-impl Guard for SessionGuard {
-    fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
-        Box::pin(async move { self.decide(request).await.map(drop) })
-    }
-
-    fn check_caller<'a>(
-        &'a self,
-        request: GuardRequest<'a>,
-    ) -> BoxFuture<'a, Result<Option<Caller>, Refusal>> {
-        Box::pin(async move {
-            let a = self.decide(request).await?;
-            let name = a.principal.name.clone();
-            Ok(Some(Caller::new(&name, Arc::new(a))))
-        })
+impl SessionGuard {
+    /// Authenticates and checks the route's requirement; the authenticated caller on success.
+    async fn run(&self, request: GuardRequest<'_>) -> Result<Authenticated, Refusal> {
+        {
+            let surface = surface(request.surface);
+            let Some(peer) = request.peer else {
+                tracing::error!(
+                    target: "krishiv::auth",
+                    surface = surface.as_str(),
+                    "no peer address recorded for an authenticated route; refusing"
+                );
+                return Err(Refusal::Misconfigured);
+            };
+            let mut credentials = Credentials::new(peer, surface);
+            credentials.malformed = request.malformed;
+            credentials.peer_leaf = request.peer_leaf.as_deref();
+            if let Some(token) = request.token {
+                credentials = credentials.with_bearer(token);
+            }
+            let authenticated = match self.auth.authenticate(&credentials).await {
+                Ok(a) => a,
+                Err(f) if f.is_retryable() => return Err(Refusal::Unavailable),
+                Err(_) => return Err(Refusal::Unauthenticated),
+            };
+            let Some((securable, privilege)) = requirement(request.access) else {
+                return Ok(authenticated);
+            };
+            // Client code is not reachable from these routes, so the UDF role does not matter;
+            // the strictest value keeps it from ever widening a decision.
+            let policy = RolePolicy::new(authenticated.role, Role::Admin, PolicyVersion(0));
+            if policy.allows(&securable, privilege) {
+                return Ok(authenticated);
+            }
+            tracing::warn!(
+                target: "krishiv::audit",
+                principal = %authenticated.principal.name,
+                role = authenticated.role.map_or("none", Role::as_str),
+                surface = surface.as_str(),
+                securable = %securable,
+                privilege = %privilege,
+                error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
+                "access denied"
+            );
+            if let Some(d) = &self.denials {
+                d.record(surface, privilege);
+            }
+            Err(Refusal::Denied)
+        }
     }
 }
 

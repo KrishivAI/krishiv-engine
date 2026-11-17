@@ -136,6 +136,61 @@ pub enum Refusal {
     Misconfigured,
 }
 
+/// Who a guarded request acts for, as the guard resolved it (P3-T066: the admin API needs the
+/// caller to tell its own work from other principals' and to log who acted).
+#[derive(Clone)]
+pub struct Caller {
+    /// The principal's name.
+    pub principal: String,
+    /// The role (`viewer`, `operator`, `admin`), if the credential maps to one.
+    pub role: Option<String>,
+    /// How the caller authenticated (`token`, `mtls`, `oidc`, `startup-token`).
+    pub method: String,
+    /// What the guard resolved, for the implementation behind the admin API to read (a
+    /// `krishiv_session::auth::Authenticated` from a `SessionGuard` (feature `session`)).
+    pub identity: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+/// The identity marker of [`Caller::local_admin`]: the only caller without an `Authenticated`
+/// identity that holds rights. A guard that sets `role` without an identity gets none.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalAdmin;
+
+impl Caller {
+    /// The local administrator of a server without authentication: whoever holds its start-up
+    /// token (loopback only, ADR 0046 section 6).
+    #[must_use]
+    pub fn local_admin() -> Self {
+        Self {
+            principal: "local".to_owned(),
+            role: Some("admin".to_owned()),
+            method: "startup-token".to_owned(),
+            identity: Some(Arc::new(LocalAdmin)),
+        }
+    }
+
+    /// A caller a guard let through without saying who it is: no role, no identity.
+    #[must_use]
+    pub fn anonymous() -> Self {
+        Self {
+            principal: "unknown".to_owned(),
+            role: None,
+            method: "none".to_owned(),
+            identity: None,
+        }
+    }
+}
+
+impl fmt::Debug for Caller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Caller")
+            .field("principal", &self.principal)
+            .field("role", &self.role)
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Decides whether a request may use a guarded route.
 pub trait Guard: Send + Sync + 'static {
     /// `Ok` lets the request through.
@@ -144,57 +199,19 @@ pub trait Guard: Send + Sync + 'static {
     /// The [`Refusal`]; the guard has already logged it.
     fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>>;
 
-    /// [`Self::check`], and who the request acts for when the guard authenticates principals (`SessionGuard`):
-    /// the UI's SQL editor runs a statement as that caller, under the caller's own policy. A guard that only
-    /// knows a shared secret identifies nobody (`None`).
+    /// [`Self::check`], returning who the request acts for. A guard that cannot say (the
+    /// default) returns [`Caller::anonymous`], which holds no role.
     ///
     /// # Errors
-    /// The [`Refusal`], as for [`Self::check`].
-    fn check_caller<'a>(
+    /// The [`Refusal`]; the guard has already logged it.
+    fn authenticate<'a>(
         &'a self,
         request: GuardRequest<'a>,
-    ) -> BoxFuture<'a, Result<Option<Caller>, Refusal>> {
-        Box::pin(async move { self.check(request).await.map(|()| None) })
-    }
-}
-
-/// The authenticated principal a [`Guard`] identified: its name, and the guard's own record of it (for
-/// `SessionGuard`, `krishiv_session::auth::Authenticated`), which the source that builds the caller's session
-/// reads back with [`Caller::identity`].
-#[derive(Clone)]
-pub struct Caller {
-    name: Arc<str>,
-    identity: Arc<dyn std::any::Any + Send + Sync>,
-}
-
-impl Caller {
-    /// A caller named `name` whose identity record is `identity`.
-    #[must_use]
-    pub fn new(name: &str, identity: Arc<dyn std::any::Any + Send + Sync>) -> Self {
-        Self {
-            name: Arc::from(name),
-            identity,
-        }
-    }
-
-    /// The principal's name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The guard's record of the caller, when it is a `T`.
-    #[must_use]
-    pub fn identity<T: 'static>(&self) -> Option<&T> {
-        self.identity.downcast_ref()
-    }
-}
-
-impl fmt::Debug for Caller {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Caller")
-            .field("name", &self.name)
-            .finish_non_exhaustive()
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        Box::pin(async move {
+            self.check(request).await?;
+            Ok(Caller::anonymous())
+        })
     }
 }
 
@@ -231,6 +248,14 @@ impl Guard for TokenGuard {
         } else {
             Err(Refusal::Unauthenticated)
         }))
+    }
+
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        let checked = self.check(request);
+        Box::pin(async move { checked.await.map(|()| Caller::local_admin()) })
     }
 }
 
@@ -340,5 +365,53 @@ mod tests {
         assert!(!same_secret(b"abc", b"abcd"));
         assert!(!same_secret(b"abcd", b"abc"));
         assert!(same_secret(b"", b""));
+    }
+
+    #[test]
+    fn the_local_admin_holds_a_role_and_an_identity_and_an_anonymous_caller_neither() {
+        let a = Caller::local_admin();
+        assert_eq!(a.principal, "local");
+        assert_eq!(a.role.as_deref(), Some("admin"));
+        assert!(a.identity.is_some());
+        let n = Caller::anonymous();
+        assert_eq!(n.principal, "unknown");
+        assert!(n.role.is_none() && n.identity.is_none());
+    }
+
+    #[test]
+    fn a_caller_prints_without_its_identity() {
+        let text = format!("{:?}", Caller::local_admin());
+        assert!(text.contains("local") && text.contains("admin"), "{text}");
+        assert!(!text.contains("LocalAdmin"), "{text}");
+    }
+
+    fn auth_request(token: Option<&str>) -> GuardRequest<'_> {
+        GuardRequest::new(GuardSurface::Ui, Access::Operate).with_token(token)
+    }
+
+    #[tokio::test]
+    async fn the_token_guard_names_the_local_admin_for_the_right_token_only() {
+        let g = TokenGuard::new("s3cret");
+        let caller = g.authenticate(auth_request(Some("s3cret"))).await;
+        assert_eq!(caller.map(|c| c.principal), Ok("local".to_owned()));
+        assert!(g.authenticate(auth_request(Some("nope"))).await.is_err());
+        assert!(g.authenticate(auth_request(None)).await.is_err());
+        let empty = TokenGuard::new("");
+        assert!(empty.authenticate(auth_request(Some(""))).await.is_err());
+    }
+
+    struct AllowAll;
+    impl Guard for AllowAll {
+        fn check<'a>(&'a self, _: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guard_that_cannot_say_who_gets_an_anonymous_caller_with_no_rights() {
+        let caller = AllowAll.authenticate(auth_request(None)).await;
+        let caller = caller.unwrap_or_else(|_| Caller::local_admin());
+        assert_eq!(caller.principal, "unknown");
+        assert!(caller.role.is_none() && caller.identity.is_none());
     }
 }

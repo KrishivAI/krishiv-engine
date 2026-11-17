@@ -1813,6 +1813,57 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     }
 }
 
+/// PR-36a: the open-file cap of an Iceberg write task.
+#[test]
+fn iceberg_write_max_open_files_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&ICEBERG_WRITE_MAX_OPEN_FILES)
+            .and_then(ConfigValue::as_int)
+    };
+    assert_eq!(get(&c), Some(100));
+    c.set("krishiv.iceberg.write.maxOpenFiles", "7").unwrap();
+    assert_eq!(get(&c), Some(7));
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "0").is_err());
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "-3").is_err());
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "many").is_err());
+    assert_eq!(ICEBERG_WRITE_MAX_OPEN_FILES.scope, Scope::Session);
+}
+
+#[test]
+fn connect_artifact_quotas_parse_and_default() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    // Design P3-T011a §3.9: 1 GiB per session, 256 MiB per artifact.
+    assert_eq!(size(&d, &CONNECT_ARTIFACTS_MAX_BYTES), Some(1 << 30));
+    assert_eq!(
+        size(&d, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(256 << 20)
+    );
+    let mut c = Config::new();
+    c.set("krishiv.connect.artifacts.maxBytes", "2m").unwrap();
+    c.set("krishiv.connect.artifacts.maxArtifactBytes", "64k")
+        .unwrap();
+    assert_eq!(size(&c, &CONNECT_ARTIFACTS_MAX_BYTES), Some(2 << 20));
+    assert_eq!(
+        size(&c, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(64 << 10)
+    );
+    assert!(c.set("krishiv.connect.artifacts.maxBytes", "-1").is_err());
+    assert!(
+        c.set("krishiv.connect.artifacts.maxArtifactBytes", "lots")
+            .is_err()
+    );
+    for e in [
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+        assert!(e.spark_alias.is_none(), "{}", e.key);
+    }
+}
+
 /// P3-T021: the Delta log pool and the catalog parse limits.
 #[test]
 fn delta_and_catalog_limit_entries_parse_and_default() {
@@ -1833,10 +1884,24 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     assert!(c.set("krishiv.delta.logThreads", "0").is_err());
     assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
     assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    let cache = |c: &Config| {
+        c.get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+    };
+    assert_eq!(cache(&c), Some(64 << 20));
+    c.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    assert_eq!(cache(&c), Some(0));
+    c.set("krishiv.iceberg.manifestCache.bytes", "1g").unwrap();
+    assert_eq!(cache(&c), Some(1 << 30));
+    assert!(
+        c.set("krishiv.iceberg.manifestCache.bytes", "lots")
+            .is_err()
+    );
     for e in [
         &DELTA_LOG_THREADS,
         &CATALOG_MAX_METADATA_BYTES,
         &CATALOG_MAX_COLUMNS,
+        &ICEBERG_MANIFEST_CACHE_BYTES,
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
@@ -1859,4 +1924,36 @@ fn union_output_partitioning_is_a_spark_alias() {
         Some(&ConfigValue::Bool(false))
     );
     assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
+}
+
+#[test]
+fn arrow_validate_schema_defaults_off_and_takes_spark_s_key() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&ARROW_PYSPARK_VALIDATE_SCHEMA)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set(
+        "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+        "true",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&ARROW_PYSPARK_VALIDATE_SCHEMA)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    // A Python runner reads it by its canonical key.
+    assert!(c.explicit_registered().contains(&(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+        "true".to_owned()
+    )));
+    assert!(
+        c.set(
+            "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+            "maybe"
+        )
+        .is_err()
+    );
 }

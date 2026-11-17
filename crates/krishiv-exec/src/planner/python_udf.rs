@@ -200,9 +200,11 @@ impl Planner<'_> {
                 return Err(internal("a Python UDF call is not a function"));
             };
             // A relation kind (design P3-T085) as a column expression: only
-            // the scalar kinds run in a `PythonEval`.
+            // the scalar kinds, and the scalar iterator kinds (each a task
+            // over the node's rows), run in a `PythonEval`.
             if let FunctionId::PythonUdf { eval_type, .. } = &f.id
                 && !eval_type.is_scalar()
+                && eval_type.kind() != krishiv_plan::PythonUdfKind::ScalarIter
             {
                 return Err(super::build::unsupported(&format!(
                     "a Python UDF of eval type {} as a column expression",
