@@ -1166,3 +1166,68 @@ async fn each_call_sends_the_session_conf_current_when_it_runs() {
     let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
     assert_eq!(longs(&r), [Some(1)]);
 }
+
+/// Adds `name` with `data` to the session as `token` (one batch, one chunk).
+async fn add_artifact(channel: &Channel, token: &str, name: &str, data: &[u8]) {
+    use krishiv_connect::proto::v4_3::add_artifacts_request::{
+        ArtifactChunk, Batch, Payload, SingleChunkArtifact,
+    };
+    let request = pb::AddArtifactsRequest {
+        session_id: SESSION.to_owned(),
+        payload: Some(Payload::Batch(Batch {
+            artifacts: vec![SingleChunkArtifact {
+                name: name.to_owned(),
+                data: Some(ArtifactChunk {
+                    data: data.to_vec(),
+                    crc: i64::from(krishiv_connect_server::artifacts::crc32(data)),
+                }),
+            }],
+        })),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.client_streaming(
+        with_token(futures::stream::iter([request]), token),
+        path("AddArtifacts"),
+        tonic_prost::ProstCodec::<pb::AddArtifactsRequest, pb::AddArtifactsResponse>::default(),
+    )
+    .await
+    .expect("add the artifact");
+}
+
+/// `spark.addArtifacts("helper_mod.py", pyfile=True)`: the module is importable in the session's UDFs.
+const IMPORTS_HELPER: &str = "def f(x):\n    import helper_mod\n    return helper_mod.scale(x)";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udf_imports_a_pyfile_added_to_its_session() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    add_artifact(
+        &run.channel,
+        ADMIN,
+        "pyfiles/helper_mod.py",
+        b"def scale(x):\n    return x * 7\n",
+    )
+    .await;
+    let responses = execute(
+        &run.channel,
+        select(
+            3,
+            alias(
+                call(udf(
+                    Some(&py),
+                    "imports_helper",
+                    IMPORTS_HELPER,
+                    long(),
+                    vec![id()],
+                )),
+                "r",
+            ),
+        ),
+        ADMIN,
+    )
+    .await
+    .expect("the UDF imports the added module");
+    assert_eq!(longs(&responses), [Some(0), Some(7), Some(14)]);
+}
