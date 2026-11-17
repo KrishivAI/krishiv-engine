@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (94)
+## Spark functions Krishiv does not run yet (91)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -53,14 +53,12 @@ an empty cell means there is none yet.
 | [`bitmap_or_agg`](../reference/sql/functions/bitmap_or_agg.md) | not yet |  |
 | [`collations`](../reference/sql/functions/collations.md) | not yet |  |
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
-| [`from_avro`](../reference/sql/functions/from_avro.md) | not yet |  |
 | [`from_protobuf`](../reference/sql/functions/from_protobuf.md) | not yet |  |
 | [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet | GROUP BY width_bucket(col, min, max, n) with count(*) gives equal-width bucket counts (bucket numbers, not bin centres; col = max lands in bucket n+1); Spark's adaptive bins are not reproduced |
 | [`hll_sketch_agg`](../reference/sql/functions/hll_sketch_agg.md) | not yet | approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available |
 | [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
 | [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
 | [`hll_union_agg`](../reference/sql/functions/hll_union_agg.md) | not yet |  |
-| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet | try_parse_json(expr) IS NOT NULL is true for a string that parses as JSON and false for one that does not |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
@@ -97,7 +95,6 @@ an empty cell means there is none yet.
 | [`theta_sketch_estimate`](../reference/sql/functions/theta_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available |
 | [`theta_union`](../reference/sql/functions/theta_union.md) | not yet |  |
 | [`theta_union_agg`](../reference/sql/functions/theta_union_agg.md) | not yet |  |
-| [`to_avro`](../reference/sql/functions/to_avro.md) | not yet |  |
 | [`to_protobuf`](../reference/sql/functions/to_protobuf.md) | not yet |  |
 | [`try_reflect`](../reference/sql/functions/try_reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`tuple_difference_double`](../reference/sql/functions/tuple_difference_double.md) | not yet |  |
