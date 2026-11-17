@@ -216,6 +216,15 @@ impl<'a> Inputs<'a> {
         }
     }
 
+    /// Argument `i` as it is held and whether it is a literal: a literal is one row (read at row 0 by every
+    /// row), not `rows` copies. A kernel over a long value (a query vector) uses this to avoid the broadcast.
+    pub(super) fn operand(&self, i: usize) -> Result<(ArrayRef, bool), KrishivError> {
+        Ok(match self.arg(i)? {
+            Arg::Array(a) => (Arc::clone(a), false),
+            Arg::Scalar(a) => (Arc::clone(a), true),
+        })
+    }
+
     /// Argument `i` as a string column of `rows` values.
     pub(super) fn strings(&self, i: usize) -> Result<StringArray, KrishivError> {
         to_utf8(self.column(i)?.as_ref())

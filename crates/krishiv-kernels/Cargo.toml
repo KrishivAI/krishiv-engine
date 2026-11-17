@@ -69,5 +69,9 @@ name = "collation_key"
 harness = false
 
 [[bench]]
+name = "vector"
+harness = false
+
+[[bench]]
 name = "datetime_zone"
 harness = false
