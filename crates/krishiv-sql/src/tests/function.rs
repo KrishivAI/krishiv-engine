@@ -330,7 +330,11 @@ fn syntax_errors_match_spark() {
     );
     let text = e.error.to_string();
     assert!(text.contains("my_nvl"), "{text}");
-    assert!(text.contains("GenericUDFNvl"), "{text}");
+    assert!(
+        !text.contains("GenericUDFNvl"),
+        "the class literal is not echoed: {text}"
+    );
+    assert_eq!(e.error.error_class().sql_state(), Some("0A000"));
     assert!(text.contains("built-in function `nvl`"), "{text}");
 }
 

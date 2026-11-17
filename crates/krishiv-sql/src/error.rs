@@ -242,21 +242,15 @@ pub(crate) fn invalid_temp_obj_qualifier(
 }
 
 /// `KRISHIV_JVM_FUNCTION_UNSUPPORTED` for a function implemented by a JVM class, with the
-/// replacement the migration table knows (`jvm_udf::hint`).
+/// replacement the migration table knows (`jvm_udf::hint`). The class text is used to pick the
+/// hint only: a string literal is never echoed in an error.
 pub(crate) fn unsupported_function_class(
     function: String,
-    class_name: String,
+    class_name: &str,
     span: Span,
 ) -> ParseError {
-    let hint = crate::parser::jvm_udf::hint(&function, &class_name);
-    at(
-        KrishivJvmFunctionUnsupported {
-            function,
-            class_name,
-            hint,
-        },
-        span,
-    )
+    let hint = crate::parser::jvm_udf::hint(&function, class_name);
+    at(KrishivJvmFunctionUnsupported { function, hint }, span)
 }
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for `EXPLAIN FORMAT JSON PHYSICAL`, reserved

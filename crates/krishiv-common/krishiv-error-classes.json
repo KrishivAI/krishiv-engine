@@ -202,7 +202,7 @@
   },
   "KRISHIV_JVM_FUNCTION_UNSUPPORTED" : {
     "message" : [
-      "The function <function> is implemented by the JVM class <className>, which Krishiv cannot load: it runs no JVM. <hint>"
+      "The function <function> is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. <hint>"
     ],
     "sqlState" : "0A000"
   },

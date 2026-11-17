@@ -168,7 +168,13 @@ class Profile:
                         if entry.perf is not None:
                             entry.perf.dump_stats(os.path.join(path, f"udf_{udf_id}_perf.pstats"))
                 elif kind == "memory":
-                    body = {"name": entry.name, "calls": entry.calls, "peak_bytes": entry.peak, "net_bytes": entry.net}
+                    with self._registry.lock:  # one consistent snapshot of the counters
+                        body = {
+                            "name": entry.name,
+                            "calls": entry.calls,
+                            "peak_bytes": entry.peak,
+                            "net_bytes": entry.net,
+                        }
                     with open(os.path.join(path, f"udf_{udf_id}_memory.json"), "w", encoding="utf-8") as f:
                         json.dump(body, f)
 

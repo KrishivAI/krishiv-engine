@@ -63,7 +63,9 @@ impl Parser<'_> {
                     .collect::<Vec<_>>()
                     .join(".");
                 return Self::fatal(error::unsupported_function_class(
-                    function, class_name, span,
+                    function,
+                    &class_name,
+                    span,
                 ));
             }
             p.expect_sym(Sym::LParen)?;
