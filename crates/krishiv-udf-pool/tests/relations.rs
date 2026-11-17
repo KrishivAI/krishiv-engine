@@ -712,12 +712,17 @@ fn a_scalar_payload_is_not_a_relation() {
     let Some(py) = python() else { return };
     let pool = pool(&py);
     let udfs = udfs(&pool);
-    // The plan names a relation kind the registered payload does not have: the server's own inconsistency.
+    // The plan names a relation kind the registered payload does not have (the store finds payloads by name
+    // and version only).
     let payload = command(&py, "def f(x):\n    return x", "LongType()", 101);
     let err = prepare(&udfs, payload, &map_call(PythonEvalType::MapPandasIter))
         .err()
         .expect("refused");
-    assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+        "{err}"
+    );
     assert_eq!(pool.live_workers(), 0, "refused before any worker starts");
 }
 
@@ -960,6 +965,49 @@ fn map_in_arrow_extra_columns_are_refused_not_dropped() {
     let err = run(prepared.as_ref(), map_frames()).expect_err("three columns");
     assert_eq!(err.error_class(), ErrorClass::PythonException, "{err}");
     assert!(err.to_string().contains("3 columns, expected 2"), "{err}");
+}
+
+/// A relation's runner conf is read through the session's `ConfSource` at each `prepare_relation`, as a
+/// scalar call's is: a change the source shows reaches the next call site's tasks. Here the source turns
+/// `validateSchema` off between two call sites of one `mapInArrow` UDF returning extra columns, which changes
+/// the refusal's class (`ARROW_TYPE_MISMATCH`, then `PYTHON_EXCEPTION`).
+#[test]
+fn a_relation_reads_its_runner_conf_through_the_conf_source() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let live = Arc::new(std::sync::Mutex::new(BTreeMap::from([(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled".to_owned(),
+        "true".to_owned(),
+    )])));
+    let source = Arc::clone(&live);
+    let udfs = udfs(&pool).with_conf_source(Arc::new(move || {
+        source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }));
+    // Ignored while a source is set.
+    udfs.set_runner_conf(BTreeMap::new());
+    let extra = || {
+        command(
+            &py,
+            "import pyarrow as pa\ndef f(it):\n    for b in it:\n        \
+             yield pa.RecordBatch.from_arrays([b.column('s'), b.column('id'), b.column('id')], ['s', 'v', 'w'])",
+            MAP_RESULT,
+            207,
+        )
+    };
+    let prepared =
+        prepare(&udfs, extra(), &map_call(PythonEvalType::MapArrowIter)).expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("three columns");
+    assert_eq!(err.error_class(), ErrorClass::ArrowTypeMismatch, "{err}");
+    live.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    let prepared =
+        prepare(&udfs, extra(), &map_call(PythonEvalType::MapArrowIter)).expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("three columns");
+    assert_eq!(err.error_class(), ErrorClass::PythonException, "{err}");
 }
 
 /// `mapInPandas` under `validateSchema` with a column declared non-nullable: Spark 4.2.0's pandas serializer

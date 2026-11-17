@@ -13,7 +13,8 @@ use arrow_schema::DataType;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivUdfNotAvailable, OperationCanceled,
+    InternalError, KrishivError, KrishivPythonUdfEvalTypeMismatch, KrishivUdfNotAvailable,
+    OperationCanceled,
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
@@ -114,20 +115,56 @@ impl SessionUdfs {
                 })
             })
     }
+
+    /// The runner conf a call prepared now sends: the [`ConfSource`]'s, else the one
+    /// [`Self::set_runner_conf`] set.
+    fn runner_conf(&self) -> Arc<BTreeMap<String, String>> {
+        match &self.conf_source {
+            Some(source) => Arc::new(source()),
+            None => Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
+        }
+    }
+}
+
+/// The payload store finds a UDF by `(name, version)` only, so a plan's call and the registration may disagree
+/// on its kind (a scalar UDF called as a relation, or the reverse): `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`,
+/// before any worker starts, rather than a worker running a payload as the wrong kind.
+pub(crate) fn check_eval_type(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+    called: &str,
+) -> Result<(), KrishivError> {
+    if registered.payload.eval_type == eval_type {
+        return Ok(());
+    }
+    Err(KrishivPythonUdfEvalTypeMismatch {
+        name: name.to_owned(),
+        version: version.to_string(),
+        registered: registered.payload.eval_type.to_string(),
+        called: called.to_owned(),
+        eval_type: eval_type.to_string(),
+    }
+    .into())
 }
 
 impl UdfRuntime for SessionUdfs {
     fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
         let registered = self.registered(&spec.name, spec.version)?;
+        check_eval_type(
+            &spec.name,
+            spec.version,
+            &registered,
+            spec.eval_type.code(),
+            "a scalar function",
+        )?;
         Ok(Arc::new(Prepared {
             pool: self.pool.clone(),
             owner: self.owner.clone(),
             registered,
             return_type: spec.return_arrow.clone(),
-            conf: match &self.conf_source {
-                Some(source) => Arc::new(source()),
-                None => Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
-            },
+            conf: self.runner_conf(),
         }))
     }
 
@@ -136,7 +173,7 @@ impl UdfRuntime for SessionUdfs {
         spec: &RelationCallSpec,
     ) -> krishiv_exec::Result<Arc<dyn PreparedRelationUdf>> {
         let registered = self.registered(&spec.name, spec.version)?;
-        let session = Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner));
+        let session = self.runner_conf();
         crate::relation::prepare(
             self.pool.clone(),
             self.owner.clone(),
@@ -324,4 +361,102 @@ pub(crate) fn with_worker<T>(
     }
     drop(state);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::{Field, Schema};
+    use krishiv_common::error::ErrorClass;
+    use krishiv_exec::python_relation::RunnerConf;
+    use krishiv_plan::function::PythonEvalType;
+    use krishiv_types::DataType as SparkType;
+
+    use super::*;
+    use crate::pool::PoolConfig;
+
+    /// The session's UDFs over a pool that cannot start workers: the checks run before any would start.
+    fn udfs() -> SessionUdfs {
+        let pool = Pool::new(PoolConfig {
+            sandbox: false,
+            executables: vec!["/nonexistent/krishiv-test-python".to_owned()],
+            ..PoolConfig::default()
+        })
+        .unwrap();
+        SessionUdfs::new(
+            pool,
+            Owner {
+                principal: "p".to_owned(),
+                session: "s".to_owned(),
+            },
+        )
+    }
+
+    fn payload(eval_type: i32) -> PythonPayload {
+        PythonPayload {
+            command: Arc::from(&b"never loaded"[..]),
+            eval_type,
+            python_ver: "3.11".to_owned(),
+        }
+    }
+
+    fn scalar(name: &str) -> UdfCallSpec {
+        UdfCallSpec {
+            name: name.to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::ArrowBatched,
+            thread_safe: true,
+            arg_types: vec![SparkType::Long],
+            return_type: SparkType::Long,
+            return_arrow: DataType::Int64,
+        }
+    }
+
+    fn relation(name: &str) -> RelationCallSpec {
+        RelationCallSpec {
+            name: name.to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::MapArrowIter,
+            thread_safe: true,
+            input_types: vec![vec![SparkType::Long]],
+            input_names: vec![vec!["v".to_owned()]],
+            key_count: 0,
+            arity: 1,
+            output_names: vec!["v".to_owned()],
+            output_types: vec![SparkType::Long],
+            output_arrow: Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
+            conf: RunnerConf::default(),
+        }
+    }
+
+    /// A scalar-registered UDF called as a relation, and a relation-registered one called as a scalar
+    /// function, are refused with the class (the store finds payloads by name and version only).
+    #[test]
+    fn a_udf_called_as_another_kind_than_registered_is_refused() {
+        let udfs = udfs();
+        udfs.register("s", 1, payload(PythonEvalType::ArrowBatched.code()));
+        udfs.register("m", 1, payload(PythonEvalType::MapArrowIter.code()));
+        let e = udfs
+            .prepare_relation(&relation("s"))
+            .err()
+            .expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(e.message().contains("as a relation (eval type 207)"), "{e}");
+        let e = udfs.prepare(&scalar("m")).err().expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(
+            e.message().contains("registered with eval type 207 but the plan calls it as a scalar function (eval type 101)"),
+            "{e}"
+        );
+        // Each kind as registered prepares.
+        assert!(udfs.prepare(&scalar("s")).is_ok());
+        assert!(udfs.prepare_relation(&relation("m")).is_ok());
+    }
 }

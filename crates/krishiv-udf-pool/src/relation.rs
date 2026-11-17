@@ -112,20 +112,25 @@ pub(crate) fn prepare(
     spec: &RelationCallSpec,
     session: &BTreeMap<String, String>,
 ) -> Result<Arc<dyn PreparedRelationUdf>, KrishivError> {
-    if !KINDS.contains(&spec.eval_type.code())
-        || spec.eval_type.code() != registered.payload.eval_type
-    {
+    if !KINDS.contains(&spec.eval_type.code()) {
+        // The executor called a kind this runtime does not run as a relation: its own inconsistency.
         return Err(InternalError {
             message: format!(
-                "the Python UDF {} v{} is registered with eval type {} and called as a relation of eval type {}",
+                "the Python UDF {} v{} is called as a relation of eval type {}, which the pool does not run",
                 spec.name,
                 spec.version,
-                registered.payload.eval_type,
                 spec.eval_type.code()
             ),
         }
         .into());
     }
+    crate::runtime::check_eval_type(
+        &spec.name,
+        spec.version,
+        &registered,
+        spec.eval_type.code(),
+        "a relation",
+    )?;
     let mut conf = session.clone();
     conf.extend(
         spec.conf
