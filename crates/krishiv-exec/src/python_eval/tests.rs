@@ -368,8 +368,10 @@ async fn a_cancel_while_calls_are_in_flight_releases_everything() {
 }
 
 /// A call that is still running when first polled and done at every later
-/// poll, waking nothing: a call that finishes while its driver checks the
-/// window.
+/// poll, waking nothing: a call whose pool thread finishes while its driver
+/// polls it (the oneshot then skips the wake and the poll sees the result).
+/// It breaks the `Future` contract (`Pending` with no wake registered) on
+/// purpose: the test polls it by hand.
 struct FinishesOnSecondPoll {
     finished: Arc<AtomicBool>,
 }
@@ -425,6 +427,74 @@ async fn a_call_finishing_while_the_window_is_checked_frees_the_driver() {
         }
     }
     assert!(finished.load(Ordering::SeqCst), "the call never finished");
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    drop((g, r.ctx, r.query));
+    assert_eq!(r.root.reserved(), 0, "memory left after the phase");
+}
+
+/// The first call waits for `gate`; every later one is done at once.
+struct HeldFirst {
+    gate: Arc<Gate>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl PreparedUdf for HeldFirst {
+    fn call(&self, args: RecordBatch) -> BoxFuture<'static, crate::error::Result<ArrayRef>> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        let gate = Arc::clone(&self.gate);
+        Box::pin(async move {
+            if first {
+                poll_fn(|cx| {
+                    gate.waker.register(cx.waker());
+                    if gate.open.load(Ordering::SeqCst) {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await;
+            }
+            Ok(Arc::clone(args.column(0)))
+        })
+    }
+}
+
+/// The window stays a bound (review of PY-055): a newer slice that is done
+/// while the oldest still runs does not free the driver, so `sink` takes no
+/// more input past the window.
+#[tokio::test]
+async fn a_newer_slice_done_does_not_free_a_driver_whose_oldest_runs() {
+    let mut r = rig(64 << 20, 2, 2, false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let schema = Schema::new(vec![Field::new("x", ArrowType::Int64, true)]);
+    let call = EvalCall {
+        args: vec![Arc::new(Col(0))],
+        udf: Arc::new(HeldFirst {
+            gate: Arc::clone(&r.gate),
+            calls: Arc::clone(&calls),
+        }),
+        client: ArrowType::Int64,
+        canonical: ArrowType::Int64,
+    };
+    r.sink = PythonEvalSink::new(&schema, vec![call], 2, 2, None);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    // Four rows in slices of two: the oldest is held, the newer one is done.
+    let SinkStatus::Blocked(mut wait) = r.sink.sink(rows(4), &mut l, &g).unwrap() else {
+        panic!("two slices fill the window of two");
+    };
+    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+    assert!(
+        wait.as_mut().poll(&mut cx).is_pending(),
+        "the newer slice is done but the oldest still runs: the driver stays blocked"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "no call past the window");
+    r.gate.open();
+    assert!(
+        wait.as_mut().poll(&mut cx).is_ready(),
+        "the oldest slice is done"
+    );
     r.sink.combine(l, &g).unwrap();
     r.sink.finalize(&g, &r.ctx).await.unwrap();
     drop((g, r.ctx, r.query));

@@ -325,25 +325,23 @@ impl Pending {
         })
     }
 
-    /// Whether a driver blocked on a full window may go on: one slice failed,
-    /// the oldest is done, or a call finished during this poll. Every slice
-    /// is polled once (so each call still running holds `cx`'s waker) and the
-    /// answer comes from the state they are in afterwards: deciding on the
-    /// oldest slice before the others were polled let a call that finished in
-    /// between leave the driver waiting with every slice done and nothing left
-    /// to wake it (PY-055). A call finished elsewhere frees the driver too;
-    /// `sink` then blocks again if the window is still full.
+    /// Whether a driver blocked on a full window may go on: one slice failed
+    /// or the oldest is done. Every slice is polled once, so each call still
+    /// running holds `cx`'s waker, and the answer comes from the state they
+    /// are in afterwards. The check used to poll the oldest slice, then every
+    /// slice again: a call whose pool thread finished during the second poll
+    /// skipped its wake (the receiver held its waker slot) and was found done
+    /// there, so the driver stayed blocked with every slice done and nothing
+    /// left to wake it (PY-055). A call that finishes during its one poll here
+    /// is ready in that poll; one that finishes after it wakes `cx`.
     fn unblocked(&mut self, cx: &mut Context<'_>) -> bool {
-        let mut finished = false;
         for slice in &mut self.slices {
-            let before = slice.running();
             slice.poll_all(cx);
             if slice.failed().is_some() {
                 return true;
             }
-            finished |= slice.running() < before;
         }
-        finished || self.slices.front().is_none_or(|h| h.running() == 0)
+        self.slices.front().is_none_or(|h| h.running() == 0)
     }
 
     /// The oldest slice if every call of it is done, without waiting.
