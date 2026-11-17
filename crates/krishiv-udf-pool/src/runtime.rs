@@ -126,9 +126,16 @@ impl SessionUdfs {
     }
 }
 
+/// The eval types the pool's workers run as scalar calls (`pool_worker.py`): Spark's `SQL_BATCHED_UDF`, its
+/// Arrow-optimized form, the pandas and the Arrow scalar UDF. A scalar call site accepts a payload of any of
+/// them: the worker runs the payload's own (over Connect a plain `@udf` is registered as 100 and planned as
+/// the Arrow-optimized 101, `krishiv-connect`'s `translate/udf.rs`; review R7c-1).
+const SCALAR_EVAL_TYPES: [i32; 4] = [100, 101, 200, 250];
+
 /// The payload store finds a UDF by `(name, version)` only, so a plan's call and the registration may disagree
 /// on its kind (a scalar UDF called as a relation, or the reverse): `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`,
-/// before any worker starts, rather than a worker running a payload as the wrong kind.
+/// before any worker starts, rather than a worker running a payload as the wrong kind. A relation call needs
+/// its exact eval type (each relation kind's runner differs).
 pub(crate) fn check_eval_type(
     name: &str,
     version: u32,
@@ -139,26 +146,50 @@ pub(crate) fn check_eval_type(
     if registered.payload.eval_type == eval_type {
         return Ok(());
     }
-    Err(KrishivPythonUdfEvalTypeMismatch {
+    Err(eval_type_mismatch(
+        name, version, registered, eval_type, called,
+    ))
+}
+
+/// As [`check_eval_type`] for a scalar call: any scalar payload ([`SCALAR_EVAL_TYPES`]) fits.
+fn check_scalar_eval_type(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+) -> Result<(), KrishivError> {
+    if SCALAR_EVAL_TYPES.contains(&registered.payload.eval_type) {
+        return Ok(());
+    }
+    Err(eval_type_mismatch(
+        name,
+        version,
+        registered,
+        eval_type,
+        "a scalar function",
+    ))
+}
+
+fn eval_type_mismatch(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+    called: &str,
+) -> KrishivError {
+    KrishivError::from(KrishivPythonUdfEvalTypeMismatch {
         name: name.to_owned(),
         version: version.to_string(),
         registered: registered.payload.eval_type.to_string(),
         called: called.to_owned(),
         eval_type: eval_type.to_string(),
-    }
-    .into())
+    })
 }
 
 impl UdfRuntime for SessionUdfs {
     fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
         let registered = self.registered(&spec.name, spec.version)?;
-        check_eval_type(
-            &spec.name,
-            spec.version,
-            &registered,
-            spec.eval_type.code(),
-            "a scalar function",
-        )?;
+        check_scalar_eval_type(&spec.name, spec.version, &registered, spec.eval_type.code())?;
         Ok(Arc::new(Prepared {
             pool: self.pool.clone(),
             owner: self.owner.clone(),
@@ -458,5 +489,34 @@ mod tests {
         // Each kind as registered prepares.
         assert!(udfs.prepare(&scalar("s")).is_ok());
         assert!(udfs.prepare_relation(&relation("m")).is_ok());
+    }
+
+    /// Over Connect a plain `@udf` is registered as `SQL_BATCHED_UDF` (100) and planned as the Arrow-optimized
+    /// 101 (review R7c-1): any scalar payload fits a scalar call; a relation payload called as a scalar
+    /// function is still refused, and a scalar payload called as a relation too.
+    #[test]
+    fn a_scalar_call_takes_any_scalar_payload_and_no_relation_payload() {
+        let udfs = udfs();
+        for (name, code) in [("b", 100), ("a", 101), ("p", 200), ("r", 250)] {
+            udfs.register(name, 1, payload(code));
+            assert!(udfs.prepare(&scalar(name)).is_ok(), "eval type {code}");
+            let e = udfs
+                .prepare_relation(&relation(name))
+                .err()
+                .expect("refused");
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+                "{e}"
+            );
+        }
+        udfs.register("g", 1, payload(PythonEvalType::GroupedMapPandas.code()));
+        let e = udfs.prepare(&scalar("g")).err().expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(e.message().contains("registered with eval type 201"), "{e}");
     }
 }
