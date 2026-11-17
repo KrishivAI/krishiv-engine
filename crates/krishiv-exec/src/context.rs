@@ -277,6 +277,7 @@ fn insert_in_order<T>(
 #[cfg(test)]
 mod forward_observed_tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow_array::{Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -354,6 +355,7 @@ mod forward_observed_tests {
         let bytes = states(64).get_array_memory_size();
         for round in 0..20_u32 {
             let ctx = query(1, root().child("q", None));
+            let taken_partials = AtomicUsize::new(0);
             std::thread::scope(|scope| {
                 for lane in 0..4_usize {
                     let (ctx, finalizer) = (&ctx, &finalizer);
@@ -366,7 +368,11 @@ mod forward_observed_tests {
                 }
                 scope.spawn(|| {
                     for _ in 0..200 {
-                        let _ = ctx.take_observed_each();
+                        let (taken, _held) = ctx.take_observed_states();
+                        taken_partials.fetch_add(
+                            taken.values().map(|o| o.partials.len()).sum::<usize>(),
+                            Ordering::Relaxed,
+                        );
                         std::thread::yield_now();
                     }
                 });
@@ -380,7 +386,12 @@ mod forward_observed_tests {
                 held * bytes,
                 "round {round}: {held} partials held"
             );
-            let _ = ctx.take_observed_each();
+            let (rest, held_back) = ctx.take_observed_states();
+            let total = taken_partials.load(Ordering::Relaxed)
+                + rest.values().map(|o| o.partials.len()).sum::<usize>();
+            // No partial is lost: every one sent (4 lanes x 50) is in some take.
+            assert_eq!(total, 200, "round {round}: partials lost between takes");
+            drop((rest, held_back));
             assert_eq!(ctx.pool().reserved(), 0);
         }
     }
@@ -493,9 +504,9 @@ impl QueryContext {
     /// is released all the same.
     #[doc(hidden)]
     pub fn forward_observed_to(&self, parent: &Self) -> Result<()> {
-        let taken = std::mem::take(&mut *lock(&self.observed));
-        // Dropped on every exit, an error included: what it still holds goes back.
-        let mut held = lock(&self.observed_memory).take();
+        // The states and their charge leave together, as in `take_observed_each`. The held
+        // reservation is dropped on every exit, an error included: what it still holds goes back.
+        let (taken, mut held) = self.take_observed_states();
         for o in taken.into_values() {
             for (source, states) in o.order.into_iter().zip(o.partials) {
                 if let Some(reservation) = held.as_mut() {
@@ -562,19 +573,21 @@ impl QueryContext {
     /// stream) keeps no observation memory. A later read sees only states sent since.
     #[doc(hidden)]
     pub fn take_observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
-        // The states and their reservation leave together, under both locks: a partial sent
-        // meanwhile lands wholly before (and is reported) or wholly after (and is kept, charged,
-        // for a later read), never half of each.
-        let (taken, held) = {
-            let mut held = lock(&self.observed_memory);
-            let mut all = lock(&self.observed);
-            (std::mem::take(&mut *all), held.take())
-        };
+        let (taken, held) = self.take_observed_states();
         let out = self.finalize_observed(&taken);
         // The retained states go back to the pool only after they were finalized.
         drop(taken);
         drop(held);
         out
+    }
+
+    /// The retained states and their reservation, left together under both locks: a partial sent
+    /// meanwhile lands wholly before (and is reported) or wholly after (and is kept, charged,
+    /// for a later read), never half of each.
+    fn take_observed_states(&self) -> (BTreeMap<(String, u32), Observed>, Option<Reservation>) {
+        let mut held = lock(&self.observed_memory);
+        let mut all = lock(&self.observed);
+        (std::mem::take(&mut *all), held.take())
     }
 
     /// The query id.
