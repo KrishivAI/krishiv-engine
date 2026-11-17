@@ -6,8 +6,10 @@
 //! second table, `vault`, is never written in any statement the principal runs and sits only
 //! behind objects it holds no grant on: neither its name nor either table's data shows in any
 //! error, plan, listing, JSON or `system.queries` row. Listing rows (run by a principal that may
-//! list the namespace) succeed without naming either. The revoke-after-cache rows are in
-//! `grants_views.rs`. One test: the audit subscriber is process-wide.
+//! list the namespace) succeed without naming either; a lookup of one hidden object by name
+//! answers as for a missing one (review B3). The read rows run again authorised (granted the
+//! canary) and revoked; the revoke-after-cache rows, for the reader's and the definer's grants,
+//! are in `grants_views.rs`. One test: the audit subscriber is process-wide.
 //!
 //! Not covered here: the `catalog` and `external` providers (G5, G6), Connect `Relation` kinds the
 //! session API does not reach (`cached_remote_relation` is the session relation cache, covered by
@@ -414,6 +416,13 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         ("SHOW TABLES", sql("SHOW TABLES")),
         ("SHOW VIEWS", sql("SHOW VIEWS")),
         ("SHOW TABLES LIKE", sql("SHOW TABLES LIKE 'c*'")),
+        ("SHOW NAMESPACES", sql("SHOW NAMESPACES")),
+        (
+            "catalog list_databases",
+            Box::new(|s: &Session| {
+                block_on(s.catalog().list_databases(None)).map(|d| format!("{d:?}"))
+            }),
+        ),
         (
             "catalog list_tables",
             Box::new(|s: &Session| {
@@ -574,6 +583,54 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
             ));
         }
     }
+    // Authorised, then revoked (design §6: each cell in all three states): granted the canary, ana
+    // reads it through every read shape; revoked, each is refused again, however much of the
+    // first answer a cache kept.
+    let reads = [
+        "SELECT",
+        "SELECT a column",
+        "SELECT count",
+        "DESCRIBE",
+        "SHOW COLUMNS",
+        "via CTE",
+        "via IN",
+        "via scalar subquery",
+        "via set operation",
+        "via join",
+        "DataFrame table",
+        "DataFrame alias",
+        "DataFrame schema",
+        "catalog get_table",
+        "catalog list_columns",
+        "analyze JSON",
+    ];
+    block_on(async {
+        root.sql("GRANT SELECT ON TABLE canary TO user:ana")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    for (row, run) in refused.iter().filter(|(r, _)| reads.contains(r)) {
+        if let Err(e) = run(&ana) {
+            bad.push(format!("{row}: refused once granted: {e}"));
+        }
+    }
+    block_on(async {
+        root.sql("REVOKE SELECT ON TABLE canary FROM user:ana")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    take();
+    for (row, run) in refused.iter().filter(|(r, _)| reads.contains(r)) {
+        match run(&ana) {
+            Err(e) if e.error_class().name() == DENIED => {}
+            other => bad.push(format!("{row}: after the revoke: {other:?}")),
+        }
+    }
+    take();
     // ana's own history holds only ana's statements: root's (which name the vault) are not shown.
     if let Ok(text) = sql("SELECT query_text FROM system.queries")(&ana)
         && let Some(l) = leaks(&text)

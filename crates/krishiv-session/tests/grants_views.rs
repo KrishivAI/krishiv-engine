@@ -557,6 +557,50 @@ fn a_definer_failure_shows_the_reader_only_what_it_wrote() {
     }
 }
 
+/// Review M3: a revoke of the *definer's* grant reaches every cache a reader holds over its
+/// definer view: an analysed frame, a cached frame, `CACHE TABLE` of the view, a view cached over
+/// it, the result cache and the analysis prefix cache (the same text analysed again).
+#[test]
+fn caches_over_a_definer_view_are_refused_after_the_definers_revoke() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    bob.conf()
+        .set("krishiv.resultCache.enabled", "true")
+        .unwrap();
+    let df = block_on(bob.sql("SELECT a FROM dv")).unwrap();
+    assert_eq!(block_on(df.collect()).unwrap()[0].num_rows(), 1);
+    let cached_df = bob.table("dv").cache();
+    assert_eq!(block_on(cached_df.collect()).unwrap()[0].num_rows(), 1);
+    ok(&bob, "CACHE TABLE dv");
+    ok(&bob, "CACHE TABLE cdv AS SELECT a FROM dv");
+    assert_eq!(rows(&bob, "SELECT a FROM dv WHERE a = 1"), 1);
+    assert_eq!(rows(&bob, "SELECT a FROM dv WHERE a = 1"), 1);
+    ok(&root, "REVOKE SELECT ON t FROM user:ana");
+    for e in [
+        block_on(df.collect()).map(|_| ()),
+        block_on(cached_df.collect()).map(|_| ()),
+    ] {
+        assert_eq!(e.unwrap_err().error_class().name(), DENIED);
+    }
+    for sql in [
+        "SELECT a FROM dv",
+        "SELECT a FROM dv WHERE a = 1",
+        "SELECT * FROM cdv",
+        "CACHE TABLE dv",
+    ] {
+        denied(&bob, sql);
+    }
+    // Granted back, the same text reads again.
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    assert_eq!(rows(&bob, "SELECT a FROM dv WHERE a = 1"), 1);
+}
+
 /// Review M1: `EXPLAIN` of a definer view shows the bodies of the views its text inlines, so the
 /// reader needs `Select` on each of them, as on a view it read itself.
 #[test]
