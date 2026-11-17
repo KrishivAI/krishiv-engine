@@ -202,6 +202,40 @@ mod tests {
         assert_eq!(estimate(&t), 1, "a string and the same bytes hash alike");
     }
 
+    /// Buffers are untrusted input: every truncation and a spread of bit flips of valid sketches (list, set and
+    /// array modes) must come back as an error or a readable sketch, never a panic.
+    #[test]
+    fn mutated_and_truncated_buffers_never_panic() {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for (lg_k, n) in [(4_u8, 3_i64), (8, 40), (8, 5_000), (12, 100_000)] {
+            let mut s = new_sketch(i32::from(lg_k)).unwrap();
+            for v in 0..n {
+                update_long(&mut s, v);
+            }
+            let bytes = to_bytes(&s);
+            for len in 0..bytes.len().min(300) {
+                let _ = from_bytes(&bytes[..len], "hll_sketch_estimate");
+            }
+            for _ in 0..300 {
+                let mut m = bytes.clone();
+                let flips = 1 + next() % 4;
+                for _ in 0..flips {
+                    let i = usize::try_from(next()).unwrap() % m.len();
+                    m[i] ^= 1 << (next() % 8);
+                }
+                if let Ok(back) = from_bytes(&m, "hll_sketch_estimate") {
+                    let _ = estimate(&back);
+                }
+            }
+        }
+    }
+
     #[test]
     fn bytes_round_trip_and_garbage_is_rejected() {
         let mut s = new_sketch(10).unwrap();
