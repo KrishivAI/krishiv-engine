@@ -403,7 +403,14 @@ fn glue_endpoint_checked_when_set() {
         ("krishiv.catalog.g.type", "glue"),
         ("krishiv.catalog.g.option.endpoint", "http://10.0.0.7:4566"),
     ];
-    assert!(checked(&pairs).is_ok());
+    let decls = checked(&pairs).unwrap();
+    assert_eq!(
+        decls.catalogs[0]
+            .options
+            .get("endpoint")
+            .map(String::as_str),
+        Some("http://10.0.0.7:4566")
+    );
 }
 
 /// Review 58a1 nit 2: the catalog `uri` and `tokenEndpoint` literals are checked at startup, in
@@ -442,7 +449,15 @@ fn catalog_uri_and_token_endpoint_literals_checked_at_startup() {
         "krishiv.catalog.lake.tokenEndpoint",
         "https://10.0.0.6/token",
     ));
-    assert!(checked(&pairs).is_ok());
+    let decls = checked(&pairs).unwrap();
+    let lake = &decls.catalogs[0];
+    assert_eq!(lake.uri.as_deref(), Some("https://10.0.0.5:8181/api"));
+    match &lake.auth {
+        CatalogAuth::ClientCredentials { token_endpoint, .. } => {
+            assert_eq!(token_endpoint, "https://10.0.0.6/token");
+        }
+        other => panic!("{other:?}"),
+    }
     // A name is checked when it resolves, not here.
     assert!(checked(&rest_with(&[])).is_ok());
 }
@@ -632,6 +647,29 @@ fn catalog_key_prefixes_match_in_any_case() {
     ] {
         assert!(is_declaration_key(key), "{key}");
         assert!(parse(&[(key, "x")], DeclMode::Server).is_err(), "{key}");
+    }
+}
+
+/// Spark's inline `token` is accepted in embedded mode under any case of the Spark prefix, as
+/// the parser matches that prefix (CodeRabbit #836).
+#[test]
+fn spark_inline_token_accepted_under_mixed_case_prefix() {
+    for prefix in ["spark.sql.catalog.uc", "Spark.SQL.Catalog.uc"] {
+        let class = (prefix.to_owned(), "io.unitycatalog.spark.UCSingleCatalog");
+        let uri = (format!("{prefix}.uri"), "https://uc.example.com");
+        let token = (format!("{prefix}.token"), "inline-token-value");
+        let pairs = [
+            (class.0.as_str(), class.1),
+            (uri.0.as_str(), uri.1),
+            (token.0.as_str(), token.1),
+        ];
+        let decls = parse(&pairs, DeclMode::Embedded).unwrap();
+        match &decls.catalogs[0].auth {
+            CatalogAuth::Token(SecretRef::Inline(s)) => {
+                assert_eq!(s.expose_secret(), "inline-token-value", "{prefix}");
+            }
+            other => panic!("{prefix}: {other:?}"),
+        }
     }
 }
 

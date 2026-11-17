@@ -820,8 +820,8 @@ fn decl(
             None => Ok(None),
             Some((k, v)) => {
                 // Spark's `token` option may be inline in embedded mode; Krishiv's keys never.
-                let spark_inline =
-                    mode == DeclMode::Embedded && k.starts_with(SPARK_CATALOG_PREFIX);
+                let spark_inline = mode == DeclMode::Embedded
+                    && strip_prefix_ci(k, SPARK_CATALOG_PREFIX).is_some();
                 SecretRef::parse(k, v, spark_inline).map(Some)
             }
         }
