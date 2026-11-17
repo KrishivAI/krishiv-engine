@@ -182,6 +182,12 @@ impl TableProvider for FileTable {
     fn scan_units(&self) -> Option<u64> {
         self.units
     }
+
+    /// Parquet files declare each row group's row count, so a scan that
+    /// reads no column still returns every row.
+    fn reads_rows_without_columns(&self) -> bool {
+        self.scan.format().name() == "parquet"
+    }
 }
 
 impl FileTable {

@@ -35,6 +35,159 @@ pub struct Capability {
     #[prost(string, tag = "4")]
     pub detail: ::prost::alloc::string::String,
 }
+/// A session as `system.sessions` shows it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Session {
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub principal: ::prost::alloc::string::String,
+    /// The service principal acting for `principal` (trusted impersonation), if any.
+    #[prost(string, tag = "3")]
+    pub delegated_by: ::prost::alloc::string::String,
+    /// Client-asserted.
+    #[prost(string, tag = "4")]
+    pub client_type: ::prost::alloc::string::String,
+    /// `connect`, `flight_sql` or `embedded`.
+    #[prost(string, tag = "5")]
+    pub transport: ::prost::alloc::string::String,
+    /// `open`, `closed`, `expired` or `killed`.
+    #[prost(string, tag = "6")]
+    pub state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "7")]
+    pub created: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag = "8")]
+    pub last_active: ::core::option::Option<::prost_types::Timestamp>,
+    /// Set when the session ended.
+    #[prost(message, optional, tag = "9")]
+    pub closed: ::core::option::Option<::prost_types::Timestamp>,
+    /// `release_session`, `idle_timeout`, `admin_kill` or `drain`, when it ended.
+    #[prost(string, tag = "10")]
+    pub close_reason: ::prost::alloc::string::String,
+    #[prost(btree_map = "string, string", tag = "11")]
+    pub tags: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    #[prost(int64, tag = "12")]
+    pub queries_running: i64,
+    #[prost(int64, tag = "13")]
+    pub queries_started: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSessionsRequest {
+    /// At most this many rows (default 100, clamped to 1,000).
+    #[prost(int32, tag = "1")]
+    pub page_size: i32,
+    /// From `next_page_token` of the previous page; bound to this request's filters.
+    #[prost(string, tag = "2")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSessionsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub sessions: ::prost::alloc::vec::Vec<Session>,
+    /// Empty at the end.
+    #[prost(string, tag = "2")]
+    pub next_page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KillSessionRequest {
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Makes a retry safe: the same id with the same request returns the first response.
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KillSessionResponse {
+    /// The queries the kill cancelled.
+    #[prost(int64, tag = "1")]
+    pub queries_cancelled: i64,
+}
+/// A query as `system.queries` shows it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Query {
+    #[prost(string, tag = "1")]
+    pub query_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub principal: ::prost::alloc::string::String,
+    /// `queued`, `running`, `finished`, `failed`, `cancelled` or `denied`.
+    #[prost(string, tag = "4")]
+    pub state: ::prost::alloc::string::String,
+    /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN`, when classified.
+    #[prost(string, tag = "5")]
+    pub statement_class: ::prost::alloc::string::String,
+    /// Cut and masked by the session's text policy.
+    #[prost(string, tag = "6")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "7")]
+    pub submitted: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag = "8")]
+    pub started: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag = "9")]
+    pub ended: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(string, tag = "10")]
+    pub error_class: ::prost::alloc::string::String,
+    #[prost(string, tag = "11")]
+    pub resource_group: ::prost::alloc::string::String,
+    #[prost(btree_map = "string, string", tag = "12")]
+    pub tags: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListQueriesRequest {
+    #[prost(int32, tag = "1")]
+    pub page_size: i32,
+    #[prost(string, tag = "2")]
+    pub page_token: ::prost::alloc::string::String,
+    /// Keeps these states; empty means `running` and `queued`.
+    #[prost(string, repeated, tag = "3")]
+    pub states: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Keeps the queries of this session.
+    #[prost(string, tag = "4")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Keeps the queries of this principal.
+    #[prost(string, tag = "5")]
+    pub principal: ::prost::alloc::string::String,
+    /// Keeps the queries carrying this tag selector (`k` or `k=v`).
+    #[prost(string, tag = "6")]
+    pub tag: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListQueriesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub queries: ::prost::alloc::vec::Vec<Query>,
+    #[prost(string, tag = "2")]
+    pub next_page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelQueryRequest {
+    #[prost(string, tag = "1")]
+    pub query_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelQueryResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelQueriesByTagRequest {
+    /// `k` or `k=v`.
+    #[prost(string, tag = "1")]
+    pub selector: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelQueriesByTagResponse {
+    /// The queries cancelled.
+    #[prost(string, repeated, tag = "1")]
+    pub query_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 /// Generated server implementations.
 pub mod admin_service_server {
     #![allow(
@@ -62,6 +215,47 @@ pub mod admin_service_server {
             request: tonic::Request<super::GetCapabilitiesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetCapabilitiesResponse>,
+            tonic::Status,
+        >;
+        /// The caller's own sessions, or every session with `Monitor` (the rows of `system.sessions`).
+        async fn list_sessions(
+            &self,
+            request: tonic::Request<super::ListSessionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSessionsResponse>,
+            tonic::Status,
+        >;
+        /// Ends a session and cancels its queries: one's own, or any with `Operate`.
+        async fn kill_session(
+            &self,
+            request: tonic::Request<super::KillSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::KillSessionResponse>,
+            tonic::Status,
+        >;
+        /// The caller's own queries, or every query with `Monitor` (the rows of `system.queries`).
+        async fn list_queries(
+            &self,
+            request: tonic::Request<super::ListQueriesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListQueriesResponse>,
+            tonic::Status,
+        >;
+        /// Cancels one query: one's own, or any with `Operate`.
+        async fn cancel_query(
+            &self,
+            request: tonic::Request<super::CancelQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CancelQueryResponse>,
+            tonic::Status,
+        >;
+        /// Cancels the queries carrying a tag selector (`k` or `k=v`). Without `Operate` it matches only
+        /// the caller's own queries; what comes back never depends on other principals' queries.
+        async fn cancel_queries_by_tag(
+            &self,
+            request: tonic::Request<super::CancelQueriesByTagRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CancelQueriesByTagResponse>,
             tonic::Status,
         >;
     }
@@ -216,6 +410,232 @@ pub mod admin_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetCapabilitiesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ListSessions" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSessionsSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::ListSessionsRequest>
+                    for ListSessionsSvc<T> {
+                        type Response = super::ListSessionsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListSessionsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::list_sessions(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSessionsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/KillSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct KillSessionSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::KillSessionRequest>
+                    for KillSessionSvc<T> {
+                        type Response = super::KillSessionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::KillSessionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::kill_session(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = KillSessionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ListQueries" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListQueriesSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::ListQueriesRequest>
+                    for ListQueriesSvc<T> {
+                        type Response = super::ListQueriesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListQueriesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::list_queries(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListQueriesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/CancelQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct CancelQuerySvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::CancelQueryRequest>
+                    for CancelQuerySvc<T> {
+                        type Response = super::CancelQueryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CancelQueryRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::cancel_query(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CancelQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/CancelQueriesByTag" => {
+                    #[allow(non_camel_case_types)]
+                    struct CancelQueriesByTagSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::CancelQueriesByTagRequest>
+                    for CancelQueriesByTagSvc<T> {
+                        type Response = super::CancelQueriesByTagResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CancelQueriesByTagRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::cancel_queries_by_tag(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CancelQueriesByTagSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

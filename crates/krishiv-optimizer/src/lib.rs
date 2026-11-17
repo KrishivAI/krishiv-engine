@@ -547,7 +547,7 @@ fn run(
                     // non-column key counts as the input's rows): order the joins
                     // above it again, as a second optimization would.
                     let ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
-                    prune_and_tidy(&ordered, &mut t)?
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
             }
             _ => root,
@@ -621,7 +621,7 @@ fn run(
         } else {
             root
         };
-        let root = prune_and_tidy(&root, &mut t)?;
+        let root = prune_and_tidy(&root, stats, &mut t)?;
         // After pruning, so a projection on the path holds only what is read
         // above it and the payload is what the path really carries; the moved
         // join is then ordered with the dimension's own joins and its path
@@ -652,7 +652,7 @@ fn run(
                     if eager {
                         ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
                     }
-                    prune_and_tidy(&ordered, &mut t)?
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
             }
             _ => root,
@@ -682,7 +682,7 @@ fn run(
             // can leave a column unread (an aggregate output, a join side's
             // column): prune again so that a second optimization finds
             // nothing to remove.
-            let pruned = prune::prune(&after);
+            let pruned = prune::prune(&after, stats);
             t.step("Cse", 1, "Prune", &after, &pruned);
             if Arc::ptr_eq(&pruned, &after) {
                 after
@@ -803,9 +803,10 @@ fn broadcast_max(config: Option<&Config>) -> Option<f64> {
 /// while tidying leaves a constant `false` filter and changes the plan.
 fn prune_and_tidy(
     root: &Arc<LogicalPlan>,
+    stats: Option<&dyn Statistics>,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let pruned = t.once("Prune", root, |r| Ok(prune::prune(r)))?;
+    let pruned = t.once("Prune", root, |r| Ok(prune::prune(r, stats)))?;
     let mut root = batch(Arc::clone(&pruned), "Tidy", t)?;
     // Tidying can fold a filter to a constant `false` and leave columns
     // unread (a `false` that reached a filter on `b` frees `b`; constants
@@ -816,7 +817,7 @@ fn prune_and_tidy(
     let mut changed = !Arc::ptr_eq(&root, &pruned) && has_false_filter(&root);
     let mut round = 2;
     while changed && round <= MAX_ITERATIONS {
-        let pruned = prune::prune(&root);
+        let pruned = prune::prune(&root, stats);
         t.step("Prune", round, "Prune", &root, &pruned);
         if Arc::ptr_eq(&pruned, &root) {
             break;

@@ -359,6 +359,11 @@ fn admin_router(
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
     let public = metrics_on && !authenticated && !metrics_need_token(config, bound);
+    // Denials of the admin API count into the same counters as every other surface.
+    let admin_denials = auth.as_ref().map_or_else(
+        || Arc::new(krishiv_session::auth::DeniedCounts::default()),
+        |a| a.denials(),
+    );
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
@@ -387,7 +392,10 @@ fn admin_router(
         .unwrap_or_default();
     let alias_guard = Arc::clone(&guard);
     let admin_v1 = krishiv_server::admin_v1::router(
-        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::new(
+            krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
+                .with_denials(admin_denials),
+        ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );

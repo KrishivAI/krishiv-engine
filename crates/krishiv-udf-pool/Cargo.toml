@@ -21,6 +21,7 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["executor", "std"] }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox", version = "=0.2.1" }
 serde_json = { workspace = true, features = ["std"] }
@@ -34,4 +35,3 @@ rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
 # The compressed-result regression test writes an LZ4 stream.
 arrow-ipc = { workspace = true, features = ["lz4"] }
 futures = { workspace = true, features = ["executor"] }
-krishiv-plan = { path = "../krishiv-plan" }

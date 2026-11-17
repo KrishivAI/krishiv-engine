@@ -236,6 +236,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
+        "krishiv.iceberg.write.maxOpenFiles",
+        &ICEBERG_WRITE_MAX_OPEN_FILES,
+    ),
+    (
         "krishiv.io.credentials.refreshSkew",
         &IO_CREDENTIALS_REFRESH_SKEW,
     ),
