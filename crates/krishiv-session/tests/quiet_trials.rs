@@ -253,32 +253,75 @@ fn quiet_trials_leave_no_trace() {
     run(&s, "SHOW TABLES IN d").unwrap_err();
     assert_eq!(told(), 1, "{:?}", policy.0.lock().unwrap());
 
-    // Review Q3: plain EXPLAIN's trial refused by `MANAGE` on the cluster, which the session asks
-    // while it changed a server-scoped store setting (`check_store_options`). The withheld fallback
-    // asks the same and is refused: the policy is told only of the refusals the session audits and
-    // counts; the trial adds none. (A secret's `USAGE` is reached only through the IR:
-    // `session/env.rs` tests.)
-    let refused_loudly_only = |sql: &str| {
-        take();
-        let (before, before_session) = (told(), total_session(&s_counts));
-        let e = run(&s, sql).unwrap_err();
+    // One statement, one refusal report: a statement refused `MANAGE` on the cluster (a
+    // server-scoped store option, or any query while the session changed a server-scoped store
+    // setting, `check_store_options`) tells the policy once, writes one audit record and counts
+    // one denial, whatever path it takes. Plain EXPLAIN's trial adds none (review Q3), and its
+    // withheld fallback and its result frame do not report the one refusal twice. (A secret's
+    // `USAGE` is reached only through the IR: `session/env.rs` tests.)
+    let reported_once = |what: &str, r: Result<(), KrishivError>| {
+        let e = r.unwrap_err();
         assert_eq!(
             e.error_class().name(),
             "KRISHIV_INSUFFICIENT_PERMISSIONS",
-            "{sql}"
+            "{what}: {e}"
         );
-        let audits = take().len() as u64;
-        assert!(audits >= 1, "{sql}");
+        assert!(e.to_string().contains("MANAGE"), "{what}: {e}");
+    };
+    let once = |what: &str, act: &dyn Fn() -> Result<(), KrishivError>| {
+        take();
+        let (before, before_session) = (told(), total_session(&s_counts));
+        reported_once(what, act());
+        let audits = take().len();
         assert_eq!(
-            told() - before,
-            audits,
-            "{sql}: {:?}",
+            (
+                told() - before,
+                total_session(&s_counts) - before_session,
+                audits
+            ),
+            (1, 1, 1),
+            "{what}: {:?}",
             policy.0.lock().unwrap()
         );
-        assert_eq!(total_session(&s_counts) - before_session, audits, "{sql}");
     };
+    let s = &s;
+    let sql = |q: &'static str| move || run(s, q).map(|_| ());
+    // The store option is the statement's own.
+    once("SET", &sql("SET fs.s3a.endpoint = 'http://10.0.0.1:9000'"));
+    once(
+        "CREATE TABLE OPTIONS",
+        &sql("CREATE TABLE d.o (a INT) USING csv OPTIONS ('fs.s3a.region' = 'eu-west-1')"),
+    );
+    // Every query while the session changed a server-scoped store setting.
     s.conf()
         .set("fs.s3a.endpoint", "http://10.0.0.1:9000")
         .unwrap();
-    refused_loudly_only("EXPLAIN SELECT 1");
+    for q in [
+        "SELECT 1",
+        "SELECT * FROM d.a1",
+        "SET",
+        "EXPLAIN SELECT 1",
+        "EXPLAIN EXTENDED SELECT * FROM d.a1",
+        "EXPLAIN FORMATTED SELECT 1",
+        "EXPLAIN CODEGEN SELECT 1",
+        "EXPLAIN COST SELECT 1",
+        "EXPLAIN FORMAT JSON SELECT 1",
+        "EXPLAIN SET",
+    ] {
+        once(q, &sql(q));
+    }
+    once("saveAsTable", &|| {
+        block_on(s.range(0, 1, 1, None).write().save_as_table("d.w"))
+    });
+    // Connect `AnalyzePlan`: the schema and the explain of a frame.
+    once("schema_for_metadata", &|| {
+        block_on(s.range(0, 1, 1, None).schema_for_metadata()).map(|_| ())
+    });
+    once("explain_for_metadata", &|| {
+        block_on(
+            s.range(0, 1, 1, None)
+                .explain_for_metadata(krishiv_session::ExplainMode::Simple),
+        )
+        .map(|_| ())
+    });
 }

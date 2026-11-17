@@ -73,6 +73,16 @@ impl Session {
         let Statement::Query(q) = &*e.statement else {
             unreachable!("an explained query");
         };
+        // The per-query store check (`check_store_options`: `MANAGE` on the cluster while the
+        // session changed a server-scoped store setting) is asked by every analysis: the explained
+        // query's (its trial, then a withheld fallback, which folds a refusal into the text) and
+        // the result frame's. Asked once here, before either, so one statement gives one refusal
+        // report: one `denied`, one audit record, one count. The same refusal the result frame
+        // gave, so the caller sees the same error.
+        let r = self
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
+            .await;
+        crate::access::audit_read(self, &env, r)?;
         let plan = krishiv_sql::lower_identified(
             q,
             krishiv_plan::SourceId(0),
