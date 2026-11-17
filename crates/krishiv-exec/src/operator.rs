@@ -250,7 +250,10 @@ pub trait Operator: Send + Sync {
     /// only if the operator's output rows depend on neither its input's
     /// batch boundaries nor when its rows arrive; their order may follow the
     /// batches only where Spark leaves it unspecified (a left outer hash
-    /// join's unmatched rows come after each batch's matches). The joined
+    /// join's unmatched rows come after each batch's matches). An operator
+    /// that evaluates expressions which can fail (ANSI) then also evaluates
+    /// up to a joined batch of rows that a limit above it would have cut:
+    /// prefer `false` unless its per-batch cost is worth that. The joined
     /// batches keep the row order and one scan split each; the
     /// driver hands every row on before the operator's
     /// [`finish`](Self::finish). Default `false`.

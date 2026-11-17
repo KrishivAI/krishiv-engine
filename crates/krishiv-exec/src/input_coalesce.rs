@@ -20,7 +20,8 @@
 //! held batches are not charged to the memory pool, like any batch in flight
 //! between two operators: they are bounded instead, at about one batch of
 //! `target` rows and at most [`HELD_MAX_BYTES`] (counted with the buffers
-//! they keep alive, so a slice of a large batch is not held long). Charging
+//! they keep alive, so a slice of a large batch is not held long): per
+//! driver, that much for each operator that joins its input. Charging
 //! them made an operator under a tight limit fail for memory that its own
 //! spill could not free.
 

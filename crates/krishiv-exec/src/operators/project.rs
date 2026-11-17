@@ -130,12 +130,6 @@ impl Project {
 }
 
 impl Operator for Project {
-    // Row by row; the partition index comes from the split, which joined
-    // batches keep (J1).
-    fn coalesce_input(&self) -> bool {
-        true
-    }
-
     fn keeps_partitioning(&self) -> bool {
         true
     }

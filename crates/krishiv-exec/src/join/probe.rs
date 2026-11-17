@@ -703,7 +703,9 @@ impl ProbeOp {
 
 impl Operator for ProbeOp {
     // The same pairs whatever the batches; only a left outer join's
-    // unmatched rows move with them, an order Spark leaves open (J1).
+    // unmatched rows move with them, an order Spark leaves open (J1). A
+    // fused filter that can fail (ANSI) may meet rows a limit above would
+    // have cut, as it already can within one scan batch.
     fn coalesce_input(&self) -> bool {
         true
     }

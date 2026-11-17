@@ -63,7 +63,7 @@ pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
           driver joins small batches (fewer than a quarter of `krishiv.exec.batchSize` rows, and \
           of 4,096, as a selective filter or join leaves them) into batches of about \
           `krishiv.exec.batchSize` \
-          rows before the build, the aggregation, a hash join's probe and a projection, so \
+          rows before the build, the aggregation and a hash join's probe, so \
           each pays its per-batch cost once per batch of that size. Rows keep their order, \
           and only rows of one scan split are joined. The rows held are not charged to the \
           query's memory, like any batch between two operators: each driver holds at most \
@@ -71,6 +71,6 @@ pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
           same either way.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.2.0",
+    version_added: "0.3.0",
     spark_alias: None,
 };
