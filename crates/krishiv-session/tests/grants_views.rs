@@ -598,3 +598,34 @@ fn explaining_a_definer_view_asks_the_views_inside_it() {
     let text = ok(&carl, "EXPLAIN SELECT * FROM outer_v");
     assert!(text.contains("Scan"), "{text}");
 }
+
+/// Review M2: `system.operators` holds a query's operators (names, metrics, row counts): for a
+/// query over a definer view whose query the reader may not see as an invoker (the rule `EXPLAIN`
+/// follows), none of them are kept.
+#[test]
+fn operators_of_a_definer_views_plan_stay_with_those_who_may_see_it() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t WHERE b = 2",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    // The operator rows of the queries `SELECT * FROM dv` the principal ran.
+    let operators = |s: &Session| {
+        rows(
+            s,
+            "SELECT o.name FROM system.operators o JOIN system.queries q \
+             ON o.query_id = q.query_id WHERE q.query_text = 'SELECT * FROM dv'",
+        )
+    };
+    assert_eq!(rows(&bob, "SELECT * FROM dv"), 1);
+    assert_eq!(operators(&bob), 0, "bob's operators");
+    // Once bob may read the base table, his next query's operators are kept.
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    assert_eq!(rows(&bob, "SELECT * FROM dv"), 1);
+    assert!(operators(&bob) > 0, "bob's operators");
+    // ana, the definer, sees her own.
+    assert_eq!(rows(&ana, "SELECT * FROM dv"), 1);
+    assert!(operators(&ana) > 0);
+}

@@ -603,36 +603,69 @@ impl Session {
         &self,
         analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
     ) -> Result<(), KrishivError> {
+        for (securable, privilege) in self.shown_definer_reads(&analyzed.views) {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)?;
+        }
+        Ok(())
+    }
+
+    /// Whether [`Self::authorize_shown_definer_reads`] would pass for the views `views`, asked
+    /// quietly (no audit record): a query's profile shows its plan only then (review M2).
+    pub(crate) async fn may_see_definer_reads(
+        &self,
+        views: &[krishiv_plan::analyzer::views::ViewExpansion],
+    ) -> bool {
+        for (securable, privilege) in self.shown_definer_reads(views) {
+            if !krishiv_plan::analyzer::allowed(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What showing the queries of the definer views among `views` asks the principal.
+    fn shown_definer_reads(
+        &self,
+        views: &[krishiv_plan::analyzer::views::ViewExpansion],
+    ) -> Vec<(Securable, Privilege)> {
         use krishiv_plan::analyzer::views::ViewSecurity;
-        let policy = &*self.state.policy;
-        for view in analyzed
-            .views
-            .iter()
-            .filter(|v| v.security == ViewSecurity::Definer)
-        {
+        let column_level = self.state.policy.column_level();
+        let mut out = Vec::new();
+        for view in views.iter().filter(|v| v.security == ViewSecurity::Definer) {
             for used in &view.owner_reads {
-                let per_column = used.privilege == Privilege::Select
-                    && policy.column_level()
-                    && !used.columns.is_empty();
-                let asked: Vec<Securable> = match &used.securable {
-                    Securable::Table(t) | Securable::View(t) if per_column => used
-                        .columns
-                        .iter()
-                        .map(|c| Securable::Column {
-                            table: t.clone(),
-                            column: c.clone(),
-                        })
-                        .collect(),
-                    other => vec![other.clone()],
-                };
-                for securable in asked {
-                    let r =
-                        authorize(policy, &self.state.principal, &securable, used.privilege).await;
-                    audit(self, StatementClass::Read, r)?;
+                let per_column =
+                    used.privilege == Privilege::Select && column_level && !used.columns.is_empty();
+                match &used.securable {
+                    Securable::Table(t) | Securable::View(t) if per_column => {
+                        out.extend(used.columns.iter().map(|c| {
+                            (
+                                Securable::Column {
+                                    table: t.clone(),
+                                    column: c.clone(),
+                                },
+                                used.privilege,
+                            )
+                        }));
+                    }
+                    other => out.push((other.clone(), used.privilege)),
                 }
             }
         }
-        Ok(())
+        out
     }
 
     /// Whether this session's principal may see `securable` in a listing (`SHOW TABLES`,

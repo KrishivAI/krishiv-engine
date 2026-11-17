@@ -1362,6 +1362,7 @@ impl Session {
             identifier_written: Arc::default(),
             observers: Arc::default(),
             view_keeps: Arc::default(),
+            withhold_profile: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1447,6 +1448,11 @@ impl Session {
                 }
                 Err(e) => return Err(self.definer_failure(env, e)),
             }
+        }
+        // The profile shows the definers' plans only to a principal that may see them (M2).
+        if !definers.is_empty() && !self.may_see_definer_reads(&inlined).await {
+            env.withhold_profile
+                .store(true, std::sync::atomic::Ordering::Release);
         }
         let trusting_views;
         let views_analysis = if texts.is_empty() {
@@ -1873,6 +1879,10 @@ impl Session {
             self.state.runtime.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
+        // A definer's plan the principal may not see stays out of its profile (review M2).
+        let withheld = env
+            .withhold_profile
+            .load(std::sync::atomic::Ordering::Acquire);
         let mut pending = PendingFold(
             Some(QueryFold {
                 query: Arc::clone(&query),
@@ -1882,7 +1892,12 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
-                history: env.history_job(self, &row_id, physical, detailed),
+                history: if withheld {
+                    None
+                } else {
+                    env.history_job(self, &row_id, physical, detailed)
+                },
+                withhold_operators: withheld,
             }),
             None,
         );

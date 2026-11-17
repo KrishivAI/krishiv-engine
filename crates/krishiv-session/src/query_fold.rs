@@ -80,6 +80,7 @@ impl QueryStart {
         error: Option<&KrishivError>,
         metrics_on: bool,
         log_id: &str,
+        withhold_operators: bool,
     ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
@@ -112,6 +113,7 @@ impl QueryStart {
                 operators: metrics
                     .operators
                     .iter()
+                    .filter(|_| !withhold_operators)
                     .take(500)
                     .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
                     .collect(),
@@ -224,6 +226,8 @@ pub(crate) struct QueryFold {
     pub(crate) _operation: Option<Arc<crate::history::Operation>>,
     /// What the persisted history needs of the query, kept only when `krishiv.history.path` is set.
     pub(crate) history: Option<HistoryJob>,
+    /// The query's operators are not recorded (`QueryEnv::withhold_profile`, review M2).
+    pub(crate) withhold_operators: bool,
 }
 
 /// The plan and who ran the query, held until the query ends, for the persisted history.
@@ -370,6 +374,7 @@ impl QueryFold {
             error,
             self.metrics_on,
             &self.log_id,
+            self.withhold_operators,
         );
     }
 
