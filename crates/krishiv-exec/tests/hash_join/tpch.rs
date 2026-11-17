@@ -821,10 +821,12 @@ async fn tpch_q9_completes_under_a_tiny_budget_with_spill_recorded() {
         let (rows, _) = q9(&t, &s, 256 * MIB).await;
         assert_eq!(rows, expected("q09"));
         // The row layout's builds are smaller: a smaller budget spills them.
+        // Small batches joined before the builds (`krishiv.exec.coalesceInput`)
+        // make them smaller still: 3 MiB and 2 MiB no longer spill.
         let tiny = if row_layout_forced() {
-            2 * MIB
+            3 * MIB / 2
         } else {
-            3 * MIB
+            2 * MIB
         };
         let (rows, q) = q9(&t, &s, tiny).await;
         assert_eq!(rows, expected("q09"));

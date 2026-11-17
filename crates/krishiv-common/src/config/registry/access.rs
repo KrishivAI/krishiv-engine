@@ -36,7 +36,9 @@ pub static IO_EGRESS_PRIVATE_ADDRESSES: ConfigEntry = ConfigEntry {
           `krishiv.io.egress.allowedCidrs`, and private (RFC 1918, unique-local) or loopback \
           addresses of a host an administrator declared, by its exact name and only for the \
           client that owns it; link-local addresses (cloud metadata) never pass by name. The \
-          rule is checked after DNS resolution and on every redirect hop. `allow` (the embedded \
+          rule is checked after DNS resolution and on every redirect hop. Under `deny`, in \
+          server and embedded mode alike, certificate verification stays on: a store option \
+          that turns it off is refused. `allow` (the embedded \
           default) applies no rule.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,

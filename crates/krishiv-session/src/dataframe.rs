@@ -1029,6 +1029,7 @@ impl DataFrame {
             && a.env.cache_generation == env.cache_generation
             && a.env.functions_version == env.functions_version
             && a.env.policy_version == env.policy_version
+            && env.catalogs_at(&a.analyzed.context.catalog_epochs)
         {
             return Ok(a);
         }

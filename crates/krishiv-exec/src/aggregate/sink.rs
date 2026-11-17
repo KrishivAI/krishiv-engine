@@ -1406,6 +1406,12 @@ impl HashAggregate {
 }
 
 impl Sink for HashAggregate {
+    // Groups and their states do not depend on the input's batches, only
+    // on its rows in order (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashAggregate"
     }

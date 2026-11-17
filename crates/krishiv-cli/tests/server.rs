@@ -53,6 +53,123 @@ fn an_unsupported_spark_connect_setting_is_refused() {
     assert!(err.contains("krishiv.connect.session.idleTimeout"), "{err}");
 }
 
+/// `krishiv server` with `confs`, expected to refuse startup: its stderr.
+fn refused(confs: &[&str]) -> String {
+    let mut cmd = krishiv();
+    // `--allow-root`: CI containers may run as root, and the root refusal comes before the
+    // catalogs are built.
+    cmd.args([
+        "server",
+        "--port",
+        "0",
+        "--connect-port",
+        "0",
+        "--allow-root",
+    ]);
+    for c in confs {
+        cmd.args(["--conf", c]);
+    }
+    let out = cmd.output().expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1), "{confs:?}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Design P3-T067 §2.3: declarations are parsed and checked at startup, and a refusal stops it.
+#[test]
+fn catalog_declarations_are_checked_at_startup() {
+    // A type no factory of this build builds is refused by name, never skipped.
+    let err = refused(&[
+        "krishiv.catalog.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`") && err.contains("`h`"), "{err}");
+    // In any letter case (review 58a2 B1): never dropped, never a silently wider catalog.
+    let err = refused(&[
+        "KRISHIV.CATALOG.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "Krishiv.catalog.lake.tenants=",
+    ]);
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("empty tenant list"), "{err}");
+    }
+    let err = refused(&[
+        "Spark.SQL.Catalog.h=org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.h.type=hive",
+        "spark.sql.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    // Spark's default-catalog key in any letter case reaches the registry (review 58a2 N3): a
+    // default no declaration names stops startup.
+    let err = refused(&["SPARK.SQL.DEFAULTCATALOG=nosuch"]);
+    assert!(err.contains("names no declared catalog"), "{err}");
+    // One field under two spellings is refused, never merged (review 58a2 N4).
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.tenants=acme",
+        "KRISHIV.CATALOG.lake.tenants=globex",
+    ]);
+    assert!(err.contains("set twice"), "{err}");
+    assert!(!err.contains("globex"), "{err}");
+    // A literal secret is refused without being echoed.
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.auth=token",
+        "krishiv.catalog.lake.token=literal-catalog-secret",
+    ]);
+    assert!(!err.contains("literal-catalog-secret"), "{err}");
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("krishiv.catalog.lake.token"), "{err}");
+        // The egress rule checks a declared literal uri and token endpoint at startup, in any
+        // spelling, naming the key, never the address.
+        for (key, conf) in [
+            (
+                "krishiv.catalog.lake.uri",
+                "krishiv.catalog.lake.uri=https://2852039166/api",
+            ),
+            (
+                "krishiv.catalog.lake.tokenEndpoint",
+                "krishiv.catalog.lake.tokenEndpoint=https://169.254.169.254/token",
+            ),
+        ] {
+            // One value per key: the tested one replaces the accepted one.
+            let confs: Vec<&str> = [
+                "krishiv.catalog.lake.type=iceberg-rest",
+                "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+                "krishiv.catalog.lake.auth=client-credentials",
+                "krishiv.catalog.lake.clientId=krishiv",
+                "krishiv.catalog.lake.clientSecret=env:PATH",
+                "krishiv.catalog.lake.tokenEndpoint=https://idp.example.com/token",
+            ]
+            .into_iter()
+            .map(|c| {
+                if c.split_once('=').map(|(k, _)| k) == Some(key) {
+                    conf
+                } else {
+                    c
+                }
+            })
+            .collect();
+            let err = refused(&confs);
+            assert!(err.contains(key), "{err}");
+            assert!(!err.contains("set twice"), "{err}");
+            assert!(
+                !err.contains("169.254") && !err.contains("2852039166"),
+                "{err}"
+            );
+        }
+    } else {
+        assert!(err.contains("`iceberg-rest`"), "{err}");
+    }
+}
+
 #[test]
 fn non_loopback_requires_auth() {
     for host in ["0.0.0.0", "::"] {
