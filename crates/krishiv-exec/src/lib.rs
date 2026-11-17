@@ -84,6 +84,7 @@ mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
+mod input_coalesce;
 mod join;
 mod loops;
 mod map_keys;
