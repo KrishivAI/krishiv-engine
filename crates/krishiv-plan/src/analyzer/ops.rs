@@ -1552,7 +1552,7 @@ pub(super) fn is_generated_metadata(a: &Attr) -> bool {
 
 /// The `_metadata` struct: Spark's field names, types and order; `row_index`
 /// only for Parquet.
-fn metadata_type(row_index: bool) -> DataType {
+pub(super) fn metadata_type(row_index: bool) -> DataType {
     use krishiv_types::{StructField, StructType, parse_metadata};
     let mark = || {
         parse_metadata(&format!(

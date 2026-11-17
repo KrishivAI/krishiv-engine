@@ -7,7 +7,8 @@
 //! - **Keys.** A delete file is read projected to its `equality_ids` columns
 //!   by field id, through the table's current schema, so a key written as
 //!   `int` and a column read as `long` compare as `long` (type promotion).
-//!   Keys are compared in Arrow's row format: `null` equals `null` (Iceberg
+//!   Keys are compared in Arrow's row format (one buffer per set, a
+//!   `hashbrown` table of indices hashed with foldhash): `null` equals `null` (Iceberg
 //!   deletes, unlike SQL), every `NaN` equals every `NaN` and `-0.0` differs
 //!   from `0.0` (Java's `Comparators` over `Float`/`Double`, the order the
 //!   delete set `StructLikeSet` uses). A field of a null struct is null, as
@@ -19,32 +20,33 @@
 //!   the query did not ask for, are dropped before the batch leaves.
 //! - **Scope.** A set is shared by every data file its delete file applies
 //!   to (sequence numbers and partitions were decided by `DeleteIndex`).
-//! - The sets are held for the scan and not charged to a query pool yet
-//!   (PR-25d: planning memory, the per-worker delete cache, spilling).
+//! - The sets are held for the scan and charged to the query's memory as
+//!   they are read (PR-25d); a set that does not fit fails the query with
+//!   the memory class (no spilling: design note §11 item 2).
 //! - A delete file that is missing or unreadable fails the query; an
 //!   equality id that is not a primitive column of the read schema is
 //!   refused (`KRISHIV_UNSUPPORTED_FEATURE`), never ignored.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::BuildHasher as _;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type, Int32Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
-use arrow_row::{RowConverter, SortField};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use futures::future::BoxFuture;
+use arrow_row::{RowConverter, Rows, SortField};
+use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use foldhash::fast::FixedState;
 use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashTable;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_exec::{GlobalState, LocalState, Source, TaskContext};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
-    ByteRange, ColumnPath, FieldMapping, FileFormat as _, FileRef, FilterId, FormatOptions,
-    IoContext, MetadataCols, ScanOptions, ScanRequest, ScanStream,
+    ByteRange, ColumnPath, FieldMapping, FileFormat as _, FileRef, FormatOptions, IoContext,
+    MetadataCols, ScanOptions, ScanRequest, ScanStream, WithoutFieldIds,
 };
-use krishiv_memory::{MemoryConfig, Reservation, TreePool};
-use krishiv_types::batch::Batch;
+use krishiv_memory::{ConsumerHandle, Reservation};
 
 use crate::plan::{DeleteFileEntry, FileFormatKind, SchemaField};
 
@@ -74,15 +76,69 @@ struct KeySet {
     /// The key columns' types, which `converter` encodes.
     types: Vec<DataType>,
     converter: RowConverter,
-    keys: HashSet<Box<[u8]>>,
+    keys: Keys,
+    /// Pays for `keys` while the set lives.
+    _charge: Reservation,
+}
+
+/// Distinct keys in Arrow's row format: every key read in one [`Rows`]
+/// buffer and a table of the indices of the distinct ones, hashed with
+/// foldhash (review 25c N3: no allocation per key, no SipHash per probe).
+/// A duplicate key stays in the buffer and is not indexed.
+struct Keys {
+    rows: Option<Rows>,
+    index: HashTable<usize>,
+    hasher: FixedState,
+}
+
+impl Keys {
+    fn new() -> Self {
+        Self {
+            rows: None,
+            index: HashTable::new(),
+            hasher: FixedState::with_seed(0),
+        }
+    }
+
+    /// The bytes held.
+    fn size(&self) -> usize {
+        self.rows.as_ref().map_or(0, Rows::size)
+            + self.index.capacity() * (std::mem::size_of::<usize>() + 1)
+    }
+
+    /// Appends the keys of `cols`, encoded by `converter`.
+    fn append(&mut self, converter: &RowConverter, cols: &[ArrayRef]) -> Result<(), ArrowError> {
+        let rows = self.rows.get_or_insert_with(|| converter.empty_rows(0, 0));
+        let from = rows.num_rows();
+        converter.append(rows, cols)?;
+        let hasher = &self.hasher;
+        for i in from..rows.num_rows() {
+            let row = rows.row(i);
+            let h = hasher.hash_one(row.as_ref());
+            if self.index.find(h, |&j| rows.row(j) == row).is_none() {
+                self.index
+                    .insert_unique(h, i, |&j| hasher.hash_one(rows.row(j).as_ref()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `key` is one of the keys.
+    fn contains(&self, key: &[u8]) -> bool {
+        let Some(rows) = &self.rows else {
+            return false;
+        };
+        let h = self.hasher.hash_one(key);
+        self.index
+            .find(h, |&j| rows.row(j).as_ref() == key)
+            .is_some()
+    }
 }
 
 /// The equality deletes of a scan: for each data file (by its index in the
 /// scan), the key sets that apply to it.
 pub(super) struct EqualityDeletes {
     by_file: Vec<Vec<Arc<KeySet>>>,
-    /// Every equality column of every set, once each.
-    columns: Vec<ColumnPath>,
 }
 
 impl fmt::Debug for EqualityDeletes {
@@ -92,85 +148,83 @@ impl fmt::Debug for EqualityDeletes {
                 "files",
                 &self.by_file.iter().filter(|s| !s.is_empty()).count(),
             )
-            .field("columns", &self.columns)
             .finish()
     }
 }
 
+#[cfg(test)]
 impl EqualityDeletes {
-    /// The equality columns the scan must read.
-    pub(super) fn columns(&self) -> &[ColumnPath] {
-        &self.columns
+    /// How many distinct equality delete files the scan's files hold.
+    pub(super) fn delete_files(&self) -> usize {
+        let mut seen: Vec<*const KeySet> = self.by_file.iter().flatten().map(Arc::as_ptr).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
     }
 }
 
-/// The equality deletes of the scan's files: `deletes[i]` are the equality
-/// delete files of data file `i`. Every delete file is read once.
+/// The equality deletes of the scan's files: `(i, d)` in `deletes` are the
+/// equality delete files `d` of data file `i` (of `files`). Every delete file
+/// is read once.
 ///
 /// # Errors
 /// The store's error for a delete file that is missing or unreadable;
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a delete file that is not Parquet or
 /// whose equality ids are missing, empty, or not primitive columns of the
-/// read schema (`fields`).
+/// read schema (`fields`); `UNABLE_TO_ACQUIRE_MEMORY` when the keys do not
+/// fit in the query's memory (`mem`, which pays for them while they live).
 pub(super) async fn load(
     io: &IoContext,
-    locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
+    mem: &Arc<ConsumerHandle>,
     table: &SchemaRef,
-    mapping: &FieldMapping,
     fields: &[SchemaField],
-    deletes: &[&[Arc<DeleteFileEntry>]],
+    files: usize,
+    deletes: &[(usize, &[Arc<DeleteFileEntry>])],
 ) -> Result<EqualityDeletes, KrishivError> {
     let mut unique: Vec<Arc<DeleteFileEntry>> = Vec::new();
     let mut slot: HashMap<String, usize> = HashMap::new();
-    for d in deletes.iter().flat_map(|d| d.iter()) {
+    for d in deletes.iter().flat_map(|(_, d)| d.iter()) {
         slot.entry(d.entry.file.path.clone()).or_insert_with(|| {
             unique.push(Arc::clone(d));
             unique.len() - 1
         });
     }
-    let pool: Arc<dyn krishiv_memory::MemoryPool> = TreePool::new(&MemoryConfig::default());
-    let sets: Vec<Arc<KeySet>> = futures::stream::iter(unique.iter())
-        .map(|d| read_keys(io, locate, &pool, table, mapping, fields, d))
+    // Futures built before the stream, so the load stays `Send` (see
+    // `deletes::load`).
+    // Java's delete loader reads delete files without the name mapping
+    // (writers give them ids): a file without ids takes the positional
+    // fallback.
+    let mapping = &FieldMapping::FieldIdOr(WithoutFieldIds::Position);
+    let reads: Vec<_> = unique
+        .iter()
+        .map(|d| read_keys(io, locate, mem, table, mapping, fields, d))
+        .collect();
+    let sets: Vec<Arc<KeySet>> = futures::stream::iter(reads)
         .buffered(DELETE_FILE_CONCURRENCY)
         .map_ok(Arc::new)
         .try_collect()
         .await?;
-    let mut columns: Vec<ColumnPath> = Vec::new();
-    for s in &sets {
-        for c in &s.columns {
-            if !columns.contains(c) {
-                columns.push(c.clone());
-            }
-        }
-    }
-    let by_file = deletes
-        .iter()
-        .map(|ds| {
+    let mut by_file: Vec<Vec<Arc<KeySet>>> = vec![Vec::new(); files];
+    for (i, ds) in deletes {
+        let at = by_file
+            .get_mut(*i)
+            .ok_or_else(|| internal(format!("no data file {i} in the scan")))?;
+        at.extend(
             ds.iter()
-                .filter_map(|d| slot.get(&d.entry.file.path).map(|i| Arc::clone(&sets[*i])))
-                .collect()
-        })
-        .collect();
-    Ok(EqualityDeletes { by_file, columns })
+                .filter_map(|d| slot.get(&d.entry.file.path).map(|k| Arc::clone(&sets[*k]))),
+        );
+    }
+    Ok(EqualityDeletes { by_file })
 }
 
-/// The key set of the equality delete file `d`.
-async fn read_keys(
-    io: &IoContext,
-    locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
-    pool: &Arc<dyn krishiv_memory::MemoryPool>,
-    table: &SchemaRef,
-    mapping: &FieldMapping,
-    fields: &[SchemaField],
-    d: &DeleteFileEntry,
-) -> Result<KeySet, KrishivError> {
+/// The equality columns of the delete file `d`, in its `equality_ids` order.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for missing or empty equality ids, or an id
+/// that is not a primitive column of the read schema (`fields`).
+fn key_paths(fields: &[SchemaField], d: &DeleteFileEntry) -> Result<Vec<ColumnPath>, KrishivError> {
     let f = &d.entry.file;
-    if f.format != FileFormatKind::Parquet {
-        return Err(unsupported(format!(
-            "reading Iceberg {:?} equality delete files ({})",
-            f.format, f.path
-        )));
-    }
     let ids = f.equality_ids.as_deref().unwrap_or_default();
     if ids.is_empty() {
         return Err(unsupported(format!(
@@ -178,8 +232,7 @@ async fn read_keys(
             f.path
         )));
     }
-    let columns = ids
-        .iter()
+    ids.iter()
         .map(|id| {
             fields
                 .iter()
@@ -193,65 +246,103 @@ async fn read_keys(
                     ))
                 })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Every equality column of `deletes`, once each, in first-seen order: what
+/// a scan reading files with these deletes must read besides the query's.
+///
+/// # Errors
+/// As [`key_paths`].
+pub(super) fn equality_columns<'a>(
+    fields: &[SchemaField],
+    deletes: impl IntoIterator<Item = &'a Arc<DeleteFileEntry>>,
+) -> Result<Vec<ColumnPath>, KrishivError> {
+    let mut out: Vec<ColumnPath> = Vec::new();
+    for d in deletes {
+        for c in key_paths(fields, d)? {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The key set of the equality delete file `d`.
+async fn read_keys(
+    io: &IoContext,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
+    mem: &Arc<ConsumerHandle>,
+    table: &SchemaRef,
+    mapping: &FieldMapping,
+    fields: &[SchemaField],
+    d: &DeleteFileEntry,
+) -> Result<KeySet, KrishivError> {
+    let f = &d.entry.file;
+    if f.format != FileFormatKind::Parquet {
+        return Err(unsupported(format!(
+            "reading Iceberg {:?} equality delete files ({})",
+            f.format, f.path
+        )));
+    }
+    let columns = key_paths(fields, d)?;
     let mut file = locate(&f.path)?;
     file.size = f.size;
     let mut req = ScanRequest::new(Arc::clone(table), columns.clone());
     // Columns by id (the caller's rule for a file without ids).
     req.mapping = mapping.clone();
-    let id = pool.register("iceberg equality deletes", None);
-    let result = async {
-        let mut stream = ScanStream::open(
-            io,
-            &ParquetFormat,
-            file.clone(),
-            ByteRange::whole(file.size),
-            &req,
-            &FormatOptions::defaults(ParquetFormat.options()),
-            Reservation::new(Arc::clone(pool), id),
-            ScanOptions::default(),
-        )
-        .await?;
-        let mut converter: Option<RowConverter> = None;
-        let mut types: Vec<DataType> = Vec::new();
-        let mut keys = HashSet::new();
-        while let Some(batch) = stream.next_batch().await? {
-            let cols = key_columns(&batch, &columns)?;
-            let conv = match &mut converter {
-                Some(c) => c,
-                None => {
-                    types = cols.iter().map(|c| c.data_type().clone()).collect();
-                    converter.insert(converter_for(&cols)?)
-                }
-            };
-            let rows = conv
-                .convert_columns(&cols)
-                .map_err(|e| internal(format!("equality delete keys of {}: {e}", f.path)))?;
-            for r in &rows {
-                keys.insert(Box::from(r.as_ref()));
-            }
-        }
-        let converter = match converter {
+    let mut charge = mem.reservation();
+    let mut stream = ScanStream::open(
+        io,
+        &ParquetFormat,
+        file.clone(),
+        ByteRange::whole(file.size),
+        &req,
+        &FormatOptions::defaults(ParquetFormat.options()),
+        mem.reservation(),
+        ScanOptions::default(),
+    )
+    .await?;
+    let mut converter: Option<RowConverter> = None;
+    let mut types: Vec<DataType> = Vec::new();
+    let mut keys = Keys::new();
+    while let Some(batch) = stream.next_batch().await? {
+        let cols = key_columns(&batch, &columns)?;
+        let conv = match &mut converter {
             Some(c) => c,
-            // No rows: the key types come from the read schema.
             None => {
-                let schema = krishiv_io::project_schema(table, &columns)?;
-                let empty = RecordBatch::new_empty(schema);
-                let cols = key_columns(&empty, &columns)?;
                 types = cols.iter().map(|c| c.data_type().clone()).collect();
-                converter_for(&cols)?
+                converter.insert(converter_for(&cols)?)
             }
         };
-        Ok(KeySet {
-            columns,
-            types,
-            converter,
-            keys,
-        })
+        keys.append(conv, &cols)
+            .map_err(|e| internal(format!("equality delete keys of {}: {e}", f.path)))?;
+        // Paid per batch: a key set too large for the query fails with
+        // the memory class.
+        let held = keys.size();
+        if let Some(more) = held.checked_sub(charge.size()) {
+            charge.grow(more).await?;
+        }
     }
-    .await;
-    pool.unregister(id);
-    result
+    let converter = match converter {
+        Some(c) => c,
+        // No rows: the key types come from the read schema.
+        None => {
+            let schema = krishiv_io::project_schema(table, &columns)?;
+            let empty = RecordBatch::new_empty(schema);
+            let cols = key_columns(&empty, &columns)?;
+            types = cols.iter().map(|c| c.data_type().clone()).collect();
+            converter_for(&cols)?
+        }
+    };
+    Ok(KeySet {
+        columns,
+        types,
+        converter,
+        keys,
+        _charge: charge,
+    })
 }
 
 fn converter_for(cols: &[ArrayRef]) -> Result<RowConverter, KrishivError> {
@@ -312,47 +403,60 @@ pub(super) fn any_metadata(c: &MetadataCols) -> bool {
         || c.row_index
 }
 
-/// A file scan's source with the equality-deleted rows dropped (see the
-/// module docs). The inner source reads the query's columns, the equality
-/// columns and [`FILE_ORDINAL`]; the output holds the query's columns
-/// (`output` paths) only.
-pub(super) struct EqDeleteSource {
-    inner: Arc<dyn Source>,
-    deletes: Arc<EqualityDeletes>,
+/// How the batches of a scan with equality deletes become its output: the
+/// inner file scan reads the query's columns, the equality columns and
+/// [`FILE_ORDINAL`]; the output holds the query's columns (`output` paths)
+/// only. Applied by [`super::lazy::DeleteSource`].
+pub(super) struct EqProjection {
     /// The column of [`FILE_ORDINAL`] in the inner batches.
     ordinal: usize,
     /// The output's columns, as paths into the inner batches.
     output: Vec<ColumnPath>,
+    /// With only top-level output columns, their indices in the inner
+    /// batches, worked out once (review 25c N2): the projection per batch is
+    /// then a column pick.
+    top: Option<Vec<usize>>,
     schema: SchemaRef,
 }
 
-impl EqDeleteSource {
-    /// The source over `inner` whose output is `output` of its columns.
+impl EqProjection {
+    /// The projection of batches of `inner` (the inner source's schema) to
+    /// its `output` columns.
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` when the inner source has no [`FILE_ORDINAL`] or a
-    /// path of `output` is not in it.
-    pub(super) fn new(
-        inner: Arc<dyn Source>,
-        deletes: Arc<EqualityDeletes>,
-        output: Vec<ColumnPath>,
-    ) -> Result<Self, KrishivError> {
-        let in_schema = inner.schema();
-        let ordinal = in_schema
+    /// `INTERNAL_ERROR` when `inner` has no [`FILE_ORDINAL`] or a path of
+    /// `output` is not in it.
+    pub(super) fn new(inner: &SchemaRef, output: Vec<ColumnPath>) -> Result<Self, KrishivError> {
+        let ordinal = inner
             .index_of(FILE_ORDINAL)
             .map_err(|_| internal("the scan does not read the file ordinal".to_owned()))?;
-        let schema = krishiv_io::project_schema(&in_schema, &output)?;
+        let schema = krishiv_io::project_schema(inner, &output)?;
+        let top = output
+            .iter()
+            .map(|p| match p.0.as_slice() {
+                [name] => inner.index_of(name).ok(),
+                _ => None,
+            })
+            .collect();
         Ok(Self {
-            inner,
-            deletes,
             ordinal,
             output,
+            top,
             schema,
         })
     }
 
-    /// `batch` without its deleted rows, projected to the output.
-    fn apply(&self, batch: &RecordBatch) -> Result<RecordBatch, KrishivError> {
+    /// The output schema.
+    pub(super) fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    /// `batch` without the rows `deletes` delete, projected to the output.
+    pub(super) fn apply(
+        &self,
+        deletes: &EqualityDeletes,
+        batch: &RecordBatch,
+    ) -> Result<RecordBatch, KrishivError> {
         let files = batch
             .column(self.ordinal)
             .as_primitive_opt::<Int32Type>()
@@ -368,7 +472,7 @@ impl EqDeleteSource {
             }
             let sets = usize::try_from(file)
                 .ok()
-                .and_then(|i| self.deletes.by_file.get(i))
+                .and_then(|i| deletes.by_file.get(i))
                 .ok_or_else(|| internal(format!("no data file {file} in the scan")))?;
             if !sets.is_empty() {
                 let run = batch.slice(start, end - start);
@@ -407,89 +511,21 @@ impl EqDeleteSource {
                 .map_err(|e| internal(format!("dropping equality-deleted rows: {e}")))?,
             None => batch.clone(),
         };
-        let out = krishiv_io::project_batch(&kept, &self.output)?;
+        let columns = match &self.top {
+            Some(top) => top.iter().map(|&i| Arc::clone(kept.column(i))).collect(),
+            None => krishiv_io::project_batch(&kept, &self.output)?
+                .columns()
+                .to_vec(),
+        };
         // The projection keeps the inner fields; the schema is the one the
         // planner was given (same fields). The row count is explicit for an
         // output of no columns.
         RecordBatch::try_new_with_options(
             Arc::clone(&self.schema),
-            out.columns().to_vec(),
+            columns,
             &RecordBatchOptions::new().with_row_count(Some(kept.num_rows())),
         )
         .map_err(|e| internal(format!("equality-deleted batch: {e}")))
-    }
-}
-
-impl Source for EqDeleteSource {
-    fn name(&self) -> &'static str {
-        self.inner.name()
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn global_state(&self, ctx: &TaskContext) -> krishiv_exec::Result<GlobalState> {
-        self.inner.global_state(ctx)
-    }
-
-    fn max_parallelism(&self, global: &GlobalState) -> usize {
-        self.inner.max_parallelism(global)
-    }
-
-    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
-        self.inner.deterministic_split(global)
-    }
-
-    fn partitions(&self, global: &GlobalState) -> usize {
-        self.inner.partitions(global)
-    }
-
-    fn local_state(
-        &self,
-        ctx: &TaskContext,
-        global: &GlobalState,
-    ) -> krishiv_exec::Result<LocalState> {
-        self.inner.local_state(ctx, global)
-    }
-
-    fn get_data<'a>(
-        &'a self,
-        local: &'a mut LocalState,
-        global: &'a GlobalState,
-    ) -> BoxFuture<'a, krishiv_exec::Result<Option<Batch>>> {
-        Box::pin(async move {
-            loop {
-                let Some(batch) = self.inner.get_data(local, global).await? else {
-                    return Ok(None);
-                };
-                let out = self.apply(batch.data())?;
-                // A batch whose rows were all deleted is skipped, not sent.
-                if out.num_rows() > 0 || batch.num_rows() == 0 {
-                    return Ok(Some(Batch::new(out).with_split(batch.split())));
-                }
-            }
-        })
-    }
-
-    fn morsels_claimed(&self, local: &LocalState) -> u64 {
-        self.inner.morsels_claimed(local)
-    }
-
-    fn reports_positions(&self) -> bool {
-        self.inner.reports_positions()
-    }
-
-    fn position(&self, local: &LocalState) -> Option<u64> {
-        self.inner.position(local)
-    }
-
-    fn runtime_filters(&self) -> Vec<FilterId> {
-        self.inner.runtime_filters()
-    }
-
-    fn extra_metrics(&self) -> krishiv_exec::ExtraMetrics {
-        self.inner.extra_metrics()
     }
 }
 
@@ -509,7 +545,31 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, Schema};
     use krishiv_io::ColumnPath;
 
-    use super::{converter_for, key_columns};
+    use super::{Keys, converter_for, key_columns};
+
+    /// The key set indexes each distinct key once across batches and finds
+    /// exactly the keys it holds (review 25c N3).
+    #[test]
+    fn keys_index_distinct_rows_across_batches() {
+        let a: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(2)]));
+        let b: ArrayRef = Arc::new(Int64Array::from(vec![Some(3), Some(1)]));
+        let conv = converter_for(std::slice::from_ref(&a)).unwrap();
+        let mut keys = Keys::new();
+        let probe = |k: &Keys, v: Option<i64>| {
+            let col: ArrayRef = Arc::new(Int64Array::from(vec![v]));
+            let rows = conv.convert_columns(&[col]).unwrap();
+            k.contains(rows.row(0).as_ref())
+        };
+        assert!(!probe(&keys, Some(1)), "an empty set holds nothing");
+        keys.append(&conv, &[a]).unwrap();
+        keys.append(&conv, &[b]).unwrap();
+        assert_eq!(keys.index.len(), 4);
+        for v in [Some(1), Some(2), Some(3), None] {
+            assert!(probe(&keys, v), "{v:?}");
+        }
+        assert!(!probe(&keys, Some(4)));
+        assert!(keys.size() > 0);
+    }
 
     /// Java's delete set compares floats as `Double.compare`: every NaN is
     /// one value, `-0.0` is not `0.0`; a field of a null struct is null.

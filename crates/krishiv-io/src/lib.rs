@@ -76,6 +76,11 @@ pub use io::{
     parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
+/// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
+pub use krishiv_store::egress;
+/// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
+#[cfg(feature = "cloud")]
+pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,

@@ -249,3 +249,57 @@ fn only_float_vectors_bind() {
         }
     }
 }
+
+/// Spark checks the degree before it looks for a NULL element (`vectorNorm`), so a bad degree raises even over a
+/// vector with a NULL element; a NULL vector row is NULL first.
+#[test]
+fn a_bad_degree_raises_before_a_null_element_is_looked_for() {
+    let null_elem = vectors(&[Some(vec![Some(1.0), None])]);
+    let bad = floats(&[Some(3.0)]);
+    for name in ["vector_norm", "vector_normalize"] {
+        let (class, _) = error(name, &[&null_elem, &bad]);
+        assert_eq!(class, ErrorClass::InvalidVectorNormDegree, "{name}");
+    }
+}
+
+/// A literal query vector is read at its one row: every row of the column gives what a column of `rows` copies of
+/// the literal gives (the top-k search never builds those copies).
+#[test]
+fn a_literal_query_vector_gives_the_same_as_its_broadcast() {
+    use super::lit;
+    let rows: Vec<Option<Vec<Option<f32>>>> = (0..40_u8)
+        .map(|r| match r % 7 {
+            0 => None,
+            3 => Some(vec![Some(1.0), None, Some(2.0)]),
+            r => Some(vec![Some(f32::from(r)), Some(0.5), Some(-1.5)]),
+        })
+        .collect();
+    let col_a = vectors(&rows);
+    let q = plain(&[0.25, 4.0, -2.0]);
+    let copies = vectors(&vec![
+        Some(vec![Some(0.25), Some(4.0), Some(-2.0)]);
+        rows.len()
+    ]);
+    for name in [
+        "vector_l2_distance",
+        "vector_cosine_similarity",
+        "vector_inner_product",
+    ] {
+        let f = bind(name, &[&col_a, &q]);
+        let n = rows.len();
+        let with_literal = f.invoke(&[col(&col_a), lit(&q)], n).unwrap();
+        let with_copies = f.invoke(&[col(&col_a), col(&copies)], n).unwrap();
+        assert_eq!(
+            with_literal.as_primitive::<Float32Type>(),
+            with_copies.as_primitive::<Float32Type>(),
+            "{name}"
+        );
+        let flipped = f.invoke(&[lit(&q), col(&col_a)], n).unwrap();
+        let flipped_copies = f.invoke(&[col(&copies), col(&col_a)], n).unwrap();
+        assert_eq!(
+            flipped.as_primitive::<Float32Type>(),
+            flipped_copies.as_primitive::<Float32Type>(),
+            "{name}"
+        );
+    }
+}

@@ -138,6 +138,7 @@ registry! {
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
+    (histogram_numeric, HistogramNumeric, POST_MIGRATION_READER_VERSION, Semantic, "The `histogram_numeric` aggregate (Spark's `NumericHistogram`, with its folded number of bins)."),
     (indeterminate_collation, IndeterminateCollation, POST_MIGRATION_READER_VERSION, Semantic, "STRING types of the INDETERMINATE collation (`string collate null`: a mixed expression's operands' collations conflict), by its name `null`, alone or inside a nested type."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -162,7 +163,8 @@ registry! {
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
-    (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan."),
+    (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan. A `PythonEval` of the scalar iterator codes 204 and 251 runs from the reader that also has `python_udf_windows` on; an earlier reader with this feature decodes it and fails at run time with `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` (no such reader was released)."),
+    (python_udf_windows, PythonUdfWindows, POST_MIGRATION_READER_VERSION, Semantic, "A `PythonAggregate` node in window form (design P3-T085 §3.1, Spark's `ArrowWindowPythonExec`): a window aggregate of Python UDFs (codes 203, 253), every input row with one value per call, a bounded frame's rows with their frame bounds; an older reader would run it as a grouped aggregate."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -470,10 +472,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             PhysNode::Sample { .. } => Some(Feature::Sample),
             PhysNode::CollectMetrics { .. } => Some(Feature::Observe),
+            PhysNode::PythonAggregate {
+                window: Some(_), ..
+            } => Some(Feature::PythonUdfWindows),
             PhysNode::PythonMap { .. }
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
-            | PhysNode::PythonAggregate { .. } => Some(Feature::PythonUdfRelations),
+            | PhysNode::PythonAggregate { window: None, .. } => Some(Feature::PythonUdfRelations),
             PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -680,6 +685,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::PercentileApprox { .. }
             | AggregateFunction::PercentileDisc { .. }
             | AggregateFunction::ApproxCountDistinct { .. } => Some(Feature::PercentileAggregates),
+            AggregateFunction::HistogramNumeric { .. } => Some(Feature::HistogramNumeric),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a

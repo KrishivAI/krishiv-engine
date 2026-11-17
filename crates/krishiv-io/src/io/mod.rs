@@ -439,16 +439,35 @@ impl IoScheduler {
     /// A scheduler whose requests run on the caller's task.
     #[must_use]
     pub fn new(config: IoConfig) -> Arc<Self> {
-        Self::build(config, None)
+        Self::build(config, None, krishiv_store::SharedHttpClients::new())
     }
 
     /// A scheduler whose requests run on `runtime` (the I/O runtime).
     #[must_use]
     pub fn with_runtime(config: IoConfig, runtime: tokio::runtime::Handle) -> Arc<Self> {
-        Self::build(config, Some(runtime))
+        Self::build(
+            config,
+            Some(runtime),
+            krishiv_store::SharedHttpClients::new(),
+        )
     }
 
-    fn build(config: IoConfig, runtime: Option<tokio::runtime::Handle>) -> Arc<Self> {
+    /// A scheduler whose requests run on `runtime` and whose stores connect through
+    /// `http_clients` (server mode: the egress policy's clients, design P3-T067 §5.2).
+    #[must_use]
+    pub fn with_runtime_and_http_clients(
+        config: IoConfig,
+        runtime: tokio::runtime::Handle,
+        http_clients: krishiv_store::SharedHttpClients,
+    ) -> Arc<Self> {
+        Self::build(config, Some(runtime), http_clients)
+    }
+
+    fn build(
+        config: IoConfig,
+        runtime: Option<tokio::runtime::Handle>,
+        http_clients: krishiv_store::SharedHttpClients,
+    ) -> Arc<Self> {
         // A cache that cannot start (no directory) is off, never an error.
         let block_cache = config.block_cache.clone().and_then(|c| {
             BlockCache::new(c)
@@ -466,7 +485,7 @@ impl IoScheduler {
             stores: RwLock::new(HashMap::new()),
             runtime,
             totals: IoCounters::default(),
-            http_clients: krishiv_store::SharedHttpClients::new(),
+            http_clients,
         })
     }
 

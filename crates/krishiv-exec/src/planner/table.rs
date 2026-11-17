@@ -42,6 +42,15 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         None
     }
 
+    /// Whether a scan of the table can read no column at all and still
+    /// return its rows: the reader takes each batch's row count from the
+    /// files' own metadata, so a `COUNT(*)` reads only footers. The default
+    /// says no, and the optimizer keeps one column; a table whose rows on
+    /// disk are not its rows (deletion files) must keep the default.
+    fn reads_rows_without_columns(&self) -> bool {
+        false
+    }
+
     /// The write modes the table declared (Spark's `TableCapability`). The
     /// session checks them before planning a write; the default declares
     /// none, so a read-only table is never offered one.
@@ -125,6 +134,12 @@ impl Statistics for ProviderStatistics {
         if let Ok(p) = self.0.provider(scan) {
             p.want_unique(columns);
         }
+    }
+
+    fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
+        self.0
+            .provider(scan)
+            .is_ok_and(|p| p.reads_rows_without_columns())
     }
 }
 
