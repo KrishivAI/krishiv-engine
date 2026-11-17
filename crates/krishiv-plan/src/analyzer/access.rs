@@ -82,6 +82,23 @@ pub async fn authorize_reported(
     }
 }
 
+/// [`authorize`] as a trial: the same questions, in the same order, and the same answer
+/// (the `Browse`-to-`Select` fallback and the filtered-reader rule included), but a refusal
+/// is not told to [`AccessPolicy::denied`], so the policy writes no audit record and counts
+/// nothing. For checks whose refusal is an answer to the engine, not a refusal of the caller:
+/// the analyze API's trial of a run's target checks (P3-T063 review R2-1).
+///
+/// # Errors
+/// As [`authorize`].
+pub async fn authorize_quietly(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
+    decide(policy, principal, securable, privilege).await
+}
+
 async fn decide(
     policy: &dyn AccessPolicy,
     principal: &Principal,
@@ -429,6 +446,49 @@ mod tests {
             column: "a".to_owned(),
         };
         assert_eq!(column.to_string(), "column `a` of table `c`.`s`.`t`");
+    }
+
+    /// T063 review R2-1: a quiet trial decides exactly as [`authorize`] does and tells the policy of
+    /// no refusal.
+    #[test]
+    fn a_quiet_check_decides_as_authorize_and_tells_the_policy_nothing() {
+        let principal = Principal::new("ana", PrincipalKind::User);
+        let table = Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        });
+        let cases: [&[(Privilege, Option<AccessDecision>)]; 6] = [
+            &[
+                (Privilege::Browse, deny()),
+                (Privilege::Select, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Browse, deny()), (Privilege::Select, deny())],
+            &[
+                (Privilege::Select, deny()),
+                (Privilege::Modify, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Select, None)],
+            &[(Privilege::Select, filtered())],
+            &[
+                (Privilege::Select, filtered()),
+                (Privilege::Drop, Some(AccessDecision::Allow)),
+            ],
+        ];
+        for answers in cases {
+            for p in ALL {
+                let loud = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let quiet = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let a = block_on(authorize(&loud, &principal, &table, p));
+                let q = block_on(authorize_quietly(&quiet, &principal, &table, p));
+                assert_eq!(
+                    a.as_ref().map_err(KrishivError::to_string),
+                    q.as_ref().map_err(KrishivError::to_string),
+                    "{p} {answers:?}"
+                );
+                assert_eq!(quiet.1.load(std::sync::atomic::Ordering::Relaxed), 0);
+            }
+        }
     }
 
     #[test]

@@ -541,8 +541,9 @@ pub trait AccessPolicy: Send + Sync {
     /// The decision for `principal` on `securable`.
     ///
     /// It may also be asked speculatively: `analyze` and `EXPLAIN FORMAT JSON` of a write ask the run's target
-    /// checks quietly (no audit record, no denial count) to decide whether to list the target's directories. A
-    /// policy that logs or counts its own decisions sees those trial denials too.
+    /// checks quietly ([`super::authorize_quietly`]: no audit record, no denial count, no [`Self::denied`]
+    /// call) to decide whether to list the target's directories. A policy that logs or counts its own `check`
+    /// answers sees those trial questions too.
     fn check<'a>(
         &'a self,
         principal: &'a Principal,
@@ -559,7 +560,8 @@ pub trait AccessPolicy: Send + Sync {
         false
     }
     /// Told once per refusal [`super::authorize`] returns (after any `Browse` fallback), so a
-    /// provider can write its audit record and count the denial. The default does nothing.
+    /// provider can write its audit record and count the denial; never for a trial
+    /// ([`super::authorize_quietly`]). The default does nothing.
     fn denied(&self, _principal: &Principal, _securable: &Securable, _privilege: Privilege) {}
 }
 

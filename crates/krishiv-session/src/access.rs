@@ -25,8 +25,8 @@ use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
-    SecurableUse, TableIdent, authorize, authorize_reported, insufficient_permissions,
-    namespace_parts, table_ident,
+    SecurableUse, TableIdent, authorize, authorize_quietly, authorize_reported,
+    insufficient_permissions, namespace_parts, table_ident,
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
@@ -395,10 +395,11 @@ impl Session {
     }
 
     /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
-    /// questions in the same order, stopping at the first denial) but quietly: no `krishiv::audit`
-    /// record, no denial count. The analyze API asks it before it reads any catalog or file-system
-    /// state about a write target (T063 N1b review B2), so analysis reveals nothing about a target the
-    /// caller may not write.
+    /// questions in the same order, stopping at the first denial, the same decisions) but quietly: no
+    /// `krishiv::audit` record, no session denial count, and the policy's [`AccessPolicy::denied`] is
+    /// not called (`authorize_quietly`, review R2-1), so a provider counts and audits nothing either.
+    /// The analyze API asks it before it reads any catalog or file-system state about a write target
+    /// (T063 N1b review B2), so analysis reveals nothing about a target the caller may not write.
     pub(crate) async fn targets_allowed_quietly(
         &self,
         statement: &Statement,
@@ -408,8 +409,9 @@ impl Session {
     }
 
     /// Whether `privilege` on `object` would be allowed, asked as [`Self::targets_allowed_quietly`]
-    /// asks (through `authorize`, with its `Browse`-to-`Select` fallback), quietly: no audit record,
-    /// no denial count. An object that cannot be placed is not allowed.
+    /// asks (through `authorize_quietly`: `authorize`'s decision, with its `Browse`-to-`Select`
+    /// fallback), quietly: no audit record, no denial count, no [`AccessPolicy::denied`] call. An
+    /// object that cannot be placed is not allowed.
     pub(crate) async fn allowed_quietly(
         &self,
         object: TargetObject<'_>,
@@ -420,7 +422,7 @@ impl Session {
             return false;
         };
         for securable in &securables {
-            let r = authorize(
+            let r = authorize_quietly(
                 &*self.state.policy,
                 &self.state.principal,
                 securable,
@@ -435,7 +437,8 @@ impl Session {
     }
 
     /// The checks of [`Self::authorize_statement`]; each denial is logged under `class`, or not at all
-    /// when `class` is `None` (a quiet trial).
+    /// when `class` is `None` (a quiet trial, asked through `authorize_quietly`, so the policy is not
+    /// told of it either).
     async fn check_targets(
         &self,
         statement: &Statement,
@@ -473,13 +476,27 @@ impl Session {
                 {
                     continue;
                 }
-                let r = authorize(
-                    &*self.state.policy,
-                    &self.state.principal,
-                    &securable,
-                    target.privilege,
-                )
-                .await;
+                let r = match class {
+                    Some(_) => {
+                        authorize(
+                            &*self.state.policy,
+                            &self.state.principal,
+                            &securable,
+                            target.privilege,
+                        )
+                        .await
+                    }
+                    // A trial's refusal is an answer, not a refusal: the policy is not told.
+                    None => {
+                        authorize_quietly(
+                            &*self.state.policy,
+                            &self.state.principal,
+                            &securable,
+                            target.privilege,
+                        )
+                        .await
+                    }
+                };
                 match class {
                     Some(class) => audit(self, class, r)?,
                     None => r?,
