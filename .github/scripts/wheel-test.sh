@@ -46,6 +46,8 @@ assert krishiv.build_info()["allocator"] == "mimalloc"
 # The wheel workflow stamps the commit (KRISHIV_GIT_SHA at build time); a wheel built inside a
 # container that did not get the variable would report "unknown".
 expected = os.environ.get("KRISHIV_GIT_SHA")
+# In CI the variable must be present, or this check would pass by doing nothing.
+assert expected or not os.environ.get("GITHUB_ACTIONS"), "KRISHIV_GIT_SHA is not set in CI"
 if expected:
     assert krishiv.build_info()["commit"] == expected, (krishiv.build_info(), expected)
 # The acceptance smoke: a session, a query, an Arrow table. `toArrow` needs

@@ -129,7 +129,7 @@ jobs:
         run: |
           if [ "$FLAVOUR" = abi3 ]; then pys="cp311-cp311 cp314-cp314"; else pys="cp314-cp314t"; fi
           for p in $pys; do
-            docker run --rm -v "$PWD:/w" -w /w \
+            docker run --rm -e KRISHIV_GIT_SHA -e GITHUB_ACTIONS -v "$PWD:/w" -w /w \
               quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d \
               bash .github/scripts/wheel-test.sh "/opt/python/$p/bin/python" dist "$FLAVOUR"
           done
