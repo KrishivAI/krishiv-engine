@@ -56,6 +56,8 @@ fn count_star_over_parquet_reads_no_column() {
     assert_eq!(n, 1000);
     assert!(scans_no_column(&plan), "{plan}");
     let df = block_on(s.sql(&format!("SELECT 1 AS one FROM parquet.`{path}` LIMIT 3"))).unwrap();
+    let plan = block_on(df.explain(ExplainMode::Simple)).unwrap();
+    assert!(scans_no_column(&plan), "{plan}");
     let rows: usize = block_on(df.collect())
         .unwrap()
         .iter()
