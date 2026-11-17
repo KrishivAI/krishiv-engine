@@ -45,11 +45,16 @@ Paths are relative to this crate.
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/artifacts.rs` (PR-26c-3) a session's pyfiles and archives (`SessionUdfs::set_artifacts`): paths checked
   when set (absolute, a regular file, canonical: no symbolic link at or above it, `INVALID_ARTIFACT_PATH`; one name
-  once, `ARTIFACT_ALREADY_EXISTS`), prepared once per set by the first worker start into a directory of the pool
-  (`py/` copies, `archives/<name>/` unpacked by `unpack.py` with the worker interpreter, sandboxed when the sandbox
-  is on; `tarfile`'s `data` filter), within `PoolConfig::artifact_limit` (`KRISHIV_PYTHON_ARTIFACT_REFUSED`); the
-  directory is the worker's only extra read path, its entries go on `sys.path` (index 1, Spark's `add_path`)
-  after the worker's own imports; the pool key carries the set's id (a worker never serves another set)
+  once, `ARTIFACT_ALREADY_EXISTS`; the device and inode recorded), prepared once per set by the first worker start
+  into a directory of the pool (each file opened `O_NOFOLLOW` and refused unless it is the file checked by the same
+  canonical path; `py/` copies; each archive copied to `in/` and that copy unpacked into `archives/<name>/` by
+  `unpack.py` with the worker interpreter, sandboxed when the sandbox is on, killed through its pidfd on a cancel;
+  `tarfile`'s `data` filter, a hard link counted at its target's size), within `PoolConfig::artifact_limit`
+  (`KRISHIV_PYTHON_ARTIFACT_REFUSED`); only a failure about the artifacts is kept for the set (`Failure::lasting`),
+  a cancel, timeout or server I/O failure is retried by the next call, and the set's lock is not held while it is
+  made; the directory is the worker's only extra read path, its entries go on `sys.path` (index 1, Spark's
+  `add_path`; the archives too, a recorded difference) after the worker's own imports; the pool key carries the
+  set's id (a worker never serves another set)
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap (`bootstrap_for`: the worker with its

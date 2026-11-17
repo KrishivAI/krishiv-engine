@@ -21,14 +21,14 @@ use krishiv_common::error::{
 };
 use krishiv_udf_sandbox::{Capabilities, Limits, SandboxSpec, probe};
 use rustix::net::{AddressFamily, SocketFlags, SocketType};
-use rustix::process::{Resource, getrlimit};
+use rustix::process::{Pid, PidfdFlags, Resource, getrlimit};
 
 use crate::WORKER_SUBCOMMAND;
-use crate::artifacts::{self, ArtifactSet};
+use crate::artifacts::{self, ArtifactSet, Failure};
 use crate::calls::{CallThreads, Job, Refused};
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
-use crate::worker::{Started, Worker};
+use crate::worker::{Started, Worker, kill_via};
 
 /// How the pool starts the sandbox trampoline: `program` with `args`, then the sandbox spec's own
 /// arguments. The default re-runs the server's own executable with [`WORKER_SUBCOMMAND`], which the binary
@@ -504,7 +504,8 @@ impl Pool {
             Some(artifacts.prepare(
                 inner.root.path(),
                 inner.config.artifact_limit,
-                &|archive, dest, budget| self.unpack(interpreter, archive, dest, budget),
+                &|archive, dest, budget| self.unpack(interpreter, archive, dest, budget, watch),
+                &|| watch.cancelled(),
             )?)
         };
         let private_dir = tempfile::Builder::new()
@@ -639,17 +640,20 @@ impl Pool {
             })
     }
 
-    /// Unpacks the archive artifact `archive` into the empty directory `dest`, within `budget` bytes, with
-    /// `interpreter` (`unpack.py`; in the sandbox when it is on: it reads the archive and writes only `dest`).
-    /// The bytes unpacked. Runs on a call thread (it blocks until the program ends, at most
-    /// [`UNPACK_TIMEOUT`]).
+    /// Unpacks the archive artifact `archive` (the pool's copy) into the empty directory `dest`, within `budget`
+    /// bytes, with `interpreter` (`unpack.py`; in the sandbox when it is on: it reads the archive and writes
+    /// only `dest`). The bytes unpacked. Runs on a call thread (it blocks until the program ends, at most
+    /// [`UNPACK_TIMEOUT`]); a cancel of `watch` kills the program through its pidfd. Only the program's own
+    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout or a program that
+    /// could not be started or waited for is not.
     fn unpack(
         &self,
         interpreter: &Interpreter,
         archive: &Path,
         dest: &Path,
         budget: u64,
-    ) -> Result<u64, KrishivError> {
+        watch: &dyn CallWatch,
+    ) -> Result<u64, Failure> {
         let mut command = self.command(
             interpreter,
             dest,
@@ -666,9 +670,37 @@ impl Pool {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = self.spawn(command, interpreter)?;
-        let output = wait_capped(&mut child, UNPACK_TIMEOUT)
-            .map_err(|e| artifacts::refused(archive, &format!("it could not be unpacked: {e}")))?;
+        let mut child = self
+            .spawn(command, interpreter)
+            .map_err(Failure::transient)?;
+        let pid = Pid::from_child(&child);
+        // The child is not reaped yet, so `pid` is still its own.
+        let pidfd = match rustix::process::pidfd_open(pid, PidfdFlags::empty()) {
+            Ok(fd) => fd,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Failure::transient(internal(format!(
+                    "cannot open a pidfd for the UDF archive unpacker: {e}"
+                ))));
+            }
+        };
+        let output = match wait_capped(&mut child, &pidfd, UNPACK_TIMEOUT, &|| watch.cancelled()) {
+            Ok(Ended::Exited(output)) => output,
+            Ok(Ended::Cancelled) => return Err(Failure::transient(OperationCanceled {}.into())),
+            Ok(Ended::TimedOut) => {
+                return Err(Failure::transient(artifacts::refused(
+                    archive,
+                    &format!("it could not be unpacked in {} s", UNPACK_TIMEOUT.as_secs()),
+                )));
+            }
+            Err(e) => {
+                return Err(Failure::transient(artifacts::refused(
+                    archive,
+                    &format!("it could not be unpacked: {e}"),
+                )));
+            }
+        };
         // The count is the program's last line (a launcher may print before it starts the interpreter).
         if output.status.success()
             && let Some(n) = String::from_utf8_lossy(&output.stdout)
@@ -681,14 +713,14 @@ impl Pool {
         }
         let why = String::from_utf8_lossy(&output.stderr);
         let why = why.trim();
-        Err(artifacts::refused(
+        Err(Failure::lasting(artifacts::refused(
             archive,
             if why.is_empty() {
                 "the unpacking program failed"
             } else {
                 why
             },
-        ))
+        )))
     }
 }
 
@@ -697,6 +729,9 @@ const UNPACK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The most bytes of the unpacking program's output kept (its reason, or its byte count).
 const UNPACK_OUTPUT: u64 = 16 * 1024;
+
+/// How often [`wait_capped`] looks at the program and the cancel.
+const UNPACK_TICK: Duration = Duration::from_millis(20);
 
 /// A thread reading `pipe` to its end, keeping the first [`UNPACK_OUTPUT`] bytes (the rest is read and
 /// dropped, so the writer never blocks on a full pipe).
@@ -714,8 +749,25 @@ fn read_capped(
     })
 }
 
-/// What `child` wrote (each stream cut to [`UNPACK_OUTPUT`] bytes) once it exited; killed past `timeout`.
-fn wait_capped(child: &mut Child, timeout: Duration) -> std::io::Result<std::process::Output> {
+/// How a program [`wait_capped`] waited for ended.
+#[derive(Debug)]
+enum Ended {
+    /// It exited: what it wrote, each stream cut to [`UNPACK_OUTPUT`] bytes.
+    Exited(std::process::Output),
+    /// It ran past the timeout and was killed.
+    TimedOut,
+    /// The call was cancelled and the program killed.
+    Cancelled,
+}
+
+/// Waits for `child` (whose pidfd is `pidfd`) to exit; killed, through the pidfd, past `timeout` or once
+/// `cancelled` says so (and reaped either way).
+fn wait_capped(
+    child: &mut Child,
+    pidfd: &OwnedFd,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Ended> {
     let stdout = read_capped(child.stdout.take());
     let stderr = read_capped(child.stderr.take());
     let deadline = Instant::now() + timeout;
@@ -723,21 +775,23 @@ fn wait_capped(child: &mut Child, timeout: Duration) -> std::io::Result<std::pro
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("it took longer than {} s", timeout.as_secs()),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(20));
+        let ended = if cancelled() {
+            Ended::Cancelled
+        } else if Instant::now() >= deadline {
+            Ended::TimedOut
+        } else {
+            std::thread::sleep(UNPACK_TICK);
+            continue;
+        };
+        kill_via(pidfd);
+        let _ = child.wait();
+        return Ok(ended);
     };
-    Ok(std::process::Output {
+    Ok(Ended::Exited(std::process::Output {
         status,
         stdout: stdout.join().unwrap_or_default(),
         stderr: stderr.join().unwrap_or_default(),
-    })
+    }))
 }
 
 /// What a call tells the pool while it waits for a worker or starts one.
@@ -915,6 +969,46 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sleeper() -> (Child, OwnedFd) {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pidfd =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).unwrap();
+        (child, pidfd)
+    }
+
+    #[test]
+    fn a_cancel_or_the_timeout_kills_the_unpacker() {
+        let (mut child, pidfd) = sleeper();
+        let start = Instant::now();
+        let ended = wait_capped(&mut child, &pidfd, Duration::from_secs(60), &|| true).unwrap();
+        assert!(matches!(ended, Ended::Cancelled), "{ended:?}");
+        assert!(start.elapsed() < Duration::from_secs(20));
+        // Reaped: nothing is left to wait for.
+        assert!(child.try_wait().unwrap().is_some());
+
+        let (mut child, pidfd) = sleeper();
+        let ended = wait_capped(&mut child, &pidfd, Duration::ZERO, &|| false).unwrap();
+        assert!(matches!(ended, Ended::TimedOut), "{ended:?}");
+
+        let mut child = Command::new("echo")
+            .arg("7")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pidfd =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).unwrap();
+        match wait_capped(&mut child, &pidfd, Duration::from_secs(60), &|| false).unwrap() {
+            Ended::Exited(output) => assert_eq!(output.stdout, b"7\n"),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[test]
     fn dropping_the_pool_removes_its_directory_and_package() {

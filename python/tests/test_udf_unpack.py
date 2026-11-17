@@ -119,3 +119,36 @@ def test_main_prints_the_bytes_or_the_reason(tmp_path: Path, capsys: pytest.Capt
         unpack.main(str(corrupt), str(dest), 100)
     assert exit_info.value.code == 2
     assert capsys.readouterr().err.startswith("it cannot be unpacked: BadZipFile: ")
+
+
+def test_a_tar_hard_link_counts_as_its_target(tmp_path: Path) -> None:
+    def archive(links: list[tuple[str, str]]) -> Path:
+        path = tmp_path / f"links{len(links)}.tar"
+        with tarfile.open(path, "w") as tf:
+            data = b"x" * 60
+            info = tarfile.TarInfo("pkg/a")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+            for name, target in links:
+                link = tarfile.TarInfo(name)
+                link.type = tarfile.LNKTYPE
+                link.linkname = target
+                tf.addfile(link)
+        return path
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with pytest.raises(unpack.Refused, match="more than the 100 bytes left"):
+        unpack.unpack(str(archive([("pkg/b", "./pkg/a")])), str(dest), 100)
+    assert list(dest.iterdir()) == []
+    assert unpack.unpack(str(archive([("pkg/b", "./pkg/a")])), str(dest), 120) == 120
+    assert (dest / "pkg" / "b").read_bytes() == b"x" * 60
+    # A link to no earlier member counts nothing (tarfile cannot extract it).
+    assert unpack._tar_member_size(_link("missing"), {}) == 0
+
+
+def _link(target: str) -> tarfile.TarInfo:
+    link = tarfile.TarInfo("l")
+    link.type = tarfile.LNKTYPE
+    link.linkname = target
+    return link

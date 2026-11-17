@@ -155,13 +155,25 @@ waits for another to finish when they would hold more, in arrival order. Spark r
 A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
 worker the same way, one per UDF of the operator.
 
+A Python UDF over a window keeps each window partition's input rows in memory until the partition's values come
+back from the worker; Spark queues them in a buffer that spills to disk. A partition larger than the query's memory
+fails with the memory pool's error in Krishiv where Spark finishes.
+
+A scalar iterator UDF runs one Python iterator per driver of the operator, not one per Spark partition, so a UDF
+that keeps state across its iterator (a running total, a call count) sees other batch boundaries than in Spark. The
+operator also reads all its input and keeps all its output before the next operator reads any, so a `LIMIT` above
+it does not stop it early.
+
 ## Python artifacts in server mode
 
-Pyfiles and archives a Connect client adds (`addArtifacts(..., pyfile=True)`, `archive=True`) reach the session's
-Python UDF workers on `sys.path`, as in Spark. Archives (zip, jar, tar, tar.gz, tgz) are unpacked into a read-only
-directory of the server, each under its file name, which is on `sys.path` too; Spark unpacks them into the
-executor's working directory, so code that opens an archive's files by a path relative to the working directory
-finds them in Spark only. A tar member that is a link leaving its archive's directory, a device file, or artifacts
+Pyfiles a Connect client adds (`addArtifacts(..., pyfile=True)`) reach the session's Python UDF workers on
+`sys.path`, as in Spark: the directory of the `.py` files, then each zip or egg. Archives (`archive=True`: zip, jar,
+tar, tar.gz, tgz) are unpacked into a read-only directory of the server, each under its file name, and that
+directory is put on `sys.path` too, which Spark does not do (its worker's `setup_spark_files` adds only the files
+directory and each `.zip`/`.egg` include): a package at an archive's top level is importable in Krishiv and not in
+Spark, and, being added at index 1, it shadows an installed package of the same name (for example a `pandas` inside
+the archive). Spark unpacks archives into the executor's working directory, so code that opens an archive's files
+by a path relative to the working directory finds them in Spark only. A tar member that is a link leaving its archive's directory, a device file, or artifacts
 past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`

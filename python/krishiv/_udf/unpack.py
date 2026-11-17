@@ -7,16 +7,19 @@ the destination directory), before any worker of the session's artifact set star
 ``.zip``, ``.jar``, ``.tar``, ``.tar.gz`` and ``.tgz`` archives (``Utils.unpack``); the same formats are read here.
 
 The archive comes from a client, so: the members' sizes together must stay within ``budget`` bytes (checked
-before anything is written; a member never writes past its declared size), there are at most ``MAX_MEMBERS``
-members, and a tar archive is extracted with ``tarfile``'s ``data`` filter (no absolute paths, no ``..``, no link
-leaving the directory, no device files). A zip's members cannot be links, and ``zipfile`` drops absolute paths and
-``..``. A refusal is one line on stderr and exit status 2; the server raises it as
-``KRISHIV_PYTHON_ARTIFACT_REFUSED``. On success the unpacked byte count is the one line on stdout.
+before anything is written; a member never writes past its declared size; a tar's hard link counts as its target,
+which ``tarfile`` may copy), there are at most ``MAX_MEMBERS`` members, and a tar archive is extracted with
+``tarfile``'s ``data`` filter (no absolute paths, no ``..``, no link leaving the directory, no device files). A
+zip's members cannot be links, and ``zipfile`` drops absolute paths and ``..``. A refusal is one line on stderr and
+exit status 2; the server raises it as ``KRISHIV_PYTHON_ARTIFACT_REFUSED``. On success the unpacked byte count is
+the one line on stdout.
 """
 
 from __future__ import annotations
 
+import os
 import sys
+import tarfile
 
 #: The most members one archive may have.
 MAX_MEMBERS = 100_000
@@ -40,22 +43,38 @@ def _unpack_zip(archive: str, dest: str, budget: int) -> int:
     return total
 
 
-def _unpack_tar(archive: str, dest: str, budget: int) -> int:
-    import tarfile
+def _tar_member_size(member: tarfile.TarInfo, sizes: dict[str, int]) -> int:
+    """The bytes ``member`` may write: a file's size, and a hard link's target's size (``sizes``, by the earlier
+    members' normalized names).
 
+    The ``data`` filter keeps a hard link whose target is inside the directory (it refuses only one that is
+    absolute or leaves it), and when the link cannot be made ``tarfile`` writes a full copy of its target
+    instead, so a hard link counts as its target. A link to no earlier member counts nothing (``tarfile`` cannot
+    extract it).
+    """
+    if member.isfile():
+        return member.size
+    if member.islnk():
+        return sizes.get(os.path.normpath(member.linkname), 0)
+    return 0
+
+
+def _unpack_tar(archive: str, dest: str, budget: int) -> int:
     if not hasattr(tarfile, "data_filter"):
         raise Refused("this interpreter's tarfile has no data filter (Python 3.11.4 or later is needed)")
     with tarfile.open(archive, "r:*") as tf:
         members = []
         total = 0
+        sizes: dict[str, int] = {}
         for member in tf:
             members.append(member)
             if len(members) > MAX_MEMBERS:
                 raise Refused(f"it has more than {MAX_MEMBERS} members")
-            if member.isfile():
-                total += member.size
-                if total > budget:
-                    raise Refused(f"it unpacks to more than the {budget} bytes left of the artifact limit")
+            size = _tar_member_size(member, sizes)
+            sizes[os.path.normpath(member.name)] = size
+            total += size
+            if total > budget:
+                raise Refused(f"it unpacks to more than the {budget} bytes left of the artifact limit")
         try:
             tf.extractall(dest, members=members, filter="data")
         except tarfile.FilterError as e:
