@@ -942,7 +942,8 @@ mod tests {
     fn with_one_thread_a_task_waiter_goes_before_a_later_scalar_call() {
         // R5-2: maxTotal 1, arrival order across both kinds. a waits for the slot d holds; b's scalar call is
         // queued after that. When d's slot frees, a is granted (it came first), so a stream of other owners'
-        // scalar calls cannot keep a waiting; a request made after b's call still yields to it.
+        // scalar calls cannot keep a waiting; a request made after b's call, with no waiter left, still yields
+        // to it.
         let calls = CallThreads::new(1, 4, Duration::from_secs(60));
         let (release, gate) = mpsc::channel::<()>();
         let (started, running) = mpsc::channel::<()>();
@@ -977,14 +978,16 @@ mod tests {
             )
             .expect("b");
         drop(d);
+        let (take, a) = calls.take_slots(&owner("a"), 1, &mut ticket, &waker);
+        assert_eq!(take, SlotTake::Taken, "a arrived before b's call");
+        drop(a);
+        // No waiter is queued now and the slot is free, so only b's queued call (it arrived first) can hold e
+        // back: `held_back` alone would grant e (review N6-1).
         assert_eq!(
             calls.try_take_now(&owner("e")).map(|_| ()),
             None,
             "a later request yields to b's queued call"
         );
-        let (take, a) = calls.take_slots(&owner("a"), 1, &mut ticket, &waker);
-        assert_eq!(take, SlotTake::Taken, "a arrived before b's call");
-        drop(a);
         let _ = release.send(());
         ran.recv_timeout(Duration::from_secs(10))
             .expect("b's call ran");

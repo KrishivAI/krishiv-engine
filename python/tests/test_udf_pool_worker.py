@@ -593,3 +593,87 @@ def test_a_frame_is_read_once_and_nothing_follows_the_end(pair: tuple[socket.soc
     assert frames.next() == ("end",)
     with pytest.raises(pool_worker._ProtocolError, match="asked for after the end"):
         frames.next()
+
+
+# --- window aggregates, scalar iterators and artifact paths (PR-26c-3) ---
+WINDOW_AGG_PANDAS = 203
+SCALAR_PANDAS_ITER = 204
+
+
+def _plus_one_each(series: Any) -> Any:
+    for s in series:
+        yield s + 1
+
+
+def test_a_grouped_aggregate_udf_runs_as_the_window_kind_its_task_names(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    monkeypatch.setattr(
+        _host, "runner_conf", lambda: {"spark.sql.session.timeZone": "UTC", "window_bound_types": "unbounded"}
+    )
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    for _ in range(2):  # the second task reuses the window runner
+        _send(server, {**_task(arity=1), "eval_type": WINDOW_AGG_PANDAS})
+        _frame(server, [1, 2])
+        _send(server, {"t": "end_group"})
+        _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    # One value per row of the partition, sent together.
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[3, 3], [3, 3]]
+    assert [m["t"] for m, _ in sent].count("done") == 2
+
+
+def test_a_task_of_another_kind_than_the_udf_s_window_kind_is_a_protocol_error(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    _send(server, {**_task(arity=1), "eval_type": SCALAR_PANDAS_ITER})
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert sent[1][0]["kind"] == "protocol"
+    assert "a task of eval type 204 for a UDF of eval type 202" in sent[1][0]["message"]
+
+
+def test_a_scalar_iterator_task_yields_a_value_per_row(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    command = pickle.dumps((_plus_one_each, LongType()))
+    udf = {"t": "udf", "id": 7, "eval_type": SCALAR_PANDAS_ITER, "python_ver": PYTHON_VER, "len": len(command)}
+    _send(server, udf, command)
+    _send(server, _task(arity=1))
+    _frame(server, [1, 2])
+    _frame(server, [3])
+    _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[2, 3], [4]]
+    assert sent[-1][0] == {"t": "done"}
+
+
+def test_artifact_paths_go_on_sys_path_once_after_the_first_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "path", ["/worker", "/stdlib"])
+    pool_worker._add_paths(["/a/py.zip", "/a/archives/x"])
+    assert sys.path == ["/worker", "/a/archives/x", "/a/py.zip", "/stdlib"]
+    pool_worker._add_paths(["/a/py.zip"])
+    assert sys.path == ["/worker", "/a/archives/x", "/a/py.zip", "/stdlib"]
+
+
+def test_main_adds_the_artifact_paths_before_it_greets(
+    fake_pyspark: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    pair: tuple[socket.socket, socket.socket],
+    tmp_path: Any,
+) -> None:
+    (tmp_path / "krishiv_test_artifact_mod.py").write_text("VALUE = 41\n")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "krishiv_test_artifact_mod", raising=False)
+    server, worker = pair
+    server.shutdown(socket.SHUT_WR)
+    pool_worker.main(worker, paths=[str(tmp_path)])
+    assert sys.path[1] == str(tmp_path)
+    import krishiv_test_artifact_mod  # ty: ignore[unresolved-import]  # the artifact written above
+
+    assert krishiv_test_artifact_mod.VALUE == 41
+    assert _recv(server)[0]["t"] == "hello"

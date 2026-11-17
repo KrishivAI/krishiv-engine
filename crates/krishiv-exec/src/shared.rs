@@ -80,6 +80,24 @@ pub(crate) fn memory_rows(state: &GlobalState) -> Option<usize> {
     })
 }
 
+/// The batches of a finalized shared plan's list held in memory, in order;
+/// `None` before it finalized or when a part of it is on disk (tests read
+/// results).
+#[cfg(test)]
+pub(crate) fn memory_batches(state: &GlobalState) -> Option<Vec<Batch>> {
+    let sink = state.downcast_ref::<SinkGlobal>()?;
+    let output = sink.done.get()?;
+    let segments = lock(&output.state);
+    let mut out = Vec::new();
+    for s in segments.iter() {
+        match s {
+            Segment::Memory { batches, .. } => out.extend(batches.iter().cloned()),
+            Segment::File(_) => return None,
+        }
+    }
+    Some(out)
+}
+
 /// What one driver collected: spilled segments first, then the batches in
 /// memory.
 struct SinkLocal {

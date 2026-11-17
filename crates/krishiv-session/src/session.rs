@@ -1697,7 +1697,7 @@ impl Session {
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
-            principal: Arc::from(self.state.principal.name.as_str()),
+            owner: Arc::from(crate::sessions::owner_key(&self.state.principal).as_str()),
             tags: self.effective_tags().into(),
             request_tags: Arc::clone(&self.request_tags),
         }

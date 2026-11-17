@@ -661,29 +661,30 @@ impl EngineRuntime {
     /// Cancels the queries and statements, of any session of the runtime, that carry a tag
     /// matching `selector`: a bare `k` matches a pair with key `k`, `k=v` the exact pair, and a
     /// Connect request tag (an opaque string, stored as the key of a pair) matches as written
-    /// ([`crate::resource_groups::tag_matches`]). The caller's own queries (principal `caller`)
-    /// end with `User` (`OPERATION_CANCELED`); with `all_principals` (the caller holds `Operate`
+    /// ([`crate::resource_groups::tag_matches`]). The caller's own queries (`caller`)
+    /// end with `User` (`OPERATION_CANCELED`; ownership is the whole principal: kind, tenant, name
+    /// and delegation, as for `system.queries`, never the name alone); with `all_principals` (the caller holds `Operate`
     /// on `System("sessions")`) other principals' queries end with `Admin`
     /// (`KRISHIV_QUERY_KILLED`). Returns the ids and no count of what was skipped, so a guessed
     /// tag reveals nothing about queries the caller may not touch. Not reachable from SQL.
     pub fn cancel_by_tag(
         &self,
         selector: &str,
-        caller: &str,
+        caller: &crate::Principal,
         all_principals: bool,
     ) -> Vec<crate::QueryId> {
+        let owner = crate::sessions::owner_key(caller);
         let matches = |t: &crate::action::Tagging| {
             t.tags
                 .iter()
                 .any(|(k, v)| crate::resource_groups::tag_matches(selector, k, v))
         };
-        let mut ids = self.cancel_tagged(CancelReason::User, |_, t| {
-            &*t.principal == caller && matches(t)
-        });
+        let mut ids =
+            self.cancel_tagged(CancelReason::User, |_, t| *t.owner == *owner && matches(t));
         if all_principals {
-            ids.extend(self.cancel_tagged(CancelReason::Admin, |_, t| {
-                &*t.principal != caller && matches(t)
-            }));
+            ids.extend(
+                self.cancel_tagged(CancelReason::Admin, |_, t| *t.owner != *owner && matches(t)),
+            );
         }
         ids
     }
@@ -738,6 +739,23 @@ impl EngineRuntime {
     pub fn cancel(&self, id: &crate::QueryId, reason: CancelReason) -> bool {
         !self
             .cancel_where(reason, |_, q| q == id.as_str())
+            .is_empty()
+    }
+
+    /// [`Self::cancel`] limited to the query `id` of session `session_id`: the same id in another
+    /// session is left running (an operator who was checked against one session's row must not
+    /// end another owner's query).
+    pub fn cancel_in_session(
+        &self,
+        session_id: &str,
+        id: &crate::QueryId,
+        reason: CancelReason,
+    ) -> bool {
+        let Some((session, _)) = self.sessions.find(session_id) else {
+            return false;
+        };
+        !self
+            .cancel_where(reason, |s, q| s == session && q == id.as_str())
             .is_empty()
     }
 

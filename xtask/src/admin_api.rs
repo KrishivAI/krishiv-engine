@@ -363,6 +363,13 @@ pub(crate) fn openapi_of(descriptor: &Value) -> Value {
                         "schema": {"$ref": "#/components/schemas/Error"}}}},
                 },
             });
+            let mut parameters = path_parameters(m["http"]["path"].as_str().unwrap_or_default());
+            if verb == "get" || verb == "delete" {
+                parameters.extend(query_parameters(descriptor, m, &parameters));
+            }
+            if !parameters.is_empty() {
+                op["parameters"] = Value::Array(parameters);
+            }
             if verb != "get" && verb != "delete" {
                 op["requestBody"] = json!({"required": false, "content": {"application/json": {
                     "schema": {"$ref": format!("#/components/schemas/{}", m["request"].as_str().unwrap_or_default())}}}});
@@ -385,8 +392,51 @@ pub(crate) fn openapi_of(descriptor: &Value) -> Value {
     })
 }
 
+/// The `{name}` placeholders of a route path as required path parameters.
+fn path_parameters(path: &str) -> Vec<Value> {
+    path.split('{')
+        .skip(1)
+        .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+        .map(|name| json!({"name": name, "in": "path", "required": true, "schema": {"type": "string"}}))
+        .collect()
+}
+
+/// The request fields a GET reads from its query string: every singular or repeated scalar field
+/// the path does not bind (the server accepts the proto or the JSON name; the JSON name is
+/// documented).
+fn query_parameters(descriptor: &Value, method: &Value, path: &[Value]) -> Vec<Value> {
+    let request = method["request"].as_str().unwrap_or_default();
+    let Some(fields) = descriptor["messages"][request]["fields"].as_object() else {
+        return Vec::new();
+    };
+    fields
+        .iter()
+        .filter(|(name, _)| !path.iter().any(|p| p["name"] == name.as_str()))
+        .map(|(_, f)| {
+            let one = schema_of(f["type"].as_str().unwrap_or_default());
+            let repeated = f["label"] == "repeated";
+            let schema = if repeated {
+                json!({"type": "array", "items": one})
+            } else {
+                one
+            };
+            let mut param =
+                json!({"name": f["jsonName"], "in": "query", "required": false, "schema": schema});
+            if repeated {
+                param["style"] = json!("form");
+                param["explode"] = json!(true);
+            }
+            param
+        })
+        .collect()
+}
+
 /// The proto3 JSON mapping of a field type as a JSON schema.
 fn schema_of(ty: &str) -> Value {
+    if ty == "message:google.protobuf.Timestamp" {
+        // ProtoJSON writes a timestamp as an RFC 3339 string.
+        return json!({"type": "string", "format": "date-time"});
+    }
     if let Some(name) = ty
         .strip_prefix("message:")
         .or_else(|| ty.strip_prefix("enum:"))

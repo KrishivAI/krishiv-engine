@@ -37,6 +37,12 @@ enum Mode {
     Burst,
     /// One `BIGINT` per group (per partition without groups): its rows.
     Count,
+    /// A scalar iterator: each batch's first column plus one, as it comes.
+    PlusOne,
+    /// A window aggregate: per row, its frame's rows (`end - start`, the
+    /// first two columns) when the frames lead with the bounds, else the
+    /// partition's rows; all at the partition's end.
+    FrameRows,
 }
 
 #[derive(Debug, Default)]
@@ -74,6 +80,8 @@ impl UdfRuntime for Runtime {
             "echo" => Mode::Echo,
             "twice" => Mode::Twice,
             "burst" => Mode::Burst,
+            "iterplus" => Mode::PlusOne,
+            "framerows" => Mode::FrameRows,
             _ => Mode::Count,
         };
         assert_eq!(spec.input_names.len(), spec.input_types.len(), "{spec:?}");
@@ -148,6 +156,8 @@ struct State {
     rows: i64,
     groups: usize,
     ended: bool,
+    /// `FrameRows`: the open partition's values.
+    held: Vec<i64>,
 }
 
 struct Task {
@@ -253,11 +263,54 @@ impl UdfTask for Task {
                             }
                         }
                         Mode::Count => {}
+                        Mode::PlusOne => {
+                            let a = batch
+                                .column(0)
+                                .as_any()
+                                .downcast_ref::<Int64Array>()
+                                .unwrap();
+                            let out: Int64Array = a.iter().map(|v| v.map(|v| v + 1)).collect();
+                            s.out.push_back(
+                                RecordBatch::try_new(
+                                    Arc::clone(&self.output),
+                                    vec![Arc::new(out) as ArrayRef],
+                                )
+                                .unwrap(),
+                            );
+                        }
+                        Mode::FrameRows => {
+                            if batch.num_columns() >= 3 {
+                                let start = batch.column(0).as_any().downcast_ref::<Int32Array>();
+                                let end = batch.column(1).as_any().downcast_ref::<Int32Array>();
+                                let (start, end) = (start.unwrap(), end.unwrap());
+                                for r in 0..batch.num_rows() {
+                                    s.held.push(i64::from(end.value(r) - start.value(r)));
+                                }
+                            } else {
+                                let n = batch.num_rows();
+                                s.held.extend(std::iter::repeat_n(-1, n));
+                            }
+                        }
                     }
                 }
                 Frame::EndGroup => {
                     self.push("G".to_owned());
                     s.groups += 1;
+                    if self.mode == Mode::FrameRows {
+                        let mut held = std::mem::take(&mut s.held);
+                        let n = i64::try_from(held.len()).unwrap();
+                        for v in &mut held {
+                            if *v < 0 {
+                                *v = n;
+                            }
+                        }
+                        let b = RecordBatch::try_new(
+                            Arc::clone(&self.output),
+                            vec![Arc::new(Int64Array::from(held)) as ArrayRef],
+                        )
+                        .unwrap();
+                        s.out.push_back(b);
+                    }
                     if self.mode == Mode::Count {
                         let n = std::mem::take(&mut s.rows);
                         let b = self.count(n);
@@ -1028,7 +1081,7 @@ fn barrier_mode_is_refused_at_planning() {
 }
 
 #[test]
-fn python_udtfs_and_window_aggregates_are_refused_until_pr_26c() {
+fn python_udtfs_are_refused_until_pr_26c() {
     let env = env();
     let (input, cols) = input(&env, "SELECT a, b FROM t");
     let call = |eval_type, kind| {
@@ -1061,17 +1114,7 @@ fn python_udtfs_and_window_aggregates_are_refused_until_pr_26c() {
         udf: udf("f", PythonEvalType::ArrowUdtf),
         output: counted(),
     });
-    let window = LogicalPlan::new(PlanNode::Window {
-        input,
-        exprs: vec![alias(
-            call(PythonEvalType::WindowAggArrow, FunctionKind::Aggregate),
-            950,
-            "w",
-        )],
-        partition_by: vec![col(&cols[0])],
-        order_by: Vec::new(),
-    });
-    for node in [lateral, table, window] {
+    for node in [lateral, table] {
         let text = node.to_string();
         let err = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap_err();
         assert_eq!(
@@ -1271,4 +1314,206 @@ fn a_task_yielding_far_more_than_its_input_runs_in_bounded_memory() {
     let rows: usize = out.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(rows, 8 * ROWS as usize);
     assert!(files > 0, "the results did not spill");
+}
+
+/// A scalar iterator Python UDF in a projection (Spark's 204, 251) runs as a
+/// task over the node's rows: each row gets its own value, in order.
+#[test]
+fn a_scalar_iterator_udf_yields_one_value_per_row() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    for eval_type in [
+        PythonEvalType::ScalarArrowIter,
+        PythonEvalType::ScalarPandasIter,
+    ] {
+        let call = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: udf("iterplus", eval_type).function_id(),
+                kind: FunctionKind::Scalar,
+                args: vec![col(&cols[1])],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Long,
+                nullable: true,
+                deterministic: true,
+            },
+        ))));
+        let node = LogicalPlan::new(PlanNode::Project {
+            input: Arc::clone(&input),
+            exprs: vec![col(&cols[1]), alias(call, 950, "p")],
+        });
+        let rt = Arc::new(Runtime::default());
+        let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+        let rows = lines(&out);
+        assert_eq!(rows.len(), 10, "{rows:?}");
+        for r in &rows {
+            let (b, p) = r.split_once('|').unwrap();
+            if b == "NULL" {
+                assert_eq!(p, "NULL", "{rows:?}");
+            } else {
+                assert_eq!(
+                    p.parse::<i64>().unwrap(),
+                    b.parse::<i64>().unwrap() + 1,
+                    "{rows:?}"
+                );
+            }
+        }
+        // No group markers: batches, then the end.
+        let log = log_of(&rt);
+        assert!(log.iter().all(|l| l != "G"), "{log:?}");
+        assert_eq!(log.last().map(String::as_str), Some("E"), "{log:?}");
+    }
+}
+
+/// The `Window` node below the first expression of `p` (its first one).
+fn window_of(p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
+    if matches!(p.node, PlanNode::Window { .. }) {
+        return Some(Arc::clone(p));
+    }
+    let mut found = None;
+    p.for_each_child(&mut |c| {
+        if found.is_none() {
+            found = window_of(c);
+        }
+    });
+    found
+}
+
+/// `count(*) OVER (spec)` analyzed, and the same window with a Python
+/// window UDF of `eval_type` (named `framerows`: it yields each row's frame
+/// size from the frame bounds it gets) beside it: the two columns agree on
+/// every row, so the bounds the engine sends are Spark's frame rows.
+fn frame_rows_match_count(spec: &str, eval_type: PythonEvalType) {
+    let env = env();
+    let plan = env.analyze(&format!("SELECT a, b, count(*) OVER ({spec}) AS c FROM t"));
+    let window = window_of(plan.root()).unwrap_or_else(|| panic!("no window: {spec}"));
+    let PlanNode::Window {
+        input,
+        exprs,
+        partition_by,
+        order_by,
+    } = &window.node
+    else {
+        unreachable!()
+    };
+    let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &exprs[0].node else {
+        panic!("{spec}: {}", exprs[0])
+    };
+    let ExprNode::Window(w) = &expr.node else {
+        panic!("{spec}: {expr}")
+    };
+    let cols = input.resolved_output().unwrap();
+    let b = cols.iter().find(|c| c.name == "b").unwrap();
+    let python = Arc::new(Expr::new(ExprNode::Window(krishiv_plan::WindowExpr {
+        function: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: udf("framerows", eval_type).function_id(),
+                kind: FunctionKind::Aggregate,
+                args: vec![col(b)],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Long,
+                nullable: true,
+                deterministic: true,
+            },
+        )))),
+        window: w.window.clone(),
+    })));
+    let node = LogicalPlan::new(PlanNode::Window {
+        input: Arc::clone(input),
+        exprs: vec![Arc::clone(&exprs[0]), alias(python, 960, "w")],
+        partition_by: partition_by.clone(),
+        order_by: order_by.clone(),
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default())))
+        .unwrap_or_else(|e| panic!("{spec}: {e}"));
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 10, "{spec}: {rows:?}");
+    for r in &rows {
+        let cells: Vec<&str> = r.split('|').collect();
+        let n = cells.len();
+        assert_eq!(cells[n - 2], cells[n - 1], "{spec}: {rows:?}");
+    }
+}
+
+#[test]
+fn a_python_window_udf_gets_each_row_s_frame_bounds() {
+    for spec in [
+        "PARTITION BY a ORDER BY b ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING",
+        "PARTITION BY a ORDER BY b ROWS BETWEEN 3 PRECEDING AND 2 PRECEDING",
+        "PARTITION BY a ORDER BY b ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING",
+        "PARTITION BY a ORDER BY b",
+        "ORDER BY b RANGE BETWEEN 2 PRECEDING AND CURRENT ROW",
+        "PARTITION BY a",
+        "",
+    ] {
+        for t in [
+            PythonEvalType::GroupedAggArrow,
+            PythonEvalType::GroupedAggPandas,
+            PythonEvalType::WindowAggArrow,
+        ] {
+            frame_rows_match_count(spec, t);
+        }
+    }
+}
+
+/// The iterator forms of a grouped aggregate (217, 254) over a window are
+/// refused at planning, as a Python UDAF call with `FILTER` is.
+#[test]
+fn an_iterator_grouped_aggregate_over_a_window_is_refused() {
+    let env = env();
+    let plan = env.analyze("SELECT a, b, count(*) OVER (PARTITION BY a) AS c FROM t");
+    let window = window_of(plan.root()).unwrap();
+    let PlanNode::Window {
+        input,
+        exprs,
+        partition_by,
+        order_by,
+    } = &window.node
+    else {
+        unreachable!()
+    };
+    let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &exprs[0].node else {
+        unreachable!()
+    };
+    let ExprNode::Window(w) = &expr.node else {
+        unreachable!()
+    };
+    let cols = input.resolved_output().unwrap();
+    let python = Arc::new(Expr::new(ExprNode::Window(krishiv_plan::WindowExpr {
+        function: udaf_of(col(&cols[1])),
+        window: w.window.clone(),
+    })));
+    let python = match &python.node {
+        ExprNode::Window(w) => {
+            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &w.function.node else {
+                unreachable!()
+            };
+            Arc::new(Expr::new(ExprNode::Window(krishiv_plan::WindowExpr {
+                function: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: udf("count", PythonEvalType::GroupedAggArrowIter).function_id(),
+                        ..f.clone()
+                    },
+                )))),
+                window: w.window.clone(),
+            })))
+        }
+        _ => unreachable!(),
+    };
+    let node = LogicalPlan::new(PlanNode::Window {
+        input: Arc::clone(input),
+        exprs: vec![alias(python, 960, "w")],
+        partition_by: partition_by.clone(),
+        order_by: order_by.clone(),
+    });
+    let err = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{err}"
+    );
+    assert!(err.to_string().contains("254 over a window"), "{err}");
 }
