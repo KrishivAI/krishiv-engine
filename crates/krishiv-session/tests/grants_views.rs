@@ -760,3 +760,49 @@ fn assert_redacted_any(e: &str, hidden: &[&str]) {
         assert!(!e.contains(h), "{h}: {e}");
     }
 }
+
+/// Review r2 R2: a definer view whose text holds a `WITH` reads with its definer's rights under
+/// every CTE precedence policy the reader sets: `LEGACY` inlines the definitions before binding,
+/// and the inlined query stays the definer's. A reader's own definition of the same name never
+/// replaces the view's.
+#[test]
+fn a_definer_views_cte_reads_as_the_definer_under_every_precedence_policy() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(&root, "CREATE TABLE other (a INT) USING parquet");
+    ok(&root, "INSERT INTO other VALUES (7), (8)");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS WITH c AS (SELECT a FROM t) SELECT a FROM c",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    for policy in ["CORRECTED", "LEGACY", "EXCEPTION"] {
+        bob.conf()
+            .set("spark.sql.legacy.ctePrecedencePolicy", policy)
+            .unwrap();
+        assert_eq!(rows(&bob, "SELECT * FROM dv"), 1, "{policy}");
+        assert_eq!(rows(&bob, "SELECT a FROM dv WHERE a = 1"), 1, "{policy}");
+    }
+    // Under LEGACY an outer definition wins over a nested one of the same name: never over the
+    // view's, which is the definer's text (and bob's `c` would read a table as ana).
+    ok(&root, "GRANT SELECT ON TABLE other TO user:bob");
+    bob.conf()
+        .set("spark.sql.legacy.ctePrecedencePolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        rows(&bob, "WITH c AS (SELECT a FROM other) SELECT * FROM dv"),
+        1
+    );
+    // Nested: bob's definer view with its own `WITH` over ana's, read by carl under LEGACY.
+    let carl = w.user("carl");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(
+        &bob,
+        "CREATE VIEW outer_v SQL SECURITY DEFINER AS WITH c AS (SELECT a FROM dv) SELECT a FROM c",
+    );
+    ok(&bob, "GRANT SELECT ON VIEW outer_v TO user:carl");
+    carl.conf()
+        .set("spark.sql.legacy.ctePrecedencePolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
+}

@@ -244,6 +244,28 @@ pub(crate) fn eliminate(
     eliminate_at(plan, policy, 0)
 }
 
+/// `plan` with every `WITH` definition inlined as `spark.sql.legacy.ctePrecedencePolicy=LEGACY`
+/// inlines them before binding: for the query of a stored view inlined on its own, before it is
+/// placed in the reader's plan (Spark analyzes a view's text apart from the query that reads it, so
+/// a reader's definition never replaces one of the view's). A plan without definitions comes back
+/// as it is (the same node), so a node kept by identity (`views::DefinerTexts`) stays itself when
+/// the reader's whole plan is inlined again.
+///
+/// # Errors
+/// `FAILED_TO_PARSE_TOO_COMPLEX` for a plan nested too deep.
+pub fn inline_legacy_ctes(
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    eliminate(
+        plan,
+        CtePolicy {
+            precedence: super::CtePrecedencePolicy::Legacy,
+            case_sensitive,
+        },
+    )
+}
+
 /// [`eliminate`] for a plan `depth` levels below the root of the walk.
 fn eliminate_at(
     plan: &Arc<LogicalPlan>,

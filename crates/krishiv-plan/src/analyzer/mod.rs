@@ -160,6 +160,7 @@ pub use catalog::{
 };
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
+pub use legacy::inline_legacy_ctes;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,

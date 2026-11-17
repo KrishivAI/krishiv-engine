@@ -302,6 +302,8 @@ impl QueryFunctions {
                     // apply to the views a query reads itself.
                     binding_enabled: false,
                     in_system: self.in_system,
+                    // A body's definer views are not trusted by identity (no `DefinerTexts`).
+                    legacy_ctes: false,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {
