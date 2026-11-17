@@ -69,6 +69,7 @@ pub mod r#struct;
 pub mod text;
 mod unsafe_dispatch;
 pub mod variant;
+pub mod vector;
 pub mod version;
 
 pub use dispatch::{Baseline, Dispatch, KernelCtx, Target};

@@ -150,4 +150,6 @@ impl FileFormat for CsvFormat {
 }
 
 #[cfg(test)]
+mod corrupt_tests;
+#[cfg(test)]
 mod tests;

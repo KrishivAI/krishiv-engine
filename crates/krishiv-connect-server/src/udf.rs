@@ -21,17 +21,25 @@
 //! is typed, nothing is registered and no privilege is needed (a scalar UDF runs no code while a plan is
 //! analyzed, ADR 0046 §3b).
 //!
+//! **Relation UDFs** (`mapInPandas`, `applyInPandas`, cogroups and their Arrow forms) take a version the same
+//! way and the same privilege check (`InlineUdfs::seen`), and run on the session's workers through the
+//! pool's `prepare_relation` (`tests/udf.rs`: map, grouped and cogrouped).
+//!
 //! **Clones** (`CloneSession`, PR-15) must not share a runtime: its owner is the source session.
 //! `SessionPython::copy_for` builds the clone's own runtime with the payloads the source registered.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::translate::{PythonUdf, UdfCallName, UdfHost as TranslateHost};
 use krishiv_exec::python_eval::UdfRuntime;
+use krishiv_plan::PythonUdfRef;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, PythonUdfDef, Session};
+
+use crate::artifacts::SessionArtifacts;
 use sha2::{Digest, Sha256};
 
 /// The session conf a worker gets with each batch (Spark's runner conf; the keys the embedded runtime
@@ -47,6 +55,25 @@ const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype",
     "spark.sql.execution.pythonUDF.arrow.concurrency.level",
 ];
+
+/// A session's Python artifacts, as [`SessionUdfRuntime::set_artifacts`] takes them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PythonArtifacts {
+    /// The installed `pyfiles/` files.
+    pub(crate) pyfiles: Vec<PathBuf>,
+    /// The installed `archives/` files.
+    pub(crate) archives: Vec<PythonArchive>,
+}
+
+/// An installed `archives/` artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonArchive {
+    /// The archive file: absolute, no link at or above it.
+    pub path: PathBuf,
+    /// The name's `#fragment`: Spark unpacks the archive into a directory of that name (the file's
+    /// name without one).
+    pub fragment: Option<String>,
+}
 
 /// Where a session runtime reads its runner conf when a call is prepared.
 pub type RunnerConf = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
@@ -69,6 +96,15 @@ pub trait SessionUdfRuntime: UdfRuntime {
     fn register(&self, name: &str, version: u32, udf: &PythonUdf);
     /// Stops the session's workers (idle ones now, busy ones when their call ends).
     fn release(&self);
+    /// The session's Python artifacts, replacing the whole set: the installed `pyfiles/` and
+    /// `archives/` files (absolute paths with no link in them, in the order installed; each archive
+    /// with its `#fragment`). Calls prepared afterwards see them; workers started for an earlier set are
+    /// not reused. Called on an async worker under a session lock: it must not block (no file I/O; a
+    /// runtime checks the paths when a call is prepared). Never called after [`Self::release`]. The
+    /// default ignores them (a runtime that runs no client files).
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
+        let _ = (pyfiles, archives);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -118,6 +154,17 @@ pub(crate) struct SessionPython {
     /// `None` when the server runs no worker pool: every grant is refused.
     runtime: Option<Arc<dyn SessionUdfRuntime>>,
     state: Mutex<State>,
+    /// The last artifact set handed to the runtime; held while a set is read and handed over.
+    artifacts: Mutex<Synced>,
+}
+
+/// What [`SessionPython::sync_artifacts`] last did.
+#[derive(Default)]
+struct Synced {
+    /// The set handed over last (none yet: an empty set is not handed over).
+    last: PythonArtifacts,
+    /// The session was released: no set is handed over any more.
+    released: bool,
 }
 
 #[derive(Default, Clone)]
@@ -126,9 +173,10 @@ struct State {
     installed: bool,
     /// Every payload registered, for a clone's runtime.
     payloads: Vec<(String, u32, Arc<PythonUdf>)>,
-    /// The version of each inline UDF registered, by the digest of its definition.
+    /// The version of each unregistered UDF (inline or a relation's) registered, by the digest of its
+    /// definition.
     anonymous: HashMap<[u8; 32], u32>,
-    /// The last inline version handed out (without the top bit).
+    /// The last unregistered version handed out (without the top bit).
     last_anonymous: u32,
 }
 
@@ -147,6 +195,7 @@ impl SessionPython {
             host: host.map(Arc::clone),
             runtime: host.map(|h| h.session_runtime(principal, session.id(), runner_conf(session))),
             state: Mutex::default(),
+            artifacts: Mutex::default(),
         }
     }
 
@@ -190,8 +239,35 @@ impl SessionPython {
         Ok(())
     }
 
-    /// Stops the session's workers.
+    /// Hands the session's Python artifacts, read from `artifacts` now, to its workers
+    /// (`AddArtifacts`, after every transfer, whether it succeeded or not: one that fails can still
+    /// have installed some; `CloneSession`, after the copy): the whole set, which replaces the last
+    /// one, when it changed. Read and handed over under one lock, so two transfers ending together
+    /// cannot leave the older set in place, and never after [`Self::release`]. Also before the first
+    /// granted call: `AddArtifacts` passed the same privilege check (`Usage` on `System("udf")`), a
+    /// clone's files are its source's, which passed it, and the runtime runs nothing until a plan of
+    /// the session is granted.
+    pub(crate) fn sync_artifacts(&self, artifacts: &SessionArtifacts) {
+        if let Some(runtime) = &self.runtime {
+            let mut synced = self
+                .artifacts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let set = artifacts.python_artifacts();
+            if synced.released || set == synced.last {
+                return;
+            }
+            synced.last = set.clone();
+            runtime.set_artifacts(set.pyfiles, set.archives);
+        }
+    }
+
+    /// Stops the session's workers; no artifact set is handed over afterwards.
     pub(crate) fn release(&self) {
+        self.artifacts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .released = true;
         if let Some(runtime) = &self.runtime {
             runtime.release();
         }
@@ -200,13 +276,6 @@ impl SessionPython {
     /// The UDFs of `clone`, a copy of this session built for `principal` (`CloneSession`): a runtime of
     /// its own (its workers serve the clone only) holding every payload this session registered, so the
     /// registrations the clone copied keep running; installed on the clone when it was on this session.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by CloneSession, which lands with PR-15 (#810)"
-        )
-    )]
     pub(crate) fn copy_for(&self, principal: &str, clone: &Session) -> Self {
         let copy = Self::new(self.host.as_ref(), principal, clone);
         let state = self.lock().clone();
@@ -246,7 +315,7 @@ fn def_of(udf: &PythonUdf) -> PythonUdfDef {
     }
 }
 
-/// The digest of everything that tells two inline UDFs apart.
+/// The digest of everything that tells two unregistered UDFs apart.
 fn digest(udf: &PythonUdf) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -268,7 +337,7 @@ pub(crate) struct InlineUdfs<'a> {
     udfs: &'a SessionPython,
     /// Analysis: names only, nothing registered.
     analysis: bool,
-    /// Whether the plan holds an inline UDF.
+    /// Whether the plan holds a Python UDF (an inline call or a relation's).
     seen: bool,
     /// UDFs new to the session, registered by [`Self::grant`].
     pending: Vec<([u8; 32], u32, PythonUdf)>,
@@ -293,7 +362,8 @@ impl<'a> InlineUdfs<'a> {
         }
     }
 
-    /// Whether the translated plan calls an inline Python UDF (it needs `Usage` on `System("udf")`).
+    /// Whether the translated plan calls a Python UDF, inline or in a relation (it needs `Usage` on
+    /// `System("udf")`).
     pub(crate) fn seen(&self) -> bool {
         self.seen
     }
@@ -320,8 +390,11 @@ impl<'a> InlineUdfs<'a> {
     }
 }
 
-impl TranslateHost for InlineUdfs<'_> {
-    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName, KrishivError> {
+impl InlineUdfs<'_> {
+    /// The version `udf` runs under in this session: the one it was registered with before, or a new
+    /// top-bit version it is registered under once the plan's privilege check passed ([`Self::grant`]).
+    /// Marks the plan as calling client code.
+    fn version_of(&mut self, udf: &PythonUdf) -> Result<u32, KrishivError> {
         if udf.name.contains('\0') {
             return Err(KrishivUnsupportedFeature {
                 feature: "Python UDF names holding a NUL character".to_owned(),
@@ -330,37 +403,55 @@ impl TranslateHost for InlineUdfs<'_> {
         }
         self.seen = true;
         let key = digest(udf);
-        let version = if self.analysis {
+        if self.analysis {
             // Typed, never run or registered: a version from the definition's digest, so the plans of two
             // UDFs that differ only in their function never compare or hash equal (Spark's `PythonUDF`
             // compares its `command` bytes).
             let [a, b, c, d, ..] = key;
-            u32::from_le_bytes([a, b, c, d]) | ANONYMOUS_VERSION_BIT
-        } else {
-            let mut state = self.udfs.lock();
-            if let Some(v) = state.anonymous.get(&key) {
-                *v
-            } else if let Some(&(_, v, _)) = self.pending.iter().find(|(d, _, _)| *d == key) {
-                v
-            } else {
-                let n = state.last_anonymous.wrapping_add(1);
-                if n & ANONYMOUS_VERSION_BIT != 0 {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: "more than 2^31 - 1 distinct inline Python UDFs in one session"
-                            .to_owned(),
-                    }
-                    .into());
-                }
-                state.last_anonymous = n;
-                drop(state);
-                let v = n | ANONYMOUS_VERSION_BIT;
-                self.pending.push((key, v, udf.clone()));
-                v
+            return Ok(u32::from_le_bytes([a, b, c, d]) | ANONYMOUS_VERSION_BIT);
+        }
+        let mut state = self.udfs.lock();
+        if let Some(v) = state.anonymous.get(&key) {
+            return Ok(*v);
+        }
+        if let Some(&(_, v, _)) = self.pending.iter().find(|(d, _, _)| *d == key) {
+            return Ok(v);
+        }
+        let n = state.last_anonymous.wrapping_add(1);
+        if n & ANONYMOUS_VERSION_BIT != 0 {
+            return Err(KrishivUnsupportedFeature {
+                feature: "more than 2^31 - 1 distinct unregistered Python UDFs (inline or in a relation) in one session".to_owned(),
             }
-        };
+            .into());
+        }
+        state.last_anonymous = n;
+        drop(state);
+        let v = n | ANONYMOUS_VERSION_BIT;
+        self.pending.push((key, v, udf.clone()));
+        Ok(v)
+    }
+}
+
+impl TranslateHost for InlineUdfs<'_> {
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName, KrishivError> {
+        let version = self.version_of(udf)?;
         Ok(UdfCallName {
             qualifier: vec!["session".to_owned()],
             name: krishiv_session::python_udf_call_name(&def_of(udf), version)?,
+        })
+    }
+
+    /// A relation's UDF takes a version as an inline call's does, under the same privilege check (the plan
+    /// is marked as calling client code, and nothing is registered before [`Self::grant`]); it runs on the
+    /// session's workers like an inline call.
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<PythonUdfRef, KrishivError> {
+        let version = self.version_of(udf)?;
+        Ok(PythonUdfRef {
+            name: udf.name.clone(),
+            version,
+            eval_type: udf.plan_eval_type,
+            thread_safe: true,
+            deterministic: udf.deterministic,
         })
     }
 }

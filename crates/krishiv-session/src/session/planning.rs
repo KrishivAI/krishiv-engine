@@ -72,6 +72,21 @@ impl Session {
         } else {
             analyzed
         };
+        // `input_file_name()` and the block functions read the file of the rows, after the cache substituted
+        // its snapshots (whose rows have no file).
+        let bound;
+        let analyzed = match krishiv_plan::analyzer::bind_input_files(&analyzed.plan, &|s| {
+            env.catalog.scan_file_metadata(s)
+        })? {
+            Some(plan) => {
+                bound = AnalyzedPlan {
+                    plan,
+                    ..analyzed.clone()
+                };
+                &bound
+            }
+            None => analyzed,
+        };
         let tables = if withheld {
             env.catalog
                 .open_files_unsampled(analyzed.plan.root())

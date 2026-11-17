@@ -586,7 +586,12 @@ impl DataFrame {
         if out.invalid.is_none() {
             out.invalid.clone_from(&other.invalid);
         }
-        out.keep.extend(other.keep.iter().cloned());
+        // A handle both frames hold (a join of a frame with one derived from it) is kept once.
+        for k in &other.keep {
+            if !out.keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                out.keep.push(Arc::clone(k));
+            }
+        }
         out
     }
 
@@ -1822,10 +1827,7 @@ impl DataFrame {
                 .collect();
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
-        // (Not a lazy checkpoint of one: its rows were taken at the analysis above.)
-        if let (PlanNode::Read(source @ ReadSource::Files { .. }), false) =
-            (&self.plan.node, checkpoint::has_lazy_checkpoint(&self.keep))
-        {
+        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
             self.session.state.catalog.put(
                 name,
                 TempTable::Files {

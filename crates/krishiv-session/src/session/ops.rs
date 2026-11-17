@@ -71,15 +71,26 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<crate::access::Checked, KrishivError> {
+        let at = self.locate_write_text(text, options, env)?;
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+    }
+
+    /// The path a write of `text` goes to as the caller wrote it (qualified, `.` and `..` folded in the
+    /// text, no link resolved): what [`Self::locate_write_path`] resolves, and the text its denial names.
+    pub(crate) fn locate_write_text(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        env: &QueryEnv,
+    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
         let stores = self.scoped_stores(&env.config);
-        let at = ObjectPaths::new(
+        ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
             Arc::clone(&self.state.io),
             stores,
         )
-        .locate_with_options(text, options)?;
-        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+        .locate_with_options(text, options)
     }
 
     /// A write's options, before its target is located: locating builds the
@@ -163,6 +174,19 @@ impl Session {
             Privilege::Manage,
         )
         .await
+    }
+
+    /// Whether [`Self::authorize_store_options`] of `options` asks `Manage` on the cluster under the
+    /// session's stored configuration (what a DDL run passes): the analyze API lists it then.
+    pub(crate) fn store_options_asked<'a>(
+        &self,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        options.any(krishiv_io::is_server_scoped_option)
+            || self
+                .state
+                .conf
+                .store_settings_changed(&self.state.conf.snapshot())
     }
 
     /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.

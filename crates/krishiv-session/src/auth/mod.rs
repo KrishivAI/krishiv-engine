@@ -79,7 +79,7 @@ use krishiv_common::principal::Principal;
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
-pub use impersonation::{ActAs, Denial, ImpersonationConfig};
+pub use impersonation::{ActAs, ActAsHint, Denial, ImpersonationConfig};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;

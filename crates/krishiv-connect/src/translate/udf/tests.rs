@@ -22,6 +22,11 @@ impl UdfHost for Recording {
             name: format!("udf{}", self.0.len()),
         })
     }
+
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<krishiv_plan::PythonUdfRef> {
+        self.0.push(udf.clone());
+        Err(unsupported("relations in this test host"))
+    }
 }
 
 fn python(eval_type: i32) -> pb::PythonUdf {

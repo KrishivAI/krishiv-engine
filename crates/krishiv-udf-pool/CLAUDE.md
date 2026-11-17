@@ -14,14 +14,33 @@ Paths are relative to this crate.
 - `src/lib.rs` public surface and `run_trampoline_if_requested` (the binary's `__udf-worker` dispatch)
 - `src/pool.rs` `Pool`, `PoolConfig` (from the `krishiv.python.worker.*` and `krishiv.udf.sandbox` keys), `Launcher`,
   `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
-- `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), the
+- `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), a
+  relation task's messages (`start_task`, `task_event`, `send_frame`, `abandon`), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
-  that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result reader `decode_result`
+  that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result readers `decode_result` (scalar) and `decode_batch` (a relation task's result, given the declared schema)
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
-- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; its runner conf read at each `prepare` from a `ConfSource` (`with_conf_source`, the session's live conf) or set with `set_runner_conf`; each call
+- `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; its runner conf read at each `prepare` and `prepare_relation` from a `ConfSource` (`with_conf_source`, the session's live conf) or set with `set_runner_conf`; a call of another kind than the payload's eval type (the store finds payloads by name and version only) is `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` before any worker starts (`check_eval_type`; a scalar call takes any scalar payload, 100/101/200/250, since Connect registers a plain `@udf` as 100 and plans it as 101; a relation call needs its exact code); each call
   runs on a pool call thread and is cancelled (worker killed, even one still starting) when its future is dropped
+  (`with_worker`, shared with the relation tasks)
+- `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,
+  grouped aggregate 202/217/252/254): `prepare_relation` checks the payload's eval type, `open` starts one task per
+  driver on a call thread that holds one worker for the task (wire `task`: frames on the worker's `want`, results
+  as they come, `done`); `send`/`next` are two bounded channels (`send` resolves once the thread took the frame);
+  dropping the task cancels it; a thread that ends without `done` or a failure (a panic, a job dropped unrun) is
+  `INTERNAL_ERROR` (`Ending`), never a clean end; a `want` after `end` is a protocol break. `PoolSlots`: the
+  session's relation slots, the call sites' capacity hint (design P3-T085 §3.3a)
+- `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
-  running calls per owner; the rest wait in a FIFO queue, not on a thread)
+  running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
+  `min(maxPerSession, maxTotal) - 1` per owner (all of them when that is 1) and `maxTotal - 1` in all (the threads
+  are shared across sessions), taken all at once or waited for in arrival order (a `TaskTicket` per waiter,
+  dropped when it stops waiting; no grant passes a waiter ahead of the same owner, or one waiting for room in
+  all; with `maxTotal` 1 no task is granted while another owner's scalar call that arrived before it waits for the
+  thread: tickets and queued calls share one arrival sequence, so neither kind starves the other).
+  `try_take_now` is the no-wait form (no ticket, no waker)
+  (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
+  `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap
@@ -29,6 +48,9 @@ Paths are relative to this crate.
   copies the files through it; one link rather than one per file, so ruff, which lints them under `python/`, does
   not lint them again without that config). The worker program is `python/krishiv/_udf/pool_worker.py`; `_host.py` switches the
   wrappers' names between the `krishiv` facade (in-process) and `pyspark` (here)
+- `python/krishiv/_udf/relations.py` (through the link) the relation kinds' runners, Spark 4.2.0's per-eval-type
+  loops of `worker.py` over the engine's frames (host-agnostic: the in-process runtime of PR-48 can reuse them)
+- `tests/relations.rs` each relation kind through the pool with real workers (same interpreter rule as below)
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
 
@@ -37,7 +59,7 @@ Paths are relative to this crate.
   worker of the previous build cannot read raises `WIRE_VERSION` (the worker is part of the same binary, so the
   version guards mixed packages, not stored data).
 - A new file in the worker package: an entry in `package::FILES` (the file itself lives in `python/krishiv/_udf/`).
-- Relation kinds, UDTF analyze and archives (PR-26c), Connect decode and registered functions (PR-26d) build on
+- Window aggregates, UDTF analyze and archives (PR-26c-3), Connect decode and registered functions (PR-26d) build on
   `SessionUdfs` and `Worker`.
 
 ## Invariants
@@ -45,8 +67,24 @@ Paths are relative to this crate.
   `pread` into one 64-byte-aligned Arrow buffer, capped (`max_result_bytes`), their framing checked by `check_frames` (verified
   flatbuffer headers, bodies and buffers in bounds, **no compression**: arrow-ipc 60 allocates a compressed
   buffer's declared length up front, so a 16 KiB stream could abort the server), then decoded by `arrow-ipc`'s
-  validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count. Worker
-  output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` nightly.
+  validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count (a relation task's result: one batch with the declared schema's types, given the declared schema). Worker
+  output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` and `decode_batch`
+  nightly.
+- **No relation task waits behind its owner's own tasks** (design P3-T085 §3.3a, review 2026-11-16 finding 1): a
+  task holds a worker while idle in `want`, so a queued one could hang its driver. The operator takes a slot per
+  lane at once (`PoolSlots`) or waits holding none; a scalar call of the owner always has a worker left (the
+  reserve), or with `maxPerSession` 1 fails fast. Tests: `calls.rs`, `relation.rs` unit tests, `tests/relations.rs`
+  `*_beside_an_open_task_*`.
+- **Memory outside the operator's accounting** (as on the scalar path): a frame's memfd copy while the worker reads
+  it, and up to two decoded result batches per task (one in the channel, one the thread waits to hand over).
+- **Divergence: map-kind results unlike the declared schema.** With
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` off (Spark's default; 3.5 and 4.0 have no such
+  setting) Spark does not check a `mapInPandas`/`mapInArrow` result's types; the pool refuses it with
+  `PYTHON_EXCEPTION` (and a null in a non-nullable declared column). Recorded in `docs/concepts/known-differences.md`.
+  No Spark golden backs either form yet (the build host has no Spark): a spark-semantics golden is owed for
+  `mapInArrow` with a wrong type at 4.1 and 4.2 and for `mapInPandas` with a non-nullable declared column (which
+  the v4.2.0 source says Spark refuses under the setting: its pandas serializer makes every field nullable). The
+  setting is not gated by Spark version (the pool does not know the client's).
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
   the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after
@@ -65,6 +103,8 @@ Paths are relative to this crate.
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
 - One worker serves one `Owner` (principal and session) and one interpreter; reuse only within that key.
 - Blocking work (spawn, socket I/O, waits) runs on the pool's threads, never on a compute worker.
+- A relation task's server side writes to the worker only after the worker's `want`, so neither side blocks on a
+  full socket while the other writes; the worker is given back before the task's results end.
 - No `unwrap`/`expect`/`panic` in library code; errors carry an error class and SQLSTATE.
 
 ## Not here yet (design note §9 records why)

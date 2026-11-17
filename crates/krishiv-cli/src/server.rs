@@ -257,7 +257,11 @@ async fn run_listeners(
         ConnectServerConfig::from_config(config),
     );
     if authenticated {
-        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
+        connect = connect.with_auth(
+            ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
+                .with_denials(denials)
+                .with_impersonation(auth),
+        );
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());

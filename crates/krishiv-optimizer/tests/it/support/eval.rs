@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Grouping, JoinCondition,
-    JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, SortDirection, SubqueryKind,
+    AttrId, Builtin, CastMode, Expr, ExprNode, FrameBound, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource,
+    ResolvedExpr, ResolvedFunction, SortDirection, SubqueryKind, WindowSpecRef,
 };
 use krishiv_types::DataType;
 
@@ -379,7 +379,9 @@ impl Interp<'_> {
                 }
                 first
             }
-            // `row_number()` only: each partition's rows in order, numbered from 1.
+            // `row_number()` (each partition's rows in order, numbered from 1), or
+            // aggregate functions over a whole partition with no ordering (the
+            // `SubqueryAsWindow` shape: every row gets its partition's value).
             PlanNode::Window {
                 input,
                 exprs,
@@ -388,6 +390,7 @@ impl Interp<'_> {
             } => {
                 let rel = self.plan(input, outer);
                 let ix = index(&rel.cols);
+                let mut calls: Vec<Option<Arc<Expr>>> = Vec::with_capacity(exprs.len());
                 for e in exprs {
                     let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &e.node else {
                         panic!("window output {e:?}")
@@ -398,7 +401,27 @@ impl Interp<'_> {
                     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &w.function.node else {
                         panic!("window function")
                     };
-                    assert_eq!(f.id.name(), "row_number", "unsupported window function");
+                    if f.id.name() == "row_number" {
+                        calls.push(None);
+                        continue;
+                    }
+                    assert_eq!(
+                        f.kind,
+                        FunctionKind::Aggregate,
+                        "unsupported window function"
+                    );
+                    assert!(order_by.is_empty(), "an ordered aggregate window");
+                    let WindowSpecRef::Spec(spec) = &w.window else {
+                        panic!("window spec")
+                    };
+                    assert!(
+                        spec.frame.as_ref().is_none_or(|f| {
+                            f.lower == FrameBound::UnboundedPreceding
+                                && f.upper == FrameBound::UnboundedFollowing
+                        }),
+                        "an aggregate window over part of its partition"
+                    );
+                    calls.push(Some(Arc::clone(&w.function)));
                 }
                 let mut keyed: Vec<(Vec<V>, Vec<V>, Vec<V>)> = rel
                     .rows
@@ -419,16 +442,28 @@ impl Interp<'_> {
                     pa.cmp(pb).then_with(|| compare(a, b, order_by))
                 });
                 let mut rows = Vec::with_capacity(keyed.len());
-                let mut n = 0;
-                let mut last: Option<Vec<V>> = None;
-                for (part, _, mut r) in keyed {
-                    if last.as_ref() != Some(&part) {
-                        n = 0;
-                        last = Some(part);
+                let mut at = 0;
+                while at < keyed.len() {
+                    let end = at
+                        + keyed[at..]
+                            .iter()
+                            .take_while(|(p, _, _)| *p == keyed[at].0)
+                            .count();
+                    let group: Vec<Vec<V>> =
+                        keyed[at..end].iter().map(|(_, _, r)| r.clone()).collect();
+                    let values: Vec<Option<V>> = calls
+                        .iter()
+                        .map(|c| c.as_ref().map(|f| self.aggregate(f, &ix, &group, outer)))
+                        .collect();
+                    for (n, mut r) in (1..).zip(group) {
+                        r.extend(
+                            values
+                                .iter()
+                                .map(|v| v.clone().unwrap_or_else(|| V::int(n))),
+                        );
+                        rows.push(r);
                     }
-                    n += 1;
-                    r.extend(exprs.iter().map(|_| V::int(n)));
-                    rows.push(r);
+                    at = end;
                 }
                 let mut cols = rel.cols;
                 cols.extend(exprs.iter().map(|e| output(e)));
