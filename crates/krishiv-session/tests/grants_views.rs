@@ -556,3 +556,45 @@ fn a_definer_failure_shows_the_reader_only_what_it_wrote() {
         assert!(!text.contains(c), "{c}: {text}");
     }
 }
+
+/// Review M1: `EXPLAIN` of a definer view shows the bodies of the views its text inlines, so the
+/// reader needs `Select` on each of them, as on a view it read itself.
+#[test]
+fn explaining_a_definer_view_asks_the_views_inside_it() {
+    let (w, root, ana) = world();
+    let carl = w.user("carl");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    let bob = w.user("bob");
+    ok(
+        &ana,
+        "CREATE VIEW inner_v AS SELECT a FROM t WHERE a < 424242",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW inner_v TO user:bob");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    ok(
+        &bob,
+        "CREATE VIEW outer_v SQL SECURITY DEFINER AS SELECT a FROM inner_v",
+    );
+    ok(&bob, "GRANT SELECT ON VIEW outer_v TO user:carl");
+    // carl may read the base table, not the inner view.
+    ok(&root, "GRANT SELECT ON TABLE t TO user:carl");
+    assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
+    for sql in [
+        "EXPLAIN SELECT * FROM outer_v",
+        "EXPLAIN EXTENDED SELECT * FROM outer_v",
+    ] {
+        let shown = match run(&carl, sql) {
+            Err(e) => {
+                assert_eq!(e.error_class().name(), DENIED, "{sql}");
+                e.to_string()
+            }
+            Ok(text) => text,
+        };
+        assert!(!shown.contains("424242"), "{sql}: {shown}");
+        assert!(!shown.contains("Scan"), "{sql}: {shown}");
+    }
+    // Granted the inner view, the plan shows.
+    ok(&ana, "GRANT SELECT ON VIEW inner_v TO user:carl");
+    let text = ok(&carl, "EXPLAIN SELECT * FROM outer_v");
+    assert!(text.contains("Scan"), "{text}");
+}

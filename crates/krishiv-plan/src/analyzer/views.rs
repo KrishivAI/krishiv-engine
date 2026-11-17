@@ -99,8 +99,9 @@ pub struct ViewExpansion {
     /// resolution left no node for it.
     pub output: Option<Vec<AttrId>>,
     /// For a [`ViewSecurity::Definer`] view: what its query reads, as authorized for its owner (the
-    /// securables of that analysis). A caller shown the view's query (an `EXPLAIN`) is asked them
-    /// too, as an invoker would be. Empty otherwise.
+    /// securables of that analysis, and `Select` on each view its text inlines). A caller shown the
+    /// view's query (an `EXPLAIN`, a query profile) is asked them too, as an invoker would be.
+    /// Empty otherwise.
     pub owner_reads: Vec<super::SecurableUse>,
 }
 

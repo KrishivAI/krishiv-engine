@@ -9,7 +9,8 @@ impl Session {
     /// principal (`Principal::definer`; a derived principal holds only its own grants, never
     /// the reader's role). Inside it, the queries of other definer views (`texts`, trusted by node
     /// identity) are theirs.
-    /// Returns what its query reads, for the view side table.
+    /// Returns what its query reads (its tables and the views its text inlines), for the view
+    /// side table.
     ///
     /// # Errors
     /// The definer's denial (42501, naming the definer), or its query's analysis error.
@@ -29,7 +30,7 @@ impl Session {
             d.definer.clone(),
             self.state.principal.name.clone(),
         ));
-        self.authorize_reads_as(&d.reads, env, &definer).await?;
+        let views = self.authorize_reads_as(&d.reads, env, &definer).await?;
         let mut ctx = env.analysis.clone();
         ctx.principal = definer;
         ctx.definer_texts = texts.without(query);
@@ -38,7 +39,20 @@ impl Session {
             .analyze(&plan, &ctx)
             .await
             .map_err(|e| e.error)?;
-        Ok(analyzed.securables)
+        // The views its text inlines show in a plan of it too (review M1): a reader shown the
+        // plan is asked `Select` on each, as on a view it read itself.
+        let mut reads = analyzed.securables;
+        for view in views {
+            let securable = krishiv_plan::analyzer::Securable::View(view);
+            if !reads.iter().any(|u| u.securable == securable) {
+                reads.push(krishiv_plan::analyzer::SecurableUse {
+                    securable,
+                    privilege: Privilege::Select,
+                    columns: std::collections::BTreeSet::new(),
+                });
+            }
+        }
+        Ok(reads)
     }
 
     /// What the reader is told of the failure `e` of a definer view's read (review B2; ADR 0048
