@@ -133,6 +133,7 @@ mod variables;
 mod variant;
 pub mod views;
 mod windows;
+mod written;
 
 use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1126,6 +1127,7 @@ async fn analyze_with(
         &securables,
         &reads,
         &bindings.definer_only,
+        |column| written::wrote_column(plan.root(), &bindings, &ctx.definer_texts, column),
         plan.root().origin,
     )
     .await?;

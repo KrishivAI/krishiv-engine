@@ -169,6 +169,10 @@ async fn decide_quietly(
 /// at Bind and is not asked again. The uses in `definer_only` (read only under a definer view's
 /// text, authorized for the view's owner) are not asked.
 ///
+/// A refused column is named only when the statement wrote it (`wrote`, asked only then; ADR
+/// 0048 §3 Denials, review r3 M1): a column reached through `*`, `* EXCEPT`, a whole-table read or
+/// a view's text is refused as a read of its table, so a refusal never lists a table's columns.
+///
 /// # Errors
 /// As [`authorize`], at `origin`, for the first column (or table) denied.
 pub(super) async fn authorize_columns(
@@ -176,6 +180,7 @@ pub(super) async fn authorize_columns(
     uses: &[super::SecurableUse],
     reads: &[super::reads::Reads],
     definer_only: &std::collections::BTreeSet<usize>,
+    wrote: impl Fn(&str) -> bool,
     origin: crate::Origin,
 ) -> Result<(), super::AnalysisError> {
     if !ctx.policy.column_level() {
@@ -211,7 +216,17 @@ pub(super) async fn authorize_columns(
             };
             authorize(&*ctx.policy, &ctx.principal, &securable, Privilege::Select)
                 .await
-                .map_err(at)?;
+                .map_err(|e| {
+                    if wrote(column) {
+                        at(e)
+                    } else {
+                        at(insufficient_permissions(
+                            &ctx.principal,
+                            &used.securable,
+                            Privilege::Select,
+                        ))
+                    }
+                })?;
         }
     }
     Ok(())

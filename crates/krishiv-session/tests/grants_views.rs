@@ -996,3 +996,64 @@ fn the_analysis_accessors_ask_what_explain_asks() {
         assert!(text.contains("424242"), "{entry}: {text}");
     }
 }
+
+/// Review r3 M1 (ADR 0048 §3 Denials, A1 §3): a refused read names a column only when the
+/// statement wrote it. `*`, `* EXCEPT`, `table()`, `isCached` and a view over the table name the
+/// table only, so a principal cannot list the columns of a table it may not read, however many
+/// it excludes.
+#[test]
+fn a_refused_read_names_only_the_columns_the_statement_wrote() {
+    let w = World::new();
+    let root = w.admin();
+    let ana = w.user("ana");
+    ok(
+        &root,
+        "CREATE TABLE ct (x INT, secret_a INT, secret_b INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO ct VALUES (1, 2, 3)");
+    ok(&root, "GRANT SELECT (x) ON ct TO user:ana");
+    ok(&root, "CREATE VIEW cv AS SELECT * FROM ct");
+    ok(&root, "GRANT SELECT ON VIEW cv TO user:ana");
+    let hidden = ["secret_a", "secret_b"];
+    type Read = Box<dyn Fn(&Session) -> Result<String, KrishivError>>;
+    let reads: Vec<(&str, Read)> = vec![
+        ("SELECT *", Box::new(|s| run(s, "SELECT * FROM ct"))),
+        (
+            "SELECT * EXCEPT (x)",
+            Box::new(|s| run(s, "SELECT * EXCEPT (x) FROM ct")),
+        ),
+        (
+            "SELECT * EXCEPT (secret_a)",
+            Box::new(|s| run(s, "SELECT * EXCEPT (secret_a) FROM ct")),
+        ),
+        ("SELECT ct.*", Box::new(|s| run(s, "SELECT ct.* FROM ct"))),
+        ("view", Box::new(|s| run(s, "SELECT * FROM cv"))),
+        (
+            "table()",
+            Box::new(|s| block_on(s.table("ct").collect()).map(|b| format!("{b:?}"))),
+        ),
+        (
+            "isCached",
+            Box::new(|s| block_on(s.catalog().is_cached("ct")).map(|b| format!("{b:?}"))),
+        ),
+    ];
+    for (entry, read) in &reads {
+        let shown = match read(&ana) {
+            Err(e) if e.error_class().name() == DENIED => e.to_string(),
+            Ok(text) => text,
+            Err(e) => panic!("{entry}: {e}"),
+        };
+        // `* EXCEPT (secret_a)` wrote `secret_a`: only `secret_b` must stay unnamed there.
+        for h in hidden {
+            if !(entry.contains(h)) {
+                assert!(!shown.contains(h), "{entry}: {h}: {shown}");
+            }
+        }
+    }
+    // A column the statement wrote is named.
+    let e = denied(&ana, "SELECT secret_b FROM ct");
+    assert!(e.contains("`secret_b`"), "{e}");
+    let e = denied(&ana, "SELECT x FROM ct WHERE secret_a = 2");
+    assert!(e.contains("`secret_a`"), "{e}");
+    assert_eq!(rows(&ana, "SELECT x FROM ct"), 1);
+}
