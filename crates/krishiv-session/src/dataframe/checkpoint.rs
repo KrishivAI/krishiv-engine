@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use krishiv_common::config::CHECKPOINT_DIR;
-use krishiv_common::error::{KrishivError, LegacyErrorTemp3016};
+use krishiv_common::error::{InternalError, KrishivError, LegacyErrorTemp3016};
 use krishiv_memory::{ConsumerId, MemoryPool, Reservation, SpillConfig, SpillFile, SpillManager};
 use krishiv_plan::{LogicalPlan, Origin, PlanId, PlanNode, ReadSource};
 use krishiv_types::batch::Batch;
@@ -29,7 +29,8 @@ const LAZY_LEAF: &str = "__krishiv_lazy_checkpoint";
 /// the snapshot in the result's plan, `source` the frame that produces the rows.
 #[derive(Debug)]
 pub(super) struct LazyCheckpoint {
-    source: DataFrame,
+    /// Released once the rows are taken: the snapshot stands on its own then.
+    source: Mutex<Option<DataFrame>>,
     dir: Option<PathBuf>,
     marker: PlanId,
     taken: futures::lock::Mutex<Option<DataFrame>>,
@@ -47,13 +48,6 @@ pub(crate) fn stands_on_materializing_checkpoint(
             .downcast::<LazyCheckpoint>()
             .is_ok_and(|c| c.materializing.load(std::sync::atomic::Ordering::SeqCst))
     })
-}
-
-/// Whether `keep` holds a lazy checkpoint: the plan beside it stands for a snapshot, not for what
-/// its sources show now.
-pub(crate) fn has_lazy_checkpoint(keep: &[Arc<dyn std::any::Any + Send + Sync>]) -> bool {
-    keep.iter()
-        .any(|k| Arc::clone(k).downcast::<LazyCheckpoint>().is_ok())
 }
 
 /// Clears `materializing` when the rows are taken, fail or the future is dropped.
@@ -83,8 +77,22 @@ impl LazyCheckpoint {
         self.materializing
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let _flag = Materializing(&self.materializing);
-        let frame = self.source.take_snapshot(self.dir.clone()).await?;
+        let source = self
+            .source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                KrishivError::from(InternalError {
+                    message: "a lazy checkpoint lost its source before taking its rows".to_owned(),
+                })
+            })?;
+        let frame = source.take_snapshot(self.dir.clone()).await?;
         *taken = Some(frame.clone());
+        self.source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         Ok(frame)
     }
 }
@@ -159,8 +167,11 @@ impl DataFrame {
             trace: None,
             ..self.clone()
         };
+        // The source's own `keep` stays with `LazyCheckpoint::source`: carried here too it would
+        // double at every join of a frame with one derived from it.
+        out.keep.clear();
         out.keep.push(Arc::new(LazyCheckpoint {
-            source: self.clone(),
+            source: Mutex::new(Some(self.clone())),
             dir,
             marker,
             taken: futures::lock::Mutex::new(None),
