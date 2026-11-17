@@ -115,6 +115,7 @@ fn every_relation_prints_its_fields() {
                 ctes: vec![Cte {
                     name: "c".to_owned(),
                     plan: t(),
+                    generated: false,
                 }],
             },
             "WithCte [c]",

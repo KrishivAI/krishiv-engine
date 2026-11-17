@@ -54,6 +54,7 @@ fn cte(depth: usize, twice: bool) -> LogicalPlan {
         ctes: vec![Cte {
             name: "q".to_owned(),
             plan: Arc::new(body),
+            generated: false,
         }],
     })
 }

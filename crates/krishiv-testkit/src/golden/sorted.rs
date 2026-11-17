@@ -138,6 +138,7 @@ mod tests {
             .map(|(i, plan)| Cte {
                 name: format!("c{i}"),
                 plan: Arc::new(plan),
+                generated: false,
             })
             .collect();
         Plan::new(PlanNode::WithCte {
@@ -351,6 +352,7 @@ mod tests {
                 ctes: vec![Cte {
                     name: "c".to_owned(),
                     plan: Arc::clone(&plan),
+                    generated: false,
                 }],
             }));
         }
@@ -361,6 +363,7 @@ mod tests {
             ctes: vec![Cte {
                 name: "c".to_owned(),
                 plan: sorted,
+                generated: false,
             }],
         });
         assert!(is_semantically_sorted(&shared));

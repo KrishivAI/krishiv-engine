@@ -434,6 +434,7 @@ fn q15() -> LogicalPlan {
         ctes: vec![Cte {
             name: "revenue".to_owned(),
             plan: Arc::new(revenue),
+            generated: false,
         }],
     })
 }

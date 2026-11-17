@@ -1299,6 +1299,7 @@ impl Resolver<'_> {
             defs.push(Cte {
                 name: c.name.clone(),
                 plan: Arc::clone(&r.plan),
+                generated: c.generated,
             });
             visible.push((c.name.clone(), r.clone()));
             scope = self.ctes_id();

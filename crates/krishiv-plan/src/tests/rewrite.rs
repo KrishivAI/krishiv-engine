@@ -124,10 +124,12 @@ fn plans() -> Vec<(LogicalPlan, usize, usize)> {
                     Cte {
                         name: "c1".to_owned(),
                         plan: t("c1"),
+                        generated: false,
                     },
                     Cte {
                         name: "c2".to_owned(),
                         plan: t("c2"),
+                        generated: false,
                     },
                 ],
             }),

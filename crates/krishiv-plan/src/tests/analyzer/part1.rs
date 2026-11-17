@@ -264,6 +264,7 @@ fn cte_chains_stay_linear() {
     let mut ctes = vec![Cte {
         name: "c0".to_owned(),
         plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+        generated: false,
     }];
     for i in 1..30 {
         let prev = format!("c{}", i - 1);
@@ -278,6 +279,7 @@ fn cte_chains_stay_linear() {
         ctes.push(Cte {
             name: format!("c{i}"),
             plan: Arc::new(body),
+            generated: false,
         });
     }
     let plan = LogicalPlan::new(PlanNode::WithCte {

@@ -756,7 +756,7 @@ impl Memo {
 
 /// Whether `r` reads a definition `ShareCte` made.
 fn is_shared_ref(r: &krishiv_plan::CteRef) -> bool {
-    r.name.starts_with(crate::share_cte::SHARED_PREFIX)
+    r.generated
 }
 
 /// Whether a `ShareCte` reference is below `plan` through single-input

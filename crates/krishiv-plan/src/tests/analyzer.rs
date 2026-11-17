@@ -375,6 +375,7 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
         ctes: vec![Cte {
             name: "t".to_owned(),
             plan: Arc::new(LogicalPlan::table(["u"]).project(vec![int(1).alias("z")])),
+            generated: false,
         }],
     });
     let renamed = LogicalPlan::new(PlanNode::SubqueryAlias {

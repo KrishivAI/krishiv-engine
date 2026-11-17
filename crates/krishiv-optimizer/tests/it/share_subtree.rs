@@ -114,3 +114,30 @@ fn q15_computes_the_revenue_body_once() {
         "{text}"
     );
 }
+
+/// A query's `WITH` may use the name `ShareCte` gives its definitions: it is
+/// still inlined where Spark inlines it (once read, or deterministic) and its
+/// joins still take the inferred `isnotnull`, as the same query with another
+/// name. Rules tell the optimizer's definitions apart by `Cte::generated`.
+#[test]
+fn a_query_cte_named_like_a_shared_one_is_still_inlined() {
+    let shapes = [
+        "WITH {n} AS (SELECT s_suppkey, s_name FROM supplier) \
+         SELECT s_name FROM {n} WHERE s_suppkey = 1",
+        "WITH {n} AS (SELECT s_suppkey, s_nationkey FROM supplier) \
+         SELECT x.s_suppkey FROM {n} x JOIN {n} y ON x.s_nationkey = y.s_nationkey",
+    ];
+    for shape in shapes {
+        for on in [false, true] {
+            let reserved = run(&shape.replace("{n}", "`__shared_0`"), on);
+            let plain = run(&shape.replace("{n}", "v"), on);
+            let text = reserved.root().to_string();
+            assert!(!text.contains("CteRef"), "{text}");
+            assert_eq!(
+                text.replace("__shared_0", "v"),
+                plain.root().to_string(),
+                "on = {on}"
+            );
+        }
+    }
+}

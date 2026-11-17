@@ -163,6 +163,7 @@ fn twice_referenced_map(deterministic: bool) -> Arc<LogicalPlan> {
             name: "c".to_owned(),
             source: vec![AttrId(1000)],
             output: vec![x(id)],
+            generated: false,
         })))
     };
     let plan = Plan::try_new(LogicalPlan::new(PlanNode::WithCte {
@@ -174,6 +175,7 @@ fn twice_referenced_map(deterministic: bool) -> Arc<LogicalPlan> {
         ctes: vec![krishiv_plan::Cte {
             name: "c".to_owned(),
             plan: Arc::clone(&def),
+            generated: false,
         }],
     }))
     .unwrap();

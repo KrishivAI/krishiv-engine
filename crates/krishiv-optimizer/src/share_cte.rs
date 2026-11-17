@@ -44,8 +44,9 @@ use crate::expr::has_outer_reference;
 use crate::inline_cte::deterministic;
 use crate::restrict::subquery_plans;
 
-/// The name prefix of the definitions this rule adds.
-pub(crate) const SHARED_PREFIX: &str = "__shared_";
+/// The name prefix of the definitions this rule adds, for display only:
+/// rules tell them from a query's `WITH` by [`krishiv_plan::Cte::generated`].
+const SHARED_PREFIX: &str = "__shared_";
 
 /// One instance: the `Shift` node, its body and offset.
 struct Member {
@@ -107,6 +108,7 @@ pub(crate) fn share(
                     name: name.clone(),
                     source: source.clone(),
                     output: shifted,
+                    generated: true,
                 }))),
             );
         }
@@ -125,6 +127,7 @@ pub(crate) fn share(
         ctes.push(Cte {
             name,
             plan: sharer.go_def(body)?,
+            generated: true,
         });
     }
     // A group none of whose members was replaced (an id overflow) leaves an

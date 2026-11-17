@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 11;
+pub const ENCODING_VERSION: u16 = 12;
 
 /// The tag that starts a plan node's encoding: one per node kind, never
 /// reused (`plan_tags_are_unique`). A new kind takes the next number; a
@@ -938,14 +938,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::WithCte { ctes, .. } => {
                 self.len(ctes.len());
-                ctes.iter().for_each(|c| self.str(&c.name));
+                ctes.iter().for_each(|c| {
+                    self.str(&c.name);
+                    self.bool(c.generated);
+                });
             }
             PlanNode::CteRef(CteRef {
                 name,
                 source,
                 output,
+                generated,
             }) => {
                 self.str(name);
+                self.bool(*generated);
                 self.len(source.len());
                 source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
                 self.len(output.len());

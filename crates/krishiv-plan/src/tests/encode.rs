@@ -10,7 +10,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
 use super::depth::self_joins;
-use crate::{AttrId, BoundColumn};
+use crate::{AttrId, BoundColumn, Cte, CteRef};
 use crate::{
     Builtin, ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind, Literal,
     LogicalPlan, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction,
@@ -433,7 +433,7 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 512, "{encoding:?}");
-    assert_eq!(hash.to_string(), "bccb1469c0da007b914098d7f620880d");
+    assert_eq!(hash.to_string(), "6caa85d634abbebcc8424cd0f5eed116");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -445,7 +445,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "2bdda6ae512d51395d38e07dcd775b1b");
+    assert_eq!(hash.to_string(), "a281da3cb345bb6658be4d9536a21972");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -572,4 +572,41 @@ fn star_replacement_values_enter_the_key() {
     assert!(with(1).structurally_eq(&with(1)));
     assert!(!with(1).structurally_eq(&with(2)));
     assert_ne!(with(1).structural_hash(), with(2).structural_hash());
+}
+
+/// A definition the optimizer added and a query's `WITH` of the same name
+/// are not structurally equal, nor are references to them (the
+/// optimizer's rules tell them apart by `generated`, so a cache must too).
+#[test]
+fn generated_definitions_and_references_are_keyed_apart() {
+    let read = |name: &str| {
+        Arc::new(LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+            name: vec![name.to_owned()],
+            options: Default::default(),
+        })))
+    };
+    let with = |generated| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: read("t"),
+            ctes: vec![Cte {
+                generated,
+                ..Cte::new("__shared_0", read("u"))
+            }],
+        })
+    };
+    assert_ne!(key(with(true)), key(with(false)));
+    let reference = |generated| {
+        LogicalPlan::new(PlanNode::CteRef(CteRef {
+            name: "__shared_0".to_owned(),
+            source: vec![AttrId(1)],
+            output: vec![BoundColumn {
+                id: AttrId(2),
+                name: "a".to_owned(),
+                data_type: DataType::Integer,
+                nullable: true,
+            }],
+            generated,
+        }))
+    };
+    assert_ne!(key(reference(true)), key(reference(false)));
 }

@@ -125,6 +125,7 @@ impl Resolver<'_> {
                 name: cte.clone(),
                 source: def.out.iter().map(|a| a.col.id).collect(),
                 output,
+                generated: false,
             });
             return Ok(self.make(p.origin, node, out, &[]));
         }

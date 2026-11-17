@@ -685,10 +685,12 @@ fn unused_cte_definitions_are_not_resolved() {
             Cte {
                 name: "good".to_owned(),
                 plan: Arc::new(valid),
+                generated: false,
             },
             Cte {
                 name: "bad".to_owned(),
                 plan: Arc::new(ambiguous),
+                generated: false,
             },
         ],
     });
@@ -704,6 +706,7 @@ fn unused_cte_definitions_are_not_resolved() {
             Cte {
                 name: "good".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "bad".to_owned(),
@@ -716,6 +719,7 @@ fn unused_cte_definitions_are_not_resolved() {
                         )
                         .project(vec![c("a")]),
                 ),
+                generated: false,
             },
         ],
     });
@@ -788,6 +792,7 @@ fn cte_refs_visit_shared_plans_under_each_scope() {
             ctes: vec![Cte {
                 name: name.to_owned(),
                 plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+                generated: false,
             }],
         })
     };
@@ -800,6 +805,7 @@ fn cte_refs_visit_shared_plans_under_each_scope() {
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     let a = run(plan, &ctx()).unwrap();
@@ -828,6 +834,7 @@ fn cte_refs_visit_shared_exprs_under_each_scope() {
             ctes: vec![Cte {
                 name: name.to_owned(),
                 plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+                generated: false,
             }],
         })
     };
@@ -838,6 +845,7 @@ fn cte_refs_visit_shared_exprs_under_each_scope() {
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     let a = run(plan, &ctx()).unwrap();
@@ -870,6 +878,7 @@ fn inner_with_names_shadow_outer_ctes() {
             ctes: vec![Cte {
                 name: "x".to_owned(),
                 plan: Arc::new(good()),
+                generated: false,
             }],
         })
     };
@@ -880,6 +889,7 @@ fn inner_with_names_shadow_outer_ctes() {
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(bad()),
+            generated: false,
         }],
     });
     let a = run(shadowed, &ctx()).unwrap();
@@ -897,6 +907,7 @@ fn inner_with_names_shadow_outer_ctes() {
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(bad()),
+            generated: false,
         }],
     });
     assert_eq!(class(&run(outer_read, &ctx())), "AMBIGUOUS_REFERENCE");
@@ -915,10 +926,12 @@ fn cte_forward_references_fall_through_to_tables() {
             Cte {
                 name: "a".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "b".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
         ],
     });
@@ -930,10 +943,12 @@ fn cte_forward_references_fall_through_to_tables() {
             Cte {
                 name: "a".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "b".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+                generated: false,
             },
         ],
     });
@@ -954,6 +969,7 @@ fn cte_name_matching_follows_case_sensitivity() {
             ctes: vec![Cte {
                 name: "X".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             }],
         })
     };

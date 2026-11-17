@@ -768,6 +768,9 @@ pub struct CteRef {
     pub source: Vec<crate::AttrId>,
     /// This reference's attributes, one per source attribute.
     pub output: Vec<BoundColumn>,
+    /// Whether it reads a definition the optimizer added ([`Cte::generated`]),
+    /// not one the query wrote.
+    pub generated: bool,
 }
 
 /// What an unresolved read reads.
@@ -1021,6 +1024,22 @@ pub struct Cte {
     pub name: String,
     /// The definition.
     pub plan: Arc<LogicalPlan>,
+    /// Whether the optimizer added it (a subtree read more than once,
+    /// computed once), not the query. A query's `WITH` may use any name, so
+    /// rules tell the two apart by this flag, never by the name.
+    pub generated: bool,
+}
+
+impl Cte {
+    /// A definition the query wrote.
+    #[must_use]
+    pub fn new(name: impl Into<String>, plan: Arc<LogicalPlan>) -> Self {
+        Self {
+            name: name.into(),
+            plan,
+            generated: false,
+        }
+    }
 }
 
 impl LogicalPlan {

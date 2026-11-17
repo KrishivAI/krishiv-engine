@@ -351,6 +351,7 @@ fn a_cte_reference_counts_its_definition() {
             ctes: vec![crate::Cte {
                 name: "x".to_owned(),
                 plan: Arc::new(read("/a")),
+                generated: false,
             }],
         })
     };

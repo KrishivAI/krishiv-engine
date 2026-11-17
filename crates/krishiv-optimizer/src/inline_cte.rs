@@ -77,7 +77,7 @@ fn generated_keys(root: &Arc<LogicalPlan>) -> HashSet<Vec<AttrId>> {
     let mut keys = HashSet::new();
     if let PlanNode::WithCte { ctes, .. } = &root.node {
         for c in ctes {
-            if c.name.starts_with(crate::share_cte::SHARED_PREFIX)
+            if c.generated
                 && let Some(out) = c.plan.resolved_output()
             {
                 keys.insert(out.iter().map(|o| o.id).collect());

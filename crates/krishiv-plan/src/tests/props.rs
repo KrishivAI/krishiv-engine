@@ -481,6 +481,7 @@ impl Gen<'_> {
                 name: self.name(),
                 source: self.many(0, 2, |g| AttrId(u64::from(g.pick(9)))),
                 output: self.many(0, 2, Gen::bound),
+                generated: false,
             }),
             14 => PlanNode::OneRowRelation,
             12 => PlanNode::Shift {
@@ -643,6 +644,7 @@ impl Gen<'_> {
                 ctes: self.many(1, 2, |g| Cte {
                     name: g.name(),
                     plan: g.input(d),
+                    generated: false,
                 }),
             },
         };
@@ -1321,6 +1323,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             source,
             output,
+            ..
         }) => {
             site!(w, source.push(AttrId(99)));
             site!(
@@ -1553,6 +1556,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                 ctes.push(Cte {
                     name: "x".to_owned(),
                     plan: Arc::new(LogicalPlan::table(["x"])),
+                    generated: false
                 })
             );
             let any = ctes

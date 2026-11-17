@@ -305,11 +305,13 @@ fn cte_shadowing_applies_at_every_level() {
             ctes: vec![Cte {
                 name: "x".to_owned(),
                 plan: Arc::new(good()),
+                generated: false,
             }],
         })),
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(bad()),
+            generated: false,
         }],
     });
     run(shadowed, &ctx).unwrap();
@@ -322,6 +324,7 @@ fn cte_shadowing_applies_at_every_level() {
                 ctes: vec![Cte {
                     name: "x".to_owned(),
                     plan: Arc::new(good()),
+                    generated: false,
                 }],
             })
             .join(
@@ -333,6 +336,7 @@ fn cte_shadowing_applies_at_every_level() {
         ctes: vec![Cte {
             name: "x".to_owned(),
             plan: Arc::new(bad()),
+            generated: false,
         }],
     });
     assert_eq!(class(&run(outer_read, &ctx)), "AMBIGUOUS_REFERENCE");
@@ -417,6 +421,7 @@ fn cte_names_may_contain_dots() {
         ctes: vec![Cte {
             name: "a.b.c".to_owned(),
             plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     let a = run(dotted, &ctx).unwrap();
@@ -451,8 +456,10 @@ fn unused_cte_inner_with_scopes_shadow() {
                 ctes: vec![Cte {
                     name: "x".to_owned(),
                     plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                    generated: false,
                 }],
             })),
+            generated: false,
         }],
     });
     run(shadowed, &ctx).unwrap();
@@ -466,8 +473,10 @@ fn unused_cte_inner_with_scopes_shadow() {
                 ctes: vec![Cte {
                     name: "x".to_owned(),
                     plan: Arc::new(LogicalPlan::table(["missing_inner"]).project(vec![c("a")])),
+                    generated: false,
                 }],
             })),
+            generated: false,
         }],
     });
     assert_eq!(class(&run(missing, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
@@ -569,6 +578,7 @@ fn unused_cte_sql_tables_are_checked() {
                 query: "q6".to_owned(),
                 args: SqlArgs::None,
             })),
+            generated: false,
         }],
     });
     run(unused_sql, &good_ctx).unwrap();
@@ -584,6 +594,7 @@ fn unused_cte_sql_tables_are_checked() {
                 query: "gone".to_owned(),
                 args: SqlArgs::None,
             })),
+            generated: false,
         }],
     });
     let e = run(unused_missing, &bad_ctx).unwrap_err();

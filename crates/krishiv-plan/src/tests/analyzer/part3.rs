@@ -564,6 +564,7 @@ fn legacy_cte_inlining_prefers_outer_definitions() {
             ctes: vec![Cte {
                 name: name.to_owned(),
                 plan: Arc::new(plan),
+                generated: false,
             }],
         })
     };
@@ -616,6 +617,7 @@ fn legacy_cte_self_reference_reads_the_outer_name_or_the_table() {
             ctes: vec![Cte {
                 name: name.to_owned(),
                 plan: Arc::new(plan),
+                generated: false,
             }],
         })
     };
@@ -653,6 +655,7 @@ fn legacy_cte_inlining_of_a_doubling_chain_is_linear() {
     let mut ctes = vec![Cte {
         name: "t0".to_owned(),
         plan: Arc::new(LogicalPlan::table(["base"])),
+        generated: false,
     }];
     for k in 1..=LEVELS {
         let prev = format!("t{}", k - 1);
@@ -663,6 +666,7 @@ fn legacy_cte_inlining_of_a_doubling_chain_is_linear() {
                 JoinKind::Inner,
                 JoinCondition::None,
             )),
+            generated: false,
         });
     }
     let plan = LogicalPlan::new(PlanNode::WithCte {
@@ -704,6 +708,7 @@ fn legacy_analysis_keeps_the_input_key_of_the_callers_plan() {
         ctes: vec![Cte {
             name: "t".to_owned(),
             plan: Arc::new(LogicalPlan::table(["u"])),
+            generated: false,
         }],
     });
     let expected = crate::Plan::try_new(Arc::new(plan.clone()))
@@ -729,6 +734,7 @@ fn exception_cte_conflicts_follow_spark() {
             ctes: vec![Cte {
                 name: name.to_owned(),
                 plan: Arc::new(plan),
+                generated: false,
             }],
         })
     };
@@ -839,6 +845,7 @@ fn unused_cte_tables_still_fail() {
         ctes: vec![Cte {
             name: "u".to_owned(),
             plan: Arc::new(missing("nope")),
+            generated: false,
         }],
     });
     let e = run(unused_missing, &ctx).unwrap_err();
@@ -870,10 +877,12 @@ fn unused_cte_tables_still_fail() {
             Cte {
                 name: "good".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "bad".to_owned(),
                 plan: Arc::new(ambiguous),
+                generated: false,
             },
         ],
     });
@@ -884,10 +893,12 @@ fn unused_cte_tables_still_fail() {
             Cte {
                 name: "good".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "bad".to_owned(),
                 plan: Arc::new(missing("gone")),
+                generated: false,
             },
         ],
     });
@@ -906,10 +917,12 @@ fn cte_forward_references_are_missing_tables() {
             Cte {
                 name: "r1".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["r2"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "r2".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
         ],
     });
@@ -929,10 +942,12 @@ fn cte_forward_references_are_missing_tables() {
             Cte {
                 name: "a".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             },
             Cte {
                 name: "b".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+                generated: false,
             },
         ],
     });
@@ -954,8 +969,10 @@ fn unused_cte_tables_are_checked_at_any_depth() {
                 ctes: vec![Cte {
                     name: "inner".to_owned(),
                     plan: Arc::new(LogicalPlan::table(["missing_deep"]).project(vec![c("a")])),
+                    generated: false,
                 }],
             })),
+            generated: false,
         }],
     });
     assert_eq!(class(&run(nested_missing, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
@@ -966,6 +983,7 @@ fn unused_cte_tables_are_checked_at_any_depth() {
         ctes: vec![Cte {
             name: "s".to_owned(),
             plan: Arc::new(LogicalPlan::table(["s"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     assert_eq!(class(&run(self_ref, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
@@ -985,6 +1003,7 @@ fn unused_cte_shadowing_follows_case_sensitivity() {
         ctes: vec![Cte {
             name: "T".to_owned(),
             plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     run(shadowed, &ctx).unwrap();
@@ -1001,6 +1020,7 @@ fn unused_cte_shadowing_follows_case_sensitivity() {
             ctes: vec![Cte {
                 name: "T".to_owned(),
                 plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                generated: false,
             }],
         }),
         &sensitive_ctx,
@@ -1013,6 +1033,7 @@ fn unused_cte_shadowing_follows_case_sensitivity() {
         ctes: vec![Cte {
             name: "T".to_owned(),
             plan: Arc::new(LogicalPlan::table(["T_missing"]).project(vec![c("a")])),
+            generated: false,
         }],
     });
     assert_eq!(

@@ -489,6 +489,7 @@ impl Lowerer {
                 ctes.push(Cte {
                     name: c.name.value.clone(),
                     plan: arc(body),
+                    generated: false,
                 });
             }
             plan = self.node(
@@ -591,6 +592,7 @@ impl Lowerer {
                 ctes: vec![Cte {
                     name: name.clone(),
                     plan: arc(reference),
+                    generated: false,
                 }],
             },
             c.span,

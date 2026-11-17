@@ -517,6 +517,7 @@ fn every_node_and_expression_form_hashes_distinctly() {
                     ctes: vec![Cte {
                         name: "c".into(),
                         plan: base(),
+                        generated: false,
                     }],
                 }),
             ),
@@ -526,6 +527,7 @@ fn every_node_and_expression_form_hashes_distinctly() {
                     name: "c".into(),
                     source: vec![AttrId(1)],
                     output: vec![bound(2, "a")],
+                    generated: false,
                 })),
             ),
             (
