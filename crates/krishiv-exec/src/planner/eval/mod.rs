@@ -1346,6 +1346,10 @@ mod tests {
         let inner = a.as_list::<i32>().value(0);
         assert_eq!(inner.len(), 3);
         assert!(inner.is_null(1));
+        let first = inner.as_list::<i32>().value(0);
+        let first = first.as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!((first.len(), first.value(0)), (1, 7));
+        assert_eq!(inner.as_list::<i32>().value(2).len(), 0);
 
         // A map with a struct value.
         let struct_type = StructType::new([
@@ -1369,6 +1373,23 @@ mod tests {
         assert_eq!(a.data_type(), &DataType::from(map_type).to_arrow());
         let m = a.as_map();
         assert_eq!((m.len(), m.value_length(0)), (1, 2));
+        // Strings are `Utf8` or `Utf8View` by the literal's Arrow type.
+        let text = |a: &dyn arrow_array::Array, i: usize| -> String {
+            a.as_string_opt::<i32>().map_or_else(
+                || a.as_string_view().value(i).to_owned(),
+                |v| v.value(i).to_owned(),
+            )
+        };
+        assert_eq!(
+            (text(m.keys(), 0), text(m.keys(), 1)),
+            ("x".to_owned(), "y".to_owned())
+        );
+        let values = m.values().as_struct();
+        let ints = values
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!((ints.value(0), ints.value(1)), (1, 2));
+        assert!(values.column(1).is_null(0) && values.column(1).is_null(1));
 
         // An empty map and a bare struct.
         let empty_map = Literal::key_value_map(
@@ -1385,6 +1406,12 @@ mod tests {
         let a = super::literal_array(&st).unwrap();
         assert_eq!(a.data_type(), &DataType::from(struct_type).to_arrow());
         assert_eq!(a.as_struct().num_columns(), 2);
+        let first = a
+            .as_struct()
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!((first.len(), first.value(0)), (1, 5));
+        assert_eq!(text(a.as_struct().column(1).as_ref(), 0), "z");
     }
 
     /// `scatter` puts the i-th value at the i-th set row, NULL elsewhere,

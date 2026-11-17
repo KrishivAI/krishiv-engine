@@ -38,7 +38,7 @@
         "properties": {
           "kind": {
             "description": "The securable's kind.",
-            "enum": ["table", "view", "function", "path", "namespace", "system", "secret", "connection"]
+            "enum": ["table", "view", "function", "path", "namespace", "system", "secret", "connection", "column"]
           },
           "name": {
             "description": "Its name parts (a path: its redacted text; a secret: its scope).",
