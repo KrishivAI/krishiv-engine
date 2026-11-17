@@ -94,7 +94,8 @@ def test_dump_and_clear(spark: SparkSession, tmp_path: Path, capsys: pytest.Capt
     udf_id = plus_one._unwrapped._profile_id
     spark.profile.dump(str(tmp_path))
     assert sorted(os.listdir(tmp_path)) == [f"udf_{udf_id}_memory.json", f"udf_{udf_id}_perf.pstats"]
-    assert pstats.Stats(str(tmp_path / f"udf_{udf_id}_perf.pstats")).total_calls > 0
+    stats = pstats.Stats(str(tmp_path / f"udf_{udf_id}_perf.pstats"))
+    assert getattr(stats, "total_calls") > 0  # noqa: B009 (typeshed lacks the attribute)
     spark.profile.clear(udf_id, type="perf")
     spark.profile.show(type="perf")
     assert capsys.readouterr().out == ""
