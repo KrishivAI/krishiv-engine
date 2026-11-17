@@ -1592,6 +1592,16 @@ fn server_entries_parse_default_and_take_sparks_names() {
             .and_then(ConfigValue::as_duration),
         Some(Duration::from_secs(30))
     );
+    assert_eq!(
+        c.get(&SERVER_READINESS_INTERVAL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(10))
+    );
+    assert_eq!(
+        c.get(&SERVER_READINESS_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(2))
+    );
     c.set("spark.connect.grpc.binding.port", "16000").unwrap();
     c.set("spark.connect.session.manager.maintenanceInterval", "5s")
         .unwrap();

@@ -26,7 +26,8 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, SERVER_READINESS_INTERVAL,
+    SERVER_READINESS_TIMEOUT, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -184,6 +185,17 @@ fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: b
         .unwrap_or(default)
 }
 
+fn duration(
+    config: &Config,
+    entry: &krishiv_common::config::ConfigEntry,
+    default: Duration,
+) -> Duration {
+    config
+        .get(entry)
+        .and_then(ConfigValue::as_duration)
+        .unwrap_or(default)
+}
+
 #[expect(
     clippy::print_stdout,
     reason = "CLI binary: the addresses and the token are its output"
@@ -244,12 +256,21 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
+    // `/readyz` answers from the cached checks (design P3-T066 §5.2); the serving flag is
+    // read on every probe, so a drain flips it at once.
+    let readiness = krishiv_server::readiness::Readiness::new(
+        Arc::clone(&ready),
+        Vec::new(),
+        duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10)),
+        duration(config, &SERVER_READINESS_TIMEOUT, Duration::from_secs(2)),
+    );
+    let checker = readiness.spawn();
     let app = admin_router(
         &runtime,
         config,
         guard,
         authenticated.then(|| Arc::clone(&auth)),
-        Arc::clone(&ready),
+        Arc::clone(&readiness),
         admin_bound,
     )?;
     let mut connect = ConnectServer::new(
@@ -326,6 +347,9 @@ async fn run_listeners(
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
     signals.abort();
+    if let Some(checker) = checker {
+        checker.abort();
+    }
     if let Some(reloads) = reloads {
         reloads.abort();
     }
@@ -347,7 +371,7 @@ fn admin_router(
     config: &Config,
     guard: Arc<dyn Guard>,
     auth: Option<Arc<ServerAuth>>,
-    ready: Arc<AtomicBool>,
+    readiness: Arc<krishiv_server::readiness::Readiness>,
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
@@ -395,7 +419,7 @@ fn admin_router(
         krishiv_server::api_router()
     };
     let app = base
-        .merge(krishiv_server::admin::health_routes(ready))
+        .merge(krishiv_server::admin::health_routes_cached(readiness))
         .merge(admin_v1)
         .merge(metrics);
     // With authentication configured the deprecated version alias needs a credential like

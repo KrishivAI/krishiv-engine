@@ -332,6 +332,26 @@ pub static SERVER_SHUTDOWN_TIMEOUT: ConfigEntry = startup(
     None,
 );
 
+/// How often the server re-runs its readiness checks.
+pub static SERVER_READINESS_INTERVAL: ConfigEntry = startup(
+    "krishiv.server.readiness.interval",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(10)),
+    "How often `krishiv server` re-runs its readiness checks (object store, authentication). \
+     `/readyz` answers from the last result; a result older than three intervals counts as \
+     not ready.",
+    None,
+);
+
+/// Time limit of one readiness check.
+pub static SERVER_READINESS_TIMEOUT: ConfigEntry = startup(
+    "krishiv.server.readiness.timeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(2)),
+    "How long one readiness check may take before it counts as failed.",
+    None,
+);
+
 /// Core dumps of the server process.
 pub static SERVER_ALLOW_CORE_DUMPS: ConfigEntry = startup(
     "krishiv.server.allowCoreDumps",

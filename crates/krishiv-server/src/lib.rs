@@ -29,6 +29,7 @@ pub mod admin;
 pub mod admin_v1;
 pub mod guard;
 pub mod internal;
+pub mod readiness;
 #[cfg(feature = "tls")]
 pub mod tls;
 

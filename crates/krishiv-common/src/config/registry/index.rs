@@ -141,6 +141,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    (
+        "krishiv.server.readiness.timeout",
+        &SERVER_READINESS_TIMEOUT,
+    ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
@@ -189,6 +193,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.memoryLimit",
         &PYTHON_WORKER_MEMORY_LIMIT,
+    ),
+    (
+        "krishiv.server.readiness.interval",
+        &SERVER_READINESS_INTERVAL,
     ),
     (
         "krishiv.sql.files.maxPartitionNum",
