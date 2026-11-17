@@ -42,6 +42,9 @@ admin-api = ["dep:prost", "dep:prost-reflect", "dep:tonic", "dep:tonic-prost", "
 tls = ["dep:tokio-rustls", "krishiv-session?/tls"]
 
 [dev-dependencies]
+# Turns on `session` for this package's own test targets, so the UI page tests (`tests/ui_pages.rs`) run
+# under default features too (the coverage gate runs them; without this they were compiled out).
+krishiv-server = { path = ".", features = ["session"] }
 krishiv-session = { path = "../krishiv-session" }
 krishiv-exec = { path = "../krishiv-exec" }
 tempfile.workspace = true

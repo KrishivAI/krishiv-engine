@@ -531,6 +531,17 @@ mod tests {
     }
 
     #[test]
+    fn ui_assets_over_the_budget_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("crates/krishiv-ui-assets/assets/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let big = vec![0_u8; usize::try_from(UI_ASSET_BUDGET_BYTES).unwrap() + 1];
+        std::fs::write(assets.join("index.js"), big).unwrap();
+        let err = check_ui_assets(dir.path()).unwrap_err();
+        assert!(err.contains("over the"), "{err}");
+    }
+
+    #[test]
     fn any_unsafe_growth_is_a_violation() {
         let with = |n: u64| Budgets {
             unsafe_sites: Some(BTreeMap::from([("k".to_owned(), n)])),

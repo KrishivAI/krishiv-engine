@@ -3452,6 +3452,7 @@ dependencies = [
  "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-server",
  "krishiv-session",
  "krishiv-ui-assets",
  "prost",
