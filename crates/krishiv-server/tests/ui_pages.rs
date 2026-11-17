@@ -588,7 +588,42 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     assert_eq!(queries[0]["state"], json!("finished"));
     assert!(queries[0]["ended_at"].as_i64().unwrap() > 0);
     let operators = source.rows(SystemTable::Operators).await.unwrap();
-    assert!(!operators.is_empty());
+    // The oracle is the stored profile document itself: every operator, its name and its row counts.
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(queries[0]["query_id"], json!(stored[0].query_id));
+    assert_eq!(queries[0]["wall_ns"], json!(stored[0].duration_ns));
+    assert_eq!(queries[0]["principal"], json!(stored[0].principal));
+    let doc: Value = serde_json::from_str(&stored[0].profile).unwrap();
+    let want: Vec<(Value, Value, Value, Value)> = doc["operators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| {
+            (
+                o["id"].clone(),
+                o["name"].clone(),
+                o["metrics"]["rows_in"].clone(),
+                o["metrics"]["rows_out"].clone(),
+            )
+        })
+        .collect();
+    let got: Vec<(Value, Value, Value, Value)> = operators
+        .iter()
+        .map(|o| {
+            (
+                o["operator_id"].clone(),
+                o["name"].clone(),
+                o["rows_in"].clone(),
+                o["rows_out"].clone(),
+            )
+        })
+        .collect();
+    assert!(!want.is_empty());
+    assert_eq!(got, want);
+    assert!(got.iter().all(|(_, name, ..)| name.is_string()), "{got:?}");
+    // The query ends in 3 groups.
+    assert!(got.iter().any(|(.., out)| *out == json!(3)), "{got:?}");
     assert!(
         operators
             .iter()
