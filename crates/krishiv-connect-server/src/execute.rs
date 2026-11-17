@@ -27,17 +27,26 @@
 //!
 //! Errors end the stream with the gRPC status of [`crate::status`] after the
 //! responses before them. An interrupted operation ends with
-//! `OPERATION_CANCELED`. A `sql_command` (`spark.sql()`) answers one
-//! `sql_command_result` (`execute::sql_command`); the other commands answer
-//! `CONNECT_INVALID_PLAN` (56K00) until P3-T012. Every command is checked
-//! for its ADR 0046 §3b class first (`crate::auth::check_command`): a caller
-//! without the privilege a command needs is refused with 42501.
+//! `OPERATION_CANCELED`; an encoder that panics ends it with
+//! `INTERNAL_ERROR` (Spark's `ExecuteThreadRunner` catches every
+//! `Throwable`), so no stream waits on an orphan. A `sql_command`
+//! (`spark.sql()`) answers one `sql_command_result` (`execute::sql_command`);
+//! the other commands answer `CONNECT_INVALID_PLAN` (56K00) until P3-T012.
+//! Every command is checked for its ADR 0046 §3b class first
+//! (`crate::auth::check_command`): a caller without the privilege a command
+//! needs is refused with 42501. The exception is `ml_command.clean_cache`:
+//! PySpark sends it when its process exits, and with no ML cache there is
+//! nothing to clean, so it is an operation with no response but
+//! `result_complete` (when reattachable). Spark sends an `ml_command_result`
+//! whose shape is unverified; Krishiv sends none.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
 //! only the envelope is Connect's.
 
 pub mod arrow;
+#[cfg(test)]
+pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
 mod sql_command;
@@ -52,7 +61,7 @@ use futures::StreamExt;
 use krishiv_common::error::{
     ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
     ConnectInvalidPlanNotFoundCachedLocalRelation, ConnectInvalidPlanPlanSizeLargerThanMax,
-    InvalidCursorNotReattachable, KrishivError, OperationCanceled,
+    InternalError, InvalidCursorNotReattachable, KrishivError, OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -73,6 +82,7 @@ use tokio::sync::{Semaphore, TryAcquireError};
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
+use crate::errors::SessionErrors;
 use crate::manager::SessionEntry;
 use crate::operation::replay::{Held, uuid_text};
 use crate::operation::{
@@ -80,7 +90,6 @@ use crate::operation::{
     validate_tags,
 };
 use crate::sender::{self, SenderCaps};
-use crate::status::status_of;
 use crate::udf::InlineUdfs;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
@@ -158,7 +167,10 @@ impl ResponseBudget {
 }
 
 /// Removes its operation from the session when dropped, unless kept: the
-/// operation failed before its stream started.
+/// operation ended before its stream started, cancelled (its RPC was
+/// dropped) unless [`Registered::fail`] marked it failed. Spark's state for
+/// either is **unverified** (its `SparkConnectGetStatusHandler` was not
+/// read); this follows design P3-T011a §3.12.
 struct Registered {
     operations: Arc<Operations>,
     op: Option<Arc<Operation>>,
@@ -170,11 +182,20 @@ impl Registered {
     fn keep(mut self) {
         self.op = None;
     }
+
+    /// The setup failed (GetStatus: `FAILED`); the operation is removed.
+    fn fail(self) {
+        if let Some(op) = &self.op {
+            op.fail();
+        }
+    }
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
         if let Some(op) = self.op.take() {
+            // Not failed: interrupted by `close` (GetStatus: CANCELLED).
+            op.mark_ended();
             op.close();
             self.operations.remove(&op);
         }
@@ -215,6 +236,27 @@ async fn until_cancelled<T>(
         biased;
         () = op.cancelled() => Err(OperationCanceled {}.into()),
         r = prepare => r,
+    }
+}
+
+/// The outcome of an operation's preparation. A preparation error settles
+/// like a query error, by the state's one compare-and-swap: failed first,
+/// the error (GetStatus `FAILED`); an interrupt that reported the operation
+/// first, `OPERATION_CANCELED` (GetStatus `CANCELLED`). Either way the
+/// operation leaves its session. (A dropped RPC drops `registered`:
+/// `CANCELLED`.)
+fn settle_preparation<T>(
+    op: &Operation,
+    registered: Registered,
+    prepared: Result<T, KrishivError>,
+) -> Result<(T, Registered), KrishivError> {
+    match prepared {
+        Ok(ready) => Ok((ready, registered)),
+        Err(e) if op.fail() => {
+            registered.fail();
+            Err(e)
+        }
+        Err(_) => Err(OperationCanceled {}.into()),
     }
 }
 
@@ -274,101 +316,107 @@ pub async fn execute_plan(
             return Err(InvalidCursorNotReattachable {}.into());
         }
         let caps = SenderCaps::of(&live, limits);
-        return Ok(sender::attach(live, operations, 0, caps));
+        return Ok(sender::attach(
+            live,
+            operations,
+            Arc::clone(entry.errors()),
+            0,
+            caps,
+        ));
     }
     let registered = Registered {
         operations: Arc::clone(&operations),
         op: Some(Arc::clone(&op)),
     };
     let session = entry.session();
-    let conf = session.conf();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let prepared = until_cancelled(&op, async {
-        // `spark.sql()`: a command runs now, a query is analyzed; neither returns rows.
-        if let Some(command) = sql_command::of(plan, limits).await? {
-            // The command's ADR 0046 §3b class is checked before it runs, as for any command.
-            let wrapped = pb::Command {
-                command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
-            };
-            crate::auth::enforce(&check_command(&wrapped), session).await?;
-            let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type else {
-                return Err(krishiv_common::error::InternalError {
-                    message: "a sql_command lost its variant".to_owned(),
+    let conf = session.conf();
+    let (work, registered) = if is_ml_clean_cache(plan) {
+        (Work::NoResult, registered)
+    } else {
+        let prepared = until_cancelled(&op, async {
+            #[cfg(test)]
+            hooks::preparing(id.as_str()).await;
+            // `spark.sql()`: a command runs now, a query is analyzed; neither returns rows.
+            if let Some(command) = sql_command::of(plan, limits).await? {
+                // The command's ADR 0046 §3b class is checked before it runs, as for any command.
+                let wrapped = pb::Command {
+                    command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+                };
+                crate::auth::enforce(&check_command(&wrapped), session).await?;
+                let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type
+                else {
+                    return Err(InternalError {
+                        message: "a sql_command lost its variant".to_owned(),
+                    }
+                    .into());
+                };
+                let answer = sql_command::run(
+                    session,
+                    &command,
+                    query_options.clone(),
+                    limits.max_batch_size,
+                )
+                .await?;
+                return Ok(Prepared::Command(answer));
+            }
+            // Decompression (up to `maxPlanSize`) runs off the async workers.
+            match execution_plan(entry, plan, limits).await? {
+                Executed::Relation(logical) => {
+                    let df = session.from_plan_with(&logical, query_options)?;
+                    let schema = df.schema().await?;
+                    let schema_response = schema::proto_schema(&schema)?;
+                    Ok(Prepared::Rows(
+                        df,
+                        schema,
+                        schema_response,
+                        observed::plan_ids(logical.root()),
+                    ))
                 }
-                .into());
-            };
-            let answer = sql_command::run(
-                session,
-                &command,
-                query_options.clone(),
-                limits.max_batch_size,
-            )
-            .await?;
-            return Ok(Prepared::Command(answer));
-        }
-        // Decompression (up to `maxPlanSize`) runs off the async workers.
-        match execution_plan(entry, plan, limits).await? {
-            Executed::Relation(logical) => {
-                let df = session.from_plan_with(&logical, query_options)?;
-                let schema = df.schema().await?;
-                Ok(Prepared::Rows(
+                // A command that ran (`register_function`): no response but the end.
+                Executed::Command => Ok(Prepared::Done),
+            }
+        })
+        .await;
+        match settle_preparation(&op, registered, prepared)? {
+            (Prepared::Rows(df, schema, schema_response, plan_ids), registered) => {
+                let query = Query {
                     df,
                     schema,
-                    observed::plan_ids(logical.root()),
-                ))
+                    schema_response,
+                    settings: encode_settings(&conf, limits, opts.chunking),
+                    plan_ids,
+                };
+                (Work::Query(Box::new(query)), registered)
             }
-            Executed::Command => Ok(Prepared::Done),
-        }
-    })
-    .await;
-    // A preparation error settles like a query error: an interrupt that
-    // reported this operation first turns it into `OPERATION_CANCELED`.
-    let prepared = match prepared {
-        Ok(ready) => ready,
-        Err(e) => {
-            return Err(if op.finish() {
-                e
-            } else {
-                OperationCanceled {}.into()
-            });
+            (Prepared::Command(answer), registered) => {
+                (Work::Command(Box::new(answer)), registered)
+            }
+            (Prepared::Done, registered) => (Work::NoResult, registered),
         }
     };
-    let settings = encode_settings(&conf, limits, opts.chunking);
 
     let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
     // Attached before the encoder starts: the operation is never detached
     // before its first stream.
-    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+    let stream = sender::attach(
+        Arc::clone(&op),
+        operations,
+        Arc::clone(entry.errors()),
+        0,
+        SenderCaps::of(&op, limits),
+    );
     registered.keep();
-    match prepared {
-        Prepared::Rows(df, schema, plan_ids) => {
-            let schema_response = schema::proto_schema(&schema)?;
-            tokio::spawn(encode(
-                sender,
-                df,
-                schema,
-                schema_response,
-                settings,
-                plan_ids,
-            ));
-        }
-        // A `sql_command`: the relation it answers.
-        Prepared::Command(answer) => {
-            tokio::spawn(sql_command::encode(sender, answer));
-        }
-        // A command that ran: no response but the end (Spark's `ExecuteThreadRunner`, v4.3.0 lines 271-293).
-        Prepared::Done => {
-            tokio::spawn(complete(sender));
-        }
-    }
+    tokio::spawn(encode(sender, work));
     Ok(stream)
 }
 
 /// What a request's plan prepared.
 enum Prepared {
-    /// A relation: its frame, schema and the plan ids of its observed nodes, streamed as batches.
-    Rows(DataFrame, SchemaRef, BTreeMap<String, i64>),
+    /// A relation: its frame, schema, schema response and the plan ids of its observed nodes,
+    /// streamed as batches.
+    Rows(DataFrame, SchemaRef, pb::DataType, BTreeMap<String, i64>),
     /// A `sql_command`: the relation it answers.
     Command(sql_command::Answer),
     /// A command that ran (`register_function`): no response but the end.
@@ -398,7 +446,30 @@ fn new_sender(
         op: Arc::clone(op),
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
+        errors: Arc::clone(entry.errors()),
     }
+}
+
+/// Whether `plan` is exactly `Command{ml_command{clean_cache}}`, the ML
+/// cache cleanup PySpark 4.3.0 sends at exit (`_cleanup_ml_cache`, before
+/// `release_session`): answered with nothing to clean (connect-mapping §4
+/// row 17, decision 11). Every other command, and this one compressed, stays
+/// 56K00.
+///
+/// The shortcut skips the command path, so it also requires the command's ADR
+/// 0046 §3b class to be [`Check::OwnSession`] (`check_command`): a class change
+/// sends it down the ordinary path, with its check, instead of past it.
+fn is_ml_clean_cache(plan: &pb::Plan) -> bool {
+    use krishiv_connect::proto::v4_3::command::CommandType;
+    use krishiv_connect::proto::v4_3::ml_command::Command as MlCommand;
+    matches!(
+        &plan.op_type,
+        Some(OpType::Command(command)) if matches!(
+            &command.command_type,
+            Some(CommandType::MlCommand(ml))
+                if matches!(ml.command, Some(MlCommand::CleanCache(_)))
+        ) && check_command(command) == Check::OwnSession
+    )
 }
 
 /// What [`translate_plan`] made of a plan.
@@ -453,8 +524,9 @@ fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
 }
 
 /// The plan of an `ExecutePlan` request, after its checks: a command's ADR
-/// 0046 §3b class is enforced before it runs; a relation with an inline
-/// Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// 0046 §3b class is enforced before it runs; a relation with a Python
+/// UDF (an inline call, or a `mapInPandas`/`applyInPandas` relation's)
+/// needs `Usage` on `System("udf")` before its UDFs are
 /// registered with the session's workers (ADR 0046 §3b, N1: fail closed,
 /// nothing is registered or started for a caller without it).
 ///
@@ -782,6 +854,8 @@ struct Sender {
     op: Arc<Operation>,
     session_id: String,
     server_side_session_id: String,
+    /// The session's errors: a failure ends the stream with an `errorId`.
+    errors: Arc<SessionErrors>,
 }
 
 impl Sender {
@@ -847,26 +921,108 @@ impl Sender {
     }
 }
 
-async fn encode(
-    sender: Sender,
+/// What an operation's encoder streams.
+enum Work {
+    /// A query's result: schema, batches, metrics, then `result_complete`
+    /// when reattachable.
+    Query(Box<Query>),
+    /// A `sql_command`: the `sql_command_result` relation it answers.
+    Command(Box<sql_command::Answer>),
+    /// A command with no result (`ml_command.clean_cache`, a
+    /// `register_function` that ran): only `result_complete`, when
+    /// reattachable.
+    NoResult,
+}
+
+/// A prepared query and how its result is encoded.
+struct Query {
     df: DataFrame,
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
+    /// The observed nodes' plan ids by observation name (`observed::plan_ids`).
     plan_ids: BTreeMap<String, i64>,
-) {
+}
+
+impl Work {
+    async fn produce(self, sender: &Sender) -> Result<(), Stop> {
+        match self {
+            Self::Query(q) => {
+                produce(
+                    sender,
+                    &q.df,
+                    &q.schema,
+                    q.schema_response.clone(),
+                    &q.settings,
+                    &q.plan_ids,
+                )
+                .await
+            }
+            Self::Command(answer) => sql_command::produce(sender, *answer).await,
+            Self::NoResult => {
+                sender.admit().await?;
+                complete(sender).await
+            }
+        }
+    }
+}
+
+/// Settles its operation when dropped unsettled: the encoder task unwound
+/// (a panic in a kernel or the IPC writer). Without it the operation would
+/// be an orphan (Spark's `ExecuteHolder.isOrphan`): a non-reattachable
+/// stream would wait forever and a reattachable one reattach forever. Spark
+/// catches every `Throwable` of the execution and sends it as the stream's
+/// error (`ExecuteThreadRunner.execute`, v4.3.0 lines 122-160); Krishiv
+/// sends `INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt.
+struct Unsettled {
+    op: Option<Arc<Operation>>,
+    errors: Arc<SessionErrors>,
+}
+
+impl Unsettled {
+    /// Settles the operation with `outcome`; its encoder has stopped.
+    fn settle(mut self, outcome: Result<(), Stop>) {
+        if let Some(op) = self.op.take() {
+            settle(&op, &self.errors, outcome);
+            op.mark_ended();
+        }
+    }
+}
+
+impl Drop for Unsettled {
+    fn drop(&mut self) {
+        if let Some(op) = self.op.take() {
+            tracing::error!(
+                target: "krishiv::connect",
+                operation = op.id().as_str(),
+                "the response encoder of a Connect operation stopped without settling it"
+            );
+            let error = InternalError {
+                message: "the response encoder of the operation stopped unexpectedly".to_owned(),
+            };
+            // FAILED, or CANCELLED when an interrupt came first.
+            settle(&op, &self.errors, Err(Stop::Failed(error.into())));
+            op.mark_ended();
+        }
+    }
+}
+
+async fn encode(sender: Sender, work: Work) {
     let op = Arc::clone(&sender.op);
+    let guard = Unsettled {
+        op: Some(Arc::clone(&op)),
+        errors: Arc::clone(&sender.errors),
+    };
     // A close or an interrupt is seen at once, also while the encoder
     // waits for admission, the query's first batch, a budget or memory.
     let outcome = tokio::select! {
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, &df, &schema, schema_response, &settings, &plan_ids) => r,
+        // The query's stream goes with `produce`, which owns the work.
+        r = work.produce(&sender) => r,
     };
-    // The query's stream is gone by now (dropped with `produce`).
-    drop(df);
-    settle(&op, outcome);
+    guard.settle(outcome);
 }
 
 /// Ends `op`'s stream after its encoder stopped with `outcome`. The
@@ -874,7 +1030,7 @@ async fn encode(
 /// before its error is recorded; an interrupt that came first wins, and the
 /// stream ends with `OPERATION_CANCELED` instead of the error (Spark's
 /// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
-fn settle(op: &Operation, outcome: Result<(), Stop>) {
+fn settle(op: &Operation, errors: &SessionErrors, outcome: Result<(), Stop>) {
     match outcome {
         // `produce` finished the stream after its last response.
         Ok(()) => {}
@@ -883,45 +1039,17 @@ fn settle(op: &Operation, outcome: Result<(), Stop>) {
             op.replay().finish(None);
         }
         Err(Stop::Failed(e)) => {
-            let error = if op.finish() {
+            // Failed now, or finished before (its last response failed:
+            // failed after all, so GetStatus agrees with the stream); an
+            // interrupt that came first wins.
+            let error = if op.fail() || op.fail_finished() {
                 e
             } else {
                 OperationCanceled {}.into()
             };
-            op.replay().finish(Some(status_of(&error)));
+            op.replay().finish(Some(errors.status(&error)));
         }
     }
-}
-
-/// The end of a command's stream: admitted as every operation is, then
-/// `ResultComplete` when reattachable.
-async fn complete(sender: Sender) {
-    let op = Arc::clone(&sender.op);
-    let outcome = tokio::select! {
-        biased;
-        () = op.closed() => Err(Stop::Gone),
-        () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = finish(&sender) => r,
-    };
-    settle(&op, outcome);
-}
-
-/// Ends `sender`'s operation after its last response: atomic with
-/// interrupts (an interrupt that came first turns the end into
-/// `OPERATION_CANCELED`, Spark's `ExecuteThreadRunner`, v4.3.0 lines
-/// 271-293), then `ResultComplete` when reattachable.
-async fn finish(sender: &Sender) -> Result<(), Stop> {
-    sender.admit().await?;
-    if !sender.op.finish() {
-        return Err(Stop::Failed(OperationCanceled {}.into()));
-    }
-    if sender.op.reattachable() {
-        sender
-            .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))
-            .await?;
-    }
-    sender.op.replay().finish(None);
-    Ok(())
 }
 
 async fn produce(
@@ -938,6 +1066,8 @@ async fn produce(
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
     sender.send(first).await?;
+    #[cfg(test)]
+    hooks::encoding(sender.op.id().as_str());
     let mut stream: RecordBatchStream = df.execute_stream().await?;
     let mut offset: i64 = 0;
     let mut sent = false;
@@ -982,6 +1112,12 @@ async fn produce(
     if let Some(e) = failed {
         return Err(e.into());
     }
+    complete(sender).await
+}
+
+/// Ends the operation's responses after its last one: `result_complete`
+/// when reattachable, then the end of its stream.
+async fn complete(sender: &Sender) -> Result<(), Stop> {
     // The end is atomic with interrupts: once finished, an interrupt
     // interrupts nothing; an interrupt that came first turns the end into
     // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines
@@ -1040,5 +1176,7 @@ async fn send_batch(
     }
 }
 
+#[cfg(test)]
+mod fault_tests;
 #[cfg(test)]
 mod tests;

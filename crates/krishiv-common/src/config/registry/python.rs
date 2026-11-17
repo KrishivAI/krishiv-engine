@@ -20,6 +20,24 @@ pub static ARROW_MAX_RECORDS_PER_BATCH: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
 };
 
+/// `krishiv.sql.execution.arrow.pyspark.validateSchema.enabled` (Spark's
+/// `spark.sql.execution.arrow.pyspark.validateSchema.enabled`, Spark 4.1+; `SQLConf.scala` L4765-4772 at
+/// v4.2.0).
+pub static ARROW_PYSPARK_VALIDATE_SCHEMA: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, the result batches of `mapInPandas` and `mapInArrow` are checked against the \
+          declared schema as Spark 4.1+ checks them (types equal, a non-nullable declared column \
+          only from a non-nullable one), failing with `ARROW_TYPE_MISMATCH`. When false, Spark \
+          checks nothing and Krishiv still refuses a result unlike the declared schema, with \
+          `PYTHON_EXCEPTION` (a documented divergence).",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.execution.arrow.pyspark.validateSchema.enabled"),
+    settable_by: SettableBy::User,
+};
+
 /// `krishiv.sql.execution.pythonUDF.arrow.enabled` (Spark's
 /// `spark.sql.execution.pythonUDF.arrow.enabled`).
 pub static PYTHON_UDF_ARROW_ENABLED: ConfigEntry = ConfigEntry {

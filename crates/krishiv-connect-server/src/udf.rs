@@ -21,6 +21,11 @@
 //! is typed, nothing is registered and no privilege is needed (a scalar UDF runs no code while a plan is
 //! analyzed, ADR 0046 §3b).
 //!
+//! **Relation UDFs** (`mapInPandas`, `applyInPandas`, cogroups and their Arrow forms) take a version the same
+//! way and the same privilege check (`InlineUdfs::seen`); the pool runs no relation yet (no
+//! `prepare_relation`, PR-26c-2), so such a plan is typed and explained but fails when it runs
+//! (`KRISHIV_UDF_NOT_AVAILABLE`).
+//!
 //! **Clones** (`CloneSession`, PR-15) must not share a runtime: its owner is the source session.
 //! `SessionPython::copy_for` builds the clone's own runtime with the payloads the source registered.
 
@@ -31,6 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::translate::{PythonUdf, UdfCallName, UdfHost as TranslateHost};
 use krishiv_exec::python_eval::UdfRuntime;
+use krishiv_plan::PythonUdfRef;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, PythonUdfDef, Session};
 use sha2::{Digest, Sha256};
 
@@ -126,9 +132,10 @@ struct State {
     installed: bool,
     /// Every payload registered, for a clone's runtime.
     payloads: Vec<(String, u32, Arc<PythonUdf>)>,
-    /// The version of each inline UDF registered, by the digest of its definition.
+    /// The version of each unregistered UDF (inline or a relation's) registered, by the digest of its
+    /// definition.
     anonymous: HashMap<[u8; 32], u32>,
-    /// The last inline version handed out (without the top bit).
+    /// The last unregistered version handed out (without the top bit).
     last_anonymous: u32,
 }
 
@@ -200,13 +207,6 @@ impl SessionPython {
     /// The UDFs of `clone`, a copy of this session built for `principal` (`CloneSession`): a runtime of
     /// its own (its workers serve the clone only) holding every payload this session registered, so the
     /// registrations the clone copied keep running; installed on the clone when it was on this session.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by CloneSession, which lands with PR-15 (#810)"
-        )
-    )]
     pub(crate) fn copy_for(&self, principal: &str, clone: &Session) -> Self {
         let copy = Self::new(self.host.as_ref(), principal, clone);
         let state = self.lock().clone();
@@ -246,7 +246,7 @@ fn def_of(udf: &PythonUdf) -> PythonUdfDef {
     }
 }
 
-/// The digest of everything that tells two inline UDFs apart.
+/// The digest of everything that tells two unregistered UDFs apart.
 fn digest(udf: &PythonUdf) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -268,7 +268,7 @@ pub(crate) struct InlineUdfs<'a> {
     udfs: &'a SessionPython,
     /// Analysis: names only, nothing registered.
     analysis: bool,
-    /// Whether the plan holds an inline UDF.
+    /// Whether the plan holds a Python UDF (an inline call or a relation's).
     seen: bool,
     /// UDFs new to the session, registered by [`Self::grant`].
     pending: Vec<([u8; 32], u32, PythonUdf)>,
@@ -293,7 +293,8 @@ impl<'a> InlineUdfs<'a> {
         }
     }
 
-    /// Whether the translated plan calls an inline Python UDF (it needs `Usage` on `System("udf")`).
+    /// Whether the translated plan calls a Python UDF, inline or in a relation (it needs `Usage` on
+    /// `System("udf")`).
     pub(crate) fn seen(&self) -> bool {
         self.seen
     }
@@ -320,8 +321,11 @@ impl<'a> InlineUdfs<'a> {
     }
 }
 
-impl TranslateHost for InlineUdfs<'_> {
-    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName, KrishivError> {
+impl InlineUdfs<'_> {
+    /// The version `udf` runs under in this session: the one it was registered with before, or a new
+    /// top-bit version it is registered under once the plan's privilege check passed ([`Self::grant`]).
+    /// Marks the plan as calling client code.
+    fn version_of(&mut self, udf: &PythonUdf) -> Result<u32, KrishivError> {
         if udf.name.contains('\0') {
             return Err(KrishivUnsupportedFeature {
                 feature: "Python UDF names holding a NUL character".to_owned(),
@@ -330,37 +334,56 @@ impl TranslateHost for InlineUdfs<'_> {
         }
         self.seen = true;
         let key = digest(udf);
-        let version = if self.analysis {
+        if self.analysis {
             // Typed, never run or registered: a version from the definition's digest, so the plans of two
             // UDFs that differ only in their function never compare or hash equal (Spark's `PythonUDF`
             // compares its `command` bytes).
             let [a, b, c, d, ..] = key;
-            u32::from_le_bytes([a, b, c, d]) | ANONYMOUS_VERSION_BIT
-        } else {
-            let mut state = self.udfs.lock();
-            if let Some(v) = state.anonymous.get(&key) {
-                *v
-            } else if let Some(&(_, v, _)) = self.pending.iter().find(|(d, _, _)| *d == key) {
-                v
-            } else {
-                let n = state.last_anonymous.wrapping_add(1);
-                if n & ANONYMOUS_VERSION_BIT != 0 {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: "more than 2^31 - 1 distinct inline Python UDFs in one session"
-                            .to_owned(),
-                    }
-                    .into());
-                }
-                state.last_anonymous = n;
-                drop(state);
-                let v = n | ANONYMOUS_VERSION_BIT;
-                self.pending.push((key, v, udf.clone()));
-                v
+            return Ok(u32::from_le_bytes([a, b, c, d]) | ANONYMOUS_VERSION_BIT);
+        }
+        let mut state = self.udfs.lock();
+        if let Some(v) = state.anonymous.get(&key) {
+            return Ok(*v);
+        }
+        if let Some(&(_, v, _)) = self.pending.iter().find(|(d, _, _)| *d == key) {
+            return Ok(v);
+        }
+        let n = state.last_anonymous.wrapping_add(1);
+        if n & ANONYMOUS_VERSION_BIT != 0 {
+            return Err(KrishivUnsupportedFeature {
+                feature: "more than 2^31 - 1 distinct unregistered Python UDFs (inline or in a relation) in one session".to_owned(),
             }
-        };
+            .into());
+        }
+        state.last_anonymous = n;
+        drop(state);
+        let v = n | ANONYMOUS_VERSION_BIT;
+        self.pending.push((key, v, udf.clone()));
+        Ok(v)
+    }
+}
+
+impl TranslateHost for InlineUdfs<'_> {
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName, KrishivError> {
+        let version = self.version_of(udf)?;
         Ok(UdfCallName {
             qualifier: vec!["session".to_owned()],
             name: krishiv_session::python_udf_call_name(&def_of(udf), version)?,
+        })
+    }
+
+    /// A relation's UDF takes a version as an inline call's does, under the same privilege check (the plan
+    /// is marked as calling client code, and nothing is registered before [`Self::grant`]). The session's
+    /// workers cannot run a relation yet (the pool has no `prepare_relation`, PR-26c-2), so a plan holding
+    /// one fails when it is planned for execution.
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<PythonUdfRef, KrishivError> {
+        let version = self.version_of(udf)?;
+        Ok(PythonUdfRef {
+            name: udf.name.clone(),
+            version,
+            eval_type: udf.plan_eval_type,
+            thread_safe: true,
+            deterministic: udf.deterministic,
         })
     }
 }

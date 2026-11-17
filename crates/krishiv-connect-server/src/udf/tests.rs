@@ -297,3 +297,62 @@ fn the_runner_conf_is_read_live_for_every_call() {
     assert_eq!(tz(&clone_conf).as_deref(), Some("Europe/Oslo"));
     assert_eq!(tz(&conf).as_deref(), Some("America/Lima"));
 }
+
+#[test]
+fn a_relation_udf_needs_the_same_grant_as_an_inline_one() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    let map = PythonUdf {
+        eval_type: 205,
+        plan_eval_type: PythonEvalType::MapPandasIter,
+        ..udf("f", b"m")
+    };
+    let mut inline = InlineUdfs::execution(&python);
+    let r = inline
+        .relation_python_udf(&map)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        (r.name.as_str(), r.version, r.eval_type),
+        (
+            "f",
+            ANONYMOUS_VERSION_BIT | 1,
+            PythonEvalType::MapPandasIter
+        )
+    );
+    // The plan calls client code: ExecutePlan checks `Usage` on `System("udf")` before the grant.
+    assert!(inline.seen());
+    assert!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .is_empty()
+    );
+    inline.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .len(),
+        1
+    );
+    // An analysis names it and registers nothing.
+    let mut analysis = InlineUdfs::analysis(&python);
+    let typed = analysis
+        .relation_python_udf(&PythonUdf {
+            command: b"other".to_vec(),
+            ..map
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(typed.version & ANONYMOUS_VERSION_BIT, 0);
+    analysis.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .len(),
+        1
+    );
+}

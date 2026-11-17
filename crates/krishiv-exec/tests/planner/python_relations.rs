@@ -15,7 +15,9 @@ use futures::future::BoxFuture;
 use futures::task::AtomicWaker;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
-use krishiv_exec::python_relation::{Frame, PreparedRelationUdf, RelationCallSpec, UdfTask};
+use krishiv_exec::python_relation::{
+    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, UdfTask,
+};
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, FunctionKind, GeneratorKind, Grouping, LogicalPlan, Plan,
     PlanNode, PythonEvalType, PythonUdfRef, ResolvedExpr, ResolvedFunction,
@@ -122,7 +124,7 @@ struct Prepared {
 }
 
 impl PreparedRelationUdf for Prepared {
-    fn open(&self) -> Result<Box<dyn UdfTask>, KrishivError> {
+    fn open(&self, _slot: Option<RelationSlot>) -> Result<Box<dyn UdfTask>, KrishivError> {
         let own: Log = Arc::default();
         self.per_task.lock().unwrap().push(Arc::clone(&own));
         Ok(Box::new(Task {
