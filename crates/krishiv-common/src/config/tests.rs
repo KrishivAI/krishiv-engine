@@ -234,33 +234,23 @@ fn bloom_at_scale_is_on_by_default_and_parses() {
 }
 
 #[test]
-fn bloom_at_scale_ratio_and_memory_tier_default_and_parse() {
+fn bloom_memory_tier_defaults_on_and_parses() {
     let mut c = Config::new();
-    let ratio = |c: &Config| {
-        c.get(&RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO)
-            .and_then(ConfigValue::as_int)
-    };
     let tier = |c: &Config| {
         c.get(&RUNTIME_FILTER_BLOOM_MEMORY_TIER)
             .and_then(ConfigValue::as_bool)
     };
-    assert_eq!(ratio(&c), Some(8));
     assert_eq!(tier(&c), Some(true));
-    c.set("krishiv.runtimeFilter.bloom.atScaleRatio", "20")
-        .unwrap();
     c.set("krishiv.runtimeFilter.bloom.memoryTier", "false")
         .unwrap();
-    assert_eq!(ratio(&c), Some(20));
     assert_eq!(tier(&c), Some(false));
-    for bad in ["0", "-1", "eight"] {
-        assert!(
-            c.set("krishiv.runtimeFilter.bloom.atScaleRatio", bad)
-                .is_err(),
-            "{bad}"
-        );
-    }
     assert!(
         c.set("krishiv.runtimeFilter.bloom.memoryTier", "maybe")
+            .is_err()
+    );
+    // Part A of Polars item 2 (the 8x ratio as a key) was killed: no key.
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.atScaleRatio", "8")
             .is_err()
     );
 }

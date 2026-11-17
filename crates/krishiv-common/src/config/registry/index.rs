@@ -469,10 +469,6 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_TOMBSTONES,
     ),
     (
-        "krishiv.runtimeFilter.bloom.atScaleRatio",
-        &RUNTIME_FILTER_BLOOM_AT_SCALE_RATIO,
-    ),
-    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
