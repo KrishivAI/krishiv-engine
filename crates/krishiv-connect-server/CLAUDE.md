@@ -21,7 +21,7 @@ Paths are relative to this crate.
   shutting down")
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
-  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  the analyzed plan; `persist`, `unpersist` and `get_storage_level` are the frame's own (`src/cache.rs` converts the protocol's `StorageLevel` both ways); access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
@@ -60,7 +60,7 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), `checkpoint_command` (`src/execute/cache_command.rs`: `DataFrame::checkpoint` / `local_checkpoint`, the result held under a UUID in `SessionEntry`'s map and answered as `checkpoint_command_result`) and `remove_cached_remote_relation_command` (drops the id, an unknown one is fine) run; a `cached_remote_relation` is looked up at translation (`Requested::bind`, `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND` when absent) and spliced in by `Session::from_plan_over` (the new frame owns what the held frames own; a read inside a subquery expression is not replaced); other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
   store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md);

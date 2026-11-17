@@ -12,6 +12,7 @@
 
 pub mod analyze;
 pub mod auth;
+mod cache;
 pub mod codec;
 pub mod config;
 pub mod execute;

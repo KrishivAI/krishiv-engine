@@ -46,7 +46,7 @@ use krishiv_common::error::{
     KrishivError, KrishivSessionLimit,
 };
 use krishiv_session::auth::{Authenticated, Role, Surface};
-use krishiv_session::{QueryId, Session};
+use krishiv_session::{DataFrame, QueryId, Session};
 
 use crate::auth::SessionOwner;
 use crate::operation::{Operation, Operations};
@@ -133,11 +133,44 @@ pub struct SessionEntry {
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
     python: SessionPython,
+    /// The DataFrames the session holds for the client (`checkpoint_command`, Spark's
+    /// `SessionHolder.dataFrameCache`): id to frame, ended by
+    /// `remove_cached_remote_relation_command` or with the session. A frame's rows and files end
+    /// when the last frame that reads them is dropped.
+    cached_frames: Mutex<HashMap<String, DataFrame>>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
 }
 
 impl SessionEntry {
+    /// Holds `frame` under `id` (a checkpoint's result).
+    pub(crate) fn cache_frame(&self, id: String, frame: DataFrame) {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, frame);
+    }
+
+    /// The frame held under `id`.
+    pub(crate) fn cached_frame(&self, id: &str) -> Option<DataFrame> {
+        self.cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    /// Lets go of the frame held under `id`; an id that is not held is not an error (Spark's
+    /// `removeCachedDataFrame`). The frame is dropped outside the lock.
+    pub(crate) fn remove_cached_frame(&self, id: &str) {
+        let removed = self
+            .cached_frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        drop(removed);
+    }
+
     /// The engine session.
     #[must_use]
     pub fn session(&self) -> &Session {
@@ -423,6 +456,7 @@ impl SessionManager {
             client_user_id: client_user_id.to_owned(),
             operations: Arc::default(),
             python,
+            cached_frames: Mutex::default(),
             last_access: AtomicU64::new(self.now_ms()),
         });
         let mut retired = None;
