@@ -201,7 +201,9 @@ async fn run_to_end(
         if lock(&run).cancel_requested {
             return Ok(None);
         }
-        df.collect().await.map(Some)
+        // One row past the cap tells `result_json` the result was cut; the rest is never materialised.
+        let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
+        capped.collect().await.map(Some)
     }
     .await;
     drop(runtime);
@@ -354,7 +356,7 @@ impl UiSource for SessionSource {
                         .find_map(|k| r.get(*k).and_then(Value::as_str))
                         .map(str::to_owned)
                 };
-                let Some(name) = first(&["catalog", "namespace", "tableName", "col_name"]) else {
+                let Some(name) = first(&["catalog", "tableName", "namespace", "col_name"]) else {
                     continue;
                 };
                 // `DESCRIBE` ends its column list with blank and `# ...` lines about partitions and metadata.

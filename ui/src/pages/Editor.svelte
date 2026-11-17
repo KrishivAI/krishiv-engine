@@ -55,26 +55,33 @@
     };
   });
 
-  async function poll() {
-    if (!runId) return;
+  // Each poll belongs to the run it was started for: a late answer for an earlier run changes nothing.
+  async function poll(id: string | null | undefined = runId) {
+    if (!id) return;
     try {
-      run = await api<SqlRun>(`/api/internal/sql/${encodeURIComponent(runId)}`);
-      if (run.state !== "running") clearInterval(timer);
+      const r = await api<SqlRun>(`/api/internal/sql/${encodeURIComponent(id)}`);
+      if (id !== runId) return;
+      run = r;
+      if (r.state !== "running") clearInterval(timer);
     } catch (e) {
+      if (id !== runId) return;
       message = (e as Error).message;
       clearInterval(timer);
     }
   }
 
   async function start() {
+    // The Run button is disabled while a statement runs; the keyboard shortcut must not bypass that.
+    if (run?.state === "running") return;
     message = "";
     run = { state: "running" };
     try {
       const r = await api<{ run_id: string }>("/api/internal/sql", { method: "POST", body: JSON.stringify({ sql: text() }) });
       runId = r.run_id;
       clearInterval(timer);
-      timer = setInterval(poll, 250);
-      void poll();
+      const id = r.run_id;
+      timer = setInterval(() => void poll(id), 250);
+      void poll(id);
     } catch (e) {
       run = null;
       message = (e as Error).message;

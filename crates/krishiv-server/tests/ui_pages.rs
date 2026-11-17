@@ -531,3 +531,39 @@ async fn the_documented_properties_are_the_ones_the_responses_carry() {
         );
     }
 }
+
+#[tokio::test]
+async fn an_editor_result_is_cut_at_the_row_cap_and_says_so() {
+    let addr = start().await;
+    let (_, body) = post(
+        addr,
+        "/api/internal/sql",
+        &json!({"sql": "SELECT id FROM range(0, 5000)"}).to_string(),
+    )
+    .await;
+    let run = body["run_id"].as_str().unwrap().to_owned();
+    let done = wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
+    assert_eq!(done["rows"].as_array().unwrap().len(), 1000, "{done}");
+    assert_eq!(done["truncated"], json!(true), "{done}");
+}
+
+#[tokio::test]
+async fn the_catalog_lists_a_table_by_its_table_name() {
+    let addr = start().await;
+    let (_, body) = post(
+        addr,
+        "/api/internal/sql",
+        &json!({"sql": "CREATE TABLE catalog_probe_table (a INT) USING parquet"}).to_string(),
+    )
+    .await;
+    let run = body["run_id"].as_str().unwrap().to_owned();
+    wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
+    let tables = get(addr, "/api/internal/catalog/spark_catalog/default/tables").await;
+    let names: Vec<&str> = tables["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"catalog_probe_table"), "{tables}");
+}

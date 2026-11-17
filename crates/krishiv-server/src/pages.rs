@@ -72,9 +72,9 @@ impl UiPolicy {
         let mut policy = Self::loopback();
         let mut any = false;
         for n in names {
-            let before = policy.hosts.len();
+            // A usable name counts even when it is already a default (`localhost`).
+            any |= is_usable_host(n);
             policy = policy.allow_host(n);
-            any |= policy.hosts.len() > before;
         }
         policy.enforce = loopback || any;
         policy
@@ -84,7 +84,7 @@ impl UiPolicy {
     #[must_use]
     pub fn allow_host(mut self, host: &str) -> Self {
         let h = host.trim().to_ascii_lowercase();
-        if !h.is_empty() && h != "*" && !self.hosts.contains(&h) {
+        if is_usable_host(&h) && !self.hosts.contains(&h) {
             self.hosts.push(h);
         }
         self
@@ -516,6 +516,12 @@ pub struct SqlRun {
     sql_state: Option<String>,
 }
 
+/// A configured host name that can be matched: not blank and not the wildcard `*` (which is never allowed).
+fn is_usable_host(host: &str) -> bool {
+    let h = host.trim();
+    !h.is_empty() && h != "*"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,6 +564,10 @@ mod tests {
         // With names configured, only those (and loopback).
         let p = UiPolicy::for_listener(false, ["ui.example.com"]);
         assert!(p.allows("ui.example.com"));
+        assert!(!p.allows("evil.example"));
+        // A configured name that is already a default still turns the check on.
+        let p = UiPolicy::for_listener(false, ["localhost"]);
+        assert!(p.allows("localhost:8080"));
         assert!(!p.allows("evil.example"));
     }
 
