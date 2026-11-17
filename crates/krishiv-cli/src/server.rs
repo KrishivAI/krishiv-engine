@@ -260,7 +260,7 @@ async fn run_listeners(
     // read on every probe, so a drain flips it at once.
     let readiness = krishiv_server::readiness::Readiness::new(
         Arc::clone(&ready),
-        Vec::new(),
+        vec![Arc::new(krishiv_server::readiness::AuthReady(Arc::clone(&auth))) as Arc<_>],
         duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10)),
         duration(config, &SERVER_READINESS_TIMEOUT, Duration::from_secs(2)),
     );

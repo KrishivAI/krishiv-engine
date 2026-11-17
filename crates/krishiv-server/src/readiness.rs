@@ -33,6 +33,23 @@ pub trait ReadinessCheck: Send + Sync {
     fn run(&self) -> CheckFuture;
 }
 
+/// Check 2 (design P3-T066 §5.2): with OIDC configured, the JWK set has been
+/// fetched and is not stale. Passes at once when OIDC is not configured.
+#[cfg(feature = "session")]
+#[derive(Debug, Clone)]
+pub struct AuthReady(pub Arc<krishiv_session::auth::ServerAuth>);
+
+#[cfg(feature = "session")]
+impl ReadinessCheck for AuthReady {
+    fn name(&self) -> &'static str {
+        "auth"
+    }
+    fn run(&self) -> CheckFuture {
+        let verdict = self.0.jwks_ready().unwrap_or(Ok(()));
+        Box::pin(std::future::ready(verdict))
+    }
+}
+
 /// The outcome of one check in the last round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckOutcome {

@@ -674,3 +674,23 @@ fn delegated_token_is_refused_as_a_login() {
     let t = token(&rs_header("k1"), &claims(), rs256(rsa()));
     assert!(auth(&server, &t).is_ok());
 }
+
+#[test]
+fn jwks_readiness_follows_the_first_fetch() {
+    let failing = Source::new(vec![Err("down".to_owned())]);
+    let server_down = server(&failing, &[]);
+    let verdict = server_down.jwks_ready().expect("oidc is configured");
+    assert!(verdict.is_err_and(|m| m.contains("not been fetched")));
+
+    let source = Source::new(vec![Ok(jwks(&[rsa_jwk(rsa(), "k1")]))]);
+    let server_up = server(&source, &[]);
+    assert_eq!(server_up.jwks_ready(), Some(Ok(())));
+}
+
+#[test]
+fn jwks_readiness_is_absent_without_oidc() {
+    let plain =
+        ServerAuth::new(&AuthConfig::from_settings(Vec::<(&str, &str)>::new()).expect("empty"))
+            .expect("server auth");
+    assert_eq!(plain.jwks_ready(), None);
+}
