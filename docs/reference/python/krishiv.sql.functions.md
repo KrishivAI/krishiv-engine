@@ -442,7 +442,7 @@ Calls the registry function `bit_xor`.
 def bitmap_and_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_and_agg`.
 
 ### `bitmap_bit_position`
 
@@ -450,7 +450,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_bit_position(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_bit_position`.
 
 ### `bitmap_bucket_number`
 
@@ -458,7 +458,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_bucket_number(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_bucket_number`.
 
 ### `bitmap_construct_agg`
 
@@ -466,7 +466,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_construct_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_construct_agg`.
 
 ### `bitmap_count`
 
@@ -474,7 +474,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_count(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_count`.
 
 ### `bitmap_or_agg`
 
@@ -482,7 +482,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_or_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_or_agg`.
 
 ### `bitwiseNOT`
 

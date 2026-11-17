@@ -495,10 +495,6 @@ _ENGINE_UNSUPPORTED = (
     "collate",
     "count_min_sketch",
     "histogram_numeric",
-    "hll_sketch_agg",
-    "hll_sketch_estimate",
-    "hll_union",
-    "hll_union_agg",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -1341,23 +1337,28 @@ def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_sketch_agg")
+    """Calls the registry function ``hll_sketch_agg``."""
+    return _call("hll_sketch_agg", _named(col, "col"), *_opt(_lit, lgConfigK, "lgConfigK"))
 
 
 def hll_sketch_estimate(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_sketch_estimate")
+    """Calls the registry function ``hll_sketch_estimate``."""
+    return _call("hll_sketch_estimate", _named(col, "col"))
 
 
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_union")
+    """Calls the registry function ``hll_union``."""
+    return _call(
+        "hll_union",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"),
+    )
 
 
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_union_agg")
+    """Calls the registry function ``hll_union_agg``."""
+    return _call("hll_union_agg", _named(col, "col"), *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"))
 
 
 def hour(col: ColumnOrName) -> Column:
