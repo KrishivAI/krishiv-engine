@@ -19,21 +19,24 @@
 //! **Trust.** The server names the paths; the client chose their contents (and maybe their names). So a path
 //! must be absolute, a regular file, not a symbolic link and with no symbolic link above it (its canonical
 //! form is itself): Landlock grants a path by the file it opens, so a link would hand the worker its target.
-//! The check records the file each path names (its device and inode); the copy opens the path without
-//! following a link at its last component and refuses a file other than the one checked, or a path whose
-//! canonical form changed since (a parent swapped for a link), so a path swapped after the check is refused
-//! (`INVALID_ARTIFACT_PATH`) and nothing of it is copied. Each archive is copied the same way into the pool's
+//! The check and the copy each resolve the path once, following no link anywhere in it (`openat2` with
+//! `RESOLVE_NO_SYMLINKS`; the path must also be lexically canonical), and the check records the file it opened
+//! (its device and inode); the copy refuses any other file, so a path swapped after the check (for a link, or a
+//! parent for a link, or for another file) is refused (`INVALID_ARTIFACT_PATH`) and nothing of it is copied. Each archive is copied the same way into the pool's
 //! directory and only that copy is unpacked (the unpacker's read rule names no client path). Two pyfiles or two
 //! archives of one name are refused (their copies would collide). The copies and the unpacked bytes together
 //! are capped ([`crate::PoolConfig::artifact_limit`]; an archive's copy, removed once it is unpacked, is not
-//! counted beside its unpacked bytes). An archive is unpacked by the worker interpreter's own
+//! counted beside its unpacked bytes, so a set's directory peaks at twice the limit while its last archive is
+//! unpacked: the copy and the unpacked bytes, each within what is left of the limit). An archive is unpacked by the worker interpreter's own
 //! `zipfile`/`tarfile`, in the sandbox when it is on (it reads the archive and writes only its own directory),
 //! with `tarfile`'s `data` filter: no absolute paths, no `..`, no link leaving the directory, no device files; a
 //! zip's entries cannot be links.
 //!
 //! **Failures.** A failure about the artifacts themselves (a path, a format, a size) is kept for the set's
 //! lifetime: every later call fails the same way. A failure of one attempt (a cancel, a timeout, the server
-//! unable to start the unpacker or to write its directory) is not: the next call tries again. The set's lock is
+//! unable to start the unpacker or to write its directory) is not: the next call tries again, except that the
+//! [`MAX_TIMEOUTS`]th timeout of a set is kept (an archive that always takes too long). When the unpacking
+//! failed, a failure to remove its copy does not replace that failure. The set's lock is
 //! not held while its directory is made; a later caller waits for the attempt and may cancel meanwhile.
 
 use std::collections::HashSet;
@@ -48,7 +51,7 @@ use std::time::Duration;
 use krishiv_common::error::{
     ArtifactAlreadyExists, InvalidArtifactPath, KrishivError, OperationCanceled,
 };
-use rustix::fs::{Mode, OFlags};
+use rustix::fs::{Mode, OFlags, ResolveFlags};
 use rustix::io::Errno;
 
 /// Ids of artifact sets, unique in the process; 0 is the empty set.
@@ -60,6 +63,10 @@ const WAIT_TICK: Duration = Duration::from_millis(50);
 /// What unpacks one archive: `(archive, dest, budget)`, the bytes unpacked.
 pub(crate) type Unpack<'a> = dyn Fn(&Path, &Path, u64) -> Result<u64, Failure> + 'a;
 
+/// How many attempts of one set may time out before the timeout is kept like a lasting failure (an archive
+/// that always takes too long would otherwise cost a call thread up to the unpacking timeout on every call).
+pub(crate) const MAX_TIMEOUTS: u32 = 3;
+
 /// Why a set's directory could not be made, and whether that lasts.
 #[derive(Debug)]
 pub(crate) struct Failure {
@@ -67,6 +74,8 @@ pub(crate) struct Failure {
     pub(crate) error: KrishivError,
     /// About the artifacts themselves: every later call gets it too. Else the next call tries again.
     pub(crate) lasting: bool,
+    /// The attempt ran out of time: retried, until [`MAX_TIMEOUTS`] attempts of the set have.
+    pub(crate) timed_out: bool,
 }
 
 impl Failure {
@@ -75,6 +84,7 @@ impl Failure {
         Failure {
             error,
             lasting: true,
+            timed_out: false,
         }
     }
 
@@ -83,6 +93,16 @@ impl Failure {
         Failure {
             error,
             lasting: false,
+            timed_out: false,
+        }
+    }
+
+    /// The attempt ran out of time: retried by the next call until [`MAX_TIMEOUTS`] attempts have, then kept.
+    pub(crate) fn timed_out(error: KrishivError) -> Self {
+        Failure {
+            error,
+            lasting: false,
+            timed_out: true,
         }
     }
 }
@@ -104,6 +124,12 @@ enum Slot {
     Done(Result<Arc<Prepared>, KrishivError>),
 }
 
+/// A set's preparation and how many of its attempts timed out.
+struct State {
+    slot: Slot,
+    timeouts: u32,
+}
+
 /// One session's artifacts, as set by [`crate::SessionUdfs::set_artifacts`].
 pub(crate) struct ArtifactSet {
     /// The pool key's part: a worker started for one set never serves another.
@@ -113,7 +139,7 @@ pub(crate) struct ArtifactSet {
     /// Why the paths given are refused (checked when they are set; raised by the calls that need them).
     refused: Option<KrishivError>,
     /// The prepared directory, made by the first worker start that needs it (or why it could not be made).
-    prepared: Mutex<Slot>,
+    prepared: Mutex<State>,
     /// Told when an attempt ends.
     made: Condvar,
 }
@@ -128,18 +154,32 @@ pub(crate) struct Prepared {
     pub(crate) read_paths: Vec<PathBuf>,
 }
 
-/// The attempt in progress: dropped, it ends the attempt with `end` (an empty slot unless set) and wakes the
-/// callers waiting for it, so an attempt that never finishes (a panic) leaves the set to the next caller.
+/// The attempt in progress: dropped, it ends the attempt with `end` (an empty slot unless set; a timeout
+/// counted when `timed_out`) and wakes the callers waiting for it, so an attempt that never finishes (a panic)
+/// leaves the set to the next caller.
 struct Attempt<'a> {
     set: &'a ArtifactSet,
     end: Slot,
+    timed_out: bool,
 }
 
 impl Drop for Attempt<'_> {
     fn drop(&mut self) {
-        *self.set.lock() = std::mem::replace(&mut self.end, Slot::Empty);
+        let mut state = self.set.lock();
+        state.slot = std::mem::replace(&mut self.end, Slot::Empty);
+        if self.timed_out {
+            state.timeouts = state.timeouts.saturating_add(1);
+        }
+        drop(state);
         self.set.made.notify_all();
     }
+}
+
+fn new_state() -> Mutex<State> {
+    Mutex::new(State {
+        slot: Slot::Empty,
+        timeouts: 0,
+    })
 }
 
 impl ArtifactSet {
@@ -150,7 +190,7 @@ impl ArtifactSet {
             pyfiles: Vec::new(),
             archives: Vec::new(),
             refused: None,
-            prepared: Mutex::new(Slot::Empty),
+            prepared: new_state(),
             made: Condvar::new(),
         }
     }
@@ -170,7 +210,7 @@ impl ArtifactSet {
             pyfiles,
             archives,
             refused,
-            prepared: Mutex::new(Slot::Empty),
+            prepared: new_state(),
             made: Condvar::new(),
         }
     }
@@ -185,13 +225,14 @@ impl ArtifactSet {
         self.refused.as_ref()
     }
 
-    fn lock(&self) -> MutexGuard<'_, Slot> {
+    fn lock(&self) -> MutexGuard<'_, State> {
         self.prepared.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The prepared directory: made by the first caller (under `root`, the archives unpacked by `unpack`, all
     /// within `limit` bytes), the same one (or the same lasting failure) for every later caller. A caller that
-    /// finds another one making it waits, and fails with `OPERATION_CANCELED` once `cancelled` says so.
+    /// finds another one making it waits, and fails with `OPERATION_CANCELED` once `cancelled` says so. The
+    /// [`MAX_TIMEOUTS`]th attempt that times out is kept as the set's failure.
     pub(crate) fn prepare(
         &self,
         root: &Path,
@@ -202,29 +243,31 @@ impl ArtifactSet {
         if let Some(e) = &self.refused {
             return Err(e.clone());
         }
-        let mut attempt = {
-            let mut slot = self.lock();
+        let (mut attempt, timeouts) = {
+            let mut state = self.lock();
             loop {
-                match &*slot {
+                match &state.slot {
                     Slot::Done(done) => return done.clone(),
                     Slot::Empty => break,
                     Slot::Making => {
                         if cancelled() {
                             return Err(OperationCanceled {}.into());
                         }
-                        slot = self
+                        state = self
                             .made
-                            .wait_timeout(slot, WAIT_TICK)
+                            .wait_timeout(state, WAIT_TICK)
                             .unwrap_or_else(PoisonError::into_inner)
                             .0;
                     }
                 }
             }
-            *slot = Slot::Making;
-            Attempt {
+            state.slot = Slot::Making;
+            let attempt = Attempt {
                 set: self,
                 end: Slot::Empty,
-            }
+                timed_out: false,
+            };
+            (attempt, state.timeouts)
         };
         // Made without the lock (an unpacking may take minutes): later callers wait on `made`, each able to
         // cancel, and the attempt's end is published when `attempt` drops.
@@ -236,15 +279,15 @@ impl ArtifactSet {
             }
             Err(Failure {
                 error,
-                lasting: true,
+                lasting,
+                timed_out,
             }) => {
-                attempt.end = Slot::Done(Err(error.clone()));
+                if lasting || (timed_out && timeouts.saturating_add(1) >= MAX_TIMEOUTS) {
+                    attempt.end = Slot::Done(Err(error.clone()));
+                }
+                attempt.timed_out = timed_out;
                 Err(error)
             }
-            Err(Failure {
-                error,
-                lasting: false,
-            }) => Err(error),
         }
     }
 
@@ -279,9 +322,11 @@ impl ArtifactSet {
             fs::create_dir(&to)
                 .map_err(|e| server_io("cannot make the UDF archive directory", &e))?;
             let bytes = unpack(&copy, &to, limit.saturating_sub(used));
-            fs::remove_file(&copy)
-                .map_err(|e| server_io("cannot remove a UDF archive's copy", &e))?;
-            used = used.saturating_add(bytes?);
+            let removed = fs::remove_file(&copy);
+            // The unpacking's own failure first: a failed removal must not hide a lasting refusal.
+            let bytes = bytes?;
+            removed.map_err(|e| server_io("cannot remove a UDF archive's copy", &e))?;
+            used = used.saturating_add(bytes);
             sys_path.push(to);
         }
         fs::remove_dir(&incoming)
@@ -300,16 +345,13 @@ fn check(paths: Vec<PathBuf>) -> Result<Vec<Artifact>, KrishivError> {
     let mut names = HashSet::new();
     let mut checked = Vec::with_capacity(paths.len());
     for path in paths {
-        if !path.is_absolute() {
-            return Err(invalid(&path));
-        }
-        let meta = fs::symlink_metadata(&path).map_err(|_| invalid(&path))?;
+        let file = open_no_links(&path).map_err(|e| match e {
+            Errno::NOSYS => no_openat2(&path),
+            _ => invalid(&path),
+        })?;
+        let meta = file.metadata().map_err(|_| invalid(&path))?;
         if !meta.file_type().is_file() {
             return Err(invalid(&path));
-        }
-        match fs::canonicalize(&path) {
-            Ok(canonical) if canonical == path => {}
-            _ => return Err(invalid(&path)),
         }
         let name = file_name(&path)?;
         if name.starts_with('.') {
@@ -345,32 +387,66 @@ fn file_name(path: &Path) -> Result<&str, KrishivError> {
         .ok_or_else(|| invalid(path))
 }
 
-/// Opens the checked `artifact` for reading: the file it named at the check, reached by the same canonical path.
-/// A link at the last component is not followed (`O_NOFOLLOW`); a link above it is seen as another file (its
-/// device and inode) or, when it leads to the same file, as a canonical path that changed. A FIFO swapped in
-/// does not block the open (`O_NONBLOCK`; it is then refused as not a regular file).
-fn open_checked(artifact: &Artifact) -> Result<fs::File, Failure> {
-    let path = &artifact.path;
+/// Opens `path` for reading in one resolution that follows no symbolic link at all (`openat2` with
+/// `RESOLVE_NO_SYMLINKS`, Linux 5.6): the file opened is the one the path names with no link at it or above
+/// it, so checking it and reading it are the same walk (no second resolution an attacker could race). The path
+/// must be absolute and lexically canonical (no `.` or `..` component, no repeated or trailing `/`), which is
+/// checked on the text alone; with no link in it, that makes it its own canonical form. A FIFO does not block
+/// the open (`O_NONBLOCK`; the caller refuses it as not a regular file).
+fn open_no_links(path: &Path) -> Result<fs::File, Errno> {
+    if !lexically_canonical(path) {
+        return Err(Errno::INVAL);
+    }
     let flags =
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY;
-    let fd = rustix::fs::open(path, flags, Mode::empty()).map_err(|e| match e {
-        Errno::LOOP | Errno::NOENT | Errno::NOTDIR => Failure::lasting(invalid(path)),
+    let resolve = ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS;
+    let fd = rustix::fs::openat2(rustix::fs::CWD, path, flags, Mode::empty(), resolve)?;
+    Ok(fs::File::from(fd))
+}
+
+/// Whether `path` is absolute with only plain components, written once each with one `/` between them.
+fn lexically_canonical(path: &Path) -> bool {
+    use std::path::Component;
+    let mut plain = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::RootDir | Component::Normal(_) => plain.push(c),
+            Component::Prefix(_) | Component::CurDir | Component::ParentDir => return false,
+        }
+    }
+    path.is_absolute() && plain.as_os_str() == path.as_os_str()
+}
+
+/// The kernel has no `openat2` (before Linux 5.6): artifacts are refused rather than opened by a weaker walk.
+fn no_openat2(path: &Path) -> KrishivError {
+    refused(
+        path,
+        "this kernel has no openat2 (Linux 5.6 or later is needed to open artifacts safely)",
+    )
+}
+
+/// Opens the checked `artifact` for reading: the file it named at the check, by a walk that follows no link
+/// ([`open_no_links`]), refused unless it is that same file (its device and inode), so a path swapped for a
+/// link or for another file since the check is refused and nothing of it is read.
+fn open_checked(artifact: &Artifact) -> Result<fs::File, Failure> {
+    let path = &artifact.path;
+    let file = open_no_links(path).map_err(|e| match e {
+        Errno::LOOP | Errno::NOENT | Errno::NOTDIR | Errno::INVAL | Errno::XDEV => {
+            Failure::lasting(invalid(path))
+        }
+        Errno::NOSYS => Failure::lasting(no_openat2(path)),
         Errno::MFILE | Errno::NFILE | Errno::NOMEM | Errno::INTR | Errno::AGAIN => {
             Failure::transient(io_refused(path, &io::Error::from(e)))
         }
         _ => Failure::lasting(io_refused(path, &io::Error::from(e))),
     })?;
-    let file = fs::File::from(fd);
     let meta = file
         .metadata()
         .map_err(|e| Failure::lasting(io_refused(path, &e)))?;
     if !meta.file_type().is_file() || meta.dev() != artifact.dev || meta.ino() != artifact.ino {
         return Err(Failure::lasting(invalid(path)));
     }
-    match fs::canonicalize(path) {
-        Ok(canonical) if canonical == *path => Ok(file),
-        _ => Err(Failure::lasting(invalid(path))),
-    }
+    Ok(file)
 }
 
 /// Copies the checked `from` to `to` (a new file), refusing more than `budget` bytes; the bytes copied.
@@ -671,6 +747,98 @@ mod tests {
             .err()
             .unwrap();
         assert!(e.to_string().contains("it is not a zip"), "{e}");
+    }
+
+    #[test]
+    fn a_failed_removal_of_the_copy_does_not_hide_a_lasting_refusal() {
+        let (_keep, set) = archive_set();
+        let pool_root = tempfile::tempdir().unwrap();
+        // The unpacker refuses the archive and its copy is gone by the time the set removes it.
+        let refuses = |archive: &Path, _: &Path, _: u64| {
+            fs::remove_file(archive).unwrap();
+            Err(Failure::lasting(refused(archive, "it is not a zip")))
+        };
+        let e = set
+            .prepare(pool_root.path(), 1 << 20, &refuses, &never)
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("it is not a zip"), "{e}");
+        // Kept, as any lasting refusal.
+        let e = set
+            .prepare(pool_root.path(), 1 << 20, &no_unpack, &never)
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("it is not a zip"), "{e}");
+    }
+
+    #[test]
+    fn an_archive_that_keeps_timing_out_is_kept_after_max_timeouts() {
+        let (_keep, set) = archive_set();
+        let pool_root = tempfile::tempdir().unwrap();
+        let calls = Mutex::new(0u32);
+        let slow = |archive: &Path, _: &Path, _: u64| {
+            *calls.lock().unwrap() += 1;
+            Err(Failure::timed_out(refused(archive, "it could not be unpacked in 300 s")))
+        };
+        for _ in 0..MAX_TIMEOUTS + 2 {
+            let e = set
+                .prepare(pool_root.path(), 1 << 20, &slow, &never)
+                .err()
+                .unwrap();
+            assert!(e.to_string().contains("300 s"), "{e}");
+        }
+        assert_eq!(*calls.lock().unwrap(), MAX_TIMEOUTS);
+        // Kept: a later caller whose unpacker would work gets the timeout too.
+        assert!(
+            set.prepare(pool_root.path(), 1 << 20, &no_unpack, &never)
+                .is_err()
+        );
+        // A timeout below the cap is still retried, and a success after it is the set's.
+        let (_keep, set) = archive_set();
+        let once = Mutex::new(false);
+        let slow_once = |archive: &Path, _: &Path, _: u64| {
+            let mut seen = once.lock().unwrap();
+            if *seen {
+                return Ok(1);
+            }
+            *seen = true;
+            Err(Failure::timed_out(refused(archive, "slow")))
+        };
+        assert!(
+            set.prepare(pool_root.path(), 1 << 20, &slow_once, &never)
+                .is_err()
+        );
+        assert!(
+            set.prepare(pool_root.path(), 1 << 20, &slow_once, &never)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_path_must_be_lexically_canonical_and_free_of_links_in_one_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir(root.join("d")).unwrap();
+        fs::write(root.join("d/m.py"), "X = 1\n").unwrap();
+        std::os::unix::fs::symlink(root.join("d"), root.join("l")).unwrap();
+        let text = root.display().to_string();
+        for bad in [
+            format!("{text}/./d/m.py"),
+            format!("{text}//d/m.py"),
+            format!("{text}/d/m.py/"),
+            format!("{text}/d/../d/m.py"),
+            format!("{text}/l/m.py"),
+            format!("/proc/self/root{text}/d/m.py"),
+        ] {
+            assert!(open_no_links(Path::new(&bad)).is_err(), "{bad} was opened");
+            let set = ArtifactSet::new(vec![PathBuf::from(&bad)], Vec::new());
+            assert_eq!(
+                set.refused().map(KrishivError::error_class),
+                Some(ErrorClass::InvalidArtifactPath),
+                "{bad}"
+            );
+        }
+        assert!(open_no_links(&root.join("d/m.py")).is_ok());
     }
 
     #[test]

@@ -644,8 +644,8 @@ impl Pool {
     /// bytes, with `interpreter` (`unpack.py`; in the sandbox when it is on: it reads the archive and writes
     /// only `dest`). The bytes unpacked. Runs on a call thread (it blocks until the program ends, at most
     /// [`UNPACK_TIMEOUT`]); a cancel of `watch` kills the program through its pidfd. Only the program's own
-    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout or a program that
-    /// could not be started or waited for is not.
+    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout (until the set's
+    /// [`artifacts::MAX_TIMEOUTS`]th) or a program that could not be started or waited for is not.
     fn unpack(
         &self,
         interpreter: &Interpreter,
@@ -689,7 +689,7 @@ impl Pool {
             Ok(Ended::Exited(output)) => output,
             Ok(Ended::Cancelled) => return Err(Failure::transient(OperationCanceled {}.into())),
             Ok(Ended::TimedOut) => {
-                return Err(Failure::transient(artifacts::refused(
+                return Err(Failure::timed_out(artifacts::refused(
                     archive,
                     &format!("it could not be unpacked in {} s", UNPACK_TIMEOUT.as_secs()),
                 )));
