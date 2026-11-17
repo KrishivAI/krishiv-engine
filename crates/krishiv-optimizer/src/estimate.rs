@@ -113,6 +113,8 @@ fn derived(e: &Expr, input: &RelStats, rows: f64) -> Option<AttrStats> {
                     s.max = None;
                 }
             }
+            // Only a bare column passes its floor on.
+            s.ndv_floor = 0.0;
             Some(s)
         }
         // A session UDF may share a built-in's name: only registry
@@ -340,6 +342,7 @@ impl<'a> Estimator<'a> {
             return Arc::clone(e);
         }
         let mut est = self.compute(p);
+        keep_floors(p, &mut est);
         est.from_statistics = match &p.node {
             PlanNode::Scan(_) | PlanNode::CteRef(_) => est.from_statistics,
             _ => {
@@ -722,6 +725,7 @@ impl<'a> Estimator<'a> {
                     } else {
                         StatSource::Guess
                     },
+                    ndv_floor: s.distinct_floor.map_or(0.0, |f| to_f64(f).min(rows)),
                 };
                 (c.id, col)
             })
@@ -733,6 +737,75 @@ impl<'a> Estimator<'a> {
             unfiltered_rows: 0.0,
         }
     }
+}
+
+/// Keeps in `est` (the estimate of `p`) only the distinct-value floors
+/// `p` cannot have lowered ([`AttrStats::ndv_floor`]): a scan's come from
+/// the table; a projection's and an aggregate's are their bare columns'
+/// (set by [`outputs`]); nodes that keep every input row keep them; a
+/// filter keeps column `c`'s only when every conjunct is `c <> literal`
+/// (one value fewer each) or `c IS NOT NULL` ([`filter_floor`]); every
+/// other node (joins, unions, limits, samples, ...) may remove any value
+/// and drops them all.
+fn keep_floors(p: &LogicalPlan, est: &mut RelStats) {
+    let kept = match &p.node {
+        PlanNode::Scan(_)
+        | PlanNode::Project { .. }
+        | PlanNode::Aggregate { .. }
+        | PlanNode::PartialAggregate { .. }
+        | PlanNode::Sort { .. }
+        | PlanNode::SubqueryAlias { .. }
+        | PlanNode::JoinHint { .. }
+        | PlanNode::Repartition { .. }
+        | PlanNode::CollectMetrics { .. }
+        | PlanNode::Window { .. }
+        | PlanNode::WithCte { .. } => return,
+        PlanNode::Filter { predicate, .. } => filter_floor(predicate),
+        _ => None,
+    };
+    for (id, c) in &mut est.cols {
+        c.ndv_floor = match kept {
+            Some((col, fewer)) if col == *id && est.rows > 0.0 => (c.ndv_floor - fewer).max(0.0),
+            _ => 0.0,
+        };
+    }
+}
+
+/// The column whose floor a filter by `pred` keeps, and by how much it
+/// lowers it: when every conjunct is `c <> literal` (a non-NULL literal,
+/// either side; it removes one value) or `isnotnull(c)` (it removes none)
+/// over one column `c`.
+fn filter_floor(pred: &Arc<Expr>) -> Option<(AttrId, f64)> {
+    let column = |e: &Expr| match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    };
+    let value =
+        |e: &Expr| matches!(&e.node, ExprNode::Literal(l) if !matches!(l, Literal::Null(_)));
+    let mut kept: Option<AttrId> = None;
+    let mut fewer = 0.0;
+    for c in conjuncts(pred) {
+        let id = match builtin(&c)? {
+            (Builtin::IsNotNull, [a], _) => column(a)?,
+            (Builtin::Not, [eq], _) => match builtin(eq)? {
+                (Builtin::Eq, [a, b], _) => {
+                    let id = match (column(a), column(b)) {
+                        (Some(id), None) if value(b) => id,
+                        (None, Some(id)) if value(a) => id,
+                        _ => return None,
+                    };
+                    fewer += 1.0;
+                    id
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if *kept.get_or_insert(id) != id {
+            return None;
+        }
+    }
+    kept.map(|id| (id, fewer))
 }
 
 /// The estimate of a union of `ests`: rows add, a column's distinct values
@@ -756,6 +829,7 @@ fn union(
                 min: Some(f64::INFINITY),
                 max: Some(f64::NEG_INFINITY),
                 source: StatSource::Provided,
+                ndv_floor: 0.0,
             };
             let mut nulls = 0.0;
             for (est, ids) in ests.iter().zip(positions) {
@@ -899,6 +973,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
                 } else {
                     StatSource::Guess
                 },
+                ndv_floor: 0.0,
             },
         );
     }

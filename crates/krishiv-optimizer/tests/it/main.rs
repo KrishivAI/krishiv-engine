@@ -14,6 +14,7 @@ mod join_cost;
 mod join_enumerator;
 mod join_order;
 mod late_payload;
+mod ndv_floor;
 mod oracle;
 mod plan_stats;
 mod props;

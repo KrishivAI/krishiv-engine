@@ -739,6 +739,7 @@ fn expansion_copies_keep_their_input_ndv() {
                     nulls: Some(0),
                     min: None,
                     max: None,
+                    distinct_floor: None,
                 },
             )]),
         },

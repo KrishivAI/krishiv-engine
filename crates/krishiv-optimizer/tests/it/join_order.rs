@@ -52,6 +52,7 @@ pub(crate) fn fixture() -> Fixture {
                 nulls: Some(0),
                 min: bound(&s["min"]),
                 max: bound(&s["max"]),
+                distinct_floor: None,
             };
             (c.clone(), stats)
         });
@@ -546,6 +547,7 @@ impl Statistics for TpcdsFooters {
                 nulls: Some(nulls),
                 min: number(min),
                 max: number(max),
+                distinct_floor: None,
             };
             (c.to_owned(), stats)
         });

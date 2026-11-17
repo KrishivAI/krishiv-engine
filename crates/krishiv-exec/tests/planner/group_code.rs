@@ -72,6 +72,7 @@ fn sf10() -> ByName {
                 nulls: Some(0),
                 min: bound(&s["min"]),
                 max: bound(&s["max"]),
+                distinct_floor: None,
             };
             (c.clone(), stats)
         });

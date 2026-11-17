@@ -127,6 +127,10 @@ pub struct ColumnStats {
     pub min: Option<Literal>,
     /// The largest value.
     pub max: Option<Literal>,
+    /// Distinct non-null values the column is known to hold at least: a
+    /// lower bound whatever the files' order (the values a sample saw, an
+    /// exact count), never an extrapolation. `None` when no bound is known.
+    pub distinct_floor: Option<u64>,
 }
 
 /// Statistics of a table: its row count and, by column name, its columns'
@@ -188,6 +192,11 @@ pub struct AttrStats {
     pub max: Option<f64>,
     /// Where the distinct count comes from.
     pub source: StatSource,
+    /// Distinct non-null values the attribute is known to hold at least
+    /// (0: no bound). Unlike [`Self::ndv`] it is never an estimate: an
+    /// operator that may remove values drops it (see `estimate`), so it
+    /// never overstates.
+    pub ndv_floor: f64,
 }
 
 impl AttrStats {
@@ -200,6 +209,7 @@ impl AttrStats {
             min: None,
             max: None,
             source: StatSource::Guess,
+            ndv_floor: 0.0,
         }
     }
 

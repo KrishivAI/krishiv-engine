@@ -81,6 +81,7 @@ fn column_stats(
         nulls,
         min,
         max,
+        distinct_floor: None,
     }
 }
 

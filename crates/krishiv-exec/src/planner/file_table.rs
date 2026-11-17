@@ -46,13 +46,19 @@ pub struct FileTable {
     partition_columns: Vec<String>,
     /// The session's scan settings, for the samples' reads.
     scan_options: ScanOptions,
-    /// Distinct counts estimated from samples (P2-T164 U6), by column name;
-    /// shared by the clones of the table.
-    sampled: Arc<Mutex<HashMap<String, Option<u64>>>>,
+    /// Distinct counts estimated from samples (P2-T164 U6), by column name,
+    /// with the distinct values the sample saw (a lower bound on the
+    /// column's, whatever the files' order); shared by the clones of the
+    /// table.
+    sampled: Arc<Mutex<HashMap<String, Sampled>>>,
     /// What each [`sample_distinct`](Self::sample_distinct) call did, in
     /// order; shared by the clones of the table.
     outcomes: Arc<Mutex<Vec<super::ndv_sample::SampleOutcome>>>,
 }
+
+/// A column's sample: the estimated distinct count, and the distinct
+/// values the sample saw.
+type Sampled = (Option<u64>, u64);
 
 impl FileTable {
     /// Opens a table of `files` as `table` (the schema the analyzer
@@ -168,10 +174,17 @@ impl TableProvider for FileTable {
     fn statistics(&self) -> Option<TableStats> {
         let mut stats = self.statistics.clone()?;
         let sampled = self.sampled.lock().unwrap_or_else(PoisonError::into_inner);
-        for (name, distinct) in sampled.iter() {
-            let Some(distinct) = distinct else { continue };
+        for (name, (distinct, seen)) in sampled.iter() {
+            if distinct.is_none() && *seen == 0 {
+                continue;
+            }
             let c = stats.columns.entry(name.clone()).or_default();
-            if c.distinct.is_none() {
+            if *seen > 0 {
+                c.distinct_floor = Some(c.distinct_floor.map_or(*seen, |f| f.max(*seen)));
+            }
+            if let Some(distinct) = distinct
+                && c.distinct.is_none()
+            {
                 c.distinct = Some(*distinct);
                 c.source = StatSource::Sampled;
             }
@@ -283,13 +296,14 @@ impl FileTable {
             .push(outcome);
     }
 
-    /// Keeps the distinct count `sample` gives `name` in a table of `rows`.
+    /// Keeps the distinct count `sample` gives `name` in a table of `rows`,
+    /// and the distinct values it saw as the column's floor.
     pub(super) fn keep_sample(&self, name: &str, sample: &krishiv_io::DistinctSample, rows: u64) {
         let distinct = super::ndv_sample::estimate(sample, rows);
         self.sampled
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.to_owned(), distinct);
+            .insert(name.to_owned(), (distinct, sample.distinct));
     }
 }
 
@@ -428,6 +442,8 @@ fn table_stats(s: &FileStatistics, table: &SchemaRef) -> TableStats {
                 nulls,
                 min: literal(&c.min),
                 max: literal(&c.max),
+                // An exact count is a floor too.
+                distinct_floor: c.distinct.exact().copied(),
             },
         );
     }

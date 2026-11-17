@@ -173,6 +173,7 @@ fn or(a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
                 min: p.min.zip(q.min).map(|(m, n)| m.min(n)),
                 max: p.max.zip(q.max).map(|(m, n)| m.max(n)),
                 source: p.source.min(q.source),
+                ndv_floor: 0.0,
             };
             v.over.insert(id, merged);
         }
