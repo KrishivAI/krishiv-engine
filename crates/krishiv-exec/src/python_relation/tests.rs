@@ -912,6 +912,7 @@ fn a_runtime_without_relation_kinds_refuses_them_as_not_available() {
         output_types: vec![krishiv_types::DataType::Long],
         output_arrow: Arc::new(Schema::new(vec![Field::new("n", ArrowType::Int64, true)])),
         conf: super::RunnerConf::default(),
+        udtf: None,
     };
     let err = crate::python_eval::UdfRuntime::prepare_relation(&ScalarOnly, &spec)
         .err()

@@ -142,6 +142,23 @@ pub(crate) struct QueryEnv {
     pub(crate) quiet_denials: bool,
 }
 
+impl QueryEnv {
+    /// Whether every catalog in `epochs` (an analysis's [`ContextFingerprint::catalog_epochs`],
+    /// the catalogs it consulted) is still visible to this query and at the epoch it was read at.
+    /// `catalog_epoch` covers only the session's own catalog; a declared catalog's table changes
+    /// with that catalog's epoch, and a catalog no longer visible is absent here.
+    ///
+    /// [`ContextFingerprint::catalog_epochs`]: krishiv_plan::analyzer::ContextFingerprint::catalog_epochs
+    pub(crate) fn catalogs_at(&self, epochs: &BTreeMap<String, u64>) -> bool {
+        epochs.iter().all(|(name, &epoch)| {
+            self.analysis
+                .catalogs
+                .catalog(name)
+                .is_some_and(|c| c.epoch() == epoch)
+        })
+    }
+}
+
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
 /// broken invariant, never dropped silently.
 pub(super) fn into_record_batch(batch: Batch) -> Result<RecordBatch, KrishivError> {

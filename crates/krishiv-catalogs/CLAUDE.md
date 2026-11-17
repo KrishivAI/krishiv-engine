@@ -52,7 +52,12 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   `parse_data_type`), `write.rs` the write half (the shared `apply_changes` for `alter_table`, same error classes as `StoreCatalog`), `tests.rs` the shared
   contract suite (`krishiv_plan::analyzer::contract`, in memory and on a file) plus a restart, two connections, threads, two processes and a `kill -9`
   mid-DDL (the test binary re-run as the child). One folding rule, stored in the file (`settings` table; opening it with the other `case_sensitive` is refused; the query's `NameForm` is ignored); `table_details(id, policy)` checks the stored location; `single_part_namespace()` is true; `epoch()` never goes backwards or repeats, also after a read fault. ADR 0028 numbers of `--features sqlite`: 4 new runtime crates (rusqlite 0.43, libsqlite3-sys 0.40 with the bundled SQLite C amalgamation, fallible-iterator, fallible-streaming-iterator; vcpkg is a build-script dependency of libsqlite3-sys), none in the default build; clean build of rusqlite + libsqlite3-sys alone (dev profile, 4 jobs) 29.5 s wall, 24.6 s user, which is the added clean-build time (measured in a scratch crate, not the whole workspace; the release-profile number is not measured). It never touches a table's files: `drop_table` removes the row, `purge` has nothing to purge.
-- Not here yet: the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
+- `src/declared.rs` (feature `session`, P3-T067 §2.3) `IcebergRestFactory`, the session registry's `iceberg-rest` factory: a
+  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`; `option.prefix` refused at startup), its
+  requests on a `PolicyConnector` scoped to the catalog's declared hosts with no redirects; the `Catalog` resolves names only (a
+  missing table is absent, an existing one `KRISHIV_UNSUPPORTED_FEATURE` until the provider exists). `transport.rs` builds no
+  `reqwest::Client` of its own: `PolicyConnector::catalog_client` (krishiv-store) and a host check before every request.
+- Not here yet: the metadata mapping and table provider of the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
   table `config` keys reach a store: `s3.endpoint`, signer and refresh endpoints, `remote-signing-config`, delegated-token keys,
   with the endpoint-override case of `catalog_location_confined`; a table's vended `token` for later requests is PR-58b), a fuzz
   target for the REST response parsers, the write half of the

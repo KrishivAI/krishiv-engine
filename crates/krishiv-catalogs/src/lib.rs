@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "session")]
+pub mod declared;
 #[cfg(feature = "hive")]
 pub mod hive;
 #[cfg(feature = "iceberg-rest")]

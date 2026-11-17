@@ -129,6 +129,8 @@ exclude = [
     "tests/pyspark_udf/test_arrow_python_udf.py",
     "tests/pyspark_udf/goldenutils.py",
     "tests/pyspark_udf/coercion",
+    # Runs only under PySpark 4.2.0 (its docstring), never in the dev environment.
+    "tests/pyspark_udf/window_iter/gen_goldens.py",
 ]
 
 [tool.ty.analysis]

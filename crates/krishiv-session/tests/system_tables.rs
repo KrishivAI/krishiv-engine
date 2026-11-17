@@ -679,6 +679,7 @@ fn show_tables_in_system_lists_the_tables() {
         [
             "caches",
             "capabilities",
+            "catalogs",
             "memory",
             "metrics",
             "operators",
@@ -933,6 +934,7 @@ fn use_system_shows_no_default_database() {
         [
             "caches",
             "capabilities",
+            "catalogs",
             "memory",
             "metrics",
             "operators",

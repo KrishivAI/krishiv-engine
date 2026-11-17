@@ -43,9 +43,10 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 9] = [
+const TABLES: [&str; 10] = [
     "capabilities",
     "caches",
+    "catalogs",
     "memory",
     "metrics",
     "operators",
@@ -236,6 +237,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
         ],
         "partition_advice" => crate::partition_advice::layout(),
         "resource_groups" => crate::system_groups::layout(),
+        "catalogs" => crate::system_catalogs::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -512,6 +514,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("resource_groups") {
         return crate::system_groups::columns(sources);
     }
+    if table.eq_ignore_ascii_case("catalogs") {
+        return crate::system_catalogs::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -643,6 +648,8 @@ pub(crate) struct Sources {
     /// The advice of the persisted query history (`krishiv.history.path`), read off the executor when the
     /// `partition_advice` table loads.
     pub(crate) advice: Arc<crate::partition_advice::AdviceCell>,
+    /// The declared catalogs the query's principal sees (`system.catalogs`, name resolution).
+    pub(crate) catalogs: crate::catalog_registry::DeclaredView,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1443,8 +1450,10 @@ impl crate::table_commands::TableName {
 /// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
 /// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
 impl Session {
-    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    /// The namespace a bare name of a stored object resolves in, refused under `system` and under a
+    /// declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         let (catalog, namespace) = self.state.catalog.position_pair();
         if is_system(&catalog) {
             return Err(krishiv_common::error::SchemaNotFound {
@@ -1478,8 +1487,28 @@ impl Session {
         self.function_namespace(ns)
     }
 
-    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
+    /// Refuses a namespace or table command that would resolve in the current catalog when that is
+    /// a declared one: a declared catalog resolves names in queries only for now (design P3-T067
+    /// PR-58a), and the embedded catalog is never read or changed in its name. `spark_catalog.<ns>`
+    /// forms, `global_temp` and temporary views are not refused.
+    pub(crate) fn refuse_declared_current(&self) -> Result<(), KrishivError> {
+        let catalog = self.state.catalog.current_catalog();
+        if is_system(&catalog) || catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+            return Ok(());
+        }
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "namespace and table commands in the declared catalog `{}`",
+                catalog.replace('`', "``")
+            ),
+        }
+        .into())
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
+    /// and under a declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         if is_system(&self.state.catalog.current_catalog()) {
             return Err(krishiv_common::error::SchemaNotFound {
                 schema_name: format!("`system`.`{ns}`"),
@@ -1540,6 +1569,12 @@ impl Session {
             }
             .into());
         }
+        if !global
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
+        {
+            self.refuse_declared_current()?;
+        }
         Ok(env.catalog.namespace().join("."))
     }
 
@@ -1555,6 +1590,7 @@ impl Session {
             }
             .into());
         }
+        self.refuse_declared_current()?;
         Ok(env.catalog.namespace().join("."))
     }
 }
