@@ -247,6 +247,8 @@ mod codec_tests;
 #[cfg(test)]
 mod format_codec_tests;
 #[cfg(test)]
+mod reader_tests;
+#[cfg(test)]
 mod tests;
 
 /// Compression suffixes this build cannot read.

@@ -1800,6 +1800,40 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     }
 }
 
+#[test]
+fn connect_artifact_quotas_parse_and_default() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    // Design P3-T011a §3.9: 1 GiB per session, 256 MiB per artifact.
+    assert_eq!(size(&d, &CONNECT_ARTIFACTS_MAX_BYTES), Some(1 << 30));
+    assert_eq!(
+        size(&d, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(256 << 20)
+    );
+    let mut c = Config::new();
+    c.set("krishiv.connect.artifacts.maxBytes", "2m").unwrap();
+    c.set("krishiv.connect.artifacts.maxArtifactBytes", "64k")
+        .unwrap();
+    assert_eq!(size(&c, &CONNECT_ARTIFACTS_MAX_BYTES), Some(2 << 20));
+    assert_eq!(
+        size(&c, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(64 << 10)
+    );
+    assert!(c.set("krishiv.connect.artifacts.maxBytes", "-1").is_err());
+    assert!(
+        c.set("krishiv.connect.artifacts.maxArtifactBytes", "lots")
+            .is_err()
+    );
+    for e in [
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+        assert!(e.spark_alias.is_none(), "{}", e.key);
+    }
+}
+
 /// P3-T021: the Delta log pool and the catalog parse limits.
 #[test]
 fn delta_and_catalog_limit_entries_parse_and_default() {
@@ -1820,10 +1854,24 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     assert!(c.set("krishiv.delta.logThreads", "0").is_err());
     assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
     assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    let cache = |c: &Config| {
+        c.get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+    };
+    assert_eq!(cache(&c), Some(64 << 20));
+    c.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    assert_eq!(cache(&c), Some(0));
+    c.set("krishiv.iceberg.manifestCache.bytes", "1g").unwrap();
+    assert_eq!(cache(&c), Some(1 << 30));
+    assert!(
+        c.set("krishiv.iceberg.manifestCache.bytes", "lots")
+            .is_err()
+    );
     for e in [
         &DELTA_LOG_THREADS,
         &CATALOG_MAX_METADATA_BYTES,
         &CATALOG_MAX_COLUMNS,
+        &ICEBERG_MANIFEST_CACHE_BYTES,
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }

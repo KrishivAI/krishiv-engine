@@ -329,7 +329,7 @@ async fn for_each_line(
 ) -> FormatResult<()> {
     let mut r = line_reader(file, range, o);
     loop {
-        match r.next_line()? {
+        match r.next_line().map_err(|e| e.at(&file.display_path()))? {
             ReadChunk::End => return Ok(()),
             ReadChunk::Line(line, at) => {
                 if !f(&line, at)? {
@@ -356,7 +356,9 @@ fn line_reader(file: &FileRef, range: ByteRange, o: &CsvOptions) -> LineReader {
     } else {
         range
     };
-    LineReader::new(file.size, range, true, o.line_sep.clone()).compressed(codec)
+    LineReader::new(file.size, range, true, o.line_sep.clone())
+        .compressed(codec)
+        .lenient(o.ignore_corrupt_files)
 }
 
 /// What every partition's type inference reads, owned so that a partition
@@ -407,7 +409,7 @@ impl Part {
                 self.reading = Some((file, r));
                 continue;
             };
-            match r.next_line()? {
+            match r.next_line().map_err(|e| e.at(&file.display_path()))? {
                 ReadChunk::End => self.reading = None,
                 ReadChunk::NeedData(need) => return Ok(Some((file.clone(), need))),
                 ReadChunk::Line(bytes, at) => {
@@ -627,7 +629,9 @@ pub(crate) fn infer<'a>(
         if opts.multi_line {
             let record_tok = Tokenizer::new(opts.syntax.clone());
             for file in files {
-                let text = whole_text(io, file, &opts).await?;
+                let text = whole_text(io, file, &opts)
+                    .await
+                    .map_err(|e| e.at(&file.display_path()))?;
                 let (mut pos, mut first_of_file) = (0, true);
                 while let Some((_, tokens, next)) =
                     record_tok.next_record(&text, pos, opts.syntax.comment)
