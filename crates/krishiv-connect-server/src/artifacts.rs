@@ -78,6 +78,7 @@ use self::dir::{ArtifactRoot, Install, SessionDir};
 use crate::manager::SessionEntry;
 use crate::operation::random_uuid;
 use crate::operation::replay::uuid_text;
+use crate::udf::PythonArtifacts;
 
 /// What each artifact counts against the session's quota besides its bytes:
 /// a file system block (the inode and the directory entry of a file, the
@@ -520,6 +521,30 @@ impl SessionArtifacts {
         if !s.closed {
             s.files.push(installed);
         }
+    }
+
+    /// The installed `pyfiles/` and `archives/` files as the session's UDF workers take them
+    /// (`SessionPython::set_artifacts`): absolute paths under the session's directory, in the order
+    /// installed, an archive's `#fragment` left out. Empty once closed.
+    pub(crate) fn python_artifacts(&self) -> PythonArtifacts {
+        let s = self.lock();
+        let mut out = PythonArtifacts::default();
+        let (Some(dir), false) = (&s.dir, s.closed) else {
+            return out;
+        };
+        for file in &s.files {
+            let list = match file.name.kind() {
+                ArtifactKind::PyFiles => &mut out.pyfiles,
+                ArtifactKind::Archives => &mut out.archives,
+                ArtifactKind::Cache | ArtifactKind::Files => continue,
+            };
+            list.push(
+                file.name
+                    .segments()
+                    .fold(dir.path().to_owned(), |p, seg| p.join(seg)),
+            );
+        }
+        out
     }
 
     /// The installed artifacts now (`CloneSession`); `None` once closed.
@@ -1179,6 +1204,14 @@ pub(crate) async fn add_artifacts(
     let artifacts = blocking(move || transfer.finish())
         .await
         .map_err(|e| errors.status(&e))?;
+    // The session's UDF workers get the whole set again when this transfer added to it (Spark's
+    // artifact manager puts `pyfiles/` on the workers' path and unpacks `archives/`).
+    if artifacts
+        .iter()
+        .any(|a| a.name.starts_with("pyfiles/") || a.name.starts_with("archives/"))
+    {
+        entry.python().sync_artifacts(entry.artifacts());
+    }
     Ok(pb::AddArtifactsResponse {
         session_id,
         server_side_session_id: entry.server_side_id().to_owned(),

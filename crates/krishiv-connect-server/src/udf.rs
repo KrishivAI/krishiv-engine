@@ -30,6 +30,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
@@ -37,6 +38,8 @@ use krishiv_connect::translate::{PythonUdf, UdfCallName, UdfHost as TranslateHos
 use krishiv_exec::python_eval::UdfRuntime;
 use krishiv_plan::PythonUdfRef;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, PythonUdfDef, Session};
+
+use crate::artifacts::SessionArtifacts;
 use sha2::{Digest, Sha256};
 
 /// The session conf a worker gets with each batch (Spark's runner conf; the keys the embedded runtime
@@ -52,6 +55,15 @@ const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype",
     "spark.sql.execution.pythonUDF.arrow.concurrency.level",
 ];
+
+/// A session's Python artifacts, as [`SessionUdfRuntime::set_artifacts`] takes them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PythonArtifacts {
+    /// The installed `pyfiles/` files.
+    pub(crate) pyfiles: Vec<PathBuf>,
+    /// The installed `archives/` files.
+    pub(crate) archives: Vec<PathBuf>,
+}
 
 /// Where a session runtime reads its runner conf when a call is prepared.
 pub type RunnerConf = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
@@ -74,6 +86,13 @@ pub trait SessionUdfRuntime: UdfRuntime {
     fn register(&self, name: &str, version: u32, udf: &PythonUdf);
     /// Stops the session's workers (idle ones now, busy ones when their call ends).
     fn release(&self);
+    /// The session's Python artifacts, replacing the whole set: the installed `pyfiles/` and
+    /// `archives/` files (absolute paths, in the order installed; an archive without its `#fragment`).
+    /// Calls prepared afterwards see them; workers started for an earlier set are not reused. The
+    /// default ignores them (a runtime that runs no client files).
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+        let _ = (pyfiles, archives);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -123,6 +142,8 @@ pub(crate) struct SessionPython {
     /// `None` when the server runs no worker pool: every grant is refused.
     runtime: Option<Arc<dyn SessionUdfRuntime>>,
     state: Mutex<State>,
+    /// Held while the artifact set is read and handed to the runtime.
+    artifacts: Mutex<()>,
 }
 
 #[derive(Default, Clone)]
@@ -153,6 +174,7 @@ impl SessionPython {
             host: host.map(Arc::clone),
             runtime: host.map(|h| h.session_runtime(principal, session.id(), runner_conf(session))),
             state: Mutex::default(),
+            artifacts: Mutex::default(),
         }
     }
 
@@ -194,6 +216,22 @@ impl SessionPython {
             .payloads
             .push((entry.def.name, entry.version, Arc::new(udf)));
         Ok(())
+    }
+
+    /// Hands the session's Python artifacts, read from `artifacts` now, to its workers
+    /// (`AddArtifacts`, `CloneSession`): the whole set, which replaces the last one. Read and handed
+    /// over under one lock, so two transfers ending together cannot leave the older set in place. Also
+    /// before the first granted call: `AddArtifacts` passed the same privilege check, and the runtime
+    /// runs nothing until a plan is granted.
+    pub(crate) fn sync_artifacts(&self, artifacts: &SessionArtifacts) {
+        if let Some(runtime) = &self.runtime {
+            let _serial = self
+                .artifacts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let set = artifacts.python_artifacts();
+            runtime.set_artifacts(set.pyfiles, set.archives);
+        }
     }
 
     /// Stops the session's workers.
