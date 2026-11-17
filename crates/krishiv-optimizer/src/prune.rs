@@ -245,7 +245,17 @@ impl Rewrite<'_> {
                     .cloned()
                     .collect();
                 if output.is_empty() {
-                    output.extend(scan.output.first().cloned());
+                    // Nothing is read: one column keeps the row count. Not the
+                    // JSON/CSV corrupt-record column when another exists: a
+                    // read of that column alone is refused (Spark's
+                    // `QUERY_ONLY_CORRUPT_RECORD_COLUMN`), a count is not.
+                    output.extend(
+                        scan.output
+                            .iter()
+                            .find(|c| c.name != "_corrupt_record")
+                            .or_else(|| scan.output.first())
+                            .cloned(),
+                    );
                 }
                 replace(
                     &rebuilt,
