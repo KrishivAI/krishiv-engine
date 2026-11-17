@@ -31,7 +31,7 @@ Paths are relative to this crate.
   counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
   quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
   `cached(hash)` for T012; a blob's pool reservation covers its whole capacity; the installed files are indexed, and
-  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first), `ArtifactStore` (the server's root,
+  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first; `python_artifacts`: the installed `pyfiles/` and `archives/` files as absolute paths (each archive with its `#fragment`, `PythonArchive`), which `SessionPython::sync_artifacts` hands to the session's UDF runtime, the whole set when it changed, after every transfer (a failed one too: it may have installed some) and after a clone's copy, never after the session's release; `tests/artifacts.rs` `python_artifacts_reach_the_sessions_udf_runtime_and_its_clones`, `a_transfer_that_fails_still_hands_over_what_it_installed`), `ArtifactStore` (the server's root,
   created on first use, removed by the awaited `shutdown` that `serve` calls after closing the sessions); `src/artifacts/dir.rs` the
   private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
   resolved per segment from a directory descriptor without following links; removal on the blocking pool
@@ -40,7 +40,7 @@ Paths are relative to this crate.
   `details` (cause chain ≤ 5, each error in its client-safe form, query contexts, no stack trace)
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
-  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  the analyzed plan; `persist`, `unpersist` and `get_storage_level` are the frame's own (`src/cache.rs` converts the protocol's `StorageLevel` both ways); access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
@@ -56,7 +56,13 @@ Paths are relative to this crate.
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under `connect`, as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
-  no groups) is the session key. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
+  `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
+  `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
+  `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never
+  `UserContext.user_id`; decided by `ServerAuth::impersonate` / `impersonate_signed` from the connection's own peer
+  (`ConnectAuth::with_impersonation`; without it, or with authentication off, act-as is refused); unreadable metadata,
+  or plain metadata that disagrees with the assertion beside it, is refused through `refuse_impersonation`; every
+  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs` (its `signed` module, feature `oidc`: assertions against a loopback JWK set, metadata beside them that disagrees refused). `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
@@ -82,7 +88,7 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), `checkpoint_command` (`src/execute/cache_command.rs`: `DataFrame::checkpoint` / `local_checkpoint`, the result held under a UUID in `SessionEntry`'s map and answered as `checkpoint_command_result`) and `remove_cached_remote_relation_command` (drops the id, an unknown one is fine) run; a `cached_remote_relation` is looked up at translation (`Requested::bind`, `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND` when absent) and spliced in by `Session::from_plan_over` (the new frame owns what the held frames own; a read inside a subquery expression is not replaced; a lazy checkpoint's rows are taken by the first analysis that reads it, `AnalyzePlan` included, a recorded difference from Spark pinned by `tests/cache.rs`); `persist`, `unpersist` and `checkpoint_command` need the operator floor (`Check::SideEffect`: `Operate` on `System("cache")`, `tests/auth.rs`); `SessionEntry::close` drops the held frames; other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
   store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md); `clean_cache` (PySpark's exit cleanup) and a `register_function` that ran end
@@ -100,9 +106,10 @@ Paths are relative to this crate.
   `InlineUdfs` is the translator's host (inline UDFs as the session's encoded unregistered-UDF names, one version per
   distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege; the UDFs of
   `mapInPandas`/`applyInPandas`/cogroup relations (PR-26d part 2, `relation_python_udf`) take a version the same way
-  under the same check, and fail with `KRISHIV_UDF_NOT_AVAILABLE` when run until the pool's `prepare_relation`,
-  PR-26c-2; `tests/udf.rs` `a_relation_udf_is_client_code_and_does_not_run_yet`); `copy_for` gives a
-  `CloneSession` clone a runtime of its own (to be called by PR-15's CloneSession); `tests/udf.rs` (real workers with
+  under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
+  `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
+  `admin_runs_map_in_arrow`, `admin_runs_each_grouped_map_kind_per_group`, `admin_runs_each_cogrouped_map_kind`); `copy_for` gives a
+  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `SessionUdfRuntime::set_artifacts` takes the session's Python artifacts (default: ignored; the pool's `SessionUdfs::set_artifacts` arrives with PR-26c-3); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
@@ -136,6 +143,9 @@ Paths are relative to this crate.
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046
   §5, threat model T-A8); a session id another owner holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer
   as unknown. Groups are not in the key; the method is (a token and an OIDC subject of one name are two owners).
+  An impersonated principal's key also holds its delegator and its groups (P3-T061 A4, rule 5): alice through a
+  front end, alice herself and alice through another front end are three owners, and a changed act-as identity
+  finds no session.
 - **A session's policy is its caller's role at creation, for life**: a caller whose role differs never gets that
   session; it is closed without a tombstone and the lookup goes on as for a free id (a create builds a new one,
   a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`, an RPC that creates nothing
@@ -186,5 +196,5 @@ Paths are relative to this crate.
 0003, 0026, 0046
 
 ## Tests
-`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`

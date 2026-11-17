@@ -522,66 +522,16 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
             "catalog-iceberg-rest",
             cfg!(feature = "catalog-iceberg-rest"),
         ),
+        ("telemetry-otlp", cfg!(feature = "telemetry-otlp")),
         ("full", cfg!(feature = "full")),
     ]
 }
 
 fn enabled_features() -> Vec<&'static str> {
-    let mut out = Vec::new();
-    if cfg!(feature = "mimalloc") {
-        out.push("mimalloc");
-    }
-    if cfg!(feature = "server") {
-        out.push("server");
-    }
-    if cfg!(feature = "ui") {
-        out.push("ui");
-    }
-    if cfg!(feature = "kafka") {
-        out.push("kafka");
-    }
-    if cfg!(feature = "iceberg") {
-        out.push("iceberg");
-    }
-    if cfg!(feature = "delta") {
-        out.push("delta");
-    }
-    if cfg!(feature = "cdc") {
-        out.push("cdc");
-    }
-    if cfg!(feature = "connect") {
-        out.push("connect");
-    }
-    if cfg!(feature = "flight-sql") {
-        out.push("flight-sql");
-    }
-    if cfg!(feature = "mcp") {
-        out.push("mcp");
-    }
-    if cfg!(feature = "python") {
-        out.push("python");
-    }
-    if cfg!(feature = "collations-icu") {
-        out.push("collations-icu");
-    }
-    if cfg!(feature = "wasm-udf") {
-        out.push("wasm-udf");
-    }
-    if cfg!(feature = "celeborn") {
-        out.push("celeborn");
-    }
-    if cfg!(feature = "tokio-console") {
-        out.push("tokio-console");
-    }
-    if cfg!(feature = "telemetry-logs") {
-        out.push("telemetry-logs");
-    }
-    if cfg!(feature = "catalog-iceberg-rest") {
-        out.push("catalog-iceberg-rest");
-    }
-    if cfg!(feature = "full") {
-        out.push("full");
-    }
+    let mut out: Vec<&'static str> = feature_states()
+        .into_iter()
+        .filter_map(|(name, on)| on.then_some(name))
+        .collect();
     out.sort_unstable();
     out
 }
