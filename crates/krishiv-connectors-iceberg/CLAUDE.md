@@ -62,7 +62,9 @@ PR-25d: pruned files read no delete file, the delete state charged and cancel-sa
 `with_file_splits`, the row estimate, `EXPLAIN`, the manifest cache). `dst_tests.rs` (PR-25d step 2: `Flaky`, a local store whose read faults are a function of a seed, the request and its attempt, so a case replays in any request order: transient failures before or mid-body (manifest list, manifests, data and delete files) retried to the model's rows or failing as `KRISHIV_OBJECT_STORE_REQUEST_FAILED`; a data or delete file vanished after planning fails `FAILED_READ_FILE.FILE_NOT_EXIST` naming it, never wrong rows; `delete_tests`' `history` model under faults). `evolution_tests.rs`
 (snapshots written by hand with one manifest per writing schema, as iceberg-rust 0.11 cannot promote or rename:
 `promoted_column_filter_returns_all_rows`, the iceberg-rust #3482 shape, int → long with 4-byte bounds in the old
-manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`).
+manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`); `azure_tests.rs` (feature `cloud`: a table written to Azurite
+over `abfss://` with the account key, loaded and scanned with only a bearer token; a token for another audience
+refused; run by `tests/scripts/object_store_emulators.sh`).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
@@ -116,4 +118,5 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 0014, 0028 (iceberg `skip-tree`, `anyhow` wrapper), 0029 (the bridge crate)
 
 ## Test
-`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` (`--features cloud` adds the Azurite test: offline
+without `KRISHIV_TEST_AZURE_OAUTH_ENDPOINT`, a failure when it is set without the tokens) · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`

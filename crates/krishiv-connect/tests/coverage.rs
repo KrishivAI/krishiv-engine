@@ -12,7 +12,7 @@ use krishiv_connect::coverage::{
     all,
 };
 use krishiv_connect::translate::{
-    TranslateConf, expression_from_bytes, relation_from_bytes, translate_command,
+    TranslateConf, expression_from_bytes, relation_from_bytes, translate_command, translate_plan,
 };
 use prost_reflect::DescriptorPool;
 
@@ -92,7 +92,14 @@ fn coverage_matches_translator() {
         else {
             panic!("a command");
         };
-        refused(&translate_command(command).map(|_| ()), row);
+        // A `sql_command` is answered as the relation it names (`translate_plan`); the others go
+        // through `translate_command`.
+        let answer = if row.field == "sql_command" {
+            translate_plan(&decoded, &conf).map(|_| ())
+        } else {
+            translate_command(command).map(|_| ())
+        };
+        refused(&answer, row);
     }
     // Expression.literal is field 1.
     for row in LITERAL_ROWS {

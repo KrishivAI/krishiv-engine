@@ -50,3 +50,7 @@ parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[features]
+# Cloud object stores through `krishiv-exec/cloud` (S3, GCS, Azure); the Azurite Iceberg scan test needs it.
+cloud = ["krishiv-exec/cloud"]
