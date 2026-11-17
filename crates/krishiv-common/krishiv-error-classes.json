@@ -93,6 +93,13 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_IDEMPOTENCY_KEY_REUSED" : {
+    "message" : [
+      "The request id <requestId> was already used for another request. Send a new request id for a different request."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
   "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
     "message" : [
       "The principal <principal> lacks the <privilege> privilege on <securable>."

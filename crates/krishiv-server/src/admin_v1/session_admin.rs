@@ -195,7 +195,7 @@ impl SessionAdmin {
             d.record(Surface::Admin, privilege);
         }
         self.log(call, rpc, target, false, "denied", &error.error_class);
-        error
+        error.disguised_denial()
     }
 
     fn log(&self, call: &Call, rpc: &str, target: &str, own: bool, result: &str, class: &str) {
@@ -216,6 +216,14 @@ impl SessionAdmin {
 }
 
 impl AdminApi for SessionAdmin {
+    fn idempotency_scope(&self, call: &Call) -> String {
+        let p = Who::of(call).principal;
+        format!(
+            "{:?}|{:?}|{}|{:?}",
+            p.kind, p.tenant, p.name, p.delegated_by
+        )
+    }
+
     fn get_version(&self, _: &Call) -> BoxFuture<'_, AdminResult<GetVersionResponse>> {
         async {
             Ok(GetVersionResponse {

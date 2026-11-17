@@ -173,6 +173,9 @@ pub struct AdminError {
     pub parameters: BTreeMap<String, String>,
     /// The message, for people; clients branch on the class.
     pub message: String,
+    /// A refusal disguised as another error (a not-found for an id the caller may not act on):
+    /// its action record says `denied`, also when a stored response is replayed.
+    pub denied: bool,
 }
 
 impl AdminError {
@@ -190,7 +193,15 @@ impl AdminError {
             sql_state: sql_state.to_owned(),
             parameters: BTreeMap::new(),
             message: message.into(),
+            denied: false,
         }
+    }
+
+    /// The error marked as a refusal disguised as another error.
+    #[must_use]
+    pub fn disguised_denial(mut self) -> Self {
+        self.denied = true;
+        self
     }
 
     /// The error with message parameter `name`.
@@ -251,6 +262,12 @@ pub struct Call {
 /// another principal's work is for the method to decide, and every mutating method writes its own
 /// record with [`action::record`].
 pub trait AdminApi: Send + Sync + 'static {
+    /// What the idempotency store keys a caller's request ids on: the caller's full identity,
+    /// not its name (two principals with one name must share nothing). The default is the name.
+    fn idempotency_scope(&self, call: &Call) -> String {
+        call.caller.principal.clone()
+    }
+
     /// The engine version and the surface revision.
     fn get_version(&self, call: &Call) -> BoxFuture<'_, AdminResult<GetVersionResponse>>;
 

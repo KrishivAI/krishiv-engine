@@ -175,12 +175,21 @@ impl Rest {
             .authenticate(guard_request)
             .await
             .map_err(refusal_error)?;
-        let header_id = req
-            .headers()
-            .get("idempotency-key")
-            .and_then(|v| v.to_str().ok())
-            .filter(|v| !v.is_empty() && v.len() <= 128)
-            .map(str::to_owned);
+        let header_id = match req.headers().get("idempotency-key") {
+            None => None,
+            Some(v) => {
+                let id = v
+                    .to_str()
+                    .ok()
+                    .filter(|v| v.len() <= super::idempotency::MAX_ID_LEN);
+                Some(id.map(str::to_owned).ok_or_else(|| {
+                    AdminError::invalid_argument(format!(
+                        "the Idempotency-Key header must be ASCII and at most {} bytes",
+                        super::idempotency::MAX_ID_LEN
+                    ))
+                })?)
+            }
+        };
         let query = req.uri().query().map(str::to_owned);
         let bytes = axum::body::to_bytes(req.into_body(), MAX_BODY)
             .await

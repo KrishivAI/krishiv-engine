@@ -9,7 +9,7 @@ use std::time::Duration;
 use prost::Message;
 
 use super::action::{self, Action};
-use super::idempotency::{Idempotency, Run};
+use super::idempotency::{Idempotency, MAX_ID_LEN, Run};
 use super::{
     AdminApi, AdminError, AdminResult, Call, CancelQueriesByTagRequest, CancelQueryRequest,
     GetCapabilitiesRequest, GetVersionRequest, KillSessionRequest, ListQueriesRequest,
@@ -56,6 +56,11 @@ impl Core {
         } else {
             message_id
         };
+        if sent.len() > MAX_ID_LEN || !sent.is_ascii() {
+            return Err(AdminError::invalid_argument(format!(
+                "the request id must be ASCII and at most {MAX_ID_LEN} bytes"
+            )));
+        }
         if !sent.is_empty() {
             sent.clone_into(&mut call.request_id);
         }
@@ -64,12 +69,20 @@ impl Core {
         fingerprint.extend_from_slice(&without_request_id(rpc, request)?);
         let (result, how) = self
             .idempotency
-            .run(&call.caller.principal, &sent, &fingerprint, || {
-                self.invoke(rpc, &call, request)
-            })
+            .run(
+                &self.api.idempotency_scope(&call),
+                &sent,
+                &fingerprint,
+                || self.invoke(rpc, &call, request),
+            )
             .await;
-        if how == Run::Replayed {
+        if how != Run::Ran {
             let class = result.as_ref().err().map_or("", |e| e.error_class.as_str());
+            let outcome = match &result {
+                Ok(_) => "ok",
+                Err(e) if e.denied => "denied",
+                Err(_) => "failed",
+            };
             action::record(&Action {
                 principal: &call.caller.principal,
                 role: call.caller.role.as_deref().unwrap_or("none"),
@@ -79,9 +92,10 @@ impl Core {
                 target: "",
                 own: false,
                 request_id: &call.request_id,
-                result: if result.is_ok() { "ok" } else { "failed" },
+                result: outcome,
                 error_class: class,
-                replay: true,
+                // A refused reuse is not a replay: nothing was returned from the store.
+                replay: how == Run::Replayed,
             });
         }
         result
