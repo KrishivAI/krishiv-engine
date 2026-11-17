@@ -23,11 +23,14 @@ ignore = [
     # workspace uses it directly too, so it cannot be dropped until Arrow moves off
     # it. Unmaintained, not a vulnerability. Revisit when Arrow switches.
     { id = "RUSTSEC-2026-0543", reason = "unmaintained; required by every Arrow crate; no safe upgrade" },
-    # humantime is unmaintained because it wraps chrono (same announcement). It
-    # comes only through console-subscriber 0.5, behind krishiv-exec's optional
-    # `tokio-console` feature, off by default. Drop this when console-subscriber
-    # releases without it.
-    { id = "RUSTSEC-2026-0542", reason = "unmaintained; only through console-subscriber behind the off-by-default tokio-console feature; no safe upgrade" },
+    # humantime is unmaintained because it wraps chrono (same announcement). It is in
+    # default builds: krishiv-store's `cloud` feature uses it for HTTP client
+    # duration settings, object_store 0.14's cloud features pull it, and
+    # console-subscriber behind krishiv-exec's off-by-default `tokio-console`
+    # feature does too. Unmaintained, not a
+    # vulnerability. Revisit when object_store drops it and krishiv-store moves to
+    # a maintained duration parser.
+    { id = "RUSTSEC-2026-0542", reason = "unmaintained; through krishiv-store (cloud), object_store 0.14 and console-subscriber; no safe upgrade" },
 ]
 
 [licenses]
