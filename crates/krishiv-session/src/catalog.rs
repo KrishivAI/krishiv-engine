@@ -1482,16 +1482,14 @@ pub(crate) fn expand_views_in(
 /// A `SQL SECURITY DEFINER` view the expansion inlined (P3-T062 §2.4): its query reads with its
 /// definer's rights. The reader is asked only about the view itself (among
 /// [`Expansion::reads`]); the session asks [`Self::reads`] and analyzes [`Self::query`] as the
-/// definer, then has the reader's analysis skip what the text from [`Self::source`] reads
-/// (`AnalysisContext::definer_sources`).
+/// definer, then has the reader's analysis skip what that very node reads
+/// (`AnalysisContext::definer_texts`: trusted by node identity, review B1).
 #[derive(Debug, Clone)]
 pub(crate) struct DefinerRead {
     /// The view's name parts (`spark_catalog`, namespace, name).
     pub(crate) name: Vec<String>,
     /// Whose rights read its query.
     pub(crate) definer: String,
-    /// The source id its text was lowered with (fresh for this read).
-    pub(crate) source: krishiv_plan::SourceId,
     /// Its query, the views it reads inlined; `None` until inlined.
     pub(crate) query: Option<Arc<LogicalPlan>>,
     /// The catalog-store lookups of its text (not those of a definer view inside it), in order.

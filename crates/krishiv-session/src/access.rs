@@ -594,7 +594,8 @@ impl Session {
     /// Asks the session's principal what the `SQL SECURITY DEFINER` views of `analyzed` read
     /// (their `owner_reads`), as an invoker would be asked, before their inlined queries are shown
     /// (`EXPLAIN`, estimates, warnings; P3-T062 §2.4: an explain checks the privileges of the
-    /// statement it explains). Column-level policies are asked per column read. Audited.
+    /// statement it explains).
+    /// Column-level policies are asked per column read. Audited.
     ///
     /// # Errors
     /// The first refusal (42501).

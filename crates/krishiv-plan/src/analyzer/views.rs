@@ -17,6 +17,58 @@ use crate::plan::{LogicalPlan, PlanNode};
 use crate::walk::{Node, PtrSet, children};
 use crate::{AttrId, Origin};
 
+/// The inlined queries of the `SQL SECURITY DEFINER` views of one plan whose reads were authorized
+/// for the views' owners (`AnalysisContext::definer_texts`, P3-T062 §2.4). They are trusted by node
+/// identity: a node is under a definer text only when it is (or descends from) one of these very
+/// nodes, which the session built while inlining the views and holds here, so their addresses are
+/// never reused while the set lives. Nothing a caller writes into a plan (an origin, a SQL source
+/// number, embedded SQL text) can make a node one of them (review B1).
+#[derive(Clone, Default)]
+pub struct DefinerTexts {
+    roots: std::sync::Arc<[std::sync::Arc<LogicalPlan>]>,
+}
+
+impl DefinerTexts {
+    /// The set of the inlined queries `roots`.
+    #[must_use]
+    pub fn new(roots: Vec<std::sync::Arc<LogicalPlan>>) -> Self {
+        Self {
+            roots: std::sync::Arc::from(roots),
+        }
+    }
+
+    /// Whether the set is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+
+    /// Whether `node` is one of the inlined queries (by address, never by content).
+    #[must_use]
+    pub fn contains(&self, node: &LogicalPlan) -> bool {
+        self.roots.iter().any(|r| std::ptr::eq(&**r, node))
+    }
+
+    /// The set without `root` (the query an analysis of the view itself starts from: its own
+    /// reads are what that analysis asks).
+    #[must_use]
+    pub fn without(&self, root: &LogicalPlan) -> Self {
+        Self::new(
+            self.roots
+                .iter()
+                .filter(|r| !std::ptr::eq(&***r, root))
+                .cloned()
+                .collect(),
+        )
+    }
+}
+
+impl std::fmt::Debug for DefinerTexts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DefinerTexts({})", self.roots.len())
+    }
+}
+
 /// How a view's base tables are authorized (P3-T062 §2.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]

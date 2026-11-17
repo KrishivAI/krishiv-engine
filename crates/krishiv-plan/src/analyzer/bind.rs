@@ -71,7 +71,7 @@ pub(super) struct Bindings {
     pub(super) epochs: BTreeMap<String, u64>,
     pub(super) securables: Vec<(Securable, Privilege)>,
     /// The [`Self::securables`] read only under a `SQL SECURITY DEFINER` view's text
-    /// ([`AnalysisContext::definer_sources`]): authorized for the view's owner, never asked of the
+    /// ([`AnalysisContext::definer_texts`]): authorized for the view's owner, never asked of the
     /// principal here, so the column pass skips them and the analysis does not report them.
     pub(super) definer_only: std::collections::BTreeSet<usize>,
     /// Whether the read being bound is under a definer view's text (see [`Self::definer_only`]).
@@ -143,7 +143,7 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
             if !seen.insert((node.key() as usize, addr(&*env), under)) {
                 continue;
             }
-            let under = under || from_definer_text(ctx, node);
+            let under = under || matches!(node, Node::Plan(p) if ctx.definer_texts.contains(p));
             let mut next = Vec::new();
             visit(node, &env, ctx, &mut next, &mut found)?;
             definer.resize(found.len(), under);
@@ -162,21 +162,6 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     load(ctx, &mut b, owner.into_iter().map(|(f, _)| f).collect()).await?;
     b.under_definer = false;
     Ok(b)
-}
-
-/// Whether `node` was lowered from the text of a `SQL SECURITY DEFINER` view whose reads were
-/// authorized for its owner ([`AnalysisContext::definer_sources`]).
-pub(super) fn from_definer_text(ctx: &AnalysisContext, node: Node<'_>) -> bool {
-    if ctx.definer_sources.is_empty() {
-        return false;
-    }
-    let origin = match node {
-        Node::Plan(p) => p.origin,
-        Node::Expr(e) => e.origin,
-    };
-    origin
-        .sql
-        .is_some_and(|(source, _)| ctx.definer_sources.contains(&source))
 }
 
 enum Found<'a> {

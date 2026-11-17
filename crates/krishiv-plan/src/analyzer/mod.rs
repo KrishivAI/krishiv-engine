@@ -667,14 +667,15 @@ pub struct AnalysisContext {
     pub variables: Arc<VariableSnapshot>,
     /// What the analysis is for: the privilege its reads ask.
     pub mode: AnalysisMode,
-    /// The SQL sources of the `SQL SECURITY DEFINER` view texts inlined into the plan whose reads
-    /// were authorized for the view's owner (P3-T062 §2.4): under a plan node lowered from one of
-    /// them, Bind asks the policy nothing about catalog tables, views and paths for
+    /// The inlined queries of the `SQL SECURITY DEFINER` views of the plan whose reads were
+    /// authorized for the view's owner (P3-T062 §2.4), trusted by node identity: under one of
+    /// these subtrees, Bind asks the policy nothing about catalog tables and views for
     /// [`Self::principal`], the column pass skips those reads, and they are not among
-    /// [`AnalyzedPlan::securables`]. Secret scopes and server-scoped store options under them
-    /// are still asked of the principal. A source id is minted by the session for each view text
-    /// it lowers, so no plan a caller writes carries one. Empty for every other analysis.
-    pub definer_sources: Arc<BTreeSet<crate::SourceId>>,
+    /// [`AnalyzedPlan::securables`]. Paths, secret scopes and server-scoped store options under
+    /// them are still asked of the principal. Only the session that inlined the views holds these
+    /// nodes, so no plan a caller writes (whatever its origins or SQL source numbers) is ever
+    /// trusted (review B1). Empty for every other analysis.
+    pub definer_texts: views::DefinerTexts,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -1115,7 +1116,7 @@ async fn analyze_with(
         hinted,
     ) = resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
     // What each table read reads, from the final plan (P3-T062 review B1).
-    let reads = reads::column_reads(ctx, &root, &bindings, &hinted);
+    let reads = reads::column_reads(&root, &bindings, &hinted);
     for (used, read) in securables.iter_mut().zip(&reads) {
         used.columns.clone_from(&read.columns);
     }

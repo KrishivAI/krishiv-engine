@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `AnalysisContext::definer_sources` (P3-T062 §2.4): the tables a `SQL SECURITY DEFINER` view's
-//! text reads were authorized for the view's owner, so Bind asks the principal nothing about a
-//! catalog table read under a node lowered from such a text, the column pass skips it and the
-//! analysis does not report it. The principal's own read of the same table is still asked, and a
-//! plan node from any other source (a DataFrame's, the statement's) is never trusted.
+//! `AnalysisContext::definer_texts` (P3-T062 §2.4, review B1): the tables a `SQL SECURITY
+//! DEFINER` view's inlined query reads were authorized for the view's owner, so Bind asks the
+//! principal nothing about a catalog table read under one of those very nodes, the column pass
+//! skips it and the analysis does not report it. The principal's own read of the same table is
+//! still asked, and no other node is ever trusted: not one equal to a trusted node, not one with
+//! its origin, not the text a caller embeds (`PlanNode::Sql`, lowered with source numbers from 0),
+//! and not a DataFrame's.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,12 +13,13 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_types::DataType;
 
 use crate::analyzer::testing::{block_on, context};
+use crate::analyzer::views::DefinerTexts;
 use crate::analyzer::{
-    AccessDecision, AccessPolicy, AnalysisContext, AnalyzedPlan, Analyzer, BoxFuture,
-    DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, ResolutionConf, Securable,
-    TableColumn,
+    AccessDecision, AccessPolicy, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer,
+    BoxFuture, DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, ResolutionConf,
+    Securable, SqlFrontend, TableColumn,
 };
-use crate::{LogicalPlan, Origin, Plan, PlanNode, ReadSource, SourceId, Span};
+use crate::{LogicalPlan, Origin, Plan, PlanNode, ReadSource, SourceId, Span, SqlArgs};
 
 /// Denies every catalog table, view and column; records what it is asked.
 #[derive(Default)]
@@ -55,7 +58,31 @@ impl AccessPolicy for NoTables {
 
 const VIEW_TEXT: SourceId = SourceId(7);
 
-fn ctx(policy: &Arc<NoTables>, trusted: &[SourceId]) -> AnalysisContext {
+/// Lowers any text to a read of `t` at `source`, as a view text read of `t` is lowered.
+struct ReadsT;
+
+impl SqlFrontend for ReadsT {
+    fn lower(&self, _: &str, source: SourceId) -> Result<Plan, AnalysisError> {
+        Plan::try_new(read(source, 0)).map_err(|error| AnalysisError {
+            error,
+            origin: Origin::UNKNOWN,
+        })
+    }
+
+    fn redact(&self, query: &str) -> krishiv_common::redact::RedactedSql {
+        krishiv_common::redact::RedactedSql::opaque(query)
+    }
+
+    fn fingerprint(&self) -> u64 {
+        1
+    }
+
+    fn keywords(&self) -> Vec<(String, bool)> {
+        Vec::new()
+    }
+}
+
+fn ctx(policy: &Arc<NoTables>, trusted: &[&Arc<LogicalPlan>]) -> AnalysisContext {
     let catalog = MemoryCatalog::new("spark_catalog").with_table(
         &["default"],
         "t",
@@ -64,7 +91,8 @@ fn ctx(policy: &Arc<NoTables>, trusted: &[SourceId]) -> AnalysisContext {
     );
     let mut c = context(catalog, ResolutionConf::default());
     c.policy = Arc::clone(policy) as Arc<dyn AccessPolicy>;
-    c.definer_sources = Arc::new(trusted.iter().copied().collect());
+    c.definer_texts = DefinerTexts::new(trusted.iter().map(|p| Arc::clone(p)).collect());
+    c.sql = Some(Arc::new(ReadsT));
     c
 }
 
@@ -103,21 +131,25 @@ fn a_definer_texts_reads_are_not_asked_of_the_principal() {
             column_level,
             ..NoTables::default()
         });
+        let text = read(VIEW_TEXT, 0);
         // Untrusted, the read is denied.
-        assert!(denied(&run(read(VIEW_TEXT, 0), &ctx(&policy, &[]))));
+        assert!(denied(&run(Arc::clone(&text), &ctx(&policy, &[]))));
         policy.asked.lock().unwrap().clear();
-        // Under the view's text it is the owner's: not asked, not reported.
-        let a = run(read(VIEW_TEXT, 0), &ctx(&policy, &[VIEW_TEXT])).unwrap();
+        // The very node the session inlined is the owner's: not asked, not reported.
+        let a = run(Arc::clone(&text), &ctx(&policy, &[&text])).unwrap();
         assert!(a.securables.is_empty(), "{:?}", a.securables);
         assert!(policy.asked.lock().unwrap().is_empty(), "{column_level}");
-        // A read from another source is the principal's, even beside a trusted one, in
+        // Under a parent of it too.
+        let a = run(union(vec![Arc::clone(&text)]), &ctx(&policy, &[&text])).unwrap();
+        assert!(a.securables.is_empty(), "{:?}", a.securables);
+        // A read from anything else is the principal's, even beside a trusted one, in
         // either order.
         for inputs in [
-            vec![read(VIEW_TEXT, 0), read(SourceId(8), 0)],
-            vec![read(SourceId(8), 0), read(VIEW_TEXT, 0)],
+            vec![Arc::clone(&text), read(SourceId(8), 0)],
+            vec![read(SourceId(8), 0), Arc::clone(&text)],
         ] {
             assert!(
-                denied(&run(union(inputs), &ctx(&policy, &[VIEW_TEXT]))),
+                denied(&run(union(inputs), &ctx(&policy, &[&text]))),
                 "{column_level}"
             );
         }
@@ -129,6 +161,39 @@ fn a_definer_texts_reads_are_not_asked_of_the_principal() {
             }))
             .with_origin(Origin::plan(crate::PlanId(3))),
         );
-        assert!(denied(&run(df, &ctx(&policy, &[VIEW_TEXT]))));
+        assert!(denied(&run(df, &ctx(&policy, &[&text]))));
+    }
+}
+
+/// Review B1: trust is the node, never its number. A node equal to the trusted one (same read,
+/// same origin) and the text a caller embeds, whose lowering numbers its sources from 0 and so
+/// gives its reads the trusted node's very origin, are both the principal's.
+#[test]
+fn equal_origins_and_embedded_sql_are_never_trusted() {
+    for column_level in [false, true] {
+        let policy = Arc::new(NoTables {
+            column_level,
+            ..NoTables::default()
+        });
+        // The session's view text numbered 0 (as Bind numbers the first embedded text).
+        let text = read(SourceId(0), 0);
+        let twin = read(SourceId(0), 0);
+        assert!(denied(&run(
+            union(vec![Arc::clone(&text), twin]),
+            &ctx(&policy, &[&text])
+        )));
+        for n in 1..4 {
+            let mut inputs = vec![Arc::clone(&text)];
+            inputs.extend((0..n).map(|_| {
+                Arc::new(LogicalPlan::new(PlanNode::Sql {
+                    query: "SELECT a FROM t".to_owned(),
+                    args: SqlArgs::None,
+                }))
+            }));
+            assert!(
+                denied(&run(union(inputs), &ctx(&policy, &[&text]))),
+                "{n} {column_level}"
+            );
+        }
     }
 }

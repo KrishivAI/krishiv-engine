@@ -1339,7 +1339,7 @@ impl Session {
             // `Metadata`; every other analysis may run the plan.
             mode: krishiv_plan::analyzer::AnalysisMode::Execute,
             // Filled per analysis by `Session::authorize_definer` callers; none by default.
-            definer_sources: Arc::default(),
+            definer_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1430,10 +1430,12 @@ impl Session {
         // `SQL SECURITY DEFINER` views (P3-T062 §2.4): the reader may read the view (asked above);
         // its text is read with its definer's rights, and the reader's analysis skips what it reads.
         let definers = std::mem::take(&mut expansion.definers);
-        let sources: std::collections::BTreeSet<krishiv_plan::SourceId> =
-            definers.iter().map(|d| d.source).collect();
+        // Trusted by node identity (review B1): the inlined queries themselves, never a number.
+        let texts = krishiv_plan::analyzer::views::DefinerTexts::new(
+            definers.iter().filter_map(|d| d.query.clone()).collect(),
+        );
         for d in &definers {
-            match Box::pin(self.authorize_definer(d, &sources, env)).await {
+            match Box::pin(self.authorize_definer(d, &texts, env)).await {
                 Ok(owner_reads) => {
                     if let Some(v) = inlined.get_mut(d.view) {
                         v.owner_reads = owner_reads;
@@ -1445,26 +1447,40 @@ impl Session {
                 }
             }
         }
-        let trusting;
-        let analysis = if sources.is_empty() {
+        let trusting_views;
+        let views_analysis = if texts.is_empty() {
             &env.analysis
         } else {
             let mut ctx = env.analysis.clone();
-            ctx.definer_sources = Arc::new(sources);
-            trusting = ctx;
-            &trusting
+            ctx.definer_texts = texts.clone();
+            trusting_views = ctx;
+            &trusting_views
         };
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
-            match Box::pin(self.check_stored_views(&expansion.stored_reads, env, analysis)).await {
+            match Box::pin(self.check_stored_views(&expansion.stored_reads, env, views_analysis))
+                .await
+            {
                 Ok(checked) => checked,
                 Err(e) => {
                     let e = self.view_text_failure(&views, env, e).await;
                     return crate::access::audit_read(self, env, Err(e));
                 }
             };
-        let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
+        // A rename rebuilds the nodes above it: the trusted queries follow their rebuilt nodes.
+        let (renamed, texts) =
+            crate::view_schema::apply_renames_keeping(&expansion.plan, &renames, &texts);
+        let trusting;
+        let analysis = if texts.is_empty() {
+            &env.analysis
+        } else {
+            let mut ctx = env.analysis.clone();
+            ctx.definer_texts = texts;
+            trusting = ctx;
+            &trusting
+        };
+        let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
@@ -1570,9 +1586,22 @@ impl Session {
         let mut renames = Vec::new();
         for read in reads {
             // A view whose query does not analyze alone is left to the outer query.
-            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
-            else {
+            let (query, texts) = crate::view_schema::apply_renames_keeping(
+                &read.query,
+                &renames,
+                &analysis.definer_texts,
+            );
+            let Ok(plan) = Plan::try_new(query) else {
                 continue;
+            };
+            let renamed;
+            let analysis = if renames.is_empty() {
+                analysis
+            } else {
+                let mut ctx = analysis.clone();
+                ctx.definer_texts = texts;
+                renamed = ctx;
+                &renamed
             };
             let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, analysis).await else {
                 continue;

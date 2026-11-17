@@ -320,7 +320,6 @@ impl Expander<'_> {
             self.definers.push(DefinerRead {
                 name: name.clone(),
                 definer: definer.clone(),
-                source,
                 query: None,
                 reads: Vec::new(),
                 view: 0,

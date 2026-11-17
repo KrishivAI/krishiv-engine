@@ -428,3 +428,51 @@ fn caches_are_refused_after_a_revoke() {
         denied(&ana, sql);
     }
 }
+
+/// P3-T062 review B1: the mark that a read is a definer view's own is node identity, never a
+/// number. Bind numbers the SQL texts a caller embeds in its plan (Spark Connect's
+/// `Relation.sql`) from 0, and the session numbers the view texts it lowers from 1: a caller's
+/// embedded text whose number equals a definer view's must still be asked of the caller.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn embedded_sql_never_borrows_a_definer_views_rights() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+    let (w, root, ana) = world();
+    ok(&root, "CREATE TABLE secret (a INT) USING parquet");
+    ok(&root, "INSERT INTO secret VALUES (9)");
+    ok(&root, "GRANT SELECT ON TABLE secret TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    let sql = |query: &str| {
+        Arc::new(LogicalPlan::new(PlanNode::Sql {
+            query: query.to_owned(),
+            args: SqlArgs::None,
+        }))
+    };
+    // The view beside embedded texts numbered 0, 1, ..., n (Bind numbers them in plan order):
+    // the last reads the secret, the others nothing. For some n its number is the view text's.
+    for n in 0..8 {
+        let mut inputs = vec![Arc::new(LogicalPlan::table(["dv"]))];
+        inputs.extend((0..n).map(|_| sql("SELECT 1 AS a")));
+        inputs.push(sql("SELECT a FROM secret"));
+        let plan = Plan::try_new(Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs,
+            by_name: false,
+            allow_missing_columns: false,
+        })))
+        .unwrap();
+        // A fresh session: its view texts are numbered from 1.
+        let bob = w.user("bob");
+        match block_on(bob.from_plan(&plan).collect()) {
+            Err(e) => assert_eq!(e.error_class().name(), DENIED, "{n}: {e}"),
+            Ok(b) => panic!("{n}: read the secret: {b:?}"),
+        }
+    }
+    // The view alone is bob's to read.
+    let bob = w.user("bob");
+    let alone = Plan::try_new(Arc::new(LogicalPlan::table(["dv"]))).unwrap();
+    assert_eq!(block_on(bob.from_plan(&alone).collect()).unwrap().len(), 1);
+}

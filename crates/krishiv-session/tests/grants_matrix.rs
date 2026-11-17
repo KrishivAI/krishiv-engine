@@ -144,6 +144,9 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         "CREATE FUNCTION ufn() RETURNS INT RETURN (SELECT max(a) FROM canary)",
         "GRANT SELECT ON FUNCTION ufn TO user:ana",
         "GRANT USAGE ON SCHEMA default TO user:lister",
+        // A definer view ana may read over `pub` (review B1).
+        "CREATE VIEW dpub SQL SECURITY DEFINER AS SELECT a FROM pub",
+        "GRANT SELECT ON VIEW dpub TO user:ana",
     ] {
         block_on(async { root.sql(statement).await?.collect().await })
             .unwrap_or_else(|e| panic!("{statement}: {e}"));
@@ -393,7 +396,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         match &result {
             Ok(text) => {
                 let shown = leaks(text).or_else(|| {
-                    ["canary", "dvc", "canary_fn", "ufn"]
+                    ["canary", "dvc", "canary_fn", "ufn", "dpub"]
                         .into_iter()
                         .find(|n| text.contains(n))
                 });
@@ -405,6 +408,39 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
                 }
             }
             Err(e) => bad.push(format!("{row}: {e}")),
+        }
+    }
+    // Review B1: Spark Connect's `Relation.sql` (embedded text, numbered by Bind from 0 in plan
+    // order) beside a definer view ana may read never borrows its definer's rights, whichever
+    // number the canary's text gets (a fresh session numbers its view texts from 1): each plan is
+    // refused, with one audit record.
+    #[cfg(feature = "unstable-ir")]
+    for n in 0..8 {
+        use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+        let sql_node = |query: &str| {
+            Arc::new(LogicalPlan::new(PlanNode::Sql {
+                query: query.to_owned(),
+                args: SqlArgs::None,
+            }))
+        };
+        let mut inputs = vec![Arc::new(LogicalPlan::table(["dpub"]))];
+        inputs.extend((0..n).map(|_| sql_node("SELECT 1 AS a")));
+        inputs.push(sql_node("SELECT a FROM canary"));
+        let plan = Plan::try_new(Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs,
+            by_name: false,
+            allow_missing_columns: false,
+        })))
+        .unwrap();
+        let fresh = session("ana", false, viewer());
+        let result = collected(&fresh.from_plan(&plan));
+        let records = take();
+        match &result {
+            Err(e) if e.error_class().name() == DENIED && records.len() == 1 => {}
+            other => bad.push(format!(
+                "B1 Connect sql {n}: {other:?}, {} audit records",
+                records.len()
+            )),
         }
     }
     // ana's own history holds only ana's statements: root's (which name the vault) are not shown.
