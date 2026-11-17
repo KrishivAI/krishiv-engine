@@ -533,7 +533,12 @@ fn run(
                 if Arc::ptr_eq(&after, &root) {
                     after
                 } else {
-                    prune_and_tidy(&after, &mut t)?
+                    // Narrowing a key list changes the aggregate's estimate (a
+                    // non-column key counts as the input's rows): order the joins
+                    // above it again, as a second optimization would.
+                    let ordered =
+                        order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?;
+                    prune_and_tidy(&ordered, &mut t)?
                 }
             }
             _ => root,

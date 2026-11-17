@@ -468,3 +468,19 @@ fn a_join_with_the_group_key_code_and_eager_aggregation_on_is_a_fixed_point() {
         assert!(r.moved(), "{sql}: {:?}\n{}", r.notes, r.text());
     }
 }
+
+/// The derived-key aggregate below a three-way join: narrowing its keys changes its estimate (a
+/// non-column key counts as the input's rows), so the joins above it are ordered again and a second
+/// optimization finds the same plan, with the group-key code and eager aggregation on.
+#[test]
+fn an_aggregate_below_a_three_way_join_is_a_fixed_point() {
+    let on = [
+        ("krishiv.optimizer.groupKeyCode", "true"),
+        ("krishiv.optimizer.eagerAggregation", "true"),
+    ];
+    let sql = "SELECT a.c, a.d, a.n, d.x, g.v FROM \
+               (SELECT c, c - 1 AS d, count(*) AS n FROM h GROUP BY c, c - 1) a \
+               JOIN h AS g ON a.c = g.c JOIN d ON a.c = d.dk";
+    let r = run_conf(sql, FOOTER, true, false, &on);
+    assert!(r.moved(), "{:?}\n{}", r.notes, r.text());
+}
