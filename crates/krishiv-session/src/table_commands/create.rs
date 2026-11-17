@@ -347,6 +347,9 @@ impl Session {
             }
             .into());
         }
+        if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &table.location);
+        }
         let checked = self
             .authorize_location(&table.location, table.managed)
             .await?;
@@ -446,6 +449,7 @@ impl Session {
         // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
         // the table directory on the way to being refused (the writer asks again for the files it writes).
         let owned = if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &table.location);
             let checked = self
                 .authorize_path(
                     &table.location,

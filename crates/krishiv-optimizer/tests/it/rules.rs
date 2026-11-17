@@ -397,6 +397,19 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
     ),
     (
+        // The NOT EXISTS twin of `restrict_below_semi`: sorting may put the
+        // restriction's semi join below the anti join, and the next round
+        // must still see it.
+        "restrict_below_anti",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) AND NOT EXISTS (SELECT * FROM t t2 WHERE t2.c = u.d) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
+    ),
+    (
+        // A FROM-subquery's projection stands between two semi/anti joins
+        // until pruning removes it; the final plan's stack is already sorted.
+        "semi_order_through_subquery",
+        "SELECT s.a FROM (SELECT a, b FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)) s WHERE NOT EXISTS (SELECT * FROM u WHERE u.d = s.b)",
+    ),
+    (
         "restrict_not_global",
         "SELECT t.a FROM t JOIN (SELECT count(*) AS n FROM u) g ON t.c = g.n WHERE t.b = 'x'",
     ),

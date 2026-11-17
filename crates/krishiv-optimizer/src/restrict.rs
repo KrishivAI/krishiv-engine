@@ -584,6 +584,10 @@ fn key_ndv(est: &Arc<RelStats>, want: &Attrs) -> f64 {
 
 /// Whether `input` is already reduced by a semi join on `keys` (this
 /// pass's own, or one the query wrote): restricting again adds little.
+/// The walk passes the left input of anti and existence joins too: semi/anti
+/// ordering may sort this pass's semi join below one, and the reduction
+/// still holds there (an anti join only drops rows, an existence join only
+/// adds a column).
 /// Only the join's kind and condition count, never the shape of its
 /// right side, which pruning changes between optimizer runs (a `Shift`
 /// gains a projection above it), so the answer is the same on every run
@@ -593,6 +597,11 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
     loop {
         match &at.node {
             PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => at = input,
+            PlanNode::Join {
+                kind: JoinKind::LeftAnti | JoinKind::Existence(_),
+                left,
+                ..
+            } => at = left,
             PlanNode::Join {
                 kind: JoinKind::LeftSemi,
                 condition: JoinCondition::On(cond),

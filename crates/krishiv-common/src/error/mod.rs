@@ -41,7 +41,7 @@
 mod template;
 
 mod render;
-pub use render::render_with_context;
+pub use render::{render_with_context, sql_summary};
 
 include!(concat!(env!("OUT_DIR"), "/error_classes.rs"));
 

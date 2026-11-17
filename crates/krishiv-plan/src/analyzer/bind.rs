@@ -759,7 +759,17 @@ async fn authorize_as(
     {
         return Ok(*i);
     }
-    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
+    // A policy that decides columns is asked only whether the schema may be seen here; the rows
+    // are asked per referenced column once the query is resolved (`authorize_columns`).
+    let asked = if privilege == Privilege::Select
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && ctx.policy.column_level()
+    {
+        Privilege::Browse
+    } else {
+        privilege
+    };
+    super::access::authorize_reported(&*ctx.policy, &ctx.principal, &securable, asked, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
