@@ -425,6 +425,28 @@ pub(super) fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivEr
     ))
 }
 
+/// Spark's `HistogramNumeric.dataType` (with
+/// `spark.sql.legacy.histogramNumericPropagateInputType`, default true):
+/// `array<struct<x: the input's type, y: double>>`, NULL for no value.
+///
+/// Known difference: like Spark's, the bins depend on where partial histograms
+/// merge, and Krishiv merges at its own points (several drivers per partition,
+/// partial flushes, the adaptive bypass, spills; a merge does not combine equal
+/// x values), so results can differ from Spark's for the same data when the
+/// plan is split differently (a local `VALUES` is one partition here).
+pub(super) fn histogram_numeric(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    use krishiv_types::{StructField, StructType};
+    let x = c.data_type(0).cloned().unwrap_or(DataType::Double);
+    let fields = vec![
+        StructField::new("x".to_owned(), x, true),
+        StructField::new("y".to_owned(), DataType::Double, true),
+    ];
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::Struct(StructType::new(fields)), true).into()),
+        true,
+    ))
+}
+
 /// `approx_count_distinct`: `bigint`, never NULL (an empty group is 0).
 pub(super) fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Long, false))
@@ -557,6 +579,17 @@ pub(super) fn aggregates() -> Vec<Spec> {
             Inputs::Any,
             percentile_ordered,
             Aggregate::PercentileDisc,
+        ),
+        // `histogram_numeric(x, nb)`: the analyzer folds `nb` (see
+        // `histogram_call`).
+        aggregate(
+            "histogram_numeric",
+            Inputs::Expects(vec![
+                InputType::NumericOrTemporal,
+                InputType::Exact(DataType::Integer),
+            ]),
+            histogram_numeric,
+            Aggregate::HistogramNumeric,
         ),
         aggregate(
             "approx_count_distinct",
