@@ -194,8 +194,8 @@ pub struct Options {
     pub group_key_code: bool,
     /// Derived group keys above the aggregate (`derived_keys`, P3-A part 2c):
     /// a group key computed from other group keys is computed above the
-    /// aggregate. Needs statistics; runs only when a session configuration
-    /// switches `krishiv.optimizer.derivedKeysAbove` on.
+    /// aggregate. Needs statistics and a session configuration, where
+    /// `krishiv.optimizer.derivedKeysAbove` is on by default.
     pub derived_keys_above: bool,
 }
 
@@ -506,7 +506,7 @@ fn run(
         // shape (eager aggregation, the group-key code), so they see the narrowed
         // aggregate and a second optimization finds nothing new: a group key
         // computed from other keys is computed above the aggregate (P3-A part 2c).
-        // Only with a session configuration that switches it on.
+        // Only with a session configuration, where it is on by default.
         let derived = options.derived_keys_above
             && udfs.is_some_and(|(_, config)| {
                 config

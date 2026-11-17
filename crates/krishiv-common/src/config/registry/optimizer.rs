@@ -54,13 +54,13 @@ pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
 pub static DERIVED_KEYS_ABOVE: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.derivedKeysAbove",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal. Let an aggregate that groups by a column and by expressions of it only \
           (ClickBench q36's `ClientIP, ClientIP - 1, ClientIP - 2`) group by the column alone and \
           compute the expressions from it above the aggregate, so the hash table holds one narrow \
           key instead of several. Applies only to deterministic built-in expressions that cannot \
           raise (or whose range statistics prove no overflow) over keys whose equality is identity. \
-          Results are the same either way. Off until its timed A/B passes.",
+          Results are the same either way. On since its timed A/B (ClickBench q36: 0.82x).",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",

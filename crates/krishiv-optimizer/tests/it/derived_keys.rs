@@ -89,7 +89,7 @@ impl Statistics for Stats {
     }
 }
 
-/// The session configuration: the rule on (and ANSI as given).
+/// The session configuration: the rule on (its default) and ANSI as given.
 fn config(ansi: bool) -> Config {
     config_with(ansi, &[])
 }
@@ -432,7 +432,7 @@ fn an_output_mixing_a_call_and_a_moved_key_refuses() {
 }
 
 #[test]
-fn switched_off_nothing_moves() {
+fn switched_off_nothing_moves_and_the_default_is_on() {
     let ctx = support::ctx_over(catalog());
     let plan = support::resolve(Q36, &ctx);
     let udfs = UdfLibrary::new();
@@ -441,14 +441,16 @@ fn switched_off_nothing_moves() {
     c.set("krishiv.optimizer.derivedKeysAbove", "false")
         .unwrap();
     let off = optimize_with_udfs(&plan, &FOOTER, &udfs, &c).unwrap();
-    // The default (no key set).
-    let default = optimize_with_udfs(&plan, &FOOTER, &udfs, &Config::new()).unwrap();
-    assert!(off.structurally_eq(&default), "{}", default.root());
     assert!(
         aggregate_line(&off.root().to_string()).contains("c#0 - 1"),
         "{}",
         off.root()
     );
+    // The default (no key set) is the rule on.
+    let on = optimize_with_udfs(&plan, &FOOTER, &udfs, &config(true)).unwrap();
+    let default = optimize_with_udfs(&plan, &FOOTER, &udfs, &Config::new()).unwrap();
+    assert!(on.structurally_eq(&default), "{}", default.root());
+    assert!(!off.structurally_eq(&default), "{}", default.root());
 }
 
 /// Both switches that read an aggregate's shape on, over a join whose derived key is a dimension
