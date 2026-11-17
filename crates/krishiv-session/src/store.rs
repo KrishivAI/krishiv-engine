@@ -140,7 +140,18 @@ pub(crate) struct ViewDef {
     /// resolves its text under them): the view's own `WITH`s resolve under it, never the reader's
     /// (review r4 Y1). `None` (a view stored without it) reads as `CORRECTED`, Spark's default.
     pub(crate) cte_precedence: Option<krishiv_plan::analyzer::CtePrecedencePolicy>,
+    /// For a `SQL SECURITY DEFINER` view (`Some`, `None` for `INVOKER`): its functions, bound
+    /// when its query was created or last replaced (review r8 item 1, ADR 0048 A1). Every name
+    /// its text calls bare (scalar or table) that no built-in answers was resolved then, through
+    /// [`Self::path`] and [`Self::namespace`], and a read calls it by the name stored here, never
+    /// resolving it again: a function created later earlier on the path does not change the view,
+    /// a dropped one fails it. An invoker view's calls resolve at each read, as Spark's do.
+    pub(crate) functions: Option<BoundFunctions>,
 }
+
+/// [`ViewDef::functions`]: each bare call's name as written in the view's text, with the
+/// catalog and schema of the stored function it resolved to.
+pub(crate) type BoundFunctions = BTreeMap<String, Vec<String>>;
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -649,6 +649,17 @@ impl Session {
         }
         // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
         check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)?;
+        let definer = matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer));
+        // A definer view's functions are bound now, through the path frozen with it (review r8
+        // item 1).
+        let functions = definer.then(|| {
+            env.sql_functions.bound_calls(
+                plan.root(),
+                &frozen_namespace,
+                &frozen_path,
+                self.state.profile,
+            )
+        });
         let view = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -673,10 +684,10 @@ impl Session {
                     original, ids, written, query.span,
                 ),
                 // `SQL SECURITY DEFINER` reads as its creator (P3-T062 §2.4).
-                definer: matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer))
-                    .then(|| self.state.principal.name.clone()),
+                definer: definer.then(|| self.state.principal.name.clone()),
                 // Spark captures the session's SQL configs with the view (`views.scala` line 557).
                 cte_precedence: Some(cte_precedence),
+                functions,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1056,6 +1067,16 @@ impl Session {
                     .collect();
                 // `ALTER VIEW ... AS` keeps the mode (`AlterViewAsCommand`).
                 let schema_mode = existing.view.as_ref().and_then(|v| v.schema_mode);
+                let definer = existing.view.as_ref().is_some_and(|v| v.definer.is_some());
+                // A definer view's functions are bound again with its new query (review r8 item 1).
+                let functions = definer.then(|| {
+                    env.sql_functions.bound_calls(
+                        plan.root(),
+                        &frozen_namespace,
+                        &frozen_path,
+                        self.state.profile,
+                    )
+                });
                 changed.view = Some(ViewDef {
                     sql: original
                         .get(query.span.start..query.span.end)
@@ -1071,13 +1092,10 @@ impl Session {
                     ),
                     // A definer view keeps its mode, and its new query reads as whoever wrote it:
                     // never as the previous definer, whose rights the new text could reach.
-                    definer: existing
-                        .view
-                        .as_ref()
-                        .and_then(|v| v.definer.as_ref())
-                        .map(|_| self.state.principal.name.clone()),
+                    definer: definer.then(|| self.state.principal.name.clone()),
                     // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
                     cte_precedence: Some(cte_precedence),
+                    functions,
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

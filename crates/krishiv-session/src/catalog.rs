@@ -1439,14 +1439,14 @@ pub(crate) struct StoredViews<'a> {
 }
 
 /// See [`StoredViews::qualify`]: the expression, the namespace it was written in, the path frozen with it and
-/// whether it is a stored view's text (else a stored function's body).
-pub(crate) type QualifyCalls<'a> =
-    dyn Fn(&Arc<Expr>, &str, &[Vec<String>], bool) -> Option<Arc<Expr>> + 'a;
+/// the rule of the text it is in (a stored function's body, an invoker or a definer view's text).
+pub(crate) type QualifyCalls<'a> = dyn Fn(&Arc<Expr>, &str, &[Vec<String>], crate::sql_functions::CallRule<'_>) -> Option<Arc<Expr>>
+    + 'a;
 
 /// See [`StoredViews::qualify_table`]: the table function's name as written, the namespace it was
-/// written in, the path frozen with it and whether it is a stored view's text (else a stored function's body).
+/// written in, the path frozen with it and the rule of the text it is in.
 pub(crate) type QualifyTableCall<'a> =
-    dyn Fn(&str, &str, &[Vec<String>], bool) -> Option<String> + 'a;
+    dyn Fn(&str, &str, &[Vec<String>], crate::sql_functions::CallRule<'_>) -> Option<String> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.
@@ -1479,6 +1479,7 @@ pub(crate) fn expand_views_in(
         stored,
         view_namespace: namespace,
         view_path,
+        view_functions: None,
         reads: Vec::new(),
         deferred: None,
         deferred_in_definer: false,

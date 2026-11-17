@@ -745,6 +745,11 @@ fn failed(
             "{error}\n\n== Optimized Logical Plan ==\n{error}\n\n== Physical Plan ==\n{error}\n\n"
         ),
         ExplainMode::Codegen => format!("{error}\n"),
+        // An access refusal (its parameters already redacted where they are a definer's) is told
+        // as the other forms tell it, never as an empty line (review r7 n6).
+        _ if error.error_class() == ErrorClass::KrishivInsufficientPermissions => {
+            format!("{PLANNING_ERROR}\n{error}")
+        }
         _ => PLANNING_ERROR.to_owned(),
     }
 }

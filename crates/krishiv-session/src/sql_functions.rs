@@ -20,7 +20,7 @@ use krishiv_plan::function::Builtin;
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, SourceId};
 
 use crate::catalog::{ReadCandidate, SessionCatalog, StoredViews, expand_views_in};
-use crate::store::{CatalogStore, StoredFunctions};
+use crate::store::{BoundFunctions, CatalogStore, StoredFunctions};
 use krishiv_common::error::KrishivError;
 
 /// A defined function and the statement that defined it.
@@ -629,12 +629,13 @@ impl QueryFunctions {
         let next_source = |views: &ViewSource| (views.next_source)();
         // The calls of a view a body reads resolve as in any stored view's text (review r5 Z1), and a
         // stored body's own calls, at every level, through its frozen path or namespace (r7 R7-1).
-        let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>], in_view: bool| {
-            self.qualify_calls(e, namespace, path, profile, in_view)
+        let qualify = |e: &Arc<Expr>, namespace: &str, path: &[Vec<String>], rule: CallRule<'_>| {
+            self.qualify_calls(e, namespace, path, profile, rule)
         };
-        let qualify_table = |name: &str, namespace: &str, path: &[Vec<String>], in_view: bool| {
-            self.qualify_table_call(name, namespace, path, profile, in_view)
-        };
+        let qualify_table =
+            |name: &str, namespace: &str, path: &[Vec<String>], rule: CallRule<'_>| {
+                self.qualify_table_call(name, namespace, path, profile, rule)
+            };
         let expansion = match &self.views {
             Some(views) => {
                 let stored = StoredViews {
@@ -730,7 +731,8 @@ impl QueryFunctions {
         let Some(namespace) = def.qualifier.last() else {
             return Arc::clone(def);
         };
-        let qualify = |e: &Arc<Expr>| self.qualify_calls(e, namespace, &def.path, profile, false);
+        let qualify =
+            |e: &Arc<Expr>| self.qualify_calls(e, namespace, &def.path, profile, CallRule::Body);
         let body = qualify(&def.body);
         let mut params = def.params.clone();
         let mut defaults = false;
@@ -755,20 +757,22 @@ impl QueryFunctions {
     /// `body` with each bare call that is not a built-in qualified: by the
     /// first schema of the function's frozen `path` holding a stored function
     /// of that name, else by `namespace`; `None` when nothing changed.
-    /// `in_view` (a permanent view's text, not a stored function's body): no temporary function
+    /// In a permanent view's text ([`CallRule::View`], [`CallRule::Bound`]) no temporary function
     /// or session UDF answers a call, whatever the path or the reader's session holds (review r5
     /// Z1; Spark v4.2.0 `SessionCatalog.scala` lines 2427-2441). A bare call goes to the first
     /// catalog schema of the path holding a stored function of its name, else to the path's first
     /// catalog schema (where it is unresolved), else, for a view stored with no path, to its own
     /// namespace; with a path of no catalog schema it stays bare and the analyzer refuses it
-    /// (`AnalysisContext::stored_view_texts`). Calls inside subquery plans are not entered.
+    /// (`AnalysisContext::stored_view_texts`). A definer view's ([`CallRule::Bound`]) goes where it
+    /// was bound when the view was created, and stays bare (refused) when it was not bound.
+    /// Calls inside subquery plans are not entered.
     pub(crate) fn qualify_calls(
         &self,
         body: &Arc<Expr>,
         namespace: &str,
         path: &[Vec<String>],
         profile: SparkProfile,
-        in_view: bool,
+        rule: CallRule<'_>,
     ) -> Option<Arc<Expr>> {
         let out = Arc::clone(body)
             .transform_up(
@@ -805,11 +809,11 @@ impl QueryFunctions {
                         return Ok(e);
                     }
                     let mut call = call.clone();
-                    call.qualifier =
-                        match self.stored_qualifier(&call.name, namespace, path, in_view) {
-                            Some(q) => q,
-                            None => return Ok(e),
-                        };
+                    call.qualifier = match self.stored_qualifier(&call.name, namespace, path, rule)
+                    {
+                        Some(q) => q,
+                        None => return Ok(e),
+                    };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
@@ -824,15 +828,22 @@ impl QueryFunctions {
     /// The qualifier [`Self::qualify_calls`] gives a bare call of `name` that no built-in answers:
     /// the first catalog schema of `path` holding a stored function of that name; for a view, else
     /// the path's first catalog schema, else (a view stored with no path) its own `namespace`; for
-    /// a body, else `namespace`. `None`: a view whose path holds no catalog schema keeps the call
-    /// bare (the analyzer refuses it in a stored view's text, never the reader's).
+    /// a body, else `namespace`; for a definer view, where it was bound ([`CallRule::Bound`]).
+    /// `None`: a view whose path holds no catalog schema, or a definer view that bound no function
+    /// of the name, keeps the call bare (the analyzer refuses it in a stored view's text, never the
+    /// reader's).
     fn stored_qualifier(
         &self,
         name: &str,
         namespace: &str,
         path: &[Vec<String>],
-        in_view: bool,
+        rule: CallRule<'_>,
     ) -> Option<Vec<String>> {
+        let in_view = match rule {
+            CallRule::Bound(bound) => return bound.get(name).cloned(),
+            CallRule::View => true,
+            CallRule::Body => false,
+        };
         let name = fold(name, self.case_sensitive);
         let from_path = path.iter().find_map(|entry| match entry.as_slice() {
             [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
@@ -867,7 +878,7 @@ impl QueryFunctions {
         }
     }
 
-    /// The name of a table function a stored view's text (`in_view`) or a stored function's body
+    /// The name of a table function a stored view's text or a stored function's body
     /// calls (`name` as written, its parts joined by [`krishiv_plan::TABLE_FUNCTION_NAME_SEP`])
     /// qualified as [`Self::qualify_calls`] qualifies a scalar call there (review r6 R6-1, r7
     /// R7-1): a bare name no built-in table function answers goes to the stored function its frozen
@@ -879,14 +890,82 @@ impl QueryFunctions {
         namespace: &str,
         path: &[Vec<String>],
         profile: SparkProfile,
-        in_view: bool,
+        rule: CallRule<'_>,
     ) -> Option<String> {
         if name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP) || builtin_table(name, profile) {
             return None;
         }
-        let mut parts = self.stored_qualifier(name, namespace, path, in_view)?;
+        let mut parts = self.stored_qualifier(name, namespace, path, rule)?;
         parts.push(name.to_owned());
         Some(parts.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()))
+    }
+}
+
+/// Where the bare calls of an expanded text resolve when not through the reader's session.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CallRule<'a> {
+    /// A stored function's body: through its frozen path, else its own namespace (review r7 R7-1).
+    Body,
+    /// An invoker view's text: through its frozen path at each read, as Spark resolves it.
+    View,
+    /// A definer view's text: where its functions were bound when it was created
+    /// ([`crate::store::ViewDef::functions`], review r8 item 1).
+    Bound(&'a BoundFunctions),
+}
+
+impl QueryFunctions {
+    /// The functions of a definer view's text `plan`, bound now (review r8 item 1): each name it
+    /// calls bare (scalar or table, at every level) that no built-in answers, with the catalog and
+    /// schema [`CallRule::View`] resolves it to through the view's frozen `path` and `namespace`.
+    /// A name that resolves nowhere is left out, so a read refuses its call.
+    pub(crate) fn bound_calls(
+        &self,
+        plan: &Arc<LogicalPlan>,
+        namespace: &str,
+        path: &[Vec<String>],
+        profile: SparkProfile,
+    ) -> BoundFunctions {
+        let mut bound = BoundFunctions::new();
+        let mut bind = |name: &str| {
+            if !bound.contains_key(name)
+                && let Some(q) = self.stored_qualifier(name, namespace, path, CallRule::View)
+            {
+                bound.insert(name.to_owned(), q);
+            }
+        };
+        let mut plans = vec![plan];
+        let mut exprs: Vec<&Arc<Expr>> = Vec::new();
+        while let Some(p) = plans.pop() {
+            if let PlanNode::TableFunction { name, .. } = &p.node
+                && !name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                && !builtin_table(name, profile)
+            {
+                bind(name);
+            }
+            p.for_each_expr(&mut |e| exprs.push(e));
+            p.for_each_child(&mut |c| plans.push(c));
+            while let Some(e) = exprs.pop() {
+                if let ExprNode::Function(call) = &e.node
+                    && call.qualifier.is_empty()
+                    && call.name != "qualify"
+                    && Builtin::from_name(&call.name).is_none()
+                    && matches!(
+                        self.base.lookup(
+                            &["system".to_owned(), "builtin".to_owned(), call.name.clone()],
+                            profile
+                        ),
+                        FunctionLookup::NotFound
+                    )
+                {
+                    bind(&call.name);
+                }
+                if let ExprNode::Subquery { plan, .. } = &e.node {
+                    plans.push(plan);
+                }
+                e.for_each_child(&mut |c| exprs.push(c));
+            }
+        }
+        bound
     }
 }
 

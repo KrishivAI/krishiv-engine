@@ -359,15 +359,15 @@ fn a_body_a_definer_views_text_calls_reads_as_its_definer_and_its_owner() {
     assert_eq!(read(&carl, "SELECT * FROM default.dva"), ["ana"]);
 }
 
-/// Review r7 n7 (probe p20): path shadowing. A definer view's bare call resolves through the path
-/// frozen with it each time it is read (Spark: the stored resolution path is searched at analysis,
-/// first schema holding the name), so a function created later in a schema earlier on that path
-/// answers. What protects the definer: calling it needs her `Select` on it (asked of the definer,
-/// review r5 M7), and its body reads with the intersection of the definer and its owner (r7 M9).
-/// Creating `ns2.f` beside the definer's `default.f` asks the creator nothing about `default.f`
-/// (the r7 n7 refusal: a stored call's bare name was looked up to test for an aggregate).
+/// Review r7 n7 (probe p20) and r8 item 1 (A1 decision): a definer view's functions are bound
+/// when it is created. Every name its text calls is resolved then, through the path frozen with
+/// it, and stored fully qualified; a read never resolves it again. So a function created later in
+/// a schema earlier on that path changes nothing, even granted to the definer: whoever may create
+/// a function there never decides the view's row filter. Creating `ns2.f` beside the definer's
+/// `default.f` asks the creator nothing about `default.f` (the r7 n7 refusal: a stored call's bare
+/// name was looked up to test for an aggregate).
 #[test]
-fn a_function_shadowing_a_definer_views_frozen_path_needs_the_definers_rights() {
+fn a_function_shadowing_a_definer_views_frozen_path_changes_nothing() {
     let w = World::new();
     let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
     ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
@@ -396,27 +396,192 @@ fn a_function_shadowing_a_definer_views_frozen_path_needs_the_definers_rights() 
     );
     ok(&ana, "GRANT SELECT ON VIEW default.dvp TO user:bob");
     assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana"]);
-    // bob creates `ns2.f`, earlier on the view's frozen path: ana may not call it, so her view is
-    // refused, redacted.
+    // bob creates `ns2.f`, earlier on the view's frozen path, and grants it to ana: the view still
+    // calls the `default.f` it was created over.
     ok(
         &bob,
         "CREATE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN true",
     );
-    for s in [&bob, &ana] {
-        assert_redacted(s, "SELECT * FROM default.dvp", &["`f`", "ns2", "`bob`"]);
-    }
-    // Granted to ana, it answers (the path is searched when the view is read).
     ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
-    assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana", "carl"]);
-    // A body reading what only bob holds: ana is asked too, so it is refused, redacted.
+    for s in [&bob, &ana] {
+        assert_eq!(read(s, "SELECT * FROM default.dvp"), ["ana"]);
+    }
+    // Nor does a body reading what only bob holds.
     ok(
         &bob,
         "CREATE OR REPLACE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN \
          RETURN x IN (SELECT o FROM ns2.bt)",
     );
     ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
-    assert_redacted(&bob, "SELECT * FROM default.dvp", &["bt", "ns2", "`bob`"]);
-    // Dropped, ana's own `default.f` answers again.
+    assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana"]);
     ok(&bob, "DROP FUNCTION ns2.f");
     assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana"]);
+    // Replacing the view binds its functions again, through the path of the replacing session.
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN true",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
+    ok(
+        &ana,
+        "ALTER VIEW default.dvp AS SELECT owner FROM default.t WHERE f(owner)",
+    );
+    assert_eq!(read(&bob, "SELECT * FROM default.dvp"), ["ana", "carl"]);
+    ok(
+        &bob,
+        "CREATE OR REPLACE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN false",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
+    assert_eq!(
+        read(&bob, "SELECT * FROM default.dvp"),
+        Vec::<String>::new()
+    );
+}
+
+/// Review r8 item 1: a function a definer view was bound to, dropped, fails the view closed, as a
+/// dropped table does (Spark's error for a missing routine), redacted for its reader; one of the
+/// name created later elsewhere on the frozen path never answers instead.
+#[test]
+fn a_dropped_bound_function_fails_a_definer_view_closed_and_redacted() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    ok(
+        &ana,
+        "CREATE FUNCTION keep(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION rows_of() RETURNS TABLE (o STRING) RETURN SELECT 'ana'",
+    );
+    ok(&ana, "SET spark.sql.path.enabled = true");
+    ok(
+        &ana,
+        "SET PATH = system.builtin, spark_catalog.ns2, spark_catalog.default",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvd SQL SECURITY DEFINER AS \
+         SELECT owner FROM default.t WHERE keep(owner)",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.dvdt SQL SECURITY DEFINER AS \
+         SELECT owner FROM default.t WHERE owner IN (SELECT o FROM rows_of())",
+    );
+    for v in ["dvd", "dvdt"] {
+        ok(
+            &ana,
+            &format!("GRANT SELECT ON VIEW default.{v} TO user:bob"),
+        );
+        assert_eq!(read(&bob, &format!("SELECT * FROM default.{v}")), ["ana"]);
+    }
+    // bob's functions of the same names, earlier on the frozen path and granted to ana.
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.keep(x STRING) RETURNS BOOLEAN RETURN true",
+    );
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.rows_of() RETURNS TABLE (o STRING) RETURN SELECT 'carl'",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.keep TO user:ana");
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.rows_of TO user:ana");
+    ok(&ana, "DROP FUNCTION default.keep");
+    ok(&ana, "DROP FUNCTION default.rows_of");
+    // Spark's errors for a missing routine: a scalar call's and a table function's.
+    for (v, class) in [
+        ("dvd", "UNRESOLVED_ROUTINE"),
+        ("dvdt", "UNRESOLVABLE_TABLE_VALUED_FUNCTION"),
+    ] {
+        let sql = format!("SELECT * FROM default.{v}");
+        let e = rows(&bob, &sql).expect_err(&sql);
+        assert_eq!(e.error_class().name(), class, "{sql}: {e}");
+        let text = e.to_string();
+        assert!(
+            text.contains(krishiv_common::secret::REDACTED),
+            "{sql}: {text}"
+        );
+        for h in ["keep", "rows_of", "ns2", "default", "`ana`"] {
+            assert!(!text.contains(h), "{sql}: {h}: {text}");
+        }
+        // The definer is told the same failure (her view no longer resolves).
+        let e = rows(&ana, &sql).expect_err(&sql);
+        assert_eq!(e.error_class().name(), class, "{sql}: {e}");
+    }
+}
+
+/// Review r8 item 1: an invoker view keeps Spark's resolution, its bare calls resolved through its
+/// frozen path each time it is read (Spark v4.2.0: the view's stored resolution path is searched
+/// when its text is analyzed), so a function created later earlier on that path answers.
+#[test]
+fn an_invoker_views_calls_resolve_through_its_frozen_path_at_each_read() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 5)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    ok(
+        &ana,
+        "CREATE FUNCTION f(x STRING) RETURNS BOOLEAN RETURN x = 'ana'",
+    );
+    ok(&ana, "SET spark.sql.path.enabled = true");
+    ok(
+        &ana,
+        "SET PATH = system.builtin, spark_catalog.ns2, spark_catalog.default",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW default.ivp AS SELECT owner FROM default.t WHERE f(owner)",
+    );
+    assert_eq!(read(&ana, "SELECT * FROM default.ivp"), ["ana"]);
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.f(x STRING) RETURNS BOOLEAN RETURN true",
+    );
+    ok(&bob, "GRANT SELECT ON FUNCTION ns2.f TO user:ana");
+    assert_eq!(read(&ana, "SELECT * FROM default.ivp"), ["ana", "carl"]);
+    ok(&bob, "DROP FUNCTION ns2.f");
+    assert_eq!(read(&ana, "SELECT * FROM default.ivp"), ["ana"]);
+}
+
+/// Review r7 n6: `EXPLAIN FORMATTED` (and the simple form) of a query whose definer view's reads
+/// are refused prints the refusal, its class and SQLSTATE with every parameter redacted, as the
+/// `EXTENDED` and `COST` forms do; never an empty message, never a plan.
+#[test]
+fn explain_formatted_of_a_refused_definer_read_prints_the_redacted_refusal() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE secret (owner STRING) USING parquet");
+    ok(&root, "INSERT INTO secret VALUES ('ana')");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE secret TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW default.dve SQL SECURITY DEFINER AS SELECT owner FROM default.secret",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dve TO user:bob");
+    assert_eq!(read(&bob, "SELECT * FROM default.dve"), ["ana"]);
+    ok(&root, "REVOKE SELECT ON TABLE secret FROM user:ana");
+    for mode in ["FORMATTED", "EXTENDED", "COST", ""] {
+        let sql = format!("EXPLAIN {mode} SELECT * FROM default.dve");
+        let text = read(&bob, &sql).join("\n");
+        assert!(
+            text.contains("42501") && text.contains(krishiv_common::secret::REDACTED),
+            "{sql}: {text}"
+        );
+        for h in ["secret", "`ana`", "Scan"] {
+            assert!(!text.contains(h), "{sql}: {h}: {text}");
+        }
+    }
 }

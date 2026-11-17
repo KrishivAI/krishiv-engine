@@ -2,6 +2,7 @@
 //! View expansion: the walk that inlines permanent and temporary views into a plan.
 
 use super::*;
+use crate::sql_functions::CallRule;
 use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -15,6 +16,8 @@ pub(super) struct Expander<'a> {
     pub(super) view_namespace: Option<String>,
     /// Inside a stored view: the SQL path frozen with it.
     pub(super) view_path: Option<Vec<Vec<String>>>,
+    /// Inside a definer view's text: the functions bound when it was created (review r8 item 1).
+    pub(super) view_functions: Option<crate::store::BoundFunctions>,
     /// The catalog-store lookups so far, in plan order, without repeats.
     pub(super) reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
@@ -193,17 +196,22 @@ impl Expander<'_> {
     /// Where the calls of the plan being expanded resolve, when not through the reader's session:
     /// inside a stored view's text, its namespace and frozen path (a view's rule); else, in a stored
     /// function's body, the function's namespace and frozen path (a body's rule, review r7 R7-1).
-    /// The last field: whether it is a view's text.
-    fn call_scope(&self) -> Option<(&str, &[Vec<String>], bool)> {
+    /// The last field: the rule, a definer view's text calling only the functions it bound when
+    /// it was created (review r8 item 1).
+    fn call_scope(&self) -> Option<(&str, &[Vec<String>], CallRule<'_>)> {
         let namespace = self.view_namespace.as_deref()?;
         if self.in_stored_view > 0 {
-            return Some((namespace, self.view_path.as_deref()?, true));
+            let rule = match &self.view_functions {
+                Some(bound) => CallRule::Bound(bound),
+                None => CallRule::View,
+            };
+            return Some((namespace, self.view_path.as_deref()?, rule));
         }
         self.stored.filter(|s| s.stored_body).map(|_| {
             (
                 namespace,
                 self.view_path.as_deref().unwrap_or_default(),
-                false,
+                CallRule::Body,
             )
         })
     }
@@ -215,12 +223,12 @@ impl Expander<'_> {
         let PlanNode::TableFunction { name, args } = &plan.node else {
             return plan;
         };
-        let (Some(qualify), Some((namespace, path, in_view))) =
+        let (Some(qualify), Some((namespace, path, rule))) =
             (self.stored.and_then(|s| s.qualify_table), self.call_scope())
         else {
             return plan;
         };
-        match qualify(name, namespace, path, in_view) {
+        match qualify(name, namespace, path, rule) {
             Some(name) => Arc::new(
                 LogicalPlan::new(PlanNode::TableFunction {
                     name,
@@ -398,11 +406,19 @@ impl Expander<'_> {
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());
+        // A definer view calls what it bound when created; an invoker view resolves at each read.
+        let previous_functions = std::mem::replace(
+            &mut self.view_functions,
+            view.definer
+                .as_ref()
+                .map(|_| view.functions.clone().unwrap_or_default()),
+        );
         self.in_stored_view += 1;
         let input = self.go(text, &mut Vec::new());
         self.in_stored_view -= 1;
         self.view_namespace = previous;
         self.view_path = previous_path;
+        self.view_functions = previous_functions;
         self.path.pop();
         if definer.is_some() {
             self.in_definer.pop();
@@ -520,9 +536,9 @@ impl Expander<'_> {
         // Inside a stored view (or a stored function's body) the calls of its query resolve through
         // the path it was created under.
         if matches!(expr.node, ExprNode::Function(_))
-            && let (Some(qualify), Some((namespace, path, in_view))) =
+            && let (Some(qualify), Some((namespace, path, rule))) =
                 (self.stored.and_then(|s| s.qualify), self.call_scope())
-            && let Some(next) = qualify(&expr, namespace, path, in_view)
+            && let Some(next) = qualify(&expr, namespace, path, rule)
         {
             expr = next;
         }
