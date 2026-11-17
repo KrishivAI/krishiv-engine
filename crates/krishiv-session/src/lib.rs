@@ -51,6 +51,7 @@ mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+pub mod catalog_decl;
 mod char_write;
 mod collation_defaults;
 mod column;
@@ -58,10 +59,12 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+pub mod egress;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
@@ -150,6 +153,8 @@ pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION
 pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].

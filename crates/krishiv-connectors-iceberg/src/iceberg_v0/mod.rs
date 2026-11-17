@@ -11,6 +11,9 @@ pub(crate) mod table;
 pub(crate) mod types;
 
 #[cfg(test)]
+#[cfg(feature = "cloud")]
+mod azure_tests;
+#[cfg(test)]
 mod baseline_tests;
 #[cfg(test)]
 mod delete_tests;

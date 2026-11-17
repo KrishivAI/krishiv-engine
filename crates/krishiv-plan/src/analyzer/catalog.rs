@@ -409,6 +409,15 @@ pub enum Securable {
     },
     /// A named connection (credentials plus endpoint) a statement uses.
     Connection(String),
+    /// One column of a table or view (P3-T062): asked per referenced column after analysis, only
+    /// of a policy that [decides columns](AccessPolicy::column_level). A grant on the table
+    /// covers all its columns.
+    Column {
+        /// The table or view.
+        table: TableIdent,
+        /// The column, in the catalog's spelling.
+        column: String,
+    },
 }
 
 impl fmt::Display for Securable {
@@ -422,6 +431,11 @@ impl fmt::Display for Securable {
             Self::System(n) => write!(f, "system {}", quoted(std::slice::from_ref(n))),
             Self::Secret { scope } => write!(f, "secret {}", quoted(std::slice::from_ref(scope))),
             Self::Connection(n) => write!(f, "connection {}", quoted(std::slice::from_ref(n))),
+            Self::Column { table, column } => write!(
+                f,
+                "column {} of table {table}",
+                quoted(std::slice::from_ref(column))
+            ),
         }
     }
 }
@@ -531,6 +545,18 @@ pub trait AccessPolicy: Send + Sync {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>>;
+    /// Whether the policy decides reads per column (P3-T062 grants): analysis then asks
+    /// [`Privilege::Browse`] on each table and view it binds (to see its schema) and, once the
+    /// query is resolved, [`Privilege::Select`] on a [`Securable::Column`] per referenced column
+    /// (on the table itself when none is). The default, `false`, asks `Select` on the table.
+    /// A wrapper that forwards `check` forwards this too; one that does not stays at the
+    /// stricter table-level question.
+    fn column_level(&self) -> bool {
+        false
+    }
+    /// Told once per refusal [`super::authorize`] returns (after any `Browse` fallback), so a
+    /// provider can write its audit record and count the denial. The default does nothing.
+    fn denied(&self, _principal: &Principal, _securable: &Securable, _privilege: Privilege) {}
 }
 
 /// The embedded default policy: everything is allowed.

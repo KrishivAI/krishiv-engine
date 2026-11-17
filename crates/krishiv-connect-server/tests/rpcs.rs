@@ -317,6 +317,25 @@ async fn analyze_explain_tree_string_and_flags() {
         panic!("is local");
     };
     assert!(!l.is_local);
+    // A `LocalRelation` (`createDataFrame`) is local; a projection over one is not.
+    let local = pb::Plan {
+        op_type: Some(PlanOp::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::LocalRelation(pb::LocalRelation {
+                data: None,
+                schema: Some("a INT".to_owned()),
+            })),
+        }))),
+    };
+    let AResult::IsLocal(l) = analyzed(
+        &run,
+        Analyze::IsLocal(Box::new(areq::IsLocal { plan: Some(local) })),
+    )
+    .await
+    else {
+        panic!("is local");
+    };
+    assert!(l.is_local);
     // Codex review (#738): SQL text is parsed during analysis, so a SQL
     // `VALUES` is not an inline table when `is_local` asks (Spark's answer
     // for it is to be checked against 4.2/4.3 before this changes).
@@ -1345,5 +1364,50 @@ async fn a_requests_tags_reach_the_engine_queries() {
             .value(0),
         1,
         "both request tags are on the operation's query row"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sql_commands_tags_reach_the_engine_queries() {
+    use arrow_array::cast::AsArray;
+    let run = start().await;
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::SqlCommand {
+        sql: "CREATE TEMPORARY VIEW tagged_v AS SELECT 1 AS a".to_owned(),
+        ..Default::default()
+    };
+    let plan = pb::Plan {
+        op_type: Some(pb::plan::OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    };
+    let mut live = stream(
+        &run.channel,
+        pb::ExecutePlanRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: Some(OP.to_owned()),
+            plan: Some(plan),
+            tags: vec!["etl".to_owned()],
+            ..Default::default()
+        },
+    )
+    .await;
+    while live.message().await.expect("message").is_some() {}
+    let batches = run
+        .entry()
+        .session()
+        .sql("select count(*) from system.queries where tags['etl'] is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0),
+        1,
+        "the request tag is on the sql_command's query row"
     );
 }

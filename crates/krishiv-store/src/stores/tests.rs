@@ -78,7 +78,7 @@ fn urls_parse_for_every_scheme() {
             "cont",
             Some("acct"),
             "k",
-            "abfss://cont@acct",
+            "abfss://cont@acct.dfs.core.windows.net",
             "abfss://cont@acct.dfs.core.windows.net/k",
         ),
         (
@@ -88,7 +88,7 @@ fn urls_parse_for_every_scheme() {
             "cont",
             Some("acct"),
             "",
-            "abfss://cont@acct",
+            "abfss://cont@acct.dfs.core.windows.net",
             "abfs://cont@acct.blob.core.windows.net",
         ),
         (
@@ -583,7 +583,7 @@ fn store_option_keys_never_slice_mid_char() {
 fn sas_tokens_allow_a_leading_question_mark() {
     let with_mark = SecretString::new("?sv=2024-01-01&sig=abc".to_owned());
     assert_eq!(
-        sas_pairs(&with_mark).unwrap(),
+        azure::sas_pairs(&with_mark).unwrap(),
         vec![
             ("sv".to_owned(), "2024-01-01".to_owned()),
             ("sig".to_owned(), "abc".to_owned())
@@ -591,16 +591,37 @@ fn sas_tokens_allow_a_leading_question_mark() {
     );
     let without_mark = SecretString::new("sv=2024-01-01&sig=abc".to_owned());
     assert_eq!(
-        sas_pairs(&without_mark).unwrap(),
+        azure::sas_pairs(&without_mark).unwrap(),
         vec![
             ("sv".to_owned(), "2024-01-01".to_owned()),
             ("sig".to_owned(), "abc".to_owned())
         ]
     );
-    // Empty names or values are not pairs.
-    for bad in ["", "?", "?&", "sv=&sig=abc", "sv=2024-01-01&sig="] {
+    // A SAS is copied percent-encoded (`az storage container generate-sas`, the portal): the
+    // pairs are decoded, as object_store's own `split_sas` (`azure/builder.rs` l.1353) does, since
+    // object_store encodes them again when it signs a request.
+    let encoded = SecretString::new("se=2030-01-01T00%3A00%3A00Z&sig=ab%2Bc%3D".to_owned());
+    assert_eq!(
+        azure::sas_pairs(&encoded).unwrap(),
+        vec![
+            ("se".to_owned(), "2030-01-01T00:00:00Z".to_owned()),
+            ("sig".to_owned(), "ab+c=".to_owned())
+        ]
+    );
+    // Empty names or values are not pairs, nor is a broken escape.
+    for bad in [
+        "",
+        "?",
+        "?&",
+        "sv=&sig=abc",
+        "sv=2024-01-01&sig=",
+        "sig=ab%2",
+        "sig=ab%zz",
+        "sig=%ff",
+        "sig=%+1",
+    ] {
         assert!(
-            sas_pairs(&SecretString::new(bad.to_owned())).is_err(),
+            azure::sas_pairs(&SecretString::new(bad.to_owned())).is_err(),
             "{bad}"
         );
     }
@@ -831,4 +852,172 @@ fn a_region_cannot_name_a_host() {
             .store(&url)
             .unwrap();
     }
+}
+
+#[test]
+fn onelake_hosts_keep_their_host_and_never_share_an_azure_store() {
+    // (url, account, host, store id): object_store 0.14.2 `azure/builder.rs` `parse_url`
+    // (l.720-756) takes the account from the first label (two labels for a workspace private
+    // link) and sets the Fabric endpoint for every `*.fabric.microsoft.com` host.
+    for (input, account, host, store) in [
+        (
+            "abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files/a.csv",
+            "onelake",
+            "onelake.dfs.fabric.microsoft.com",
+            "abfss://ws@onelake.dfs.fabric.microsoft.com",
+        ),
+        // Hosts are case-insensitive: object_store reads the lower-cased `Url::host_str`, so the
+        // account (and the store id) is lower-case too; the `blob` name of a OneLake host is the
+        // same store as its `dfs` name.
+        (
+            "abfss://ws@OneLake.Blob.Fabric.Microsoft.com/lh",
+            "onelake",
+            "onelake.blob.fabric.microsoft.com",
+            "abfss://ws@onelake.dfs.fabric.microsoft.com",
+        ),
+        (
+            "abfss://c@Acct.DFS.core.windows.net/k",
+            "acct",
+            "acct.dfs.core.windows.net",
+            "abfss://c@acct.dfs.core.windows.net",
+        ),
+        (
+            "abfss://ws@WsId.Z28.dfs.fabric.microsoft.com/lh",
+            "wsid.z28",
+            "wsid.z28.dfs.fabric.microsoft.com",
+            "abfss://ws@wsid.z28.dfs.fabric.microsoft.com",
+        ),
+        (
+            "abfss://ws@wsid.z28.dfs.fabric.microsoft.com/lh",
+            "wsid.z28",
+            "wsid.z28.dfs.fabric.microsoft.com",
+            "abfss://ws@wsid.z28.dfs.fabric.microsoft.com",
+        ),
+        (
+            "abfss://ws@wsid.z28.onelake.fabric.microsoft.com/lh",
+            "wsid.z28",
+            "wsid.z28.onelake.fabric.microsoft.com",
+            "abfss://ws@wsid.z28.onelake.fabric.microsoft.com",
+        ),
+        (
+            "abfss://ws@onelake.dfs.core.windows.net/lh",
+            "onelake",
+            "onelake.dfs.core.windows.net",
+            "abfss://ws@onelake.dfs.core.windows.net",
+        ),
+    ] {
+        let url = parse_object_url(input).unwrap();
+        assert_eq!(url.account.as_deref(), Some(account), "{input}");
+        assert_eq!(url.host.as_deref(), Some(host), "{input}");
+        assert_eq!(url.store_id, StoreId::new(store), "{input}");
+        assert_eq!(parse_object_url(&url.display).unwrap(), url, "{input}");
+    }
+    // A OneLake workspace and a same-named container of an Azure account `onelake` are two
+    // stores, so neither reuses the other's cached store (or its credentials).
+    assert_ne!(
+        parse_object_url("abfss://ws@onelake.dfs.fabric.microsoft.com/k")
+            .unwrap()
+            .store_id,
+        parse_object_url("abfss://ws@onelake.dfs.core.windows.net/k")
+            .unwrap()
+            .store_id
+    );
+    // The dfs and blob names of one account are one store, as before.
+    assert_eq!(
+        parse_object_url("abfss://c@acct.dfs.core.windows.net/k")
+            .unwrap()
+            .store_id,
+        parse_object_url("abfs://c@acct.blob.core.windows.net/k")
+            .unwrap()
+            .store_id
+    );
+    assert_eq!(parse_object_url("abfss://c/k").unwrap().host, None);
+}
+
+#[test]
+fn azure_hosts_other_than_storage_and_onelake_are_refused() {
+    for input in [
+        "abfss://c@acct.dfs.core.chinacloudapi.cn/k",
+        "abfss://c@evil.example.com/k",
+        "abfss://c@acct/k",
+        "abfss://c@onelake.fabric.microsoft.com/k",
+        "abfss://c@a.b.dfs.core.windows.net/k",
+        "abfss://c@.dfs.core.windows.net/k",
+        "abfss://c@ws.y28.dfs.fabric.microsoft.com/k",
+        "abfss://c@ws.z28.queue.fabric.microsoft.com/k",
+        "abfss://c@acct.dfs.core.windows.net:443/k",
+    ] {
+        let error = parse_object_url(input).unwrap_err();
+        assert_eq!(
+            error.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{input}"
+        );
+    }
+}
+
+#[cfg(feature = "cloud")]
+#[test]
+fn onelake_stores_address_the_fabric_endpoint() {
+    // The store's service URL (object_store's `AzureConfig::service`, in its `Debug`): what every
+    // request is sent to.
+    // The store's `Debug` (object_store's, derived) prints its credential: the token here is no
+    // secret.
+    let registry = StoreRegistry::new(config(&[
+        (AZURE_AUTH_TYPE, "OAuth"),
+        (AZURE_OAUTH_ACCESS_TOKEN, "not-a-secret"),
+    ]));
+    for (input, service) in [
+        (
+            "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Files/a.csv",
+            "onelake.blob.fabric.microsoft.com",
+        ),
+        (
+            "abfss://ws@onelake.blob.fabric.microsoft.com/lh",
+            "onelake.blob.fabric.microsoft.com",
+        ),
+        (
+            "abfss://ws@wsid.z28.dfs.fabric.microsoft.com/lh",
+            "wsid.z28.dfs.fabric.microsoft.com",
+        ),
+        (
+            "abfss://cont@acct.dfs.core.windows.net/k",
+            "acct.blob.core.windows.net",
+        ),
+    ] {
+        let store = registry.store(&parse_object_url(input).unwrap()).unwrap();
+        let shown = format!("{store:?}");
+        assert!(
+            shown.contains(&format!("Domain(\"{service}\")")),
+            "{input}: {shown}"
+        );
+    }
+}
+
+#[test]
+fn azure_host_kinds_and_inline_oauth_keys() {
+    assert!(AzureHost::is_core("acct.dfs.core.windows.net"));
+    assert!(!AzureHost::is_core("onelake.dfs.fabric.microsoft.com"));
+    assert!(AzureHost::is_private_link(
+        "wsid.z28.dfs.fabric.microsoft.com"
+    ));
+    assert!(!AzureHost::is_private_link(
+        "onelake.dfs.fabric.microsoft.com"
+    ));
+    // OAuth keys that only authenticate are inline; the ones naming an endpoint or provider are not.
+    assert!(is_inline_azure_key(AZURE_OAUTH_CLIENT_SECRET));
+    assert!(is_inline_azure_key(&format!(
+        "{AZURE_OAUTH_ACCESS_TOKEN}.acct.dfs.core.windows.net"
+    )));
+    assert!(!is_inline_azure_key(AZURE_AUTH_TYPE));
+    assert!(!is_inline_azure_key(
+        "fs.azure.account.oauth2.client.endpoint"
+    ));
+    assert!(is_inline_azure_key(
+        "fs.azure.account.key.acct.dfs.core.windows.net"
+    ));
+    assert!(!is_server_scoped_option(AZURE_OAUTH_CLIENT_SECRET));
+    assert!(is_server_scoped_option(
+        "fs.azure.account.oauth2.client.endpoint"
+    ));
 }
