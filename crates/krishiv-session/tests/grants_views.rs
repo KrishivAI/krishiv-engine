@@ -1666,3 +1666,39 @@ fn a_permanent_view_may_not_reference_an_object_of_the_session() {
         "CREATE TEMP VIEW tv2 AS SELECT a FROM tv WHERE tf(a) AND ruf(a) AND a < lim",
     );
 }
+
+/// Review r5 M7: a stored function a definer view's text calls is the definer's to call (the text
+/// is analyzed as the definer): the reader needs `Select` on the view only, and the definer's
+/// refusal reaches the reader redacted. A call the reader's own statement makes is still asked of
+/// the reader.
+#[test]
+fn a_function_a_definer_views_text_calls_is_asked_of_the_definer() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "CREATE TABLE t (owner STRING, a INT) USING parquet");
+    ok(&root, "INSERT INTO t VALUES ('ana', 1), ('carl', 2)");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:ana");
+    ok(
+        &root,
+        "CREATE FUNCTION rootf(o STRING) RETURNS BOOLEAN RETURN o = 'ana'",
+    );
+    ok(&root, "GRANT SELECT ON FUNCTION rootf TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW dvr SQL SECURITY DEFINER AS SELECT owner FROM t WHERE rootf(owner)",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dvr TO user:bob");
+    assert_eq!(
+        column(&bob, "SELECT owner FROM default.dvr").unwrap(),
+        ["ana"]
+    );
+    let e = denied(
+        &bob,
+        "SELECT owner FROM default.dvr WHERE default.rootf(owner)",
+    );
+    assert!(e.contains("rootf"), "{e}");
+    ok(&root, "REVOKE SELECT ON FUNCTION rootf FROM user:ana");
+    let e = column(&bob, "SELECT owner FROM default.dvr").unwrap_err();
+    assert_redacted(&e.to_string(), &["rootf", "`t`"]);
+}

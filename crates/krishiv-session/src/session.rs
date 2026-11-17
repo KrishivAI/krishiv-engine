@@ -1452,6 +1452,9 @@ impl Session {
                 Err(e) => return Err(self.definer_failure(env, e)),
             }
         }
+        // What only their texts call was asked of their definers (review r5 M7).
+        env.sql_functions
+            .settle_definer_calls(&expansion.plan, &texts, self.state.profile);
         // The profile shows the definers' plans only to a principal that may see them (M2).
         if !definers.is_empty() && !self.may_see_definer_reads(&inlined).await {
             env.withhold_profile

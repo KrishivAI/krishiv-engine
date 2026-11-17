@@ -52,7 +52,7 @@ impl Session {
             .authorize_reads_as(&d.reads, env, &definer, false)
             .await?;
         let mut ctx = env.analysis.clone();
-        ctx.principal = definer;
+        ctx.principal = Arc::clone(&definer);
         ctx.definer_texts = texts.without(query);
         // Bound where the view was created, never where the reader is (review r4 Y1b): its own `WITH`s
         // were resolved under its captured policy before it was inlined, so none is left to the reader's.
@@ -67,11 +67,27 @@ impl Session {
         ctx.variables = Arc::new(krishiv_plan::analyzer::VariableSnapshot::default());
         ctx.stored_view_texts =
             krishiv_plan::analyzer::views::DefinerTexts::new(vec![Arc::clone(query)]);
+        // The stored functions its text calls are the definer's to call (review r5 M7): recorded
+        // apart from the query's, asked of the definer.
+        let calls = Arc::new(env.sql_functions.recording_fork());
+        ctx.functions = Arc::clone(&calls) as Arc<dyn krishiv_plan::analyzer::FunctionRegistry>;
         let plan = Plan::try_new(Arc::clone(query))?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &ctx)
             .await
             .map_err(|e| e.error)?;
+        let privilege = env.analysis.mode.read_privilege();
+        let called = calls.stored_calls();
+        for (namespace, name) in &called {
+            let securable = krishiv_plan::analyzer::Securable::Function(vec![
+                crate::catalog::CATALOG.to_owned(),
+                namespace.clone(),
+                name.clone(),
+            ]);
+            krishiv_plan::analyzer::authorize(&*self.state.policy, &definer, &securable, privilege)
+                .await?;
+        }
+        env.sql_functions.note_definer_calls(called);
         // The views its text inlines show in a plan of it too (review M1): a reader shown the
         // plan is asked `Select` on each, as on a view it read itself.
         let mut reads = analyzed.securables;

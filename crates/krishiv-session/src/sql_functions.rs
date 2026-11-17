@@ -158,7 +158,13 @@ pub(crate) struct QueryFunctions {
     /// The stored function a `CREATE FUNCTION` is checking (namespace, name): its probe calls
     /// it, which is no call by the creator, so it is not recorded in `called`.
     defining: Option<(String, String)>,
+    /// The stored functions a definer view's text calls (asked of its definer, review r5 M7), and
+    /// of those the ones only such texts call: the query's principal is not asked those.
+    definer_calls: Mutex<(Calls, Calls)>,
 }
+
+/// Stored functions by (namespace, name as stored), each once.
+type Calls = Vec<(String, String)>;
 
 /// How a body's permanent views are read: the parser options of the query
 /// and the source ids of the views' lowered text.
@@ -193,7 +199,144 @@ impl QueryFunctions {
             views_read: Mutex::new(Vec::new()),
             called: Mutex::new(Vec::new()),
             defining: None,
+            definer_calls: Mutex::new((Vec::new(), Vec::new())),
         }
+    }
+
+    /// This registry with nothing looked up yet: what an analysis through it calls is recorded
+    /// apart from the query's (a definer view's query, review r5 M7).
+    pub(crate) fn recording_fork(&self) -> Self {
+        Self {
+            base: Arc::clone(&self.base),
+            map: Arc::clone(&self.map),
+            catalog: Arc::clone(&self.catalog),
+            case_sensitive: self.case_sensitive,
+            in_system: self.in_system,
+            stored: Arc::clone(&self.stored),
+            path: self.path.clone(),
+            views: self.views.clone(),
+            expanded: Mutex::new(HashMap::new()),
+            reads: Mutex::new((Vec::new(), None)),
+            views_read: Mutex::new(Vec::new()),
+            called: Mutex::new(Vec::new()),
+            defining: self.defining.clone(),
+            definer_calls: Mutex::new((Vec::new(), Vec::new())),
+        }
+    }
+
+    /// Records `calls`, the stored functions a definer view's text called (its definer was asked).
+    pub(crate) fn note_definer_calls(&self, calls: Vec<(String, String)>) {
+        let mut noted = self
+            .definer_calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for call in calls {
+            if !noted.0.contains(&call) {
+                noted.0.push(call);
+            }
+        }
+    }
+
+    /// Of the stored functions definer views' texts called, those `plan` (the query, its definer
+    /// views' texts `texts` aside) does not call itself, directly or through a body: the query's
+    /// principal is not asked about them (review r5 M7). A plan holding SQL text (not walked here)
+    /// keeps every call the principal's.
+    pub(crate) fn settle_definer_calls(
+        &self,
+        plan: &Arc<LogicalPlan>,
+        texts: &krishiv_plan::analyzer::views::DefinerTexts,
+        profile: SparkProfile,
+    ) {
+        let mut noted = self
+            .definer_calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if noted.0.is_empty() {
+            return;
+        }
+        let own = self.calls_outside(plan, texts, profile);
+        noted.1 = match own {
+            Some(own) => noted
+                .0
+                .iter()
+                .filter(|c| !own.contains(c))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// The stored functions `plan` calls outside the subtrees `texts`, directly or through the
+    /// bodies of the functions it calls, as this registry resolves them; `None` for a plan holding
+    /// SQL text.
+    fn calls_outside(
+        &self,
+        plan: &Arc<LogicalPlan>,
+        texts: &krishiv_plan::analyzer::views::DefinerTexts,
+        profile: SparkProfile,
+    ) -> Option<Vec<(String, String)>> {
+        let fork = self.recording_fork();
+        let mut bodies: Vec<String> = Vec::new();
+        let mut plans: Vec<Arc<LogicalPlan>> = vec![Arc::clone(plan)];
+        let mut exprs: Vec<Arc<Expr>> = Vec::new();
+        let mut body = |found: FunctionLookup, exprs: &mut Vec<Arc<Expr>>| {
+            if let FunctionLookup::Sql(def) = found
+                && !bodies.contains(&cache_key(&def))
+            {
+                bodies.push(cache_key(&def));
+                exprs.push(Arc::clone(&def.body));
+                exprs.extend(def.params.iter().filter_map(|p| p.default.clone()));
+            }
+        };
+        loop {
+            if let Some(p) = plans.pop() {
+                if texts.contains(&p) {
+                    continue;
+                }
+                match &p.node {
+                    PlanNode::Sql { .. } => return None,
+                    PlanNode::TableFunction { name, .. } => {
+                        let parts: Vec<String> = name
+                            .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                            .map(str::to_owned)
+                            .collect();
+                        body(fork.lookup(&parts, profile), &mut exprs);
+                    }
+                    _ => {}
+                }
+                p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+                p.for_each_child(&mut |c| plans.push(Arc::clone(c)));
+            } else if let Some(e) = exprs.pop() {
+                match &e.node {
+                    ExprNode::Function(call) => {
+                        let mut parts = call.qualifier.clone();
+                        parts.push(call.name.clone());
+                        body(fork.lookup(&parts, profile), &mut exprs);
+                    }
+                    ExprNode::Subquery { plan, .. } => plans.push(Arc::clone(plan)),
+                    _ => {}
+                }
+                e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
+            } else {
+                break;
+            }
+        }
+        Some(fork.stored_calls())
+    }
+
+    /// The stored functions a lookup resolved so far that the query's principal is asked about:
+    /// all but those only a definer view's text calls (review r5 M7).
+    pub(crate) fn principal_calls(&self) -> Vec<(String, String)> {
+        let skipped = self
+            .definer_calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .1
+            .clone();
+        self.stored_calls()
+            .into_iter()
+            .filter(|c| !skipped.contains(c))
+            .collect()
     }
 
     /// The stored functions a lookup resolved so far, in order, each once (see `called`).

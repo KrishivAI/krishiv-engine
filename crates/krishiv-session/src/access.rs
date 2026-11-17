@@ -585,7 +585,7 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
         let privilege = env.analysis.mode.read_privilege();
-        for (namespace, name) in env.sql_functions.stored_calls() {
+        for (namespace, name) in env.sql_functions.principal_calls() {
             let securable =
                 Securable::Function(vec![crate::catalog::CATALOG.to_owned(), namespace, name]);
             authorize(
