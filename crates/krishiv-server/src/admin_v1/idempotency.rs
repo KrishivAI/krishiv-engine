@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_principals_keys_never_evict_anothers() {
+    async fn one_principals_keys_never_evict_other_principals_keys() {
         let store = Idempotency::with_limit(Duration::from_secs(60), 2);
         let n = AtomicUsize::new(0);
         store
