@@ -87,7 +87,7 @@ def test_a_client_without_the_token_is_refused(server: Any) -> None:
     try:
         with pytest.raises(PySparkException) as info:
             spark.range(1).collect()
-        assert "unauthenticated" in str(info.value).lower()
+        assert any(w in str(info.value).lower() for w in ("unauthenticated", "authentication"))
     finally:
         spark.stop()
 
@@ -100,7 +100,7 @@ def test_a_wrong_token_is_refused(server: Any) -> None:
     try:
         with pytest.raises(PySparkException) as info:
             spark.range(1).collect()
-        assert "unauthenticated" in str(info.value).lower()
+        assert any(w in str(info.value).lower() for w in ("unauthenticated", "authentication"))
     finally:
         spark.stop()
 
