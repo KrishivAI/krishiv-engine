@@ -492,6 +492,128 @@ impl QueryFunctions {
     }
 }
 
+impl QueryFunctions {
+    /// The first temporary SQL function or session UDF (Rust, Python, Connect) `plan` calls, as
+    /// this registry resolves a call: a bare name a built-in does not answer and a session UDF
+    /// or, earlier on the path than any stored function of that name, a temporary function does,
+    /// or a `session.` / `system.session.` name. A permanent view may call none (review r5 Z2;
+    /// Spark v4.2.0 `views.scala` lines 628-650). Lower case, as Spark names a function.
+    pub(crate) fn temporary_call(
+        &self,
+        plan: &Arc<LogicalPlan>,
+        profile: SparkProfile,
+    ) -> Option<String> {
+        let mut plans = vec![plan];
+        let mut exprs: Vec<&Arc<Expr>> = Vec::new();
+        while let Some(p) = plans.pop() {
+            if let PlanNode::TableFunction { name, .. } = &p.node {
+                let mut parts: Vec<String> = name
+                    .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                    .map(str::to_owned)
+                    .collect();
+                let f = parts.pop().unwrap_or_default();
+                if self.temporary_answers(&parts, &f, true, profile) {
+                    return Some(f.to_lowercase());
+                }
+            }
+            p.for_each_expr(&mut |e| exprs.push(e));
+            p.for_each_child(&mut |c| plans.push(c));
+            while let Some(e) = exprs.pop() {
+                if let ExprNode::Function(call) = &e.node
+                    && self.temporary_answers(&call.qualifier, &call.name, false, profile)
+                {
+                    return Some(call.name.to_lowercase());
+                }
+                if let ExprNode::Subquery { plan, .. } = &e.node {
+                    plans.push(plan);
+                }
+                e.for_each_child(&mut |c| exprs.push(c));
+            }
+        }
+        None
+    }
+
+    /// Whether a temporary function or session UDF answers a call of `name` written with
+    /// `qualifier` (a table function's when `table`).
+    fn temporary_answers(
+        &self,
+        qualifier: &[String],
+        name: &str,
+        table: bool,
+        profile: SparkProfile,
+    ) -> bool {
+        let session = matches!(qualifier, [q] if q.eq_ignore_ascii_case("session"))
+            || matches!(qualifier, [s, q]
+                if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"));
+        if !qualifier.is_empty() && !session {
+            return false;
+        }
+        let temporary = self
+            .map
+            .get(name)
+            .is_some_and(|e| !table || e.def.returns_table.is_some());
+        let udf = !table
+            && !matches!(
+                self.base
+                    .lookup(&["session".to_owned(), name.to_owned()], profile),
+                FunctionLookup::NotFound
+            );
+        if session {
+            return temporary || udf;
+        }
+        let builtin = if table {
+            name.eq_ignore_ascii_case("json_tuple")
+                || matches!(
+                    krishiv_plan::analyzer::TableFunctionRegistry::lookup(
+                        &krishiv_plan::analyzer::BuiltinTableFunctions::new(),
+                        name,
+                        profile,
+                    ),
+                    krishiv_plan::analyzer::TableFunctionLookup::Found(_)
+                )
+        } else {
+            name == "qualify"
+                || Builtin::from_name(name).is_some()
+                || !matches!(
+                    self.base.lookup(
+                        &["system".to_owned(), "builtin".to_owned(), name.to_owned()],
+                        profile
+                    ),
+                    FunctionLookup::NotFound
+                )
+        };
+        if builtin {
+            return false;
+        }
+        // A session UDF answers a bare name right after the built-ins.
+        if udf {
+            return true;
+        }
+        if !temporary {
+            return false;
+        }
+        let name = fold(name, self.case_sensitive);
+        for entry in &self.path {
+            match entry.as_slice() {
+                [s, q] if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session") => {
+                    return true;
+                }
+                [c, n]
+                    if c.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                        && self
+                            .stored
+                            .get(&fold(n, self.case_sensitive), &name)
+                            .is_some() =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+}
+
 impl FunctionRegistry for QueryFunctions {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
         match self.base.lookup(name, profile) {

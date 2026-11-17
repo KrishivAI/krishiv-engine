@@ -110,6 +110,7 @@ mod udfs;
 mod variable_substitution;
 mod variables;
 mod view_schema;
+mod view_session_refs;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};

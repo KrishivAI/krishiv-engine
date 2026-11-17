@@ -1528,3 +1528,141 @@ fn a_stored_views_text_never_reads_a_readers_session_variable() {
     // The reader's own text still reads its variable.
     assert_eq!(column(&bob, "SELECT lim").unwrap(), ["100"]);
 }
+
+/// Review r5 Z2: a permanent view may not reference a temporary view, a temporary function, a
+/// session UDF or a session variable: `CREATE VIEW`, `CREATE OR REPLACE VIEW` and `ALTER VIEW .. AS`
+/// are refused with `INVALID_TEMP_OBJ_REFERENCE`, temporary views first, then functions, then
+/// variables. Spark v4.2.0 `views.scala` lines 628-650 (`verifyTemporaryObjectsNotExists`), with the
+/// parameters of `QueryCompilationErrors.notAllowedToCreatePermanentViewByReferencingTemp{View,Func,
+/// Var}Error` (lines 3447-3481); goldens `sql-session-variables.sql.out` (a variable) and
+/// `postgreSQL/create_view.sql.out` (a temporary view). A temporary view may reference all of them.
+#[test]
+fn a_permanent_view_may_not_reference_an_object_of_the_session() {
+    let (_w, root, ana) = world();
+    ok(&ana, "CREATE TEMP VIEW tv AS SELECT * FROM t");
+    ok(&ana, "DECLARE VARIABLE lim INT DEFAULT 3");
+    ok(
+        &ana,
+        "DECLARE VARIABLE st STRUCT<f: INT> DEFAULT named_struct('f', 3)",
+    );
+    ok(
+        &ana,
+        "CREATE TEMPORARY FUNCTION tf(x INT) RETURNS BOOLEAN RETURN x < 3",
+    );
+    ok(
+        &ana,
+        "CREATE TEMPORARY FUNCTION ttf() RETURNS TABLE (a INT) RETURN SELECT 1",
+    );
+    ana.register_udf(Shadow {
+        name: "ruf",
+        test: "z2",
+    })
+    .unwrap();
+    ana.register_python_udf(krishiv_session::PythonUdfDef {
+        name: "pyf".to_owned(),
+        eval_type: krishiv_plan::PythonEvalType::ArrowBatched,
+        return_type: krishiv_types::DataType::Boolean,
+        deterministic: true,
+        thread_safe: true,
+    });
+    ok(&ana, "CREATE VIEW altered AS SELECT a FROM t");
+    for (query, temp, kind) in [
+        ("SELECT * FROM tv", "`tv`", "VIEW"),
+        ("SELECT * FROM tv WHERE tf(a) AND a < lim", "`tv`", "VIEW"),
+        ("SELECT * FROM t WHERE tf(a)", "`tf`", "FUNCTION"),
+        ("SELECT * FROM t WHERE session.tf(a)", "`tf`", "FUNCTION"),
+        (
+            "SELECT * FROM t WHERE system.session.TF(a)",
+            "`tf`",
+            "FUNCTION",
+        ),
+        ("SELECT * FROM ttf()", "`ttf`", "FUNCTION"),
+        ("SELECT * FROM t WHERE ruf(a)", "`ruf`", "FUNCTION"),
+        ("SELECT pyf(a) AS p FROM t", "`pyf`", "FUNCTION"),
+        (
+            "SELECT a FROM t WHERE a IN (SELECT a FROM t WHERE tf(a))",
+            "`tf`",
+            "FUNCTION",
+        ),
+        (
+            "SELECT * FROM t WHERE tf(a) AND a < lim",
+            "`tf`",
+            "FUNCTION",
+        ),
+        ("SELECT * FROM t WHERE a < lim", "`lim`", "VARIABLE"),
+        (
+            "SELECT * FROM t WHERE a < session.lim",
+            "`session`.`lim`",
+            "VARIABLE",
+        ),
+        (
+            "SELECT * FROM t WHERE a < system.session.lim",
+            "`system`.`session`.`lim`",
+            "VARIABLE",
+        ),
+        (
+            "SELECT a FROM t WHERE a IN (SELECT lim)",
+            "`lim`",
+            "VARIABLE",
+        ),
+    ] {
+        for (statement, view) in [
+            (format!("CREATE VIEW cv AS {query}"), "cv"),
+            (
+                format!("CREATE VIEW dv SQL SECURITY DEFINER AS {query}"),
+                "dv",
+            ),
+            (format!("ALTER VIEW altered AS {query}"), "altered"),
+        ] {
+            let e = run(&ana, &statement).unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "INVALID_TEMP_OBJ_REFERENCE",
+                "{statement}: {e}"
+            );
+            let message = e.to_string();
+            let expected = format!(
+                "Cannot create the persistent object `spark_catalog`.`default`.`{view}` of the type \
+                 VIEW because it references to the temporary object {temp} of the type {kind}."
+            );
+            assert!(message.contains(&expected), "{statement}: {message}");
+        }
+    }
+    // `CREATE OR REPLACE VIEW` of an existing view (root may drop it).
+    ok(&root, "CREATE VIEW replaced AS SELECT a FROM t");
+    ok(&root, "DECLARE VARIABLE root_lim INT DEFAULT 3");
+    let e = run(
+        &root,
+        "CREATE OR REPLACE VIEW replaced AS SELECT a FROM t WHERE a < root_lim",
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains(
+            "`spark_catalog`.`default`.`replaced` of the type VIEW because it references to the \
+             temporary object `root_lim` of the type VARIABLE"
+        ),
+        "{e}"
+    );
+    // A field of a struct variable is a reference to the variable.
+    let e = run(&ana, "CREATE VIEW sv AS SELECT a, st.f AS f FROM t").unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_TEMP_OBJ_REFERENCE", "{e}");
+    // A column wins over a variable of its name; a stored function and a built-in are no session
+    // objects; a temporary view may reference every one of them.
+    ok(&ana, "CREATE TABLE tl (a INT, lim INT) USING parquet");
+    ok(
+        &ana,
+        "CREATE VIEW by_column AS SELECT a FROM tl WHERE a < lim",
+    );
+    ok(
+        &ana,
+        "CREATE FUNCTION stored_f(x INT) RETURNS BOOLEAN RETURN x < 3",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW by_stored AS SELECT a FROM t WHERE stored_f(a) AND lower('A') = 'a'",
+    );
+    ok(
+        &ana,
+        "CREATE TEMP VIEW tv2 AS SELECT a FROM tv WHERE tf(a) AND ruf(a) AND a < lim",
+    );
+}

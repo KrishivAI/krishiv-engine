@@ -577,17 +577,17 @@ impl Session {
             plan.root(),
             env.analysis.conf.case_sensitive,
         ) {
-            return Err(krishiv_common::error::InvalidTempObjReference {
-                obj_name: name.quoted(),
-                obj: "view".to_owned(),
-                temp_obj_name: format!("`{temp}`"),
-                temp_obj: "view".to_owned(),
-            }
-            .into());
+            return Err(crate::view_session_refs::refusal(
+                &name.quoted(),
+                format!("`{temp}`"),
+                "VIEW",
+            ));
         }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env).await?;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+            .await?;
         let query_columns: Vec<String> = analysis
             .analyzed
             .output
@@ -1036,16 +1036,16 @@ impl Session {
                     plan.root(),
                     env.analysis.conf.case_sensitive,
                 ) {
-                    return Err(krishiv_common::error::InvalidTempObjReference {
-                        obj_name: name.quoted(),
-                        obj: "view".to_owned(),
-                        temp_obj_name: format!("`{temp}`"),
-                        temp_obj: "view".to_owned(),
-                    }
-                    .into());
+                    return Err(crate::view_session_refs::refusal(
+                        &name.quoted(),
+                        format!("`{temp}`"),
+                        "VIEW",
+                    ));
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env).await?;
+                let analysis = df.analyzed_in(env.clone()).await?;
+                self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+                    .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
