@@ -20,6 +20,7 @@ use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Schema, SchemaRef};
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerExited, OperationCanceled, PythonException,
+    TableValuedFunctionFailedToAnalyzeInPython,
 };
 use krishiv_exec::python_relation::Frame;
 use krishiv_udf_sandbox::{EXIT_SANDBOX_FAILED, SandboxError};
@@ -280,7 +281,11 @@ impl Worker {
     /// Starts a relation task over loaded payload `id` (wire `task`) run as `eval_type` (the payload's own, or
     /// the window kind of a grouped-aggregate payload): `key_count` key columns lead each frame, `arity` data
     /// columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an aggregate keeps
-    /// before it sends them.
+    /// before it sends them; `udtf` is a UDTF call's part of the message (`relation.rs` `udtf_message`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the task message's fields, each from the call site"
+    )]
     pub(crate) fn start_task(
         &mut self,
         id: u64,
@@ -289,8 +294,9 @@ impl Worker {
         arity: usize,
         max_rows: usize,
         conf: &BTreeMap<String, String>,
+        udtf: Option<&Value>,
     ) -> Result<(), KrishivError> {
-        let header = json!({
+        let mut header = json!({
             "t": "task",
             "udf": id,
             "eval_type": eval_type,
@@ -299,7 +305,51 @@ impl Worker {
             "max_rows": max_rows,
             "conf": conf,
         });
+        if let (Some(udtf), Some(map)) = (udtf, header.as_object_mut()) {
+            map.insert("udtf".to_owned(), udtf.clone());
+        }
         self.send_message(&header, &[])
+    }
+
+    /// Runs loaded UDTF payload `id`'s static `analyze` (wire `analyze`) for a call of `name` with `args` (each
+    /// `{type, value?, is_table, name?}`, `udtf.py` `analyze_udtf`), and returns its result (`analyzed`). A
+    /// Python failure is `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` with Spark's message: the
+    /// traceback's text after its last `PySparkValueError:` (`UserDefinedPythonFunction.scala`
+    /// `receiveFromPython`, v4.2.0); the worker stays usable.
+    pub(crate) fn analyze(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &Value,
+    ) -> Result<Value, KrishivError> {
+        let header = json!({"t": "analyze", "udf": id, "name": name, "args": args});
+        self.send_message(&header, &[])?;
+        let msg = match wire::recv(self.control.as_fd()) {
+            Ok(Some(msg)) => msg,
+            Ok(None) => return Err(self.exited("while it ran a UDTF's analyze")),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                return Err(self.exited("while it ran a UDTF's analyze"));
+            }
+            Err(e) => return Err(self.protocol(&e.to_string())),
+        };
+        if !msg.fds.is_empty() {
+            return Err(self.protocol("an analyze answer with descriptors"));
+        }
+        match msg.kind() {
+            "analyzed" => msg
+                .body
+                .get("result")
+                .cloned()
+                .ok_or_else(|| self.protocol("an analyze answer without its result")),
+            "error" if msg.str_field("kind") == "python" => {
+                Err(TableValuedFunctionFailedToAnalyzeInPython {
+                    msg: analyze_message(msg.str_field("message")),
+                }
+                .into())
+            }
+            "error" => Err(self.python_error(&msg)),
+            other => Err(self.protocol(&format!("unexpected answer {other:?} to analyze"))),
+        }
     }
 
     /// The next message of a running task: a request for a frame, a result batch (checked against
@@ -501,6 +551,18 @@ impl Drop for Worker {
         self.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Spark's message of a failed `analyze`: the worker's traceback text after its last `PySparkValueError:`
+/// (Java's `split(...).last` drops trailing empty parts), trimmed.
+pub(crate) fn analyze_message(traceback: &str) -> String {
+    traceback
+        .split("PySparkValueError:")
+        .filter(|part| !part.is_empty())
+        .last()
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
 }
 
 /// Sends `SIGKILL` to the process of `pidfd`; after that process exited (or was reaped) the call fails

@@ -24,13 +24,21 @@ Paths are relative to this crate.
   (`with_worker`, shared with the relation tasks)
 - `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,
   grouped aggregate 202/217/252/254; PR-26c-3: window aggregate 203/253, run over a 202/252 payload as Spark runs
-  one over a window, and scalar iterator 204/251): `prepare_relation` checks the payload's eval type (the task
+  one over a window, and scalar iterator 204/251; part B: the UDTFs 300/301/302, whose task message carries the
+  call's `udtf` part, `udtf_message`: argument offsets and names, partition child indexes, `TABLE` offsets, the
+  declared struct as Spark's JSON and `analyze`'s pickled result in hex; a UDTF payload's command is the
+  cloudpickled class alone): `prepare_relation` checks the payload's eval type (the task
   message carries the kind it runs as), `open` starts one task per
   driver on a call thread that holds one worker for the task (wire `task`: frames on the worker's `want`, results
   as they come, `done`); `send`/`next` are two bounded channels (`send` resolves once the thread took the frame);
   dropping the task cancels it; a thread that ends without `done` or a failure (a panic, a job dropped unrun) is
   `INTERNAL_ERROR` (`Ending`), never a clean end; a `want` after `end` is a protocol break. `PoolSlots`: the
   session's relation slots, the call sites' capacity hint (design P3-T085 §3.3a)
+- `src/udtf.rs` (PR-26c-3 part B) `UdfRuntime::analyze_udtf` on the pool: a 300/301 payload's static `analyze`
+  run on a worker of the owner on a call thread (wire `analyze`/`analyzed`), its answer read as a `UdtfAnalysis`
+  (untrusted: an unreadable one fails the analysis); a Python failure is
+  `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` with Spark's message (the text after the traceback's last
+  `PySparkValueError:`, `worker.rs` `analyze_message`); 302 has no `analyze` (`KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`)
 - `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
   `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
@@ -70,6 +78,9 @@ Paths are relative to this crate.
 - `python/krishiv/_udf/relations.py` (through the link) the relation kinds' runners, Spark 4.2.0's per-eval-type
   loops of `worker.py` over the engine's frames (host-agnostic: the in-process runtime of PR-48 can reuse them)
 - `tests/relations.rs` each relation kind through the pool with real workers (same interpreter rule as below)
+- `tests/udtf.rs` the UDTFs through the pool: `eval`/`terminate` per kind, a partitioned `TABLE` argument, the
+  `UDTF_*` errors, `analyze` and its result reaching `__init__`; `python/krishiv/_udf/udtf.py` is the Python side
+  (a port of pyspark 4.2.0's `read_udtf` and `analyze_udtf.py`)
 - `tests/window_iter_goldens.rs` PySpark 4.2.0's goldens for window aggregates and scalar iterators
   (`python/tests/pyspark_udf/window_iter/goldens.json`) replayed as SQL on a `krishiv_session::Session` over the pool
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,

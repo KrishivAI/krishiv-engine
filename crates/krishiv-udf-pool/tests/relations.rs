@@ -196,6 +196,7 @@ fn prepare_with(
             settings,
             ..RunnerConf::default()
         },
+        udtf: None,
     };
     udfs.prepare_relation(&spec)
 }

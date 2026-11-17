@@ -27,6 +27,11 @@ crosses the socket: an Arrow IPC stream in a memfd does.
   holding one record batch of the declared columns whenever it has rows, and ``done`` when the UDF finished
   (also before ``end``, when the UDF stopped reading: the server drops the frames left), or ``error``. The
   server writes only after a ``want``, so neither side ever blocks on a full socket while the other writes.
+- a UDTF's ``task`` (eval types 300, 301, 302) also carries ``udtf`` (``udtf.UdtfCall``: the argument offsets,
+  the partition child indexes, the declared return type as Spark's JSON and ``analyze``'s pickled result); its
+  ``udf`` command is the cloudpickled UDTF class alone, as Spark Connect sends it.
+- server → worker: ``analyze`` ``{udf, name, args}`` (no descriptor): run loaded UDTF ``udf``'s static
+  ``analyze`` for a call with ``args`` (``udtf.analyze_udtf``); answered by ``analyzed`` ``{result}`` or ``error``.
 - EOF on the socket: the worker exits 0.
 
 ``error`` is ``{kind, message}``: ``kind`` ``python`` is an exception raised while loading or running the UDF
@@ -169,6 +174,14 @@ class _Relation:
         return self.runners[eval_type]
 
 
+class _Udtf:
+    """A loaded Python table function: its class and eval type (``udtf.make_udtf_runner`` per task)."""
+
+    def __init__(self, handler: Any, eval_type: int) -> None:
+        self.handler = handler
+        self.eval_type = eval_type
+
+
 #: The most rows of an aggregate's values kept before they are sent, when the task gives no ``max_rows``
 #: (Spark's default ``spark.sql.execution.arrow.maxRecordsPerBatch``).
 DEFAULT_MAX_ROWS = 10_000
@@ -258,9 +271,15 @@ class _Worker:
         from krishiv._udf.worker import make_wrapper
 
         _check_python_version(str(msg["python_ver"]))
+        from krishiv._udf.udtf import UDTF_EVAL_TYPES
+
         command = _read_memfd(fd, int(msg["len"])).to_pybytes()
-        func, return_type = cloudpickle.loads(command)
         eval_type = int(msg["eval_type"])
+        if eval_type in UDTF_EVAL_TYPES:
+            # A UDTF's command is its class alone (Spark Connect's `PythonUDTF.command`).
+            self.udfs[int(msg["id"])] = _Udtf(cloudpickle.loads(command), eval_type)
+            return
+        func, return_type = cloudpickle.loads(command)
         if eval_type in RELATION_EVAL_TYPES:
             self.udfs[int(msg["id"])] = _Relation(func, return_type, eval_type)
         else:
@@ -273,7 +292,7 @@ class _Worker:
         from krishiv._udf._host import set_runner_conf
 
         wrapper = self.udfs[int(msg["udf"])]
-        if isinstance(wrapper, _Relation):
+        if isinstance(wrapper, (_Relation, _Udtf)):
             raise _ProtocolError("a batch for a relation UDF")
         batch = _read_batch(fd, int(msg["len"]))
         set_runner_conf(dict(msg.get("conf") or {}))
@@ -285,12 +304,19 @@ class _Worker:
         worker still in step (it sends nothing until the server's next message)."""
         from krishiv._udf._host import set_runner_conf
         from krishiv._udf.relations import AGGREGATE_EVAL_TYPES
+        from krishiv._udf.udtf import UdtfCall, make_udtf_runner
 
         relation = self.udfs[int(msg["udf"])]
-        if not isinstance(relation, _Relation):
+        if isinstance(relation, _Udtf):
+            eval_type = int(msg.get("eval_type") or relation.eval_type)
+            if eval_type != relation.eval_type or not isinstance(msg.get("udtf"), dict):
+                raise _ProtocolError(f"a task of eval type {eval_type} for a UDTF of eval type {relation.eval_type}")
+            runner = make_udtf_runner(relation.handler, eval_type, UdtfCall.of(msg["udtf"]))
+        elif isinstance(relation, _Relation):
+            eval_type = int(msg.get("eval_type") or relation.eval_type)
+            runner = relation.runner(eval_type)
+        else:
             raise _ProtocolError("a task for a scalar UDF")
-        eval_type = int(msg.get("eval_type") or relation.eval_type)
-        runner = relation.runner(eval_type)
         set_runner_conf(dict(msg.get("conf") or {}))
         results = _Results(self.sock, int(msg.get("max_rows") or 0), eval_type in AGGREGATE_EVAL_TYPES)
         frames = _Frames(self.sock, results)
@@ -298,6 +324,15 @@ class _Worker:
             results.add(batch)
         results.flush()
         _send(self.sock, {"t": "done"})
+
+    def analyze(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Runs a loaded UDTF's ``analyze`` (``udtf.analyze_udtf``)."""
+        from krishiv._udf.udtf import analyze_udtf
+
+        udtf = self.udfs[int(msg["udf"])]
+        if not isinstance(udtf, _Udtf):
+            raise _ProtocolError("an analyze for a UDF that is not a table function")
+        return analyze_udtf(udtf.handler, str(msg["name"]), list(msg.get("args") or []))
 
     def serve(self) -> None:
         while True:
@@ -312,8 +347,8 @@ class _Worker:
             try:
                 msg = json.loads(data)
                 kind = msg["t"]
-                wanted = 0 if kind == "task" else 1
-                if kind not in ("udf", "batch", "task") or len(fds) != wanted:
+                wanted = 0 if kind in ("task", "analyze") else 1
+                if kind not in ("udf", "batch", "task", "analyze") or len(fds) != wanted:
                     _error(self.sock, "protocol", f"unexpected message {kind!r} with {len(fds)} descriptors")
                     return
             except (ValueError, KeyError, TypeError) as e:
@@ -323,6 +358,17 @@ class _Worker:
                 extra = fds[1:] if len(fds) > 1 else []
                 for fd in extra:
                     os.close(fd)
+            if kind == "analyze":
+                try:
+                    result = self.analyze(msg)
+                except _ProtocolError as e:
+                    _error(self.sock, "protocol", str(e))
+                    return
+                except Exception as e:
+                    _error(self.sock, "python", _traceback(e))
+                    continue
+                _send(self.sock, {"t": "analyzed", "result": result})
+                continue
             if kind == "task":
                 try:
                     self.run_task(msg)
@@ -379,6 +425,7 @@ def main(sock: socket.socket | None = None, paths: list[str] | None = None) -> N
         import pyspark  # ty: ignore[unresolved-import]  # pool workers only
 
         import krishiv._udf.relations  # fail at start, not at the first task
+        import krishiv._udf.udtf  # fail at start, not at the first UDTF
         import krishiv._udf.worker  # noqa: F401  # fail at start, not at the first batch
     except Exception as e:  # a missing package is reported to the server, then the worker exits
         _error(sock, "python", _traceback(e))

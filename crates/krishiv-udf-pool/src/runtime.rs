@@ -263,6 +263,18 @@ impl UdfRuntime for SessionUdfs {
             self.artifacts(),
         )
     }
+    fn analyze_udtf(
+        &self,
+        spec: &krishiv_exec::python_udtf::UdtfAnalyzeSpec,
+    ) -> BoxFuture<'static, krishiv_exec::Result<krishiv_exec::python_udtf::UdtfAnalysis>> {
+        crate::udtf::analyze(
+            &self.pool,
+            &self.owner,
+            self.registered(&spec.name, spec.version),
+            self.artifacts(),
+            spec,
+        )
+    }
 }
 
 struct Prepared {
@@ -514,6 +526,7 @@ mod tests {
             output_types: vec![SparkType::Long],
             output_arrow: Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
             conf: RunnerConf::default(),
+            udtf: None,
         }
     }
 
