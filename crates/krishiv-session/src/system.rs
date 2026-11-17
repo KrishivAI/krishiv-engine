@@ -1429,8 +1429,10 @@ impl crate::table_commands::TableName {
 /// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
 /// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
 impl Session {
-    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    /// The namespace a bare name of a stored object resolves in, refused under `system` and under a
+    /// declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         let (catalog, namespace) = self.state.catalog.position_pair();
         if is_system(&catalog) {
             return Err(krishiv_common::error::SchemaNotFound {

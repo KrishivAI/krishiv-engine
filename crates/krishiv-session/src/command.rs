@@ -394,7 +394,11 @@ impl Session {
 
     /// The name the cache knows the table `parts` by: a temporary view or table by its name, a
     /// permanent table as `namespace.name`. `None` when there is no such relation.
-    fn cache_key(&self, parts: &[String]) -> Option<String> {
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a permanent table's name while a declared catalog is
+    /// current ([`Session::refuse_declared_current`]).
+    fn cache_key(&self, parts: &[String]) -> Result<Option<String>, KrishivError> {
         let env = self.query_env();
         let case_sensitive = env.analysis.conf.case_sensitive;
         let fold = |s: &str| {
@@ -408,12 +412,15 @@ impl Session {
         match parts {
             [only] => {
                 if self.state.catalog.exists(only, case_sensitive) {
-                    return Some(only.clone());
+                    return Ok(Some(only.clone()));
                 }
-                let namespace = self.stored_namespace().ok()?;
-                store
+                self.refuse_declared_current()?;
+                let Ok(namespace) = self.stored_namespace() else {
+                    return Ok(None);
+                };
+                Ok(store
                     .table(&namespace, &fold(only))
-                    .map(|_| format!("{namespace}.{}", fold(only)))
+                    .map(|_| format!("{namespace}.{}", fold(only))))
             }
             [namespace, name]
                 if namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
@@ -423,12 +430,20 @@ impl Session {
                         .exists(&crate::catalog::global_key(name), case_sensitive) =>
             {
                 // The cache records a view by the last part of the name it was read by.
-                Some(name.clone())
+                Ok(Some(name.clone()))
             }
-            [namespace, name] if self.stored_namespace().is_ok() => store
-                .table(&fold(namespace), &fold(name))
-                .map(|_| format!("{}.{}", fold(namespace), fold(name))),
-            _ => None,
+            [namespace, name] => {
+                if !namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+                    self.refuse_declared_current()?;
+                }
+                if self.stored_namespace().is_err() {
+                    return Ok(None);
+                }
+                Ok(store
+                    .table(&fold(namespace), &fold(name))
+                    .map(|_| format!("{}.{}", fold(namespace), fold(name))))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -459,7 +474,7 @@ impl Session {
                     }
                     .into());
                 };
-                if let Some(key) = self.cache_key(&parts) {
+                if let Some(key) = self.cache_key(&parts)? {
                     self.uncache_table(&key);
                 } else if !if_exists {
                     return Err(table_not_found(&parts));
@@ -545,7 +560,7 @@ impl Session {
                     }
                     .into());
                 };
-                let Some(key) = self.cache_key(&parts) else {
+                let Some(key) = self.cache_key(&parts)? else {
                     return Err(table_not_found(&parts));
                 };
                 self.refresh_table(&key);

@@ -316,6 +316,8 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
     let s = Session::builder().runtime(rt).build().unwrap();
     run(&s, "CREATE TABLE default.e (a INT) USING parquet").unwrap();
     run(&s, "CREATE NAMESPACE n0").unwrap();
+    run(&s, "CREATE FUNCTION default.f() RETURNS INT RETURN 5").unwrap();
+    run(&s, "CACHE TABLE default.e").unwrap();
     run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS a").unwrap();
     run(&s, "USE lake").unwrap();
     let mut wrong = Vec::new();
@@ -342,6 +344,14 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
         "SHOW TBLPROPERTIES default.e",
         "SHOW CREATE TABLE default.e",
         "ALTER TABLE default.e ADD COLUMNS (b INT)",
+        "CREATE FUNCTION f2() RETURNS INT RETURN 1",
+        "DROP FUNCTION f",
+        "DROP FUNCTION IF EXISTS f",
+        "REFRESH TABLE e",
+        "REFRESH TABLE default.e",
+        "UNCACHE TABLE e",
+        "UNCACHE TABLE default.e",
+        "UNCACHE TABLE IF EXISTS e",
     ] {
         match run(&s, sql) {
             Err(e)
@@ -356,23 +366,102 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
             )),
         }
     }
+    // The Catalog API calls that run those statements.
+    for (call, r) in [
+        ("refresh_table", block_on(s.catalog().refresh_table("e"))),
+        ("uncache_table", block_on(s.catalog().uncache_table("e"))),
+    ] {
+        match r {
+            Err(e) if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {}
+            other => wrong.push(format!("{call}: {other:?}")),
+        }
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     // Qualified with `spark_catalog`, temporary views and `global_temp` keep working.
     assert_eq!(
         strings(&s, "SHOW TABLES IN spark_catalog.default", 1),
         ["e", "tv"]
     );
-    run(&s, "DESCRIBE NAMESPACE spark_catalog.default").unwrap();
-    run(&s, "SHOW TABLES IN global_temp").unwrap();
-    run(&s, "SELECT * FROM tv").unwrap();
-    run(&s, "DROP VIEW tv").unwrap();
+    let describe = run(&s, "DESCRIBE NAMESPACE spark_catalog.default").unwrap();
+    assert_eq!(
+        &column(&describe, 0)[..2],
+        ["Catalog Name", "Namespace Name"]
+    );
+    assert_eq!(&column(&describe, 1)[..2], ["spark_catalog", "default"]);
+    assert_eq!(strings(&s, "SHOW TABLES IN global_temp", 1), ["tv"]);
+    assert_eq!(strings(&s, "SELECT CAST(a AS STRING) FROM tv", 0), ["1"]);
+    assert!(run(&s, "DROP VIEW tv").unwrap().is_empty());
+    assert!(run(&s, "SELECT * FROM tv").is_err());
     run(&s, "CREATE NAMESPACE spark_catalog.n2").unwrap();
+    assert!(block_on(s.catalog().database_exists("spark_catalog.n2")).unwrap());
     run(&s, "DROP NAMESPACE spark_catalog.n2").unwrap();
-    // Nothing was changed in the embedded catalog.
+    assert!(!block_on(s.catalog().database_exists("spark_catalog.n2")).unwrap());
+    // Nothing was changed in the embedded catalog: its namespaces, table, function and cache.
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(strings(&s, "SHOW NAMESPACES", 0), ["default", "n0"]);
     assert_eq!(strings(&s, "SHOW TABLES", 1), ["e"]);
     assert_eq!(strings(&s, "SHOW COLUMNS IN e", 0), ["a"]);
+    assert_eq!(strings(&s, "SELECT CAST(f() AS STRING)", 0), ["5"]);
+    assert!(!block_on(s.catalog().function_exists("f2")).unwrap());
+    assert!(block_on(s.catalog().is_cached("e")).unwrap());
+}
+
+/// With a declared catalog current, a two-part name in a query resolves in that catalog, as in
+/// Spark, never as the embedded catalog's view or function; a table the declared catalog has is
+/// refused before it is read (the catalog resolves names only for now). `spark_catalog.` names, and
+/// the tables and functions a stored view of `spark_catalog` reads, stay the embedded ones.
+#[test]
+fn queries_under_a_declared_catalog_never_read_embedded_views_or_functions() {
+    let rt = runtime(DeclMode::Embedded, &LAKE);
+    let s = Session::builder().runtime(rt).build().unwrap();
+    for sql in [
+        "CREATE TABLE default.e (a INT) USING parquet",
+        "INSERT INTO default.e VALUES (1)",
+        "CREATE VIEW default.v AS SELECT 42 AS a",
+        "CREATE FUNCTION default.f() RETURNS INT RETURN 5",
+        "CREATE VIEW default.w AS SELECT default.f() + a AS b FROM default.e",
+    ] {
+        run(&s, sql).unwrap();
+    }
+    run(&s, "USE lake").unwrap();
+    let error = |sql: &str| {
+        let e = run(&s, sql).unwrap_err();
+        (e.error_class().name().to_owned(), e.to_string())
+    };
+    let (class, text) = error("SELECT * FROM default.v");
+    assert_eq!(class, "TABLE_OR_VIEW_NOT_FOUND", "{text}");
+    assert!(text.contains("`default`.`v`"), "{text}");
+    let (class, text) = error("SELECT default.f()");
+    assert_eq!(class, "UNRESOLVED_ROUTINE", "{text}");
+    assert!(text.contains("`default`.`f`"), "{text}");
+    // A table `lake` has: its name resolves, its read is refused, never an internal error.
+    for sql in ["SELECT * FROM db.t", "SELECT * FROM lake.db.t"] {
+        let (class, text) = error(sql);
+        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}: {text}");
+        assert!(text.contains("`lake`"), "{sql}: {text}");
+    }
+    assert_eq!(schema_of(&s, "SELECT * FROM db.t").unwrap(), ["x"]);
+    // The embedded catalog's objects by their full names.
+    assert_eq!(
+        strings(
+            &s,
+            "SELECT CAST(a AS STRING) FROM spark_catalog.default.v",
+            0
+        ),
+        ["42"]
+    );
+    assert_eq!(
+        strings(&s, "SELECT CAST(spark_catalog.default.f() AS STRING)", 0),
+        ["5"]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "SELECT CAST(b AS STRING) FROM spark_catalog.default.w",
+            0
+        ),
+        ["6"]
+    );
 }
 
 /// The error text with the catalog name replaced, so a hidden and an undeclared name compare.
