@@ -3052,6 +3052,7 @@ dependencies = [
  "insta",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "prost",
  "prost-reflect",

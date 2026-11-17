@@ -48,7 +48,9 @@ numbers: deletes through SQL, `delete_application_matches_model`, DV corruption,
 assignment errors, equality deletes by sequence number and partition, null keys, a missing equality delete file). `evolution_tests.rs`
 (snapshots written by hand with one manifest per writing schema, as iceberg-rust 0.11 cannot promote or rename:
 `promoted_column_filter_returns_all_rows`, the iceberg-rust #3482 shape, int → long with 4-byte bounds in the old
-manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`).
+manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`); `azure_tests.rs` (feature `cloud`: a table written to Azurite
+over `abfss://` with the account key, loaded and scanned with only a bearer token; a token for another audience
+refused; run by `tests/scripts/object_store_emulators.sh`).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
@@ -90,4 +92,5 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 0014, 0028 (iceberg `skip-tree`, `anyhow` wrapper), 0029 (the bridge crate)
 
 ## Test
-`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` (`--features cloud` adds the Azurite test: offline
+without `KRISHIV_TEST_AZURE_OAUTH_ENDPOINT`, a failure when it is set without the tokens) · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`

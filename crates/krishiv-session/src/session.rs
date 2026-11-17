@@ -64,6 +64,8 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+#[cfg(feature = "unstable-ir")]
+pub use lifecycle::SqlOutcome;
 #[cfg(test)]
 mod run_task;
 
@@ -523,44 +525,7 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        self.check_open()?;
-        let (session, text) = (self.clone(), query.to_owned());
-        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
-        let marker = Arc::clone(&row);
-        let (result, cancelled) = self
-            .on_executor_reasoned(async move {
-                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
-                use tracing::Instrument as _;
-                let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
-                session
-                    .sql_here_marked(&text, marker)
-                    .instrument(span)
-                    .await
-                    .map(|df| df.with_trace(trace))
-            })
-            .await;
-        // A statement refused before it ran (parse, analysis, access) is a
-        // row of `system.queries` too, with the text as the session may show it.
-        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
-        // that failed while it ran): that one has its row.
-        if let Err(error) = &result
-            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
-        {
-            let id = self.state.queries.record_refused(
-                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
-                Some(krishiv_sql::redact_sql(query).as_str()),
-                None,
-                error,
-                self.operation_id(),
-            );
-            self.stamp_row(&id);
-            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
-            if let Some(reason) = cancelled {
-                self.state.queries.note_cancel_reason(&id, reason);
-            }
-        }
-        result
+        self.sql_kind(query).await.map(|(df, _)| df)
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
@@ -584,7 +549,9 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+            .await
+            .map(|(df, _)| df)
     }
 
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
@@ -593,7 +560,7 @@ impl Session {
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
         Box::pin(self.sql_here_inner(query, row, Vec::new())).await
     }
@@ -603,7 +570,7 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         let mut env = self.query_env();
         env.row = row;
         let written = query;
@@ -633,11 +600,12 @@ impl Session {
         let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
+        let command = !matches!(statement, Statement::Query(_));
         let df = self.run_statement(statement, env, query, &redacted).await?;
         // Whatever frame the statement returns (a command's result too) shows the statement's
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
-        Ok(df)
+        Ok((df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -899,11 +867,6 @@ impl Session {
         )
         .map_err(|e| e.error)?;
         Ok(Column::new((*lowered).clone()))
-    }
-
-    /// This session's parser options, from its configuration.
-    pub(crate) fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
     }
 
     /// Reads files (Spark's `spark.read`).

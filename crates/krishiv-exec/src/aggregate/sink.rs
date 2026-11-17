@@ -36,6 +36,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
+use super::distinct::PairCounts;
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, observes_order, unsupported};
@@ -47,9 +48,11 @@ use crate::hash::{HashSeed, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
+pub(super) use counting::set_pair_counter;
 use held::{charged_to_writer, lend_headroom, regrow, reserve_to, shrink_to, take_bytes};
 
 mod combined;
+mod counting;
 mod disk;
 mod held;
 mod parallel;
@@ -1107,6 +1110,10 @@ struct Global {
     changed: Event,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
+    /// The pairs table of a `count(DISTINCT)` counted at the merge
+    /// ([`super::distinct`]): each in-memory final-phase task counts its
+    /// finished table here instead of publishing it.
+    counter: OnceLock<Arc<PairCounts>>,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -1438,6 +1445,7 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
+            counter: OnceLock::new(),
         }))
     }
 
