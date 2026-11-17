@@ -207,6 +207,10 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
+    /// The statement this frame runs as when it has no analysis of its own yet: set for the
+    /// `count(*)` frame [`Self::count`] builds over a `Session::sql` frame, so its analysis keeps
+    /// the statement's text, class, `system.queries` row and sample salt.
+    statement: Option<Arc<QueryEnv>>,
     /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
     pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -236,6 +240,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: None,
             trace: None,
+            statement: None,
             keep: Vec::new(),
         }
     }
@@ -276,6 +281,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
+            statement: None,
             keep: self.keep.clone(),
         }
     }
@@ -1014,12 +1020,18 @@ impl DataFrame {
         let mut env = self.session.query_env();
         // A fresh analysis is still the same statement: keep what
         // `system.queries` shows of it.
-        if let Some(a) = &cached {
-            env.copy_text_from(&a.env);
-            env.statement_class = a.env.statement_class;
-            env.row = Arc::clone(&a.env.row);
-            env.sample_salt = a.env.sample_salt;
+        if let Some(statement) = cached.as_ref().map(|a| &a.env).or(self.statement.as_ref()) {
+            env.copy_text_from(statement);
+            env.statement_class = statement.statement_class;
+            env.row = Arc::clone(&statement.row);
+            env.sample_salt = statement.sample_salt;
         }
+        // A first analysis as another frame's statement: its errors carry
+        // that statement's SQL span.
+        let text = match (&cached, &self.statement) {
+            (None, Some(statement)) => statement.redacted.clone(),
+            _ => None,
+        };
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
@@ -1033,7 +1045,7 @@ impl DataFrame {
             return Ok(a);
         }
         env.quiet_denials = quiet_denials;
-        self.analyzed_in(env).await
+        self.analyzed_in_with_text(env, text.as_deref()).await
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -1051,12 +1063,17 @@ impl DataFrame {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(a) = cached {
-            let id =
-                self.session
-                    .record_refused(a.env.text.as_deref(), a.env.statement_class, &error);
+        if let Some(statement) = cached
+            .map(|a| Arc::clone(&a.env))
+            .or_else(|| self.statement.clone())
+        {
+            let id = self.session.record_refused(
+                statement.text.as_deref(),
+                statement.statement_class,
+                &error,
+            );
             // Shared with the statement's marker, so `sql` adds no second row.
-            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+            *statement.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
         }
         Err(error)
     }
@@ -1334,32 +1351,16 @@ impl DataFrame {
         // leaves the scan reading no column of its own (a count of a JSON/CSV read of only the corrupt-record
         // column is a count, not Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
         let mut frame = self.agg([crate::functions::count_star()]);
-        // Still the frame's statement: its text (a run-time error's SQL context, `system.queries`) and span.
+        // Still the frame's statement: its text (a run-time error's SQL context, `system.queries`), class,
+        // row and span. The count frame is analyzed in the action, as any frame is.
         frame.trace.clone_from(&self.trace);
-        let parent = self
+        frame.statement = self
             .analysis
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(a) = parent
-            && let Some(redacted) = a.env.redacted.as_deref()
-        {
-            let mut env = self.session.query_env();
-            env.copy_text_from(&a.env);
-            env.statement_class = a.env.statement_class;
-            env.row = Arc::clone(&a.env.row);
-            env.sample_salt = a.env.sample_salt;
-            if let Err(error) = frame.analyzed_in_with_text(env, Some(redacted)).await {
-                // As `action_analysis`: a failed re-analysis is the statement's row of `system.queries`.
-                let id = self.session.record_refused(
-                    a.env.text.as_deref(),
-                    a.env.statement_class,
-                    &error,
-                );
-                *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-                return Err(error);
-            }
-        }
+            .as_ref()
+            .map(|a| Arc::clone(&a.env))
+            .or_else(|| self.statement.clone());
         let mut stream = frame.execute_stream().await?;
         let mut rows = 0_u64;
         while let Some(batch) = stream.next().await {

@@ -357,7 +357,7 @@ fn a_count_of_a_statement_shows_its_text() {
         &s,
         "SELECT query_text FROM system.queries WHERE query_text LIKE 'SELECT id FROM range(5)%'",
     );
-    assert!(!texts.is_empty(), "{texts:?}");
+    assert_eq!(texts.len(), 1, "one row for the statement: {texts:?}");
     let all = column(
         &s,
         "SELECT coalesce(query_text, '<none>') FROM system.queries",
