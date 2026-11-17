@@ -34,7 +34,7 @@ const DIR_FLAGS: OFlags = OFlags::RDONLY
 const STAGING: &str = ".staging";
 
 /// The mode bits group and others may not have on the root.
-const NOT_PRIVATE: u32 = 0o077;
+const NOT_PRIVATE: rustix::fs::RawMode = 0o077;
 
 /// The server's artifact root: a fresh private directory.
 #[derive(Debug)]
