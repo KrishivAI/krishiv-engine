@@ -487,7 +487,8 @@ impl Session {
             .into());
         }
         let name = self.namespace_name(&u.name, &env)?;
-        if !self.state.catalog.store.has_namespace(&name) {
+        // One the principal may not list reads as missing (review r2 R4).
+        if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
             return Err(SchemaNotFound {
                 schema_name: format!("`{name}`"),
             }

@@ -384,8 +384,13 @@ impl Session {
         }
     }
 
-    fn require_namespace(&self, namespace: &str) -> Result<(), KrishivError> {
-        if self.state.catalog.store.has_namespace(namespace) {
+    /// `SCHEMA_NOT_FOUND` unless the session catalog has `namespace`; with `named` (the statement
+    /// wrote the name), also for one the principal may not list, exactly as for a missing one
+    /// (review r2 R4: `database_exists`'s rule, `Session::namespace_hidden`).
+    async fn require_namespace(&self, namespace: &str, named: bool) -> Result<(), KrishivError> {
+        if self.state.catalog.store.has_namespace(namespace)
+            && !(named && self.namespace_hidden(namespace).await)
+        {
             Ok(())
         } else {
             Err(SchemaNotFound {
@@ -396,7 +401,7 @@ impl Session {
     }
 
     /// The namespace a `SHOW ... IN name` names, else the current one.
-    fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
+    async fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
@@ -414,7 +419,7 @@ impl Session {
             }
         };
         if !is_global_namespace(&ns) {
-            self.require_namespace(&ns)?;
+            self.require_namespace(&ns, name.is_some()).await?;
         }
         Ok(ns)
     }
@@ -455,7 +460,7 @@ impl Session {
                         .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
                 }
-                let ns = self.show_namespace(namespace.as_ref())?;
+                let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
                     return self
                         .global_views_frame(cols::SHOW_TABLES, pattern.as_ref())
@@ -489,7 +494,7 @@ impl Session {
             ShowKind::Views {
                 namespace, pattern, ..
             } => {
-                let ns = self.show_namespace(namespace.as_ref())?;
+                let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
                     return self
                         .global_views_frame(cols::SHOW_VIEWS, pattern.as_ref())
@@ -677,7 +682,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         self.require_current_profile("SHOW TABLE EXTENDED")?;
-        let ns = self.show_namespace(namespace)?;
+        let ns = self.show_namespace(namespace).await?;
         if is_global_namespace(&ns) {
             return Err(unsupported("SHOW TABLE EXTENDED IN global_temp"));
         }
@@ -1140,6 +1145,8 @@ impl Session {
             }
             DescribeKind::Namespace { extended, name, .. } => {
                 let ns = self.namespace_name(name, &env)?;
+                // One the principal may not list reads as missing (review r2 R4).
+                self.require_namespace(&ns, true).await?;
                 let meta = self
                     .state
                     .catalog

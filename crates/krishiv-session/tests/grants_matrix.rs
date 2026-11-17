@@ -149,6 +149,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         "GRANT USAGE ON CATALOG spark_catalog TO user:lister",
         // A namespace lister holds nothing on (review B3).
         "CREATE NAMESPACE vaultns",
+        "CREATE TABLE vaultns.vt (a INT) USING parquet",
         // A definer view ana may read over `pub` (review B1).
         "CREATE VIEW dpub SQL SECURITY DEFINER AS SELECT a FROM pub",
         "GRANT SELECT ON VIEW dpub TO user:ana",
@@ -557,6 +558,38 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
                 block_on(s.catalog().database_exists(n)).map(|t| format!("{t:?}"))
             }),
         ),
+        // Review r2 R4: the SQL namespace lookups, by `database_exists`'s rule.
+        ("vaultns", "nosuchns", statement("DESCRIBE NAMESPACE {}")),
+        ("vaultns", "nosuchns", statement("DESCRIBE DATABASE {}")),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("DESCRIBE SCHEMA EXTENDED {}"),
+        ),
+        ("vaultns", "nosuchns", statement("SHOW TABLES IN {}")),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW TABLES FROM {} LIKE 'v*'"),
+        ),
+        ("vaultns", "nosuchns", statement("SHOW VIEWS IN {}")),
+        ("vaultns", "nosuchns", statement("SHOW FUNCTIONS IN {}")),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW USER FUNCTIONS IN {}"),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW TABLE EXTENDED IN {} LIKE '*'"),
+        ),
+        ("vaultns", "nosuchns", statement("SHOW CREATE TABLE {}.vt")),
+        ("vaultns", "nosuchns", statement("DESCRIBE {}.vt")),
+        ("vaultns", "nosuchns", statement("SHOW COLUMNS IN vt IN {}")),
+        ("vaultns", "nosuchns", statement("DESCRIBE FUNCTION {}.f")),
+        // Last: a `USE` that succeeds moves the session.
+        ("vaultns", "nosuchns", statement("USE {}")),
     ];
     // The name's last part, wherever the text quotes it.
     let answer = |r: Result<String, KrishivError>, name: &str| {
@@ -583,6 +616,8 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
             ));
         }
     }
+    sql("USE default")(&lister).unwrap();
+    take();
     // Authorised, then revoked (design §6: each cell in all three states): granted the canary, ana
     // reads it through every read shape; revoked, each is refused again, however much of the
     // first answer a cache kept.
