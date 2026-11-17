@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::ArrayRef;
 use krishiv_types::DataType;
 
 /// One argument of a UDTF call: the frame column it reads, and its name
@@ -58,9 +59,12 @@ pub struct UdtfCall {
 pub struct UdtfAnalyzeArg {
     /// The argument's type (a struct for a `TABLE` argument).
     pub data_type: DataType,
-    /// The value of a constant argument, in JSON (`None` for one that is
-    /// not constant).
-    pub value: Option<serde_json::Value>,
+    /// The value of a constant argument: a one-row array of the type's
+    /// Arrow form ([`DataType::to_arrow`]), its row null for a `NULL`
+    /// constant; `None` for an argument that is not constant. The worker
+    /// gives `analyze` the Python value Spark gives (`analyze_udtf.py`
+    /// L76-82 at v4.2.0: the internal value through `fromInternal`).
+    pub value: Option<ArrayRef>,
     /// Whether it is a `TABLE` argument.
     pub is_table: bool,
     /// Its name, when named.

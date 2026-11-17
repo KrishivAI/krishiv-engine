@@ -38,7 +38,11 @@ Paths are relative to this crate.
   run on a worker of the owner on a call thread (wire `analyze`/`analyzed`), its answer read as a `UdtfAnalysis`
   (untrusted: an unreadable one fails the analysis); a Python failure is
   `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` with Spark's message (the text after the traceback's last
-  `PySparkValueError:`, `worker.rs` `analyze_message`); 302 has no `analyze` (`KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`)
+  `PySparkValueError:`, `worker.rs` `analyze_message`); 302 has no `analyze` (`KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`).
+  The call's constants (a one-row Arrow batch, `analyze_input`) and the result (JSON) travel in memfds, never in
+  a control message, the result capped at `MAX_ANALYZE_RESULT` on both sides (the analyze class); the worker
+  converts each constant as Spark does (internal value, then `fromInternal`). A UDTF task's call data goes in a
+  memfd too (`udtf_len`)
 - `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
   `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
@@ -79,10 +83,12 @@ Paths are relative to this crate.
   loops of `worker.py` over the engine's frames (host-agnostic: the in-process runtime of PR-48 can reuse them)
 - `tests/relations.rs` each relation kind through the pool with real workers (same interpreter rule as below)
 - `tests/udtf.rs` the UDTFs through the pool: `eval`/`terminate` per kind, a partitioned `TABLE` argument, the
-  `UDTF_*` errors, `analyze` and its result reaching `__init__`; `python/krishiv/_udf/udtf.py` is the Python side
-  (a port of pyspark 4.2.0's `read_udtf` and `analyze_udtf.py`)
+  `UDTF_*` errors, `analyze` and its result reaching `__init__`, large and oversize `analyze` data, constants of
+  each type; `python/krishiv/_udf/udtf.py` is the Python side (a port of pyspark 4.2.0's `read_udtf` and
+  `analyze_udtf.py`)
 - `tests/window_iter_goldens.rs` PySpark 4.2.0's goldens for window aggregates and scalar iterators
-  (`python/tests/pyspark_udf/window_iter/goldens.json`) replayed as SQL on a `krishiv_session::Session` over the pool
+  (`python/tests/pyspark_udf/window_iter/goldens.json`) replayed as SQL on a `krishiv_session::Session` over the
+  pool, and grouped-aggregate UDFs in SQL `GROUP BY` with the shapes Spark refuses
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
 

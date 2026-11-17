@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import pickle
+import types
 from collections.abc import Iterator
 from typing import Any, ClassVar
 
@@ -24,7 +25,7 @@ pa = pytest.importorskip("pyarrow")
 import krishiv.errors as kerrors  # noqa: E402
 from krishiv._udf import _host, udtf  # noqa: E402
 from krishiv._udf.udtf import SQL_ARROW_TABLE_UDF, SQL_ARROW_UDTF, SQL_TABLE_UDF, UdtfCall  # noqa: E402
-from krishiv.sql.types import IntegerType, LongType, StructField, StructType  # noqa: E402
+from krishiv.sql.types import DataType, IntegerType, LongType, StructField, StructType  # noqa: E402
 
 AB = StructType([StructField("a", LongType()), StructField("b", LongType())])
 
@@ -477,10 +478,14 @@ def analyze_api(monkeypatch: pytest.MonkeyPatch) -> None:
         "_analyze_api",
         lambda: (AnalyzeArgument, AnalyzeResult, OrderingColumn, PartitioningColumn, SelectedColumn),
     )
+    # The facade's types have no `needConversion` yet; an integer needs none in pyspark either.
+    monkeypatch.setattr(DataType, "needConversion", lambda self: False, raising=False)
 
 
-TABLE = {"type": AB.json(), "is_table": True, "name": None}
-N = {"type": '"integer"', "value": 3, "is_table": False, "name": "n"}
+TABLE = {"type": AB.json(), "is_table": True, "name": None, "column": None}
+N = {"type": '"integer"', "column": 0, "is_table": False, "name": "n"}
+#: The constants of a call with ``N``: its value, 3, in column 0.
+VALUES = pa.record_batch([pa.array([3], pa.int32())], names=["_1"])
 
 
 class Analyzed:
@@ -505,7 +510,7 @@ class Analyzed:
 
 
 def test_analyze_gives_spark_s_fields(analyze_api: None) -> None:
-    got = udtf.analyze_udtf(Analyzed, "f", [TABLE, N])
+    got = udtf.analyze_udtf(Analyzed, "f", [TABLE, N], VALUES)
     assert got["schema"] == StructType([StructField("c", LongType())]).json()
     assert pickle.loads(bytes.fromhex(got["pickled"])).partitionBy == [PartitioningColumn("a")]
     assert got["with_single_partition"] is False
@@ -516,7 +521,7 @@ def test_analyze_gives_spark_s_fields(analyze_api: None) -> None:
 
 def analyze_error(handler: Any, args: list[dict[str, Any]]) -> str:
     with pytest.raises(Exception) as err:  # noqa: PT011  # each caller checks the message
-        udtf.analyze_udtf(handler, "f", args)
+        udtf.analyze_udtf(handler, "f", args, VALUES)
     return str(err.value)
 
 
@@ -563,4 +568,71 @@ def test_analyze_s_refusals(analyze_api: None) -> None:
 
 def test_analyze_is_not_run_in_process() -> None:
     with pytest.raises(kerrors.PySparkNotImplementedError):
-        udtf.analyze_udtf(Analyzed, "f", [])
+        udtf.analyze_udtf(Analyzed, "f", [], VALUES)
+
+
+# --- analyze's constants: Spark's internal value, then `fromInternal` ---
+def spark_type(name: str, **fields: Any) -> Any:
+    """A stand-in for a pyspark type: what ``_internal_value`` reads (``fields``, ``elementType``, ...)."""
+    return types.SimpleNamespace(name=name, **fields)
+
+
+def internal(array: Any, dt: Any = None) -> Any:
+    return udtf._internal_value(array[0], dt or spark_type("atomic"))
+
+
+def test_constants_take_spark_s_internal_form() -> None:
+    import datetime
+    import decimal
+
+    assert internal(pa.array([19724], pa.date32())) == 19724
+    assert internal(pa.array([1_704_164_645_123_456], pa.timestamp("us", "UTC"))) == 1_704_164_645_123_456
+    assert internal(pa.array([1_704_164_645_123_456], pa.timestamp("us"))) == 1_704_164_645_123_456
+    assert internal(pa.array([datetime.timedelta(seconds=1)], pa.duration("us"))) == 1_000_000
+    assert internal(pa.array([5_000], pa.time64("ns"))) == 5_000
+    dec = internal(pa.array([decimal.Decimal("12.50")], pa.decimal128(5, 2)))
+    assert str(dec) == "12.50"
+    assert isinstance(dec, decimal.Decimal)
+    assert internal(pa.array([b"\x00\xff"], pa.binary_view())) == b"\x00\xff"
+    assert internal(pa.array(["s"], pa.string_view())) == "s"
+    assert internal(pa.array([None], pa.int32())) is None
+    date = spark_type("date")
+    assert internal(pa.array([[1, None]], pa.list_(pa.date32())), spark_type("array", elementType=date)) == [1, None]
+    st = spark_type(
+        "struct",
+        fields=[spark_type("f", dataType=date), spark_type("f", dataType=spark_type("int"))],
+    )
+    struct = pa.array([{"x": 0, "y": 7}], pa.struct([("x", pa.date32()), ("y", pa.int32())]))
+    assert internal(struct, st) == (0, 7)
+    mt = spark_type("map", keyType=spark_type("string"), valueType=date)
+    assert internal(pa.array([[("k", 2)]], pa.map_(pa.string(), pa.date32())), mt) == {"k": 2}
+
+
+class Converting:
+    """A stand-in type that needs conversion, as ``DateType`` does."""
+
+    def needConversion(self) -> bool:  # pyspark's name
+        return True
+
+    def fromInternal(self, v: int) -> Any:  # pyspark's name
+        import datetime
+
+        return datetime.date.fromordinal(v + datetime.date(1970, 1, 1).toordinal())
+
+
+def test_analyze_gets_a_constant_through_from_internal(analyze_api: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    import datetime
+
+    seen: list[Any] = []
+
+    class Dated:
+        @staticmethod
+        def analyze(d: AnalyzeArgument) -> AnalyzeResult:
+            seen.append(d)
+            return AnalyzeResult(schema=StructType([StructField("c", LongType())]))
+
+    monkeypatch.setattr(udtf, "_parse_type", lambda text: Converting())
+    values = pa.record_batch([pa.array([19724], pa.date32())], names=["_0"])
+    udtf.analyze_udtf(Dated, "f", [{"type": '"date"', "column": 0, "is_table": False, "name": None}], values)
+    assert seen[0].value == datetime.date(2024, 1, 2)
+    assert seen[0].isConstantExpression

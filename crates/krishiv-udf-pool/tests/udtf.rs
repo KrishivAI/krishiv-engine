@@ -21,7 +21,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, StructArray};
+use arrow_array::types::Date32Type;
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, Date32Array, Decimal64Array, Int32Array, Int64Array,
+    ListArray, RecordBatch, StringViewArray, StructArray, TimestampMicrosecondArray,
+};
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -488,7 +492,7 @@ fn analyze_spec(name: &str) -> UdtfAnalyzeSpec {
             },
             UdtfAnalyzeArg {
                 data_type: DataType::Integer,
-                value: Some(serde_json::json!(3)),
+                value: Some(Arc::new(Int32Array::from(vec![3]))),
                 is_table: false,
                 name: Some("n".to_owned()),
             },
@@ -573,6 +577,13 @@ fn a_failing_analyze_is_spark_s_class() {
             300,
             "has not implemented the 'analyze' static method",
         ),
+        // Spark's `worker_run` catches every exception, `SystemExit` too (review R1-7).
+        (
+            "class F:\n    @staticmethod\n    def analyze(x, n):\n        raise SystemExit(3)\n    \
+             def eval(self, x, n):\n        yield x,",
+            300,
+            "SystemExit: 3",
+        ),
     ];
     for (body, code, want) in cases {
         let name = register(&udfs, udtf_command(&py, body, code));
@@ -584,6 +595,17 @@ fn a_failing_analyze_is_spark_s_class() {
         );
         assert!(err.to_string().contains(want), "{body}: {err}");
     }
+    // A payload that does not unpickle fails the analysis with its class too: Spark reads the UDTF inside
+    // `analyze_udtf.py`'s `main` (review R1-7).
+    let mut broken = udtf_command(&py, "class F:\n    pass", 300);
+    broken.command = Arc::from(&b"not a pickle"[..]);
+    let name = register(&udfs, broken);
+    let err = block_on(udfs.analyze_udtf(&analyze_spec(&name))).expect_err("unpickle");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::TableValuedFunctionFailedToAnalyzeInPython,
+        "{err}"
+    );
     let name = register(
         &udfs,
         udtf_command(
@@ -597,4 +619,190 @@ fn a_failing_analyze_is_spark_s_class() {
         err.error_class(),
         ErrorClass::KrishivPythonUdfEvalTypeMismatch
     );
+}
+
+/// One `analyze` argument of `data_type`, constant with `value` (one row) when given.
+fn analyze_arg(data_type: DataType, value: Option<ArrayRef>) -> UdtfAnalyzeArg {
+    UdtfAnalyzeArg {
+        data_type,
+        value,
+        is_table: false,
+        name: None,
+    }
+}
+
+/// A large constant argument and a large `AnalyzeResult` (Spark's pattern of a subclass that carries state) do
+/// not ride in the size-capped control messages (review R1-2): both reach `analyze` and `__init__` whole.
+#[test]
+fn large_analyze_arguments_and_results_reach_init() {
+    let Some(py) = python() else { return };
+    let (_pool, udfs) = udfs(&py);
+    let body = "import dataclasses\n@dataclasses.dataclass\nclass Big(AnalyzeResult):\n    \
+                state: str = ''\nclass F:\n    def __init__(self, analyze_result):\n        \
+                self.n = len(analyze_result.state)\n    @staticmethod\n    def analyze(x, s):\n        \
+                return Big(schema=StructType().add('a', LongType()).add('n', LongType()), state=s.value * 2)\n    \
+                def eval(self, x, s):\n        yield x, self.n";
+    let name = register(&udfs, udtf_command(&py, body, 300));
+    let big = "x".repeat(300 * 1024);
+    let spec = UdtfAnalyzeSpec {
+        name: name.clone(),
+        version: 1,
+        args: vec![
+            analyze_arg(DataType::Long, None),
+            analyze_arg(
+                DataType::String,
+                Some(Arc::new(StringViewArray::from(vec![big.as_str()]))),
+            ),
+        ],
+    };
+    let analysis = block_on(udfs.analyze_udtf(&spec)).expect("analyze");
+    assert!(analysis.pickled.len() > 600 * 1024);
+    let call = UdtfCall {
+        analyze_result: Some(Arc::clone(&analysis.pickled)),
+        ..positional(2)
+    };
+    let prepared = prepare(
+        &udfs,
+        &name,
+        PythonEvalType::TableUdf,
+        &[("_0", DataType::Long), ("_1", DataType::Long)],
+        &["a", "n"],
+        call,
+    )
+    .expect("prepare");
+    let frames = vec![
+        frame(vec![("_0", longs(&[5])), ("_1", longs(&[0]))]),
+        Frame::End,
+    ];
+    let out = run(prepared.as_ref(), frames).expect("run");
+    assert_eq!(rows(&out), ["5|614400"]);
+}
+
+/// An `analyze` result over the limit (64 MiB, as the server reads it) fails the analysis with Spark's class,
+/// and the worker stays usable (review R1-2): the next `analyze` answers.
+#[test]
+fn an_oversize_analyze_result_is_spark_s_class() {
+    let Some(py) = python() else { return };
+    let (pool, udfs) = udfs(&py);
+    let body = "import dataclasses\n@dataclasses.dataclass\nclass Big(AnalyzeResult):\n    \
+                state: bytes = b''\nclass F:\n    @staticmethod\n    def analyze(x, n):\n        \
+                return Big(schema=StructType().add('a', LongType()), state=bytes(n.value << 20))\n    \
+                def eval(self, x, n):\n        yield x,";
+    let name = register(&udfs, udtf_command(&py, body, 300));
+    let spec = |mib: i64| UdtfAnalyzeSpec {
+        name: name.clone(),
+        version: 1,
+        args: vec![
+            analyze_arg(DataType::Long, None),
+            analyze_arg(DataType::Long, Some(longs(&[mib]))),
+        ],
+    };
+    let err = block_on(udfs.analyze_udtf(&spec(40))).expect_err("over the limit");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::TableValuedFunctionFailedToAnalyzeInPython,
+        "{err}"
+    );
+    assert!(err.to_string().contains("over the limit"), "{err}");
+    let live = pool.live_workers();
+    block_on(udfs.analyze_udtf(&spec(1))).expect("the worker still answers");
+    assert_eq!(pool.live_workers(), live, "no worker was replaced");
+}
+
+/// `analyze` sees each constant argument as the Python value of its type, as Spark converts it
+/// (`analyze_udtf.py` L76-82 at v4.2.0: the pickled internal value through `dataType.fromInternal`): a `date`,
+/// a naive local `datetime` for `timestamp`, a naive `datetime` for `timestamp_ntz`, a `Decimal` keeping its
+/// scale, `bytes` for `binary` (`spark.sql.execution.pyspark.binaryAsBytes`, true by default), a list and a
+/// `Row` of converted values, and `None` for a `NULL` constant (review R1-3).
+#[test]
+fn analyze_gets_constants_as_python_values_of_their_type() {
+    let Some(py) = python() else { return };
+    let (_pool, udfs) = udfs(&py);
+    let body = "import datetime, decimal\nfrom pyspark.sql import Row\nclass F:\n    @staticmethod\n    \
+                def analyze(d, ts, ntz, dec, b, arr, st, nul):\n        \
+                want = [\n            \
+                (d, datetime.date(2024, 1, 2)),\n            \
+                (ts, datetime.datetime.fromtimestamp(1704164645).replace(microsecond=123456)),\n            \
+                (ntz, datetime.datetime(2024, 1, 2, 3, 4, 5, 123456)),\n            \
+                (dec, decimal.Decimal('12.50')),\n            \
+                (b, b'\\x00\\xff'),\n            \
+                (arr, [datetime.date(1970, 1, 2), None]),\n            \
+                (st, Row(x=datetime.date(1970, 1, 1), y=7)),\n            \
+                (nul, None),\n        ]\n        \
+                for i, (arg, value) in enumerate(want):\n            \
+                assert arg.isConstantExpression, i\n            \
+                assert type(arg.value) is type(value) and arg.value == value, (i, arg.value, value)\n        \
+                assert str(dec.value) == '12.50' and ts.value.tzinfo is None and ntz.value.tzinfo is None\n        \
+                return AnalyzeResult(schema=StructType().add('a', LongType()))\n    \
+                def eval(self, *args):\n        yield 1,";
+    let name = register(&udfs, udtf_command(&py, body, 300));
+    let st = DataType::Struct(StructType::new([
+        StructField::new("x", DataType::Date, true),
+        StructField::new("y", DataType::Integer, true),
+    ]));
+    let spec = UdtfAnalyzeSpec {
+        name,
+        version: 1,
+        args: vec![
+            analyze_arg(
+                DataType::Date,
+                Some(Arc::new(Date32Array::from(vec![19724]))),
+            ),
+            analyze_arg(
+                DataType::Timestamp,
+                Some(Arc::new(
+                    TimestampMicrosecondArray::from(vec![1_704_164_645_123_456_i64])
+                        .with_timezone("UTC"),
+                )),
+            ),
+            analyze_arg(
+                DataType::TimestampNtz,
+                Some(Arc::new(TimestampMicrosecondArray::from(vec![
+                    1_704_164_645_123_456_i64,
+                ]))),
+            ),
+            analyze_arg(
+                DataType::Decimal(krishiv_types::DecimalType::try_new(5, 2).expect("decimal")),
+                Some(Arc::new(
+                    Decimal64Array::from(vec![1250])
+                        .with_precision_and_scale(5, 2)
+                        .expect("decimal"),
+                )),
+            ),
+            analyze_arg(
+                DataType::Binary,
+                Some(Arc::new(BinaryViewArray::from(vec![&[0_u8, 255][..]]))),
+            ),
+            analyze_arg(
+                DataType::Array(Arc::new(krishiv_types::ArrayType::new(
+                    DataType::Date,
+                    true,
+                ))),
+                Some(Arc::new(
+                    ListArray::from_iter_primitive::<Date32Type, _, _>(vec![Some(vec![
+                        Some(1),
+                        None,
+                    ])]),
+                )),
+            ),
+            analyze_arg(
+                st,
+                Some(Arc::new(StructArray::from(vec![
+                    (
+                        Arc::new(Field::new("x", ArrowType::Date32, true)),
+                        Arc::new(Date32Array::from(vec![0])) as ArrayRef,
+                    ),
+                    (
+                        Arc::new(Field::new("y", ArrowType::Int32, true)),
+                        Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+                    ),
+                ]))),
+            ),
+            analyze_arg(
+                DataType::Integer,
+                Some(Arc::new(Int32Array::from(vec![None::<i32>]))),
+            ),
+        ],
+    };
+    block_on(udfs.analyze_udtf(&spec)).expect("analyze");
 }

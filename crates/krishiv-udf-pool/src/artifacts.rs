@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A session's Python artifacts (P3-T014 PR-26c-3): the pyfiles and archives a Connect client added
-//! (`addArtifacts(pyfile=True)`, `addArtifacts(archive=True)`), as its workers see them.
+//! (`addArtifacts(pyfile=True)`, `addArtifacts(archive=True)`), as its workers see them once the server sets
+//! them (`SessionUdfs::set_artifacts`; the Connect server's forward to it is a later change, so today only a
+//! caller of that method sets any).
 //!
 //! Spark's worker puts its files directory and each `.zip`/`.egg` include on `sys.path` (`add_path`, at index
 //! 1, `worker_util.py` L59-65 and L133-154 at v4.2.0). Its executor unpacks each archive into that same
@@ -381,10 +383,7 @@ fn check(
 ) -> Result<Vec<Artifact>, KrishivError> {
     let mut checked = Vec::new();
     for (path, alias) in paths {
-        let file = open_no_links(&path).map_err(|e| match e {
-            Errno::NOSYS => no_openat2(&path),
-            _ => invalid(&path),
-        })?;
+        let file = open_no_links(&path).map_err(|e| open_refusal(&path, e))?;
         let meta = file.metadata().map_err(|_| invalid(&path))?;
         if !meta.file_type().is_file() {
             return Err(invalid(&path));
@@ -419,11 +418,38 @@ fn check(
     Ok(checked)
 }
 
-/// Whether `alias` names one plain entry of the files directory: not empty, no `/` or NUL, and not hidden
-/// (which also refuses `.` and `..`). Spark 4.2.0 takes any fragment (`new File(root, fragment)`), so a
+/// Whether `alias` names one plain entry of the files directory: not empty, at most `NAME_MAX` (255) bytes, no
+/// `/` or NUL, and not hidden (which also refuses `.` and `..`). Spark 4.2.0 takes any fragment (`new File(root, fragment)`), so a
 /// fragment like `../x` would leave its directory there; here it is refused (`INVALID_ARTIFACT_PATH`).
 fn plain_alias(alias: &str) -> bool {
-    !alias.is_empty() && !alias.starts_with('.') && !alias.contains(['/', '\0'])
+    !alias.is_empty()
+        && alias.len() <= 255
+        && !alias.starts_with('.')
+        && !alias.contains(['/', '\0'])
+}
+
+/// The error of a failed `open_no_links` of `path`: `INVALID_ARTIFACT_PATH` when the path is bad (missing,
+/// through a link, not canonical, not readable), `INTERNAL_ERROR` for the server's own problem (a seccomp
+/// profile refusing `openat2`, no descriptors or memory left, an I/O error).
+fn open_refusal(path: &Path, errno: Errno) -> KrishivError {
+    match errno {
+        Errno::NOSYS => no_openat2(path),
+        Errno::NOENT
+        | Errno::LOOP
+        | Errno::NOTDIR
+        | Errno::XDEV
+        | Errno::ACCESS
+        | Errno::INVAL
+        | Errno::NAMETOOLONG => invalid(path),
+        other => krishiv_common::error::InternalError {
+            message: format!(
+                "cannot open the artifact {}: {}",
+                path.display(),
+                io::Error::from(other)
+            ),
+        }
+        .into(),
+    }
 }
 
 /// `INVALID_ARTIFACT_PATH` for `path`.
@@ -634,7 +660,12 @@ mod tests {
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::write(root.join("env.zip"), "z").unwrap();
         fs::write(root.join("m.py"), "").unwrap();
-        for bad in ["", ".", "..", "../x", "a/b", "/abs", ".hidden", "a\0b"] {
+        // An alias longer than a file name may be (`NAME_MAX`, 255 bytes) is refused here, not left to fail
+        // as a retried server error when its directory is made (review R1-8).
+        let long = "a".repeat(256);
+        for bad in [
+            "", ".", "..", "../x", "a/b", "/abs", ".hidden", "a\0b", &long,
+        ] {
             let set = ArtifactSet::new(Vec::new(), vec![aliased(root.join("env.zip"), bad)]);
             let e = set
                 .refused()
@@ -671,6 +702,45 @@ mod tests {
                 Some(ErrorClass::ArtifactAlreadyExists)
             );
         }
+    }
+
+    /// Only an error that says the path is bad is `INVALID_ARTIFACT_PATH`; a server problem opening it (a
+    /// seccomp profile refusing `openat2`, no descriptors left) is `INTERNAL_ERROR` (review R1-8).
+    #[test]
+    fn an_open_failure_is_classed_by_its_cause() {
+        let path = Path::new("/x/m.py");
+        for errno in [
+            Errno::NOENT,
+            Errno::LOOP,
+            Errno::NOTDIR,
+            Errno::XDEV,
+            Errno::ACCESS,
+            Errno::INVAL,
+            Errno::NAMETOOLONG,
+        ] {
+            assert_eq!(
+                open_refusal(path, errno).error_class(),
+                ErrorClass::InvalidArtifactPath,
+                "{errno:?}"
+            );
+        }
+        for errno in [
+            Errno::PERM,
+            Errno::MFILE,
+            Errno::NFILE,
+            Errno::NOMEM,
+            Errno::IO,
+        ] {
+            assert_eq!(
+                open_refusal(path, errno).error_class(),
+                ErrorClass::InternalError,
+                "{errno:?}"
+            );
+        }
+        assert_eq!(
+            open_refusal(path, Errno::NOSYS).error_class(),
+            no_openat2(path).error_class()
+        );
     }
 
     fn never() -> bool {

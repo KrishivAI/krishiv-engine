@@ -85,7 +85,9 @@ impl SessionUdfs {
     /// alias one plain name (not empty, no `/`, not hidden), or the calls fail with `INVALID_ARTIFACT_PATH`;
     /// two artifacts of one name fail them with `ARTIFACT_ALREADY_EXISTS`; an archive the pool cannot unpack
     /// within its limit fails them with `KRISHIV_PYTHON_ARTIFACT_REFUSED`. Workers started for the previous set
-    /// are not reused for the new one.
+    /// are not reused for the new one. The Spark Connect server does not call this yet (its
+    /// `SessionUdfRuntime` forward comes with a later change), so a Connect client's artifacts do not reach
+    /// the workers until then.
     pub fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
         *self
             .artifacts

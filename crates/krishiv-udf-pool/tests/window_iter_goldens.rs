@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, Int64Array, RecordBatch};
+use arrow_array::{Array, Float64Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::ErrorClass;
 use krishiv_plan::function::PythonEvalType;
@@ -107,6 +107,7 @@ fn command(python: &Path, body: &str, return_type: &str, eval_type: i32) -> Pyth
 }
 
 /// The UDFs of `cases.py` (`_window_udfs`, `_iter_udfs`): name, eval type, return type and body (`f`).
+/// Kept by hand in step with those bodies (`cases.py` says so where they are defined).
 const UDFS: &[(&str, PythonEvalType, DataType, &str)] = &[
     (
         "pandas_sum",
@@ -300,6 +301,8 @@ fn answer(batches: &[RecordBatch]) -> Value {
                         } else {
                             Value::from(format!("{v:?}").to_lowercase())
                         }
+                    } else if let Some(a) = c.as_any().downcast_ref::<StringViewArray>() {
+                        Value::from(a.value(r))
                     } else {
                         Value::from(format!("{:?}", c.data_type()))
                     }
@@ -348,25 +351,21 @@ async fn difference(session: &Session, case: &str, want: &Value) -> Option<Strin
     }
 }
 
-/// Every case of `goldens.json` answers as PySpark 4.2.0 did, run on the pool.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn window_aggregates_and_scalar_iterators_match_pyspark_4_2_0() {
-    let Some(py) = python() else { return };
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../python/tests/pyspark_udf/window_iter/goldens.json");
-    let goldens: Value =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("goldens")).expect("json");
-    assert_eq!(goldens["spark"], "4.2.0");
-    let pool = pool(&py);
+/// A session whose Python UDFs (`UDFS`) run on a new pool, with `conf` set.
+fn session_on_pool(
+    py: &Path,
+    conf: &serde_json::Map<String, Value>,
+) -> (Session, Arc<SessionUdfs>) {
+    let pool = pool(py);
     let session = Session::new().expect("session");
-    for (k, v) in goldens["conf"].as_object().expect("conf") {
+    for (k, v) in conf {
         session
             .conf()
             .set(k, v.as_str().expect("conf value"))
             .expect("set conf");
     }
     let udfs = Arc::new(SessionUdfs::new(
-        pool.clone(),
+        pool,
         Owner {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
@@ -388,10 +387,23 @@ async fn window_aggregates_and_scalar_iterators_match_pyspark_4_2_0() {
         udfs.register(
             *name,
             entry.version,
-            command(&py, body, returns, eval_type.code()),
+            command(py, body, returns, eval_type.code()),
         );
     }
     session.set_python_udf_runtime(Arc::clone(&udfs) as Arc<_>);
+    (session, udfs)
+}
+
+/// Every case of `goldens.json` answers as PySpark 4.2.0 did, run on the pool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn window_aggregates_and_scalar_iterators_match_pyspark_4_2_0() {
+    let Some(py) = python() else { return };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../python/tests/pyspark_udf/window_iter/goldens.json");
+    let goldens: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("goldens")).expect("json");
+    assert_eq!(goldens["spark"], "4.2.0");
+    let (session, udfs) = session_on_pool(&py, goldens["conf"].as_object().expect("conf"));
     let cases = goldens["cases"].as_object().expect("cases");
     assert_eq!(cases.len(), 26);
     let mut differ = BTreeMap::new();
@@ -402,4 +414,86 @@ async fn window_aggregates_and_scalar_iterators_match_pyspark_4_2_0() {
     }
     udfs.release();
     assert!(differ.is_empty(), "{differ:#?}");
+}
+
+/// The rows of `sql` as JSON (`answer`), or its error's class and text.
+async fn query(session: &Session, sql: &str) -> Result<Value, (ErrorClass, String)> {
+    let run = async {
+        let df = session.sql(sql).await?;
+        df.collect().await
+    };
+    run.await
+        .map(|batches| answer(&batches)["rows"].clone())
+        .map_err(|e| (e.error_class(), e.to_string()))
+}
+
+/// A grouped-aggregate Python UDF (pandas 202, Arrow 252) is an aggregate in SQL `GROUP BY` and in a global
+/// aggregate (review R1-6). The shapes Spark 4.2.0 refuses are refused with its classes:
+/// - a Python UDAF beside a built-in aggregate in one aggregation: `INVALID_PANDAS_UDF_PLACEMENT`
+///   (`SparkStrategies.scala` `Aggregation`, `QueryCompilationErrors.invalidPandasUDFPlacementError`);
+/// - `DISTINCT` or `FILTER` on a Python UDAF: `INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX`
+///   (`FunctionResolution.scala` `checkUnsupportedAggregateClause`), with `syntax` `DISTINCT` or
+///   `FILTER CLAUSE` and the function named `pythonudaf` (the UDAF's `prettyName`: no alias tag, so its
+///   class name).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grouped_aggregate_udfs_in_sql_group_by() {
+    let Some(py) = python() else { return };
+    let (session, udfs) = session_on_pool(&py, &serde_json::Map::new());
+    let ok = [
+        (
+            format!("SELECT g, pandas_sum(v) AS s FROM {WINDOW_INPUT} GROUP BY g ORDER BY g"),
+            serde_json::json!([["a", 15.0], ["b", 48.0], ["c", 0.0]]),
+        ),
+        (
+            format!("SELECT g, arrow_count(v) AS n FROM {WINDOW_INPUT} GROUP BY g ORDER BY g"),
+            serde_json::json!([["a", 5], ["b", 2], ["c", 1]]),
+        ),
+        (
+            format!(
+                "SELECT g, pandas_count(v) + 1 AS n, pandas_mean(o) AS m FROM {WINDOW_INPUT} \
+                 GROUP BY g ORDER BY g"
+            ),
+            serde_json::json!([["a", 6, 2.6], ["b", 3, 2.5], ["c", 2, 1.0]]),
+        ),
+        (
+            format!("SELECT arrow_sum(v) AS s FROM {WINDOW_INPUT}"),
+            serde_json::json!([[63.0]]),
+        ),
+    ];
+    for (sql, want) in ok {
+        let got = query(&session, &sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(got, want, "{sql}");
+    }
+    let refused = [
+        (
+            format!("SELECT g, pandas_sum(v), sum(v) FROM {WINDOW_INPUT} GROUP BY g"),
+            ErrorClass::InvalidPandasUdfPlacement,
+            "`pandas_sum`",
+        ),
+        (
+            format!("SELECT arrow_count(v), count(*) FROM {WINDOW_INPUT}"),
+            ErrorClass::InvalidPandasUdfPlacement,
+            "`arrow_count`",
+        ),
+        (
+            format!("SELECT g, pandas_sum(DISTINCT v) FROM {WINDOW_INPUT} GROUP BY g"),
+            ErrorClass::InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+            "`pythonudaf` does not support DISTINCT",
+        ),
+        (
+            format!("SELECT arrow_sum(v) FILTER (WHERE v > 1) FROM {WINDOW_INPUT}"),
+            ErrorClass::InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+            "`pythonudaf` does not support FILTER CLAUSE",
+        ),
+    ];
+    for (sql, class, text) in refused {
+        let Err((got, message)) = query(&session, &sql).await else {
+            panic!("{sql} ran; Spark refuses it")
+        };
+        assert_eq!(got, class, "{sql}: {message}");
+        assert!(message.contains(text), "{sql}: {message}");
+    }
+    udfs.release();
 }

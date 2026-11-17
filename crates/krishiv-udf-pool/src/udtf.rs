@@ -4,13 +4,20 @@
 //! (`UserDefinedPythonFunction.scala`, `pyspark/sql/worker/analyze_udtf.py` at v4.2.0). Here it runs on a
 //! worker of the session's owner, in the sandbox like any call, on a pool call thread (never on the caller):
 //! wire `analyze` over the loaded payload, answered by `analyzed` with the result `udtf.py` `analyze_udtf`
-//! builds. A failure in Python is `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`.
+//! builds. Both travel in memfds, never in the size-capped control messages: the call's constant arguments as
+//! a one-row Arrow batch (`analyze_input`; the worker gives `analyze` each value as Spark does, through
+//! `fromInternal`), the result as JSON of at most [`MAX_ANALYZE_RESULT`] bytes. A failure in Python, or a
+//! result over that limit, is `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`.
 //!
 //! The UDTF's tasks (eval types 300, 301, 302) run as relation tasks (`relation.rs`, `udtf.py`
 //! `make_udtf_runner`); `@arrow_udtf` (302) has no `analyze` (pyspark refuses one when the UDTF is made,
 //! `INVALID_ARROW_UDTF_WITH_ANALYZE`), so only a 300 or 301 payload is analyzed here.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+use arrow_array::{RecordBatch, RecordBatchOptions};
+use arrow_schema::{Field, Schema};
 
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
@@ -57,23 +64,10 @@ pub(crate) fn analyze(
         Ok(r) => r,
         Err(e) => return ready(Err(e)),
     };
-    let args = Value::Array(
-        spec.args
-            .iter()
-            .map(|a| {
-                let mut arg = json!({
-                    "type": a.data_type.json(),
-                    "is_table": a.is_table,
-                    "name": a.name,
-                });
-                if let (Some(v), Some(map)) = (&a.value, arg.as_object_mut()) {
-                    map.insert("value".to_owned(), v.clone());
-                }
-                arg
-            })
-            .collect(),
-    );
-    let name = spec.name.clone();
+    let input = match analyze_input(spec) {
+        Ok(input) => input,
+        Err(e) => return ready(Err(e)),
+    };
     let (done, result) = oneshot::channel();
     let call = Arc::new(Mutex::new(CallState::default()));
     let cancel = CancelOnDrop(Arc::clone(&call));
@@ -88,7 +82,7 @@ pub(crate) fn analyze(
                 &registered,
                 &artifacts,
                 &call,
-                |worker| worker.analyze(registered.id, &name, &args),
+                |worker| worker.analyze(registered.id, &input, MAX_ANALYZE_RESULT),
             )
             .and_then(|answer| analysis(&answer));
             let _ = done.send(result);
@@ -105,6 +99,66 @@ pub(crate) fn analyze(
             }
             .into())
         })
+    })
+}
+
+/// The largest `analyze` result the server reads, in bytes (its JSON, the pickled `AnalyzeResult` as hex
+/// inside): the worker refuses to send a larger one, and so does the server, both as
+/// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`. Spark sets no limit; this one only keeps a worker
+/// from handing the analyzer an unbounded plan field.
+pub(crate) const MAX_ANALYZE_RESULT: u64 = 64 << 20;
+
+/// The schema metadata key of an `analyze` input: the call's name and arguments, as JSON.
+const ANALYZE_METADATA: &str = "krishiv.udtf.analyze";
+
+/// What an `analyze` call sends its worker (wire `analyze`, in a memfd: nothing of it rides in a control
+/// message): a one-row batch holding each constant argument's value as a column, its schema metadata
+/// [`ANALYZE_METADATA`] the call's name and its arguments (`{type, is_table, name, column}`: the Spark JSON
+/// type, and the batch column of a constant's value). A value that is not one row is the caller's
+/// inconsistency.
+fn analyze_input(spec: &UdtfAnalyzeSpec) -> Result<RecordBatch, KrishivError> {
+    let mut fields = Vec::new();
+    let mut columns = Vec::new();
+    let mut args = Vec::with_capacity(spec.args.len());
+    for (i, a) in spec.args.iter().enumerate() {
+        let column = match &a.value {
+            None => Value::Null,
+            Some(value) if value.len() == 1 => {
+                fields.push(Field::new(format!("_{i}"), value.data_type().clone(), true));
+                columns.push(Arc::clone(value));
+                json!(columns.len() - 1)
+            }
+            Some(value) => {
+                return Err(InternalError {
+                    message: format!(
+                        "the constant argument {i} of a call of the Python UDTF {} holds {} rows, not one",
+                        spec.name,
+                        value.len()
+                    ),
+                }
+                .into());
+            }
+        };
+        args.push(json!({
+            "type": a.data_type.json(),
+            "is_table": a.is_table,
+            "name": a.name,
+            "column": column,
+        }));
+    }
+    let meta = json!({"name": spec.name, "args": args}).to_string();
+    let schema =
+        Schema::new_with_metadata(fields, HashMap::from([(ANALYZE_METADATA.to_owned(), meta)]));
+    RecordBatch::try_new_with_options(
+        Arc::new(schema),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(1)),
+    )
+    .map_err(|e| {
+        InternalError {
+            message: format!("cannot build the analyze input of {}: {e}", spec.name),
+        }
+        .into()
     })
 }
 

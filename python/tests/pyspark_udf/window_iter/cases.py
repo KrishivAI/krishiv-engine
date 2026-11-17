@@ -76,6 +76,8 @@ def _window_specs(api: Api) -> dict[str, Any]:
     }
 
 
+# `crates/krishiv-udf-pool/tests/window_iter_goldens.rs` (`UDFS`) repeats the bodies of `_window_udfs` and
+# `_iter_udfs` to replay the goldens on the worker pool: change both together.
 def _window_udfs(api: Api) -> dict[str, Any]:
     F = api.F
 

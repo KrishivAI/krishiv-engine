@@ -27,11 +27,15 @@ crosses the socket: an Arrow IPC stream in a memfd does.
   holding one record batch of the declared columns whenever it has rows, and ``done`` when the UDF finished
   (also before ``end``, when the UDF stopped reading: the server drops the frames left), or ``error``. The
   server writes only after a ``want``, so neither side ever blocks on a full socket while the other writes.
-- a UDTF's ``task`` (eval types 300, 301, 302) also carries ``udtf`` (``udtf.UdtfCall``: the argument offsets,
-  the partition child indexes, the declared return type as Spark's JSON and ``analyze``'s pickled result); its
-  ``udf`` command is the cloudpickled UDTF class alone, as Spark Connect sends it.
-- server → worker: ``analyze`` ``{udf, name, args}`` (no descriptor): run loaded UDTF ``udf``'s static
-  ``analyze`` for a call with ``args`` (``udtf.analyze_udtf``); answered by ``analyzed`` ``{result}`` or ``error``.
+- a UDTF's ``task`` (eval types 300, 301, 302) also carries ``udtf_len`` + a sealed memfd holding its call as
+  JSON (``udtf.UdtfCall``: the argument offsets, the partition child indexes, the declared return type as Spark's
+  JSON and ``analyze``'s pickled result as hex); its ``udf`` command is the cloudpickled UDTF class alone, as
+  Spark Connect sends it.
+- server → worker: ``analyze`` ``{udf, len, max}`` + a sealed memfd holding one record batch of one row: each
+  constant argument's value as a column, the schema metadata ``krishiv.udtf.analyze`` the call's name and
+  arguments as JSON; run loaded UDTF ``udf``'s static ``analyze`` (``udtf.analyze_udtf``); answered by
+  ``analyzed`` ``{len}`` + a memfd holding the result as JSON (at most ``max`` bytes, else a Python error), or
+  ``error``.
 - EOF on the socket: the worker exits 0.
 
 ``error`` is ``{kind, message}``: ``kind`` ``python`` is an exception raised while loading or running the UDF
@@ -138,7 +142,11 @@ def _write_batch(batch: Any) -> tuple[int, int]:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, batch.schema) as writer:
         writer.write_batch(batch)
-    data = memoryview(sink.getvalue())
+    return _write_memfd(memoryview(sink.getvalue()))
+
+
+def _write_memfd(data: memoryview) -> tuple[int, int]:
+    """``data`` in a new memfd, and its length."""
     result_fd = os.memfd_create("krishiv-udf-result", os.MFD_CLOEXEC)
     try:
         written = 0
@@ -175,11 +183,25 @@ class _Relation:
 
 
 class _Udtf:
-    """A loaded Python table function: its class and eval type (``udtf.make_udtf_runner`` per task)."""
+    """A loaded Python table function: its class and eval type (``udtf.make_udtf_runner`` per task). A command
+    that does not unpickle is kept as its error, raised by :meth:`handler`: Spark reads the class inside the
+    ``analyze`` or task program, so the failure is that program's (an ``analyze`` failure for ``analyze``)."""
 
-    def __init__(self, handler: Any, eval_type: int) -> None:
-        self.handler = handler
+    def __init__(self, command: bytes, eval_type: int) -> None:
+        from pyspark import cloudpickle  # ty: ignore[unresolved-import]  # pool workers only
+
         self.eval_type = eval_type
+        self._handler: Any = None
+        self._error: BaseException | None = None
+        try:
+            self._handler = cloudpickle.loads(command)
+        except BaseException as e:  # raised again by every use, as Spark would raise it
+            self._error = e
+
+    def handler(self) -> Any:
+        if self._error is not None:
+            raise self._error
+        return self._handler
 
 
 #: The most rows of an aggregate's values kept before they are sent, when the task gives no ``max_rows``
@@ -277,7 +299,7 @@ class _Worker:
         eval_type = int(msg["eval_type"])
         if eval_type in UDTF_EVAL_TYPES:
             # A UDTF's command is its class alone (Spark Connect's `PythonUDTF.command`).
-            self.udfs[int(msg["id"])] = _Udtf(cloudpickle.loads(command), eval_type)
+            self.udfs[int(msg["id"])] = _Udtf(command, eval_type)
             return
         func, return_type = cloudpickle.loads(command)
         if eval_type in RELATION_EVAL_TYPES:
@@ -299,9 +321,9 @@ class _Worker:
         result = wrapper(*batch.columns)
         return _write_batch(pa.RecordBatch.from_arrays([result], names=["_0"]))
 
-    def run_task(self, msg: dict[str, Any]) -> None:
-        """Runs one relation task to its ``done`` (see the module doc); a UDF error propagates, with the
-        worker still in step (it sends nothing until the server's next message)."""
+    def run_task(self, msg: dict[str, Any], fd: int | None) -> None:
+        """Runs one relation task to its ``done`` (see the module doc; ``fd`` holds a UDTF's call); a UDF error
+        propagates, with the worker still in step (it sends nothing until the server's next message)."""
         from krishiv._udf._host import set_runner_conf
         from krishiv._udf.relations import AGGREGATE_EVAL_TYPES
         from krishiv._udf.udtf import UdtfCall, make_udtf_runner
@@ -309,14 +331,22 @@ class _Worker:
         relation = self.udfs[int(msg["udf"])]
         if isinstance(relation, _Udtf):
             eval_type = int(msg.get("eval_type") or relation.eval_type)
-            if eval_type != relation.eval_type or not isinstance(msg.get("udtf"), dict):
+            if eval_type != relation.eval_type or fd is None:
                 raise _ProtocolError(f"a task of eval type {eval_type} for a UDTF of eval type {relation.eval_type}")
-            runner = make_udtf_runner(relation.handler, eval_type, UdtfCall.of(msg["udtf"]))
+            try:
+                call = json.loads(_read_memfd(fd, int(msg["udtf_len"])).to_pybytes())
+            except ValueError as e:
+                raise _ProtocolError(f"an unreadable UDTF call: {e}") from None
+            if not isinstance(call, dict):
+                raise _ProtocolError("a UDTF call that is not a JSON object")
+            runner = make_udtf_runner(relation.handler(), eval_type, UdtfCall.of(call))
         elif isinstance(relation, _Relation):
             eval_type = int(msg.get("eval_type") or relation.eval_type)
             runner = relation.runner(eval_type)
         else:
             raise _ProtocolError("a task for a scalar UDF")
+        if fd is not None and not isinstance(relation, _Udtf):
+            raise _ProtocolError("a task with a UDTF call for a UDF that is not a table function")
         set_runner_conf(dict(msg.get("conf") or {}))
         results = _Results(self.sock, int(msg.get("max_rows") or 0), eval_type in AGGREGATE_EVAL_TYPES)
         frames = _Frames(self.sock, results)
@@ -325,14 +355,29 @@ class _Worker:
         results.flush()
         _send(self.sock, {"t": "done"})
 
-    def analyze(self, msg: dict[str, Any]) -> dict[str, Any]:
-        """Runs a loaded UDTF's ``analyze`` (``udtf.analyze_udtf``)."""
-        from krishiv._udf.udtf import analyze_udtf
+    def analyze(self, msg: dict[str, Any], fd: int) -> tuple[int, int]:
+        """Runs a loaded UDTF's ``analyze`` (``udtf.analyze_udtf``) over the call in memfd ``fd``; returns a
+        memfd holding the result as JSON and its length. A result over the server's ``max`` raises, as a
+        Python error (the server's analyze class)."""
+        from krishiv._udf.udtf import ANALYZE_METADATA, analyze_udtf
 
         udtf = self.udfs[int(msg["udf"])]
         if not isinstance(udtf, _Udtf):
             raise _ProtocolError("an analyze for a UDF that is not a table function")
-        return analyze_udtf(udtf.handler, str(msg["name"]), list(msg.get("args") or []))
+        values = _read_batch(fd, int(msg["len"]))
+        try:
+            call = json.loads((values.schema.metadata or {})[ANALYZE_METADATA])
+            name, args = str(call["name"]), list(call["args"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise _ProtocolError(f"an unreadable analyze call: {e!r}") from None
+        result = analyze_udtf(udtf.handler(), name, args, values)
+        data = json.dumps(result, separators=(",", ":")).encode()
+        limit = int(msg.get("max") or 0)
+        if limit and len(data) > limit:
+            from krishiv._udf._host import PySparkValueError
+
+            raise PySparkValueError(f"the analyze result of {len(data)} bytes is over the limit of {limit} bytes")
+        return _write_memfd(memoryview(data))
 
     def serve(self) -> None:
         while True:
@@ -347,7 +392,7 @@ class _Worker:
             try:
                 msg = json.loads(data)
                 kind = msg["t"]
-                wanted = 0 if kind in ("task", "analyze") else 1
+                wanted = int("udtf_len" in msg) if kind == "task" else 1
                 if kind not in ("udf", "batch", "task", "analyze") or len(fds) != wanted:
                     _error(self.sock, "protocol", f"unexpected message {kind!r} with {len(fds)} descriptors")
                     return
@@ -360,18 +405,23 @@ class _Worker:
                     os.close(fd)
             if kind == "analyze":
                 try:
-                    result = self.analyze(msg)
+                    result_fd, length = self.analyze(msg, fds[0])
                 except _ProtocolError as e:
                     _error(self.sock, "protocol", str(e))
                     return
-                except Exception as e:
+                except BaseException as e:  # Spark's `worker_run` reports every exception, `SystemExit` too
                     _error(self.sock, "python", _traceback(e))
                     continue
-                _send(self.sock, {"t": "analyzed", "result": result})
+                finally:
+                    os.close(fds[0])
+                try:
+                    _send(self.sock, {"t": "analyzed", "len": length}, [result_fd])
+                finally:
+                    os.close(result_fd)
                 continue
             if kind == "task":
                 try:
-                    self.run_task(msg)
+                    self.run_task(msg, fds[0] if fds else None)
                 except _ProtocolError as e:
                     _error(self.sock, "protocol", str(e))
                     return
@@ -382,6 +432,9 @@ class _Worker:
                         _error(self.sock, "protocol", str(e))
                         return
                     _error(self.sock, "python", _traceback(e))
+                finally:
+                    for fd in fds:
+                        os.close(fd)
                 continue
             fd = fds[0]
             try:

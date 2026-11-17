@@ -42,6 +42,10 @@ SQL_ARROW_UDTF = 302
 #: The UDTF kinds :func:`make_udtf_runner` runs.
 UDTF_EVAL_TYPES = frozenset({SQL_TABLE_UDF, SQL_ARROW_TABLE_UDF, SQL_ARROW_UDTF})
 
+#: The schema metadata key of an ``analyze`` call's input batch: the call's name and arguments, as JSON
+#: (``krishiv-udf-pool`` ``udtf.rs`` ``analyze_input``).
+ANALYZE_METADATA = b"krishiv.udtf.analyze"
+
 #: Spark's legacy pandas conversion of an Arrow UDTF (``SQLConf.PYTHON_UDTF_LEGACY_PANDAS_CONVERSION``).
 LEGACY_PANDAS_CONVERSION = "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled"
 
@@ -771,6 +775,17 @@ def _arrow_udtf_mapper(
             cleanup()
 
 
+def _dumps(value: Any) -> bytes:
+    """``value`` pickled as Spark's ``pickleSer`` pickles it: with pyspark's ``cloudpickle`` in a pool worker."""
+    if IN_WORKER:
+        from pyspark import cloudpickle  # ty: ignore[unresolved-import]  # pool workers only
+
+        return cloudpickle.dumps(value)
+    import pickle
+
+    return pickle.dumps(value)
+
+
 def _analyze_api() -> tuple[Any, Any, Any, Any, Any]:
     """``AnalyzeArgument``, ``AnalyzeResult``, ``OrderingColumn``, ``PartitioningColumn``, ``SelectedColumn``:
     pyspark's in a pool worker (a UDTF's ``analyze`` builds them); the facade has none yet (PR-48)."""
@@ -786,13 +801,38 @@ def _analyze_api() -> tuple[Any, Any, Any, Any, Any]:
     return AnalyzeArgument, AnalyzeResult, OrderingColumn, PartitioningColumn, SelectedColumn
 
 
-def analyze_udtf(handler: Any, name: str, args: list[dict[str, Any]]) -> dict[str, Any]:
-    """Runs ``handler``'s static ``analyze`` for a call with ``args`` (each ``{type, value?, is_table, name?}``:
-    a Spark JSON type, a constant's value when it is one) and returns its result as the server reads it
+def _internal_value(value: Any, dt: Any) -> Any:
+    """Spark's internal form of the Arrow scalar ``value`` of Spark type ``dt``, as the JVM pickles a constant
+    for ``analyze`` (``EvaluatePython.toJava`` at v4.2.0): a date as its days, a timestamp (either kind) or a
+    day-time interval as its microseconds, a time as its nanoseconds, a struct as the tuple of its fields, an
+    array as a list and a map as a dict of internal values; a decimal is a ``Decimal`` keeping its scale
+    (``toJavaBigDecimal``), a binary is ``bytes`` (``spark.sql.execution.pyspark.binaryAsBytes``, true by
+    default), any other value its plain Python value. ``dt.fromInternal`` then makes the Python value."""
+    import pyarrow as pa
+
+    if not value.is_valid:
+        return None
+    t = value.type
+    if pa.types.is_date32(t):
+        return value.cast(pa.int32()).as_py()
+    if pa.types.is_timestamp(t) or pa.types.is_duration(t) or pa.types.is_time64(t):
+        return value.cast(pa.int64()).as_py()
+    if pa.types.is_struct(t) and hasattr(dt, "fields"):
+        return tuple(_internal_value(value[i], f.dataType) for i, f in enumerate(dt.fields))
+    if pa.types.is_map(t):
+        return {_internal_value(e[0], dt.keyType): _internal_value(e[1], dt.valueType) for e in value.values}
+    if pa.types.is_list(t) or pa.types.is_large_list(t) or pa.types.is_fixed_size_list(t):
+        return [_internal_value(v, dt.elementType) for v in value.values]
+    return value.as_py()
+
+
+def analyze_udtf(handler: Any, name: str, args: list[dict[str, Any]], values: Any) -> dict[str, Any]:
+    """Runs ``handler``'s static ``analyze`` for a call with ``args`` (each ``{type, is_table, name, column}``:
+    a Spark JSON type, and for a constant the column of ``values``, a one-row record batch, holding its value)
+    and returns its result as the server reads it
     (``analyze_udtf.py``'s ``_main``, v4.2.0): the schema (Spark JSON), the pickled ``AnalyzeResult`` (hex),
     ``withSinglePartition``, the ``partitionBy`` names, the ``orderBy`` columns and the ``select`` columns. Every
     failure raises; the server makes it ``TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON``."""
-    import pickle
     from textwrap import dedent
 
     AnalyzeArgument, AnalyzeResult, OrderingColumn, PartitioningColumn, SelectedColumn = _analyze_api()
@@ -816,10 +856,16 @@ def analyze_udtf(handler: Any, name: str, args: list[dict[str, Any]]) -> dict[st
     named: dict[str, Any] = {}
     for a in args:
         dt = _parse_type(str(a["type"]))
-        constant = "value" in a
+        constant = a.get("column") is not None
+        value = None
+        if constant:
+            # analyze_udtf.py:79-82: the pickled internal value, through `fromInternal` when the type needs it.
+            value = _internal_value(values.column(int(a["column"]))[0], dt)
+            if dt.needConversion():
+                value = dt.fromInternal(value)
         argument = AnalyzeArgument(
             dataType=dt,
-            value=a.get("value"),
+            value=value,
             isTable=bool(a.get("is_table")),
             isConstantExpression=constant,
         )
@@ -907,7 +953,9 @@ def analyze_udtf(handler: Any, name: str, args: list[dict[str, Any]]) -> dict[st
 
     return {
         "schema": result.schema.json(),
-        "pickled": pickle.dumps(result).hex(),
+        # analyze_udtf.py:203 writes it with `pickleSer` (cloudpickle), so a result class made in the client's
+        # `__main__` pickles too.
+        "pickled": _dumps(result).hex(),
         "with_single_partition": bool(result.withSinglePartition),
         "partition_by": [c.name for c in result.partitionBy],
         "order_by": [

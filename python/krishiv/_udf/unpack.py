@@ -17,6 +17,7 @@ the one line on stdout.
 
 from __future__ import annotations
 
+import bisect
 import os
 import sys
 import tarfile
@@ -67,7 +68,11 @@ def _tar_sizes(members: list[tarfile.TarInfo]) -> list[int]:
             name = "/".join(filter(None, (os.path.dirname(member.name), member.linkname)))
             found = by_name.get(os.path.normpath(name), [])
         else:
-            found = [j for j in by_name.get(os.path.normpath(member.linkname), []) if j < i]
+            # The members of a name in order: the last one before `i`, by a binary search (no scan, so many
+            # hard links to one name stay linear-logarithmic).
+            found = by_name.get(os.path.normpath(member.linkname), [])
+            before = bisect.bisect_left(found, i)
+            return found[before - 1] if before else None
         return found[-1] if found else None
 
     def size(i: int) -> int:

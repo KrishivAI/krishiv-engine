@@ -281,7 +281,8 @@ impl Worker {
     /// Starts a relation task over loaded payload `id` (wire `task`) run as `eval_type` (the payload's own, or
     /// the window kind of a grouped-aggregate payload): `key_count` key columns lead each frame, `arity` data
     /// columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an aggregate keeps
-    /// before it sends them; `udtf` is a UDTF call's part of the message (`relation.rs` `udtf_message`).
+    /// before it sends them; `udtf` is a UDTF call's part of the message (`relation.rs` `udtf_message`), passed
+    /// in a sealed memfd (`udtf_len` its length).
     #[expect(
         clippy::too_many_arguments,
         reason = "the task message's fields, each from the call site"
@@ -305,51 +306,70 @@ impl Worker {
             "max_rows": max_rows,
             "conf": conf,
         });
-        if let (Some(udtf), Some(map)) = (udtf, header.as_object_mut()) {
-            map.insert("udtf".to_owned(), udtf.clone());
+        // A UDTF call's part goes in a sealed memfd: its declared struct and `analyze`'s pickled result have
+        // no bound a control message could keep.
+        let Some(udtf) = udtf else {
+            return self.send_message(&header, &[]);
+        };
+        let bytes = serde_json::to_vec(udtf)
+            .map_err(|e| self.server_failure(&format!("cannot encode a UDTF call: {e}")))?;
+        let file = wire::sealed_memfd("krishiv-udtf-call", &bytes)
+            .map_err(|e| self.server_failure(&format!("cannot pass a UDTF call: {e}")))?;
+        if let Some(map) = header.as_object_mut() {
+            map.insert("udtf_len".to_owned(), json!(bytes.len()));
         }
-        self.send_message(&header, &[])
+        self.send_message(&header, &[file.as_fd()])
     }
 
-    /// Runs loaded UDTF payload `id`'s static `analyze` (wire `analyze`) for a call of `name` with `args` (each
-    /// `{type, value?, is_table, name?}`, `udtf.py` `analyze_udtf`), and returns its result (`analyzed`). A
-    /// Python failure is `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` with Spark's message: the
+    /// Runs loaded UDTF payload `id`'s static `analyze` (wire `analyze`) over `input` (`udtf.rs`
+    /// `analyze_input`, passed in a sealed memfd) and returns its result: the JSON the worker wrote into the
+    /// memfd of its `analyzed` answer, at most `max` bytes. A Python failure, or a result over `max`, is
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`, a Python failure with Spark's message: the
     /// traceback's text after its last `PySparkValueError:` (`UserDefinedPythonFunction.scala`
-    /// `receiveFromPython`, v4.2.0); the worker stays usable.
+    /// `receiveFromPython`, v4.2.0). The worker stays usable either way.
     pub(crate) fn analyze(
         &mut self,
         id: u64,
-        name: &str,
-        args: &Value,
+        input: &RecordBatch,
+        max: u64,
     ) -> Result<Value, KrishivError> {
-        let header = json!({"t": "analyze", "udf": id, "name": name, "args": args});
-        self.send_message(&header, &[])?;
-        let msg = match wire::recv(self.control.as_fd()) {
-            Ok(Some(msg)) => msg,
-            Ok(None) => return Err(self.exited("while it ran a UDTF's analyze")),
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
-                return Err(self.exited("while it ran a UDTF's analyze"));
-            }
-            Err(e) => return Err(self.protocol(&e.to_string())),
-        };
-        if !msg.fds.is_empty() {
-            return Err(self.protocol("an analyze answer with descriptors"));
-        }
-        match msg.kind() {
-            "analyzed" => msg
-                .body
-                .get("result")
-                .cloned()
-                .ok_or_else(|| self.protocol("an analyze answer without its result")),
-            "error" if msg.str_field("kind") == "python" => {
-                Err(TableValuedFunctionFailedToAnalyzeInPython {
-                    msg: analyze_message(msg.str_field("message")),
+        let (file, len) = write_input(input)
+            .map_err(|e| self.server_failure(&format!("cannot pass an analyze call: {e}")))?;
+        let header = json!({"t": "analyze", "udf": id, "len": len, "max": max});
+        let mut reply = self.exchange(&header, &file)?;
+        match reply.kind() {
+            "analyzed" => {}
+            "error" if reply.str_field("kind") == "python" => {
+                return Err(TableValuedFunctionFailedToAnalyzeInPython {
+                    msg: analyze_message(reply.str_field("message")),
                 }
-                .into())
+                .into());
             }
-            "error" => Err(self.python_error(&msg)),
-            other => Err(self.protocol(&format!("unexpected answer {other:?} to analyze"))),
+            "error" => return Err(self.python_error(&reply)),
+            other => {
+                return Err(self.protocol(&format!("unexpected answer {other:?} to analyze")));
+            }
         }
+        let (Some(len), Some(fd), true) = (
+            reply.u64_field("len"),
+            reply.fds.pop(),
+            reply.fds.is_empty(),
+        ) else {
+            return Err(
+                self.protocol("an analyze answer without exactly one descriptor and a length")
+            );
+        };
+        if len > max {
+            // The worker refuses to send this; it answered in step all the same.
+            return Err(TableValuedFunctionFailedToAnalyzeInPython {
+                msg: format!("the analyze result of {len} bytes is over the limit of {max} bytes"),
+            }
+            .into());
+        }
+        let bytes =
+            wire::read_untrusted(fd, len, max).map_err(|e| self.protocol(&e.to_string()))?;
+        serde_json::from_slice(bytes.as_slice())
+            .map_err(|e| self.protocol(&format!("an analyze result that is not JSON: {e}")))
     }
 
     /// The next message of a running task: a request for a frame, a result batch (checked against
