@@ -11,8 +11,9 @@
 //! order under their output names.
 //!
 //! A `WITH` definition is planned again at each reference (Spark inlines
-//! deterministic CTEs too); a shared subtree (`Arc`) is planned once per
-//! parent.
+//! deterministic CTEs too), unless it is shared; a shared subtree (`Arc`) is
+//! planned once per parent. The first pass, which decides which deterministic
+//! definitions to share, plans each body once (`Bodies`).
 //!
 //! The planner produces data ([`PhysNode`]s); it validates each node and
 //! learns its schema with the operator builders instantiation uses
@@ -50,6 +51,7 @@ use crate::physical::{
     top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
+use bodies::Bodies;
 
 /// How far above the planner's first fresh attribute subquery ids start:
 /// subquery values are read as attributes of these numbers, so they must
@@ -72,46 +74,72 @@ impl PhysicalPlanner for DefaultPlanner {
         // Planning recurses once per relation; plans nest up to
         // `krishiv_plan::MAX_DEPTH` levels.
         let run = || {
-            // First as a plan with its deterministic shared definitions
-            // inlined per reference (as before); the groups no runtime
-            // filter reaches are then planned shared (design P2-T198 3.1).
-            let (plan, shareable) = plan_once(cx, root, &output, None)?;
-            if shareable.is_empty() {
-                return Ok::<_, KrishivError>(plan);
+            // First a pass that decides which deterministic shared
+            // definitions to share, as if every reference were planned
+            // inline, but planning each body once (later references reuse
+            // its shape, `Bodies`). The groups no runtime filter reaches are
+            // then planned shared (design P2-T198 3.1). The first pass is
+            // the plan when it reused no body and found no group to share.
+            match plan_once(cx, root, &output, Pass::Decide)? {
+                (Some(plan), shareable) if shareable.is_empty() => Ok::<_, KrishivError>(plan),
+                (_, shareable) => plan_once(cx, root, &output, Pass::Share(shareable))?
+                    .0
+                    .ok_or_else(|| internal("a sharing pass reused a definition's body")),
             }
-            Ok(plan_once(cx, root, &output, Some(shareable))?.0)
         };
         krishiv_common::stack::on_big_stack(run)
             .ok_or_else(|| internal("cannot start a planner thread"))?
     }
 }
 
-/// One planning pass; the definitions of `share` are shared. Also returns the
-/// deterministic groups a second pass may share: two or more references whose
-/// copies no runtime filter reaches.
+/// What a planning pass does with the deterministic shared definitions.
+enum Pass {
+    /// Decides which to share: shares none, and plans each body once ([`Bodies`]).
+    Decide,
+    /// Shares these and plans every other reference anew.
+    Share(HashSet<Vec<AttrId>>),
+}
+
+/// One planning pass. Also returns the deterministic groups a second pass may
+/// share: two or more references whose copies no runtime filter reaches. The
+/// plan is `None` when a deciding pass reused a body (its plan is not whole).
 fn plan_once(
     cx: &PlanningContext,
     root: &Arc<LogicalPlan>,
     output: &[BoundColumn],
-    share: Option<HashSet<Vec<AttrId>>>,
-) -> Result<(PhysicalPlan, HashSet<Vec<AttrId>>)> {
+    pass: Pass,
+) -> Result<(Option<PhysicalPlan>, HashSet<Vec<AttrId>>)> {
     let mut planner = Planner::new(cx, root);
-    planner.share_groups = share;
+    match pass {
+        Pass::Decide => planner.bodies = Some(Bodies::default()),
+        Pass::Share(groups) => planner.share_groups = Some(groups),
+    }
     let planned = planner.plan(root)?;
     let mut planned = select(planned, output, "Project")?;
     // A group is shareable when no copy's scan receives a filter from outside the copy: a join inside the body
-    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1).
+    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1). A reused body's sites
+    // name its first copy's scans, so a filter that reaches any reference lands on that copy.
     let reached = |copy: &Copy| {
         planner.scan_filters.iter().any(|(scan, filters)| {
             copy.scans.contains(&scan.0) && filters.iter().any(|f| !copy.filters.contains(&f.id.0))
         })
     };
+    let counts = planner.bodies.as_ref().map(Bodies::copies);
     let shareable: HashSet<Vec<AttrId>> = planner
         .copies
         .iter()
-        .filter(|(_, copies)| copies.len() >= 2 && !copies.iter().any(reached))
+        .filter(|(key, copies)| {
+            let n = counts.as_ref().map_or(copies.len(), |c| {
+                c.get(*key)
+                    .map_or(0, |&n| usize::try_from(n).unwrap_or(usize::MAX))
+            });
+            n >= 2 && !copies.iter().any(reached)
+        })
         .map(|(key, _)| key.clone())
         .collect();
+    if planner.bodies.as_ref().is_some_and(|b| b.reused) {
+        return Ok((None, shareable));
+    }
     let mut shared = std::mem::take(&mut planner.shared);
     let fuse = planner.fuse_probe_select();
     attach_runtime_filters(
@@ -130,7 +158,7 @@ fn plan_once(
     )
     .with_shared(shared)?
     .with_warnings(planner.warnings);
-    Ok((plan, shareable))
+    Ok((Some(plan), shareable))
 }
 
 /// Whether `n` produces its rows in an order a reader must keep: a sort or top-N, possibly under row-wise
@@ -218,6 +246,23 @@ pub(crate) struct Planned {
 }
 
 impl Planned {
+    /// This relation's shape over a leaf stand-in node, which the deciding pass gives a body's later references
+    /// ([`Bodies`]); `name` labels it in `EXPLAIN`.
+    fn shape(&self, name: &str) -> Self {
+        Self {
+            node: PhysNode::SharedRead {
+                id: SharedId(u64::MAX),
+                layout: self.layout.clone(),
+            },
+            schema: Arc::clone(&self.schema),
+            layout: self.layout.clone(),
+            explain: ExplainNode::leaf("ReusedBody", name),
+            sites: self.sites.clone(),
+            placement: self.placement.clone(),
+            ordering: self.ordering.clone(),
+        }
+    }
+
     /// The column holding `id`.
     pub(crate) fn column(&self, id: AttrId) -> Result<usize> {
         self.layout
@@ -290,6 +335,8 @@ pub(crate) struct Planner<'a> {
     share_groups: Option<HashSet<Vec<AttrId>>>,
     /// The scans and runtime filters of each unshared deterministic reference's copy, by definition.
     copies: HashMap<Vec<AttrId>, Vec<Copy>>,
+    /// The deciding pass's bodies; `None` in a pass that plans every unshared reference anew.
+    bodies: Option<Bodies>,
     /// The join hints a join read, by address.
     pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
@@ -343,6 +390,7 @@ impl<'a> Planner<'a> {
             shared_schemas: HashMap::new(),
             share_groups: None,
             copies: HashMap::new(),
+            bodies: None,
             consumed_hints: HashSet::new(),
             next_id,
             rf: Settings::new(&cx.config),
@@ -504,16 +552,13 @@ impl<'a> Planner<'a> {
                 if share {
                     return self.shared_read(r);
                 }
-                let (scans_from, filters_from) = (self.next_scan, self.next_filter);
-                let planned = self.plan(&def)?;
                 // An unseeded sample is never shared: as Spark inlines the
                 // definition, each reference samples with its own seed.
-                if !krishiv_optimizer::plan_has_unseeded_sample(&def) {
-                    self.copies.entry(r.source.clone()).or_default().push(Copy {
-                        scans: scans_from..self.next_scan,
-                        filters: filters_from..self.next_filter,
-                    });
-                }
+                let planned = if krishiv_optimizer::plan_has_unseeded_sample(&def) {
+                    self.plan(&def)?
+                } else {
+                    self.copy(r, &def)?
+                };
                 // Exactly the definition's columns, under this reference's
                 // attributes.
                 let source: Vec<BoundColumn> = r
@@ -779,6 +824,40 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// An unshared copy of `r`'s deterministic definition `def`, its scans and filters recorded. In the deciding
+    /// pass only the first reference plans the body; a later one gets its shape ([`Bodies`]).
+    fn copy(&mut self, r: &krishiv_plan::CteRef, def: &Arc<LogicalPlan>) -> Result<Planned> {
+        if let Some(bodies) = self.bodies.as_mut() {
+            let enclosing = bodies.enclosing.last().cloned().flatten();
+            bodies
+                .references
+                .entry(r.source.clone())
+                .or_default()
+                .push(enclosing);
+            if let Some(shape) = bodies.shapes.get(&r.source) {
+                bodies.reused = true;
+                return Ok(shape.shape(&r.name));
+            }
+            bodies.enclosing.push(Some(r.source.clone()));
+        }
+        let (scans_from, filters_from) = (self.next_scan, self.next_filter);
+        let planned = self.plan(def);
+        if let Some(bodies) = self.bodies.as_mut() {
+            bodies.enclosing.pop();
+        }
+        let planned = planned?;
+        self.copies.entry(r.source.clone()).or_default().push(Copy {
+            scans: scans_from..self.next_scan,
+            filters: filters_from..self.next_filter,
+        });
+        if let Some(bodies) = self.bodies.as_mut() {
+            bodies
+                .shapes
+                .insert(r.source.clone(), planned.shape(&r.name));
+        }
+        Ok(planned)
+    }
+
     /// A reference read from the definition's shared plan.
     fn shared_read(&mut self, r: &krishiv_plan::CteRef) -> Result<Planned> {
         let (id, schema) = self.shared_plan(&r.source, &r.name)?;
@@ -823,7 +902,15 @@ impl<'a> Planner<'a> {
         let output = def
             .resolved_output()
             .ok_or_else(|| internal("a CTE without output"))?;
-        let planned = self.plan(&def)?;
+        // A shared plan is planned once: a reference inside it makes one copy.
+        if let Some(bodies) = self.bodies.as_mut() {
+            bodies.enclosing.push(None);
+        }
+        let planned = self.plan(&def);
+        if let Some(bodies) = self.bodies.as_mut() {
+            bodies.enclosing.pop();
+        }
+        let planned = planned?;
         // Exactly the definition's columns, in its order.
         let planned = select(planned, &output, "CteRef")?;
         let ordered = ends_in_sort(&planned.node);
@@ -1849,6 +1936,7 @@ impl<'a> Planner<'a> {
 #[cfg(test)]
 mod attach_tests;
 
+mod bodies;
 mod util;
 pub(crate) use util::*;
 

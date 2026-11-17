@@ -175,12 +175,14 @@ fn equal_instances_with_a_breaker_are_shared() {
     assert_eq!(rows, same, "sharing changes no result");
 }
 
-/// A group whose member receives a runtime filter from a join outside it keeps its copies.
+/// A group whose member receives a runtime filter from a join outside it keeps its copies. (A semi join over a
+/// filter on another column: an equality on the key would be pushed into one member, and the members would
+/// differ.)
 #[test]
 fn a_member_that_receives_a_runtime_filter_is_not_shared() {
     let env = env();
     let sql = "WITH c AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a) \
-               SELECT s.a, c1.n FROM (SELECT a FROM t WHERE a = 1) s JOIN c c1 ON s.a = c1.k \
+               SELECT c1.k, c1.n FROM c c1 LEFT SEMI JOIN (SELECT a FROM t WHERE b > 50) s ON s.a = c1.k \
                UNION ALL SELECT k, n FROM c";
     let (shared, rows) = sharing(&env, sql, &[]);
     let (copies, same) = sharing(
@@ -191,6 +193,65 @@ fn a_member_that_receives_a_runtime_filter_is_not_shared() {
     assert_eq!(copies, 0);
     assert_eq!(rows, same);
     assert_eq!(shared, 0, "a filter from the join reaches a copy");
+}
+
+/// The same when the filter reaches only a later reference: the pass deciding what to share plans the body at
+/// the first reference and gives later ones its shape, whose runtime-filter sites still name that copy's scans.
+#[test]
+fn a_filter_reaching_a_later_reference_keeps_the_copies() {
+    let env = env();
+    let sql = "WITH c AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a) \
+               SELECT k, n FROM c \
+               UNION ALL SELECT c1.k, c1.n FROM c c1 LEFT SEMI JOIN (SELECT a FROM t WHERE b > 50) s ON s.a = c1.k";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (_, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(rows, same);
+    assert_eq!(shared, 0, "a filter from the join reaches the second copy");
+}
+
+/// An inner group read once in an outer body has a copy per outer copy, and is reached through the outer
+/// group's second reference: the deciding pass plans the outer body once, so the filter lands on the inner
+/// group's first copy, and neither group is shared.
+#[test]
+fn a_filter_reaching_an_inner_group_through_a_later_outer_reference_keeps_both() {
+    let env = env();
+    let sql = "WITH a AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a), \
+                    b AS (SELECT k, sum(n) AS n FROM a GROUP BY k) \
+               SELECT k, n FROM b \
+               UNION ALL SELECT b1.k, b1.n FROM b b1 LEFT SEMI JOIN (SELECT a FROM t WHERE b > 50) s ON s.a = b1.k";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (_, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(rows, same);
+    assert_eq!(
+        shared, 0,
+        "the join's filter reaches b's second copy and a's inside it"
+    );
+}
+
+/// Unreached, the same inner group has two copies (one per copy of the outer body), so both groups are shared,
+/// the inner one read once inside the outer shared plan.
+#[test]
+fn an_inner_group_read_once_counts_a_copy_per_outer_copy() {
+    let env = env();
+    let sql = "WITH a AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a), \
+                    b AS (SELECT k, sum(n) AS n FROM a GROUP BY k) \
+               SELECT k, n FROM b UNION ALL SELECT k, n FROM b";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (_, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(rows, same);
+    assert_eq!(shared, 2);
 }
 
 /// Groups nested in another group's body are found too.
@@ -208,6 +269,32 @@ fn nested_groups_are_shared_inside_the_outer_definition() {
     );
     assert_eq!(rows, same);
     assert_eq!(shared, 2, "a and b are both shared");
+}
+
+/// A chain of definitions that each join the previous one with itself plans in time linear in its length: the
+/// pass deciding what to share plans each body once (planning every reference anew doubled per level), and each
+/// level is one shared plan.
+#[test]
+fn chained_self_joins_plan_each_body_once() {
+    let env = env();
+    let depth = 30;
+    let mut sql = String::from("WITH c0 AS (SELECT id FROM range(3))");
+    for i in 1..=depth {
+        let p = i - 1;
+        sql.push_str(&format!(
+            ", c{i} AS (SELECT l.id FROM c{p} l JOIN c{p} r ON l.id = r.id)"
+        ));
+    }
+    sql.push_str(&format!(" SELECT id FROM c{depth}"));
+    let started = std::time::Instant::now();
+    let (shared, rows) = sharing(&env, &sql, &[]);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(rows, vec!["0", "1", "2"]);
+    assert_eq!(shared, depth, "every level but the last is read twice");
 }
 
 /// A body without a pipeline breaker is not shared (rescanning is cheaper than buffering).
