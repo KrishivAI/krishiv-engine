@@ -372,7 +372,7 @@ pub(super) fn resolve(
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
 /// offset).
-fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
+pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     use crate::walk::{Node, visit_distinct};
     use crate::{ExprNode, ResolvedExpr};
     let mut top = 0_u64;

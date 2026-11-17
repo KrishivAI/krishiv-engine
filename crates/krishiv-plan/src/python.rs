@@ -40,6 +40,30 @@ pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
     }
 }
 
+/// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is
+/// deterministic: the optimizer's test for inlining a `WITH` definition at each reference (`InlineCTE`), shared
+/// with the analyzer's binding of `input_file_name()`, which instantiates a definition the same way.
+#[must_use]
+pub fn plan_is_deterministic(plan: &crate::LogicalPlan) -> bool {
+    use crate::walk::{Node, visit_distinct};
+    let mut ok = true;
+    let _ = visit_distinct(Node::Plan(plan), |n| {
+        ok &= match n {
+            Node::Plan(p) => python_relation_is_deterministic(&p.node),
+            Node::Expr(e) => !matches!(
+                &e.node,
+                crate::ExprNode::Resolved(crate::ResolvedExpr::Function(f)) if !f.deterministic
+            ),
+        };
+        if ok {
+            std::ops::ControlFlow::Continue(())
+        } else {
+            std::ops::ControlFlow::Break(())
+        }
+    });
+    ok
+}
+
 /// Refuses a grouped or cogrouped map whose UDF is nondeterministic:
 /// Spark's `CheckAnalysis` allows nondeterministic expressions only on some
 /// operators, of the Python relations `MapInPandas` and `MapInArrow`
