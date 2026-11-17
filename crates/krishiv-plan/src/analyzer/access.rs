@@ -487,6 +487,15 @@ mod tests {
                     "{p} {answers:?}"
                 );
                 assert_eq!(quiet.1.load(std::sync::atomic::Ordering::Relaxed), 0);
+                // `authorize` itself tells the policy once of each permission refusal.
+                let refused = a
+                    .as_ref()
+                    .is_err_and(|e| e.error_class() == ErrorClass::KrishivInsufficientPermissions);
+                assert_eq!(
+                    loud.1.load(std::sync::atomic::Ordering::Relaxed),
+                    usize::from(refused),
+                    "{p} {answers:?}"
+                );
             }
         }
     }

@@ -106,8 +106,8 @@ fn assert_trials_quiet(s: &Session, session: &DeniedCounts, provider: &dyn Fn() 
     );
 }
 
-/// Allows everything but `BROWSE` on a namespace (and `SELECT`, its fallback), and records every
-/// refusal it is told of.
+/// Allows everything but `BROWSE` on a namespace (and `SELECT`, its fallback), `USAGE` on a secret
+/// scope and `MANAGE` on the cluster, and records every refusal it is told of.
 #[derive(Default)]
 struct NoBrowseRecording(Mutex<Vec<String>>);
 
@@ -124,6 +124,8 @@ impl AccessPolicy for NoBrowseRecording {
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         let d = if matches!(securable, Securable::Namespace(_))
             && matches!(privilege, Privilege::Browse | Privilege::Select)
+            || matches!(securable, Securable::Secret { .. }) && privilege == Privilege::Usage
+            || matches!(securable, Securable::System(_)) && privilege == Privilege::Manage
         {
             AccessDecision::Deny {
                 reason: "private".to_owned(),
@@ -250,4 +252,33 @@ fn quiet_trials_leave_no_trace() {
     // The policy is told of a run's refusal.
     run(&s, "SHOW TABLES IN d").unwrap_err();
     assert_eq!(told(), 1, "{:?}", policy.0.lock().unwrap());
+
+    // Review Q3: plain EXPLAIN's trial refused by `MANAGE` on the cluster, which the session asks
+    // while it changed a server-scoped store setting (`check_store_options`). The withheld fallback
+    // asks the same and is refused: the policy is told only of the refusals the session audits and
+    // counts; the trial adds none. (A secret's `USAGE` is reached only through the IR:
+    // `session/env.rs` tests.)
+    let refused_loudly_only = |sql: &str| {
+        take();
+        let (before, before_session) = (told(), total_session(&s_counts));
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "{sql}"
+        );
+        let audits = take().len() as u64;
+        assert!(audits >= 1, "{sql}");
+        assert_eq!(
+            told() - before,
+            audits,
+            "{sql}: {:?}",
+            policy.0.lock().unwrap()
+        );
+        assert_eq!(total_session(&s_counts) - before_session, audits, "{sql}");
+    };
+    s.conf()
+        .set("fs.s3a.endpoint", "http://10.0.0.1:9000")
+        .unwrap();
+    refused_loudly_only("EXPLAIN SELECT 1");
 }

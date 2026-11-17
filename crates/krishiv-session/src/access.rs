@@ -321,7 +321,7 @@ pub(crate) fn audit_read<T>(
     env: &QueryEnv,
     result: Result<T, KrishivError>,
 ) -> Result<T, KrishivError> {
-    if env.quiet_denials {
+    if env.quiet_denials() {
         return result;
     }
     audit(session, StatementClass::Read, result)

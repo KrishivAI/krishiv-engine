@@ -1082,6 +1082,7 @@ impl DataFrame {
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.
         env.set_quiet_denials(false, &self.session.state.policy);
+        debug_assert!(env.asks_policy(&self.session.state.policy));
         if let Some(t) = text {
             env.set_text(t);
         }

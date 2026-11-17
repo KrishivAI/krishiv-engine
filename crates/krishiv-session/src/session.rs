@@ -1419,7 +1419,7 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
         }
     }
 
