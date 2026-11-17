@@ -45,6 +45,7 @@
 //! only the envelope is Connect's.
 
 pub mod arrow;
+mod cache_command;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -59,9 +60,10 @@ use crate::auth::{Check, check_command};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
-    ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    ConnectInvalidPlanNotFoundCachedLocalRelation, ConnectInvalidPlanPlanSizeLargerThanMax,
-    InternalError, InvalidCursorNotReattachable, KrishivError, OperationCanceled,
+    ConnectInvalidPlanDataframeNotFound, ConnectInvalidPlanInvalidEnum,
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, ConnectInvalidPlanNotFoundCachedLocalRelation,
+    ConnectInvalidPlanPlanSizeLargerThanMax, InternalError, InvalidCursorNotReattachable,
+    KrishivError, OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -71,8 +73,9 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{
-    Command as RunCommand, LocalRelations, LocalRequest, TranslateConf, UdfHost as TranslateHost,
-    command_not_supported, translate_command, translate_relation_with,
+    CachedRemoteIds, Command as RunCommand, LocalRelations, LocalRequest, TranslateConf,
+    UdfHost as TranslateHost, cached_remote_table, command_not_supported, translate_command,
+    translate_relation_with,
 };
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
@@ -363,17 +366,18 @@ pub async fn execute_plan(
             }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
             match execution_plan(entry, plan, limits).await? {
-                Executed::Relation(logical) => {
-                    let df = session.from_plan_with(&logical, query_options)?;
+                Executed::Relation(requested) => {
+                    let df = requested.frame(session, query_options).await?;
                     let schema = df.schema().await?;
                     let schema_response = schema::proto_schema(&schema)?;
                     Ok(Prepared::Rows(
                         df,
                         schema,
                         schema_response,
-                        observed::plan_ids(logical.root()),
+                        observed::plan_ids(requested.plan.root()),
                     ))
                 }
+                Executed::Checkpointed(id) => Ok(Prepared::Checkpoint(id)),
                 // A command that ran (`register_function`): no response but the end.
                 Executed::Command => Ok(Prepared::Done),
             }
@@ -393,6 +397,7 @@ pub async fn execute_plan(
             (Prepared::Command(answer), registered) => {
                 (Work::Command(Box::new(answer)), registered)
             }
+            (Prepared::Checkpoint(id), registered) => (Work::Checkpoint(id), registered),
             (Prepared::Done, registered) => (Work::NoResult, registered),
         }
     };
@@ -412,6 +417,55 @@ pub async fn execute_plan(
     Ok(stream)
 }
 
+/// A request's plan with the DataFrames its cached remote relations name (`checkpoint_command`
+/// results the session holds), looked up at translation as Spark's `transformCachedRemoteRelation`
+/// does. The frames are held here, so a `remove_cached_remote_relation_command` that arrives
+/// while the request runs frees nothing it reads.
+pub(crate) struct Requested {
+    /// The translated plan; a cached remote relation is a read of the reserved table.
+    pub(crate) plan: krishiv_plan::Plan,
+    frames: Vec<(Vec<String>, DataFrame)>,
+}
+
+impl Requested {
+    /// `plan` with the frames of `ids` bound.
+    ///
+    /// # Errors
+    /// `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND` for an id the session does not hold.
+    fn bind(
+        entry: &SessionEntry,
+        plan: krishiv_plan::Plan,
+        ids: &[String],
+    ) -> Result<Self, KrishivError> {
+        let mut frames = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(frame) = entry.cached_frame(id) else {
+                return Err(ConnectInvalidPlanDataframeNotFound {
+                    df_id: id.clone(),
+                    session_id: entry.client_session_id().to_owned(),
+                }
+                .into());
+            };
+            frames.push((cached_remote_table(id), frame));
+        }
+        Ok(Self { plan, frames })
+    }
+
+    /// The plan as a `DataFrame` of `session`, the frames spliced in.
+    ///
+    /// # Errors
+    /// `Session::from_plan_over`'s.
+    pub(crate) async fn frame(
+        &self,
+        session: &krishiv_session::Session,
+        options: QueryOptions,
+    ) -> Result<DataFrame, KrishivError> {
+        session
+            .from_plan_over(&self.plan, options, &self.frames)
+            .await
+    }
+}
+
 /// What a request's plan prepared.
 enum Prepared {
     /// A relation: its frame, schema, schema response and the plan ids of its observed nodes,
@@ -421,6 +475,8 @@ enum Prepared {
     Command(sql_command::Answer),
     /// A command that ran (`register_function`): no response but the end.
     Done,
+    /// A `checkpoint_command`: the id the result frame is held under.
+    Checkpoint(String),
 }
 
 /// The producing side of `op`.
@@ -491,23 +547,44 @@ struct TranslatedCommand {
     run: Result<RunCommand, KrishivError>,
     /// `CONNECT_INVALID_PLAN` naming the command.
     refusal: KrishivError,
+    /// The relation a `checkpoint_command` checkpoints, translated with the plan's host.
+    input: Option<Result<krishiv_plan::Plan, KrishivError>>,
 }
 
 impl Translated {
-    fn command(command: &pb::Command) -> Self {
-        Self::Command(Box::new(TranslatedCommand {
+    fn command(
+        command: &pb::Command,
+        conf: &TranslateConf,
+        udfs: &mut dyn TranslateHost,
+    ) -> Result<Self, KrishivError> {
+        let input = match &command.command_type {
+            Some(pb::command::CommandType::CheckpointCommand(c)) => {
+                let empty = pb::Relation::default();
+                // The error waits for the command's class check: a viewer is refused first.
+                Some(translate_relation_with(
+                    c.relation.as_ref().unwrap_or(&empty),
+                    conf,
+                    udfs,
+                ))
+            }
+            _ => None,
+        };
+        Ok(Self::Command(Box::new(TranslatedCommand {
             check: check_command(command),
             run: translate_command(command),
             refusal: command_not_supported(command),
-        }))
+            input,
+        })))
     }
 }
 
 /// What an `ExecutePlan` request's plan is, once its privileges are checked.
 enum Executed {
     /// A ROOT relation to run; its inline Python UDFs are registered.
-    Relation(krishiv_plan::Plan),
-    /// A command that ran (`register_function`).
+    Relation(Requested),
+    /// A `checkpoint_command` that ran: the id its result is held under.
+    Checkpointed(String),
+    /// A command that ran (`register_function`, `remove_cached_remote_relation_command`).
     Command,
 }
 
@@ -520,6 +597,7 @@ fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
             .unwrap_or_else(|| TranslateConf::default().default_data_source),
         parser: session.parser_options(),
         local_relations: LocalRelations::default(),
+        cached_remote: CachedRemoteIds::default(),
     }
 }
 
@@ -542,20 +620,49 @@ async fn execution_plan(
     let session = entry.session();
     let decompressed = decompressed(plan, limits).await?;
     let mut udfs = InlineUdfs::execution(entry.python());
-    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
+    let (translated, cached) =
+        translate_locals(entry, Input::Plan(plan), decompressed.as_deref(), &mut udfs).await?;
+    match translated {
         Translated::Relation(logical) => {
             if udfs.seen() {
                 crate::auth::enforce(&crate::auth::client_code(), session).await?;
                 udfs.grant(session)?;
             }
-            Ok(Executed::Relation(logical))
+            Ok(Executed::Relation(Requested::bind(
+                entry, logical, &cached,
+            )?))
         }
         Translated::Command(command) => {
-            let TranslatedCommand { check, run, .. } = *command;
+            let TranslatedCommand {
+                check, run, input, ..
+            } = *command;
             crate::auth::enforce(&check, session).await?;
             match run? {
                 RunCommand::RegisterPythonUdf(udf) => {
                     entry.python().register(session, udf)?;
+                }
+                RunCommand::Checkpoint(spec) => {
+                    let Some(input) = input else {
+                        return Err(krishiv_common::error::InternalError {
+                            message: "a checkpoint command lost its relation".to_owned(),
+                        }
+                        .into());
+                    };
+                    let input = input?;
+                    if udfs.seen() {
+                        crate::auth::enforce(&crate::auth::client_code(), session).await?;
+                        udfs.grant(session)?;
+                    }
+                    // No operation id or tags on the source: the result is held by the session
+                    // for good, and its frame would hold them with it.
+                    let source = Requested::bind(entry, input, &cached)?
+                        .frame(session, QueryOptions::new())
+                        .await?;
+                    let id = cache_command::checkpoint(entry, &source, spec).await?;
+                    return Ok(Executed::Checkpointed(id));
+                }
+                RunCommand::RemoveCachedRemoteRelation { relation_id } => {
+                    entry.remove_cached_frame(&relation_id);
                 }
             }
             Ok(Executed::Command)
@@ -576,18 +683,63 @@ pub(crate) async fn request_plan(
     entry: &SessionEntry,
     plan: &pb::Plan,
     limits: &ExecuteLimits,
-) -> Result<krishiv_plan::Plan, KrishivError> {
+) -> Result<Requested, KrishivError> {
     let session = entry.session();
     let decompressed = decompressed(plan, limits).await?;
     // Inline Python UDFs are typed, never registered: analysis runs no client code.
     let mut udfs = InlineUdfs::analysis(entry.python());
-    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
-        Translated::Relation(logical) => Ok(logical),
+    let (translated, cached) =
+        translate_locals(entry, Input::Plan(plan), decompressed.as_deref(), &mut udfs).await?;
+    match translated {
+        Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
         // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
         // takes a plan.
         Translated::Command(command) => {
             crate::auth::enforce(&command.check, session).await?;
             Err(command.refusal)
+        }
+    }
+}
+
+/// [`request_plan`] for a relation the request carries as such (`AnalyzePlan`'s `persist`,
+/// `unpersist` and `get_storage_level`, which Spark reads with `transformRelation`).
+///
+/// # Errors
+/// The translation errors, and `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND`.
+pub(crate) async fn request_relation(
+    entry: &SessionEntry,
+    relation: &pb::Relation,
+) -> Result<Requested, KrishivError> {
+    let mut udfs = InlineUdfs::analysis(entry.python());
+    let (translated, cached) =
+        translate_locals(entry, Input::Relation(relation), None, &mut udfs).await?;
+    match translated {
+        Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
+        Translated::Command(_) => Err(krishiv_common::error::InternalError {
+            message: "a relation translated to a command".to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// What a request translates: a `Plan` (a relation or a command) or a bare `Relation`.
+#[derive(Clone, Copy)]
+enum Input<'a> {
+    Plan(&'a pb::Plan),
+    Relation(&'a pb::Relation),
+}
+
+/// [`translate_plan`] or the translation of a bare relation.
+fn translate_input(
+    input: Input<'_>,
+    decompressed: Option<&[u8]>,
+    conf: &TranslateConf,
+    udfs: &mut dyn TranslateHost,
+) -> Result<Translated, KrishivError> {
+    match input {
+        Input::Plan(plan) => translate_plan(plan, decompressed, conf, udfs),
+        Input::Relation(relation) => {
+            translate_relation_with(relation, conf, udfs).map(Translated::Relation)
         }
     }
 }
@@ -622,24 +774,29 @@ async fn decompressed(
 /// built, and a second translation uses them. A plan without any is translated once.
 async fn translate_locals(
     entry: &SessionEntry,
-    plan: &pb::Plan,
+    plan: Input<'_>,
     decompressed: Option<&[u8]>,
     udfs: &mut dyn TranslateHost,
-) -> Result<Translated, KrishivError> {
+) -> Result<(Translated, Vec<String>), KrishivError> {
     let translate = translate_conf(entry.session());
+    let cached = translate.cached_remote.clone();
     let collecting = LocalRelations::collecting();
     let first = TranslateConf {
         local_relations: collecting.clone(),
         ..translate.clone()
     };
-    let translated = translate_plan(plan, decompressed, &first, udfs)?;
+    let translated = translate_input(plan, decompressed, &first, udfs)?;
     // Drained, not copied: the recorded inline data is the one copy, and each request is consumed
     // (and freed) by its build below.
     let requests = collecting.take_requests();
     drop(first);
     drop(collecting);
-    if requests.is_empty() || !matches!(translated, Translated::Relation(_)) {
-        return Ok(translated);
+    let has_plan = match &translated {
+        Translated::Relation(_) => true,
+        Translated::Command(c) => matches!(c.input, Some(Ok(_))),
+    };
+    if requests.is_empty() || !has_plan {
+        return Ok((translated, cached.take()));
     }
     drop(translated);
     let mut built = Vec::with_capacity(requests.len());
@@ -650,7 +807,8 @@ async fn translate_locals(
         local_relations: LocalRelations::resolved(built),
         ..translate
     };
-    translate_plan(plan, decompressed, &second, udfs)
+    let translated = translate_input(plan, decompressed, &second, udfs)?;
+    Ok((translated, cached.take()))
 }
 
 /// The relation of one request of the translator's first pass: an inline one through
@@ -692,7 +850,7 @@ fn translate_plan(
         Some(OpType::Root(relation)) => {
             translate_relation_with(relation, conf, udfs).map(Translated::Relation)
         }
-        Some(OpType::Command(command)) => Ok(Translated::command(command)),
+        Some(OpType::Command(command)) => Translated::command(command, conf, udfs),
         Some(OpType::CompressedOperation(c)) => {
             let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
@@ -701,8 +859,8 @@ fn translate_plan(
                         .map(Translated::Relation)
                 }
                 Ok(CompressedOpType::Command) => match &decode_command(bytes)?.op_type {
-                    Some(OpType::Command(command)) => Ok(Translated::command(command)),
-                    _ => Ok(Translated::command(&pb::Command::default())),
+                    Some(OpType::Command(command)) => Translated::command(command, conf, udfs),
+                    _ => Translated::command(&pb::Command::default(), conf, udfs),
                 },
                 _ => {
                     // Spark's `PlanCompressionUtils` re-throws what parsing
@@ -928,6 +1086,8 @@ enum Work {
     Query(Box<Query>),
     /// A `sql_command`: the `sql_command_result` relation it answers.
     Command(Box<sql_command::Answer>),
+    /// A `checkpoint_command`: the id its result is held under.
+    Checkpoint(String),
     /// A command with no result (`ml_command.clean_cache`, a
     /// `register_function` that ran): only `result_complete`, when
     /// reattachable.
@@ -959,6 +1119,7 @@ impl Work {
                 .await
             }
             Self::Command(answer) => sql_command::produce(sender, *answer).await,
+            Self::Checkpoint(id) => cache_command::produce(sender, id).await,
             Self::NoResult => {
                 sender.admit().await?;
                 complete(sender).await

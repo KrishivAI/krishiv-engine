@@ -53,6 +53,7 @@ impl Session {
         &self,
         e: &Explain,
         env: crate::session::QueryEnv,
+        text: &str,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         // Krishiv's `EXPLAIN FORMAT JSON` (P3-T063 N2): the explained
@@ -60,7 +61,7 @@ impl Session {
         // reads are checked as a run checks them.
         if e.mode == krishiv_sql::ast::ExplainMode::Json {
             let json = self
-                .analyze_statement((*e.statement).clone(), redacted)
+                .analyze_statement((*e.statement).clone(), text, redacted)
                 .await?
                 .to_json();
             return self.one_row(&json).await;

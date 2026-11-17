@@ -633,7 +633,7 @@ impl Session {
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, query, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => {
@@ -1139,6 +1139,57 @@ impl Session {
             self.with_options(options)?,
             Arc::clone(plan.root()),
         ))
+    }
+
+    /// As [`Self::from_plan_with`], with each read of a table named in `frames` replaced by that
+    /// frame's plan (the read node's origin, so a client's plan id still names it): a DataFrame
+    /// the host holds under an id (Spark Connect's `CachedRemoteRelation`, the result of a
+    /// checkpoint). The new frame owns what the frames own, so a checkpoint's rows live as long
+    /// as it does even when the host lets go of the frame. A frame that is a lazy checkpoint takes
+    /// its rows here. A read inside a subquery expression is not replaced.
+    ///
+    /// # Errors
+    /// The errors of [`Self::from_plan_with`], and of taking a lazy checkpoint's rows.
+    #[cfg(feature = "unstable-ir")]
+    pub async fn from_plan_over(
+        &self,
+        plan: &Plan,
+        options: crate::QueryOptions,
+        frames: &[(Vec<String>, DataFrame)],
+    ) -> Result<DataFrame, KrishivError> {
+        let session = self.with_options(options)?;
+        if frames.is_empty() {
+            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+        }
+        let frames = frames.to_vec();
+        let root = Arc::clone(plan.root());
+        let (root, keep) = self
+            .on_executor(async move {
+                let mut keep: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
+                let mut plans = Vec::with_capacity(frames.len());
+                for (name, frame) in &frames {
+                    plans.push((name.clone(), frame.plan_with_checkpoints().await?));
+                    for k in &frame.keep {
+                        if !keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                            keep.push(Arc::clone(k));
+                        }
+                    }
+                }
+                let root = root.transform_down(&mut |node| {
+                    let PlanNode::Read(ReadSource::Table { name, .. }) = &node.node else {
+                        return Ok::<_, std::convert::Infallible>(node);
+                    };
+                    Ok(match plans.iter().find(|(n, _)| n == name) {
+                        Some((_, plan)) => {
+                            Arc::new(LogicalPlan::clone(plan).with_origin(node.origin))
+                        }
+                        None => node,
+                    })
+                });
+                Ok((root.unwrap_or_else(|e| match e {}), keep))
+            })
+            .await?;
+        Ok(DataFrame::over_plan(session, root, keep))
     }
 
     /// Runs `work` on the session's executor, so that it finds the
