@@ -19,6 +19,9 @@ pub(super) struct Expander<'a> {
     pub(super) reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
     pub(super) deferred: Option<KrishivError>,
+    /// Whether [`Self::deferred`] arose inside a definer view's text (review B2: the reader is told
+    /// only its class).
+    pub(super) deferred_in_definer: bool,
     /// The stored views inlined so far, for [`Expansion::stored_reads`].
     pub(super) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined so far, for [`Expansion::views`] (the lineage side table).
@@ -262,7 +265,10 @@ impl Expander<'_> {
             Ok(done) => Ok(done),
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.
-                self.deferred.get_or_insert(e);
+                if self.deferred.is_none() {
+                    self.deferred_in_definer = !self.in_definer.is_empty();
+                    self.deferred = Some(e);
+                }
                 Ok(plan)
             }
         }

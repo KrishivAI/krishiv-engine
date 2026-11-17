@@ -40,4 +40,19 @@ impl Session {
             .map_err(|e| e.error)?;
         Ok(analyzed.securables)
     }
+
+    /// What the reader is told of the failure `e` of a definer view's read (review B2; ADR 0048
+    /// §3: a denial names only what the statement wrote; design §6: the canary never shows in
+    /// error text): its class and SQLSTATE, every message parameter redacted, no position in a
+    /// text. The record of a refusal keeps the whole error (the definer, the securable): it is
+    /// audited here, before the redaction.
+    pub(crate) fn definer_failure(&self, env: &QueryEnv, e: KrishivError) -> KrishivError {
+        let Err(e) = crate::access::audit_read::<()>(self, env, Err(e)) else {
+            return krishiv_common::error::InternalError {
+                message: "a definer failure without an error".to_owned(),
+            }
+            .into();
+        };
+        e.redacted().without_pending_site()
+    }
 }

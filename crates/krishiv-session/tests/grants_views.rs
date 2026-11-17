@@ -90,6 +90,18 @@ fn denied(s: &Session, sql: &str) -> String {
     }
 }
 
+/// A refusal of a definer's read as its reader sees it (review B2): the class and SQLSTATE, every
+/// parameter redacted, none of `hidden` shown.
+fn assert_redacted(e: &str, hidden: &[&str]) {
+    assert!(
+        e.contains(krishiv_common::secret::REDACTED) && e.contains("42501"),
+        "{e}"
+    );
+    for h in hidden {
+        assert!(!e.contains(h), "{h}: {e}");
+    }
+}
+
 /// root's `t (a INT, b INT)` with the row (1, 2); ana may create in `default` and read `t`.
 fn world() -> (World, Session, Session) {
     let w = World::new();
@@ -134,11 +146,11 @@ fn a_definer_view_reads_with_its_definers_rights() {
     let carl = w.user("carl");
     let e = denied(&carl, "SELECT * FROM dv");
     assert!(e.contains("`dv`") && !e.contains("`t`"), "{e}");
-    // The definer's rights are asked on every read: a revoke from the definer reaches its readers,
-    // and the refusal names the definer.
+    // The definer's rights are asked on every read: a revoke from the definer reaches its readers.
+    // The refusal is redacted (review B2): bob wrote neither the definer nor its table.
     ok(&root, "REVOKE SELECT ON t FROM user:ana");
     let e = denied(&bob, "SELECT * FROM dv");
-    assert!(e.contains("`ana`"), "{e}");
+    assert_redacted(&e, &["`ana`", "`t`", "default.t"]);
     // Column grants of the definer: what the view's query reads.
     ok(&root, "GRANT SELECT (a) ON t TO user:ana");
     assert_eq!(rows(&bob, "SELECT * FROM dv"), 1);
@@ -173,7 +185,7 @@ fn a_definer_holds_only_its_own_grants_never_an_admin_role() {
     );
     ok(&root, "GRANT SELECT ON VIEW over_anas TO user:bob");
     let e = denied(&bob, "SELECT * FROM over_anas");
-    assert!(e.contains("`root`"), "{e}");
+    assert_redacted(&e, &["`root`", "anas`"]);
     // Even root reading its own definer view: the view's query is the definer's, acting for root.
     denied(&root, "SELECT * FROM over_anas");
     ok(&ana, "GRANT SELECT ON TABLE anas TO user:root");
@@ -202,7 +214,7 @@ fn a_definer_view_inside_a_definer_view_reads_as_its_own_definer() {
     // The outer definer losing the inner view refuses carl.
     ok(&ana, "REVOKE SELECT ON VIEW inner_v FROM user:bob");
     let e = denied(&carl, "SELECT * FROM outer_v");
-    assert!(e.contains("`bob`"), "{e}");
+    assert_redacted(&e, &["`bob`", "inner_v"]);
 }
 
 #[test]
@@ -475,4 +487,72 @@ fn embedded_sql_never_borrows_a_definer_views_rights() {
     let bob = w.user("bob");
     let alone = Plan::try_new(Arc::new(LogicalPlan::table(["dv"]))).unwrap();
     assert_eq!(block_on(bob.from_plan(&alone).collect()).unwrap().len(), 1);
+}
+
+/// Review B2 (design §6 canary rule): what goes wrong inside a definer's read tells the reader
+/// nothing it did not write. carl may read bob's `outer_v` only; bob's view reads ana's
+/// `inner_v`, ana's view reads `vault_base`. Neither the definers, nor `inner_v`, nor its base
+/// table, nor its text show in carl's error, whether the definer lost its grant or the text no
+/// longer analyzes; the audit record still names the definer.
+#[test]
+fn a_definer_failure_shows_the_reader_only_what_it_wrote() {
+    let (w, root, ana) = world();
+    let (bob, carl) = (w.user("bob"), w.user("carl"));
+    ok(
+        &root,
+        "CREATE TABLE vault_base (secret_col INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO vault_base VALUES (424242)");
+    ok(&root, "GRANT SELECT ON TABLE vault_base TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(
+        &ana,
+        "CREATE VIEW inner_v SQL SECURITY DEFINER AS SELECT secret_col AS a FROM vault_base WHERE secret_col > 7",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW inner_v TO user:bob");
+    ok(
+        &bob,
+        "CREATE VIEW outer_v SQL SECURITY DEFINER AS SELECT a FROM inner_v",
+    );
+    ok(&bob, "GRANT SELECT ON VIEW outer_v TO user:carl");
+    assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
+    let canary = [
+        "`ana`",
+        "`bob`",
+        "inner_v",
+        "vault_base",
+        "secret_col",
+        "424242",
+        "> 7",
+    ];
+    let shown = |e: &KrishivError| {
+        let mut text = e.to_string();
+        for c in e.query_contexts() {
+            text.push_str(&format!("{c:?}"));
+        }
+        text
+    };
+    // The definer of the inner view loses its table.
+    ok(&root, "REVOKE SELECT ON vault_base FROM user:ana");
+    let e = run(&carl, "SELECT * FROM outer_v").unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED);
+    assert_eq!(e.sql_state(), Some("42501"));
+    assert_redacted(&shown(&e), &canary);
+    // The inner view's text no longer analyzes (its column is gone).
+    ok(&root, "GRANT SELECT ON vault_base TO user:ana");
+    assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
+    ok(&root, "DROP TABLE vault_base");
+    ok(&root, "CREATE TABLE vault_base (other INT) USING parquet");
+    ok(&root, "GRANT SELECT ON TABLE vault_base TO user:ana");
+    let e = run(&carl, "SELECT * FROM outer_v").unwrap_err();
+    let text = shown(&e);
+    for c in canary {
+        assert!(!text.contains(c), "{c}: {text}");
+    }
+    // An outer view whose own text fails is the outer definer's too.
+    let e = run(&carl, "SELECT a + 1 FROM outer_v").unwrap_err();
+    let text = shown(&e);
+    for c in canary {
+        assert!(!text.contains(c), "{c}: {text}");
+    }
 }

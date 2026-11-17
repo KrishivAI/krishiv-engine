@@ -1424,6 +1424,10 @@ impl Session {
         // can fail, so a principal who may not read it learns nothing from it.
         let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
+            // Inside a definer view's text it is the definer's failure (review B2).
+            if expansion.deferred_in_definer {
+                return Err(self.definer_failure(env, e));
+            }
             let e = self.view_text_failure(&views, env, e).await;
             return crate::access::audit_read(self, env, Err(e));
         }
@@ -1441,10 +1445,7 @@ impl Session {
                         v.owner_reads = owner_reads;
                     }
                 }
-                Err(e) => {
-                    let e = self.view_text_failure(&views, env, e).await;
-                    return crate::access::audit_read(self, env, Err(e));
-                }
+                Err(e) => return Err(self.definer_failure(env, e)),
             }
         }
         let trusting_views;

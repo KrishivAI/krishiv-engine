@@ -147,8 +147,32 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         // A definer view ana may read over `pub` (review B1).
         "CREATE VIEW dpub SQL SECURITY DEFINER AS SELECT a FROM pub",
         "GRANT SELECT ON VIEW dpub TO user:ana",
+        // Definers that lose the canary under views ana may read (review B2): dana's view over
+        // the canary, and dora's view over dana's.
+        "GRANT CREATE ON SCHEMA default TO user:dana",
+        "GRANT CREATE ON SCHEMA default TO user:dora",
+        "GRANT SELECT ON TABLE canary TO user:dana",
     ] {
         block_on(async { root.sql(statement).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{statement}: {e}"));
+    }
+    let dana = session("dana", false, Arc::new(AllowAll));
+    let dora = session("dora", false, Arc::new(AllowAll));
+    for (s, statement) in [
+        (
+            &dana,
+            "CREATE VIEW dcan SQL SECURITY DEFINER AS SELECT a FROM canary WHERE a > 0",
+        ),
+        (&dana, "GRANT SELECT ON VIEW dcan TO user:ana"),
+        (&dana, "GRANT SELECT ON VIEW dcan TO user:dora"),
+        (
+            &dora,
+            "CREATE VIEW dnest SQL SECURITY DEFINER AS SELECT a FROM dcan",
+        ),
+        (&dora, "GRANT SELECT ON VIEW dnest TO user:ana"),
+        (&root, "REVOKE SELECT ON TABLE canary FROM user:dana"),
+    ] {
+        block_on(async { s.sql(statement).await?.collect().await })
             .unwrap_or_else(|e| panic!("{statement}: {e}"));
     }
     let canary_dir = wh.join("canary");
@@ -159,7 +183,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         dir.path().join("out").display()
     );
     // design §6: one row per cell (the unauthorised case of the `grants` column).
-    let refused: Vec<Row<'_>> = vec![
+    let mut refused: Vec<Row<'_>> = vec![
         ("SELECT", sql("SELECT * FROM canary")),
         ("SELECT a column", sql("SELECT a FROM canary WHERE a = 1")),
         ("SELECT count", sql("SELECT count(*) FROM canary")),
@@ -297,6 +321,13 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
             }),
         ),
     ];
+    // Review B2: a definer that lost the canary, read through a view ana may read (alone and
+    // nested): neither definer, view nor table behind it shows.
+    refused.push(("B2 definer lost the canary", sql("SELECT * FROM dcan")));
+    refused.push((
+        "B2 nested definer lost the canary",
+        sql("SELECT * FROM dnest"),
+    ));
     take();
     let mut bad = Vec::new();
     for (row, run) in &refused {
@@ -318,6 +349,13 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
                     bad.push(format!("{row}: SQLSTATE {:?}", e.sql_state()));
                 }
                 if let Some(l) = leaks(&e.to_string()) {
+                    bad.push(format!("{row}: the error shows {l}: {e}"));
+                }
+                if row.starts_with("B2")
+                    && let Some(l) = ["dana", "dora", "dcan", "canary", "> 0"]
+                        .into_iter()
+                        .find(|l| e.to_string().contains(l))
+                {
                     bad.push(format!("{row}: the error shows {l}: {e}"));
                 }
             }
@@ -396,7 +434,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         match &result {
             Ok(text) => {
                 let shown = leaks(text).or_else(|| {
-                    ["canary", "dvc", "canary_fn", "ufn", "dpub"]
+                    ["canary", "dvc", "canary_fn", "ufn", "dcan", "dnest", "dpub"]
                         .into_iter()
                         .find(|n| text.contains(n))
                 });

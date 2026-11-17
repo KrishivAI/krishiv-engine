@@ -1461,6 +1461,7 @@ pub(crate) fn expand_views_in(
         view_path,
         reads: Vec::new(),
         deferred: None,
+        deferred_in_definer: false,
         stored_reads: Vec::new(),
         views: Vec::new(),
         definers: Vec::new(),
@@ -1472,6 +1473,7 @@ pub(crate) fn expand_views_in(
         plan,
         reads: expander.reads,
         deferred: expander.deferred,
+        deferred_in_definer: expander.deferred_in_definer,
         stored_reads: expander.stored_reads,
         views: expander.views,
         definers: expander.definers,
@@ -1518,6 +1520,8 @@ pub(crate) struct Expansion {
     /// A failure inside a stored view's text (it no longer parses, reads itself, ...). It is raised only
     /// after the reads are authorized, so a principal who may not read the view never sees its text's errors.
     pub(crate) deferred: Option<KrishivError>,
+    /// Whether [`Self::deferred`] arose inside a `SQL SECURITY DEFINER` view's text.
+    pub(crate) deferred_in_definer: bool,
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
