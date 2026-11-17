@@ -1037,27 +1037,65 @@ fn gather<const N: usize>(out: &mut [u8], rows: &[&[u8]], at: usize) {
 }
 
 /// An array of string or binary `data_type` holding `values`.
+///
+/// Strings are gathered into one values buffer and checked as UTF-8 once,
+/// as a whole (with Arrow's character-boundary check at every offset),
+/// instead of value by value: on 24M string groups the per-value check and
+/// the view builder took about 6% of ClickBench q17's cycles. A `Utf8View`
+/// column is built over that same checked buffer.
 fn strings_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<ArrayRef> {
-    use arrow_array::{
-        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
-        StringViewArray,
-    };
-    let text = || {
-        values
-            .iter()
-            .map(|v| v.map(std::str::from_utf8).transpose())
-            .collect::<std::result::Result<Vec<Option<&str>>, _>>()
-            .map_err(|e| internal(format!("a row string is not UTF-8: {e}")))
-    };
+    use arrow_array::{BinaryArray, BinaryViewArray, LargeBinaryArray, StringViewArray};
     Ok(match data_type {
-        DataType::Utf8 => Arc::new(StringArray::from(text()?)),
-        DataType::LargeUtf8 => Arc::new(LargeStringArray::from(text()?)),
-        DataType::Utf8View => Arc::new(StringViewArray::from(text()?)),
+        DataType::Utf8 => Arc::new(checked_strings::<i32>(values)?),
+        DataType::LargeUtf8 => Arc::new(checked_strings::<i64>(values)?),
+        DataType::Utf8View => {
+            // Arrow's conversion reuses the buffer when its offsets fit in
+            // `u32`; past that, the large array's views go through Arrow's
+            // block splitting.
+            let total: usize = values.iter().flatten().map(|v| v.len()).sum();
+            if i32::try_from(total).is_ok() {
+                Arc::new(StringViewArray::from(&checked_strings::<i32>(values)?))
+            } else {
+                Arc::new(StringViewArray::from(&checked_strings::<i64>(values)?))
+            }
+        }
         DataType::Binary => Arc::new(BinaryArray::from(values.to_vec())),
         DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values.to_vec())),
         DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),
         t => return Err(internal(format!("no row view decoding for {t}"))),
     })
+}
+
+/// `values` as a string array: one copy into a values buffer and one UTF-8
+/// check of the whole buffer (`GenericStringArray::try_new`).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for bytes that are not UTF-8 (a corrupt row) or more
+/// bytes than offsets of type `O` address.
+fn checked_strings<O: arrow_array::OffsetSizeTrait>(
+    values: &[Option<&[u8]>],
+) -> Result<arrow_array::GenericStringArray<O>> {
+    use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+    let total: usize = values.iter().flatten().map(|v| v.len()).sum();
+    let mut bytes = Vec::with_capacity(total);
+    let mut offsets = Vec::with_capacity(values.len() + 1);
+    offsets.push(O::usize_as(0));
+    for v in values {
+        if let Some(v) = v {
+            bytes.extend_from_slice(v);
+        }
+        offsets.push(
+            O::from_usize(bytes.len())
+                .ok_or_else(|| internal("row strings past the offset range".to_owned()))?,
+        );
+    }
+    let nulls = values
+        .iter()
+        .any(Option::is_none)
+        .then(|| NullBuffer::from_iter(values.iter().map(Option::is_some)));
+    let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+    arrow_array::GenericStringArray::<O>::try_new(offsets, Buffer::from_vec(bytes), nulls)
+        .map_err(|e| internal(format!("a row string is not UTF-8: {e}")))
 }
 
 /// Rows taken out of [`EncodedKeys`] by [`EncodedKeys::gather`].
@@ -1288,5 +1326,50 @@ mod tests {
             )
         };
         assert_eq!(put(&dirty), put(&clean));
+    }
+
+    /// String keys decode with one UTF-8 check of the gathered bytes: the
+    /// same values and NULLs for every string type, and as strict as a
+    /// check per value (invalid bytes, or a character split between two
+    /// values whose concatenation is valid, are refused).
+    #[test]
+    fn strings_decode_with_one_check_as_strict_as_one_per_value() {
+        use arrow_array::cast::AsArray;
+        let long = "a value longer than twelve bytes, é and 漢字";
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"short"),
+            None,
+            Some(long.as_bytes()),
+            Some(b""),
+            Some("ü".as_bytes()),
+            None,
+        ];
+        let want: Vec<Option<&str>> = values
+            .iter()
+            .map(|v| v.map(|b| std::str::from_utf8(b).unwrap_or_else(|e| panic!("{e}"))))
+            .collect();
+        for t in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let a = strings_array(&t, &values).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(a.data_type(), &t);
+            let got: Vec<Option<&str>> = match &t {
+                DataType::Utf8 => a.as_string::<i32>().iter().collect(),
+                DataType::LargeUtf8 => a.as_string::<i64>().iter().collect(),
+                _ => a.as_string_view().iter().collect(),
+            };
+            assert_eq!(got, want, "{t}");
+            assert_eq!(a.null_count(), 2, "{t}");
+            let empty = strings_array(&t, &[]).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(empty.len(), 0, "{t}");
+            let no_nulls = strings_array(&t, &values[..1]).unwrap_or_else(|e| panic!("{e}"));
+            assert!(no_nulls.nulls().is_none(), "{t}");
+            // "é" is c3 a9: split between two values, the whole buffer is
+            // valid UTF-8 but neither value is.
+            let split: Vec<Option<&[u8]>> = vec![Some(&[0xc3]), Some(&[0xa9])];
+            let invalid: Vec<Option<&[u8]>> = vec![Some(b"ok"), Some(&[0xff, 0xfe])];
+            for bad in [split, invalid] {
+                let e = strings_array(&t, &bad).expect_err("not UTF-8");
+                assert!(e.to_string().contains("not UTF-8"), "{t}: {e}");
+            }
+        }
     }
 }
