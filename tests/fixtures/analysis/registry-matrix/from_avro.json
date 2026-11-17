@@ -1,0 +1,102 @@
+{
+  "entries": [
+    {
+      "id": "from_avro#06b4c1507baa/ansi_on",
+      "reason": "SELECT from_avro(s, ' \\t a\\u3000\\n ', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#06b4c1507baa/ansi_off",
+      "reason": "SELECT from_avro(s, ' \\t a\\u3000\\n ', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#0b137ff88258/ansi_on",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#0b137ff88258/ansi_off",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#1a28b58a1298/ansi_on",
+      "reason": "SELECT from_avro(s, '', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#1a28b58a1298/ansi_off",
+      "reason": "SELECT from_avro(s, '', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#284ee1ef9007/ansi_on",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', CAST(NULL AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#284ee1ef9007/ansi_off",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', CAST(NULL AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#2c560483cf2c/ansi_on",
+      "reason": "SELECT from_avro(s, NULL, map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#2c560483cf2c/ansi_off",
+      "reason": "SELECT from_avro(s, NULL, map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#596b191af678/ansi_on",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', NULL) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#596b191af678/ansi_off",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', NULL) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#696bde64fffc/ansi_on",
+      "reason": "SELECT from_avro(s, CAST(X'C328FF' AS STRING), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#696bde64fffc/ansi_off",
+      "reason": "SELECT from_avro(s, CAST(X'C328FF' AS STRING), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#791e754b601d/ansi_on",
+      "reason": "SELECT from_avro(s, CAST(NULL AS string), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#791e754b601d/ansi_off",
+      "reason": "SELECT from_avro(s, CAST(NULL AS string), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#8436c7e4814e/ansi_on",
+      "reason": "SELECT from_avro(s, 'Ä€日本語😀é', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#8436c7e4814e/ansi_off",
+      "reason": "SELECT from_avro(s, 'Ä€日本語😀é', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#e7b40ab048d8/ansi_on",
+      "reason": "SELECT from_avro(s, 'abc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#e7b40ab048d8/ansi_off",
+      "reason": "SELECT from_avro(s, 'abc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#ebeb17f6769a/ansi_on",
+      "reason": "SELECT from_avro(s, '1', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#ebeb17f6769a/ansi_off",
+      "reason": "SELECT from_avro(s, '1', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#f2588ce0ea36/ansi_on",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', CAST(map() AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_avro#f2588ce0ea36/ansi_off",
+      "reason": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', CAST(map() AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    }
+  ],
+  "format_version": 1,
+  "function": "from_avro"
+}

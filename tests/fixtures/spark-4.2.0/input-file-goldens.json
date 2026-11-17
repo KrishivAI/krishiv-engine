@@ -1,0 +1,1875 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_input_file_goldens.py",
+ "master": "local[1]",
+ "setup": {
+  "files": [
+   "<root>/a/a1.parquet (452 bytes)",
+   "<root>/a/a2.parquet (447 bytes)",
+   "<root>/b/b1.parquet (452 bytes)",
+   "<root>/big/big.parquet (14201270 bytes)",
+   "<root>/c/c1.csv (7 bytes)",
+   "<root>/d/d1.json (18 bytes)"
+  ],
+  "contents": {
+   "a/a1.parquet": "id 1,2",
+   "a/a2.parquet": "id 3",
+   "b/b1.parquet": "id 1,10",
+   "c/c1.csv": "header id; 1,7",
+   "d/d1.json": "id 2,8",
+   "big/big.parquet": "id 0..199999, h = sha2(id), parquet.block.size=65536"
+  },
+  "views": {
+   "a": "parquet a",
+   "b": "parquet b",
+   "c": "csv c (header, inferSchema)",
+   "d": "json d",
+   "big": "parquet big",
+   "t": "CREATE TABLE t USING parquet LOCATION <root>/a (catalog table)"
+  },
+  "paths": "rows print <root> for the mounted data directory"
+ },
+ "cases": [
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "0",
+     "447",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM a WHERE input_file_name() LIKE '%a1%'",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id FROM a WHERE input_file_name() LIKE '%a1%'",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), count(*) FROM a GROUP BY 1",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT max(input_file_name()) FROM a",
+   "conf": {},
+   "error": {
+    "class": "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION",
+    "sqlstate": "42845",
+    "message": "[AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION] Non-deterministic expression \"max(input_file_name())\" should not appear in the arguments of an aggregate function. SQLSTATE: 42845; line 1 pos 11;\nAggregate [max(input_file_name()) AS max(input_file_name())#118]\n+- SubqueryAlias a\n   +- View (`a`, [id#32])\n      +- Relation [id#32] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name(), n FROM (SELECT count(*) n FROM a)",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT DISTINCT input_file_name() FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM (SELECT DISTINCT id FROM a)",
+   "conf": {},
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM a ORDER BY id",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a ORDER BY id",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM (SELECT * FROM a ORDER BY id)",
+   "conf": {},
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM (SELECT * FROM a LIMIT 10)",
+   "conf": {},
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a LIMIT 1",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM (SELECT /*+ REPARTITION(3) */ * FROM a)",
+   "conf": {},
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a DISTRIBUTE BY id",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), row_number() OVER (ORDER BY id) FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id, count(*) OVER (PARTITION BY input_file_name()) FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "2"
+    ],
+    [
+     "2",
+     "2"
+    ],
+    [
+     "3",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT f FROM (SELECT input_file_name() f, row_number() OVER (ORDER BY id) r FROM a)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM (SELECT id, row_number() OVER (ORDER BY id) r FROM a)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a JOIN b USING (id)",
+   "conf": {},
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 7;\nProject [input_file_name() AS input_file_name()#196]\n+- Project [id#32]\n   +- Join Inner, (id#32 = id#33)\n      :- SubqueryAlias a\n      :  +- View (`a`, [id#32])\n      :     +- Relation [id#32] parquet\n      +- SubqueryAlias b\n         +- View (`b`, [id#33])\n            +- Relation [id#33] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT id FROM a JOIN b USING (id) WHERE input_file_name() LIKE '%a1%'",
+   "conf": {},
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 41;\nProject [id#32]\n+- Filter input_file_name() LIKE %a1%\n   +- Project [id#32]\n      +- Join Inner, (id#32 = id#33)\n         :- SubqueryAlias a\n         :  +- View (`a`, [id#32])\n         :     +- Relation [id#32] parquet\n         +- SubqueryAlias b\n            +- View (`b`, [id#33])\n               +- Relation [id#33] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT input_file_name() f, id FROM a) JOIN b USING (id)",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a JOIN range(5) r ON a.id = r.id",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a JOIN range(5) r ON a.id = r.id",
+   "conf": {
+    "spark.sql.autoBroadcastJoinThreshold": "-1"
+   },
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a CROSS JOIN (VALUES (1)) v",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a CROSS JOIN (VALUES (1)) v",
+   "conf": {
+    "spark.sql.autoBroadcastJoinThreshold": "-1"
+   },
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM (SELECT * FROM a UNION ALL SELECT * FROM b)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ],
+    [
+     "file://<root>/b/b1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/b/b1.parquet",
+     "10"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM (SELECT * FROM a UNION SELECT * FROM b)",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "1"
+    ],
+    [
+     "",
+     "10"
+    ],
+    [
+     "",
+     "2"
+    ],
+    [
+     "",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM (SELECT * FROM a INTERSECT SELECT * FROM b)",
+   "conf": {},
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 7;\nProject [input_file_name() AS input_file_name()#235, id#32]\n+- SubqueryAlias __auto_generated_subquery_name\n   +- Intersect false\n      :- Project [id#32]\n      :  +- SubqueryAlias a\n      :     +- View (`a`, [id#32])\n      :        +- Relation [id#32] parquet\n      +- Project [id#33]\n         +- SubqueryAlias b\n            +- View (`b`, [id#33])\n               +- Relation [id#33] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a JOIN (SELECT id FROM b UNION ALL SELECT id FROM c) u USING (id)",
+   "conf": {},
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 7;\nProject [input_file_name() AS input_file_name()#236]\n+- Project [id#32]\n   +- Join Inner, (id#32 = id#33)\n      :- SubqueryAlias a\n      :  +- View (`a`, [id#32])\n      :     +- Relation [id#32] parquet\n      +- SubqueryAlias u\n         +- Union false, false\n            :- Project [id#33]\n            :  +- SubqueryAlias b\n            :     +- View (`b`, [id#33])\n            :        +- Relation [id#33] parquet\n            +- Project [id#51]\n               +- SubqueryAlias c\n                  +- View (`c`, [id#51])\n                     +- Relation [id#51] csv\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM (SELECT * FROM a UNION ALL SELECT * FROM range(2))",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "0"
+    ],
+    [
+     "",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length()",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "-1",
+     "-1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length() FROM range(2)",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "-1",
+     "-1"
+    ],
+    [
+     "",
+     "-1",
+     "-1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length() FROM VALUES (1) AS v(x)",
+   "conf": {},
+   "rows": [
+    [
+     "",
+     "-1",
+     "-1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM ca",
+   "conf": {},
+   "pre": [
+    "CACHE TABLE ca AS SELECT * FROM a"
+   ],
+   "rows": [
+    [
+     "",
+     "-1",
+     "-1",
+     "1"
+    ],
+    [
+     "",
+     "-1",
+     "-1",
+     "2"
+    ],
+    [
+     "",
+     "-1",
+     "-1",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM a",
+   "conf": {},
+   "pre": [
+    "CACHE TABLE ca AS SELECT * FROM a"
+   ],
+   "rows": [
+    [
+     "",
+     "-1",
+     "-1",
+     "1"
+    ],
+    [
+     "",
+     "-1",
+     "-1",
+     "2"
+    ],
+    [
+     "",
+     "-1",
+     "-1",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_block_start() s, input_file_block_length() l, count(*) FROM big GROUP BY 1, 2",
+   "conf": {
+    "spark.sql.files.maxPartitionBytes": "100000"
+   },
+   "rows": [
+    [
+     "0",
+     "100000",
+     "1722"
+    ],
+    [
+     "100000",
+     "100000",
+     "861"
+    ],
+    [
+     "1000000",
+     "100000",
+     "861"
+    ],
+    [
+     "10000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10200000",
+     "100000",
+     "861"
+    ],
+    [
+     "10300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10500000",
+     "100000",
+     "861"
+    ],
+    [
+     "10600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10700000",
+     "100000",
+     "861"
+    ],
+    [
+     "10800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "10900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "1100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11000000",
+     "100000",
+     "861"
+    ],
+    [
+     "11100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11300000",
+     "100000",
+     "861"
+    ],
+    [
+     "11400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11500000",
+     "100000",
+     "861"
+    ],
+    [
+     "11600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "11800000",
+     "100000",
+     "861"
+    ],
+    [
+     "11900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "1200000",
+     "100000",
+     "861"
+    ],
+    [
+     "12000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12100000",
+     "100000",
+     "861"
+    ],
+    [
+     "12200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12400000",
+     "100000",
+     "861"
+    ],
+    [
+     "12500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12700000",
+     "100000",
+     "861"
+    ],
+    [
+     "12800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "12900000",
+     "100000",
+     "861"
+    ],
+    [
+     "1300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13200000",
+     "100000",
+     "861"
+    ],
+    [
+     "13300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13500000",
+     "100000",
+     "861"
+    ],
+    [
+     "13600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "13800000",
+     "100000",
+     "861"
+    ],
+    [
+     "13900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "1400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "14000000",
+     "100000",
+     "1109"
+    ],
+    [
+     "1500000",
+     "100000",
+     "861"
+    ],
+    [
+     "1600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "1700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "1800000",
+     "100000",
+     "861"
+    ],
+    [
+     "1900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2100000",
+     "100000",
+     "861"
+    ],
+    [
+     "2200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2400000",
+     "100000",
+     "861"
+    ],
+    [
+     "2500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2700000",
+     "100000",
+     "861"
+    ],
+    [
+     "2800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "2900000",
+     "100000",
+     "861"
+    ],
+    [
+     "300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3200000",
+     "100000",
+     "861"
+    ],
+    [
+     "3300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3500000",
+     "100000",
+     "861"
+    ],
+    [
+     "3600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "3800000",
+     "100000",
+     "861"
+    ],
+    [
+     "3900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "400000",
+     "100000",
+     "861"
+    ],
+    [
+     "4000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4100000",
+     "100000",
+     "861"
+    ],
+    [
+     "4200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4400000",
+     "100000",
+     "861"
+    ],
+    [
+     "4500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4700000",
+     "100000",
+     "861"
+    ],
+    [
+     "4800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "4900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5000000",
+     "100000",
+     "861"
+    ],
+    [
+     "5100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5300000",
+     "100000",
+     "861"
+    ],
+    [
+     "5400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5500000",
+     "100000",
+     "861"
+    ],
+    [
+     "5600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "5900000",
+     "100000",
+     "861"
+    ],
+    [
+     "600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6100000",
+     "100000",
+     "861"
+    ],
+    [
+     "6200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6400000",
+     "100000",
+     "861"
+    ],
+    [
+     "6500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6700000",
+     "100000",
+     "861"
+    ],
+    [
+     "6800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "6900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "700000",
+     "100000",
+     "861"
+    ],
+    [
+     "7000000",
+     "100000",
+     "861"
+    ],
+    [
+     "7100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "7200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "7300000",
+     "100000",
+     "861"
+    ],
+    [
+     "7400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "7500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "7600000",
+     "100000",
+     "861"
+    ],
+    [
+     "7700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "7800000",
+     "100000",
+     "861"
+    ],
+    [
+     "7900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8000000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8100000",
+     "100000",
+     "861"
+    ],
+    [
+     "8200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8300000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8400000",
+     "100000",
+     "861"
+    ],
+    [
+     "8500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8600000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8700000",
+     "100000",
+     "861"
+    ],
+    [
+     "8800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "8900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "900000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9000000",
+     "100000",
+     "861"
+    ],
+    [
+     "9100000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9200000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9300000",
+     "100000",
+     "861"
+    ],
+    [
+     "9400000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9500000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9600000",
+     "100000",
+     "861"
+    ],
+    [
+     "9700000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9800000",
+     "100000",
+     "1722"
+    ],
+    [
+     "9900000",
+     "100000",
+     "861"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), count(*) FROM big GROUP BY 1",
+   "conf": {
+    "spark.sql.files.maxPartitionBytes": "100000"
+   },
+   "rows": [
+    [
+     "file://<root>/big/big.parquet",
+     "200000"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_block_start() s, input_file_block_length() l, count(*) FROM big GROUP BY 1, 2",
+   "conf": {},
+   "rows": [
+    [
+     "0",
+     "14201270",
+     "200000"
+    ]
+   ],
+   "local2": {
+    "rows": [
+     [
+      "0",
+      "9197787",
+      "130872"
+     ],
+     [
+      "9197787",
+      "5003483",
+      "69128"
+     ]
+    ]
+   }
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM c",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/c/c1.csv",
+     "0",
+     "7",
+     "1"
+    ],
+    [
+     "file://<root>/c/c1.csv",
+     "0",
+     "7",
+     "7"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM d",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/d/d1.json",
+     "0",
+     "18",
+     "2"
+    ],
+    [
+     "file://<root>/d/d1.json",
+     "0",
+     "18",
+     "8"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM t",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "0",
+     "447",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT max(input_file_name()) FROM b) FROM a",
+   "conf": {},
+   "error": {
+    "class": "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION",
+    "sqlstate": "42845",
+    "message": "[AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION] Non-deterministic expression \"max(input_file_name())\" should not appear in the arguments of an aggregate function. SQLSTATE: 42845; line 1 pos 19;\nProject [scalar-subquery#497 [] AS scalarsubquery()#500]\n:  +- Aggregate [max(input_file_name()) AS max(input_file_name())#499]\n:     +- SubqueryAlias b\n:        +- View (`b`, [id#33])\n:           +- Relation [id#33] parquet\n+- SubqueryAlias a\n   +- View (`a`, [id#32])\n      +- Relation [id#32] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM a WHERE id IN (SELECT id FROM b)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM a WHERE EXISTS (SELECT 1 FROM b WHERE b.id = a.id)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id FROM a WHERE id IN (SELECT id FROM b WHERE input_file_name() LIKE '%b1%')",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id FROM a WHERE EXISTS (SELECT 1 FROM b WHERE input_file_name() LIKE '%a1%')",
+   "conf": {},
+   "rows": []
+  },
+  {
+   "sql": "SELECT input_file_name(), x FROM a LATERAL VIEW explode(array(1, 2)) AS x",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "DF:select",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "DF:filter",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "DF:blocks",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "0",
+     "447",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() = _metadata.file_path, input_file_name(), _metadata.file_path, id FROM t",
+   "conf": {},
+   "rows": [
+    [
+     "false",
+     "file://<root>/a/a1.parquet",
+     "file:<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "false",
+     "file://<root>/a/a1.parquet",
+     "file:<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "false",
+     "file://<root>/a/a2.parquet",
+     "file:<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() = _metadata.file_path, count(*) FROM t GROUP BY 1",
+   "conf": {},
+   "rows": [
+    [
+     "false",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() = _metadata.file_path, input_file_name(), id FROM parquet.`/w/data/a`",
+   "conf": {},
+   "rows": [
+    [
+     "false",
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "false",
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "false",
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() = _metadata.file_path, id FROM a",
+   "conf": {},
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `_metadata`.`file_path` cannot be resolved. Did you mean one of the following? [`a`.`id`]. SQLSTATE: 42703; line 1 pos 27;\n'Project [unresolvedalias((input_file_name() = '_metadata.file_path)), id#32]\n+- SubqueryAlias a\n   +- View (`a`, [id#32])\n      +- Relation [id#32] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name(), input_file_block_start(), input_file_block_length(), id FROM av2",
+   "conf": {
+    "spark.sql.sources.useV1SourceList": ""
+   },
+   "pre": [
+    "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`"
+   ],
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "0",
+     "452",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "0",
+     "447",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM av2 JOIN b USING (id)",
+   "conf": {
+    "spark.sql.sources.useV1SourceList": ""
+   },
+   "pre": [
+    "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`"
+   ],
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 7;\nProject [input_file_name() AS input_file_name()#640]\n+- Project [id#637]\n   +- Join Inner, (id#637 = id#33)\n      :- SubqueryAlias av2\n      :  +- View (`av2`, [id#637])\n      :     +- Project [cast(id#638 as int) AS id#637]\n      :        +- Project [id#638]\n      :           +- Relation [id#638] parquet\n      +- SubqueryAlias b\n         +- View (`b`, [id#33])\n            +- Relation [id#33] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name() FROM av2 JOIN range(5) r ON av2.id = r.id",
+   "conf": {
+    "spark.sql.sources.useV1SourceList": ""
+   },
+   "pre": [
+    "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`"
+   ],
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a2.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM av2 WHERE input_file_name() LIKE '%a1%'",
+   "conf": {
+    "spark.sql.sources.useV1SourceList": ""
+   },
+   "pre": [
+    "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`"
+   ],
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ],
+    [
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a WHERE id > 1 ORDER BY id LIMIT 1",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id + 1 FROM a ORDER BY input_file_name(), id",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "3"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "4"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() f, count(*) OVER () FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "3"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "3"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id, (SELECT input_file_name() FROM b LIMIT 1) FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "file://<root>/b/b1.parquet"
+    ],
+    [
+     "2",
+     "file://<root>/b/b1.parquet"
+    ],
+    [
+     "3",
+     "file://<root>/b/b1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id, (SELECT count(*) FROM b WHERE input_file_name() LIKE '%b1%') FROM a",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "2"
+    ],
+    [
+     "2",
+     "2"
+    ],
+    [
+     "3",
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT id FROM a WHERE id IN (SELECT a2.id FROM a a2 JOIN b ON a2.id = b.id WHERE input_file_name() LIKE '%a1%')",
+   "conf": {},
+   "error": {
+    "class": "MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION",
+    "sqlstate": "42K0E",
+    "message": "[MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION] The expression \"input_file_name()\" does not support more than one source. SQLSTATE: 42K0E; line 1 pos 82;\nProject [id#32]\n+- Filter id#32 IN (list#702 [])\n   :  +- Project [id#703]\n   :     +- Filter input_file_name() LIKE %a1%\n   :        +- Join Inner, (id#703 = id#33)\n   :           :- SubqueryAlias a2\n   :           :  +- SubqueryAlias a\n   :           :     +- View (`a`, [id#703])\n   :           :        +- Relation [id#703] parquet\n   :           +- SubqueryAlias b\n   :              +- View (`b`, [id#33])\n   :                 +- Relation [id#33] parquet\n   +- SubqueryAlias a\n      +- View (`a`, [id#32])\n         +- Relation [id#32] parquet\n"
+   }
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a WHERE id IN (SELECT id FROM b)",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a WHERE id IN (SELECT id FROM b)",
+   "conf": {
+    "spark.sql.autoBroadcastJoinThreshold": "-1"
+   },
+   "rows": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT input_file_name() f, id FROM a) JOIN b USING (id)",
+   "conf": {
+    "spark.sql.autoBroadcastJoinThreshold": "-1"
+   },
+   "rows": [
+    [
+     "1",
+     "file://<root>/a/a1.parquet"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name(), id FROM a GROUP BY id, input_file_name()",
+   "conf": {},
+   "rows": [
+    [
+     "file://<root>/a/a1.parquet",
+     "1"
+    ],
+    [
+     "file://<root>/a/a1.parquet",
+     "2"
+    ],
+    [
+     "file://<root>/a/a2.parquet",
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT input_file_name() FROM a GROUP BY id",
+   "conf": {},
+   "rows": [
+    [
+     ""
+    ],
+    [
+     ""
+    ],
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM a WHERE input_file_name() = ''",
+   "conf": {},
+   "rows": [
+    [
+     "0"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*), min(s), max(s), min(l), max(l) FROM (SELECT input_file_block_start() s, input_file_block_length() l FROM big)",
+   "conf": {},
+   "rows": [
+    [
+     "200000",
+     "0",
+     "0",
+     "14201270",
+     "14201270"
+    ]
+   ],
+   "local2": {
+    "rows": [
+     [
+      "200000",
+      "0",
+      "9197787",
+      "5003483",
+      "9197787"
+     ]
+    ]
+   }
+  },
+  {
+   "sql": "SELECT count(*), min(s), max(s), min(l), max(l) FROM (SELECT input_file_block_start() s, input_file_block_length() l FROM big)",
+   "conf": {
+    "spark.sql.files.maxPartitionBytes": "100000"
+   },
+   "rows": [
+    [
+     "200000",
+     "0",
+     "14000000",
+     "100000",
+     "100000"
+    ]
+   ]
+  }
+ ]
+}

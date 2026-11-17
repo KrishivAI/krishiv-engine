@@ -198,6 +198,7 @@ async fn planning_baseline() {
     let metrics = WriterMetrics::default();
     let env = PlanEnv {
         max_metadata_bytes: u64::MAX,
+        cache: None,
         metrics: &metrics,
     };
     let start = Instant::now();
