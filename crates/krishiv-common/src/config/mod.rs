@@ -26,6 +26,7 @@ use crate::error::{
 
 mod build_projection;
 mod direct_keys;
+mod distinct_count;
 mod join_cost;
 mod legacy;
 mod partition_types;
@@ -34,6 +35,7 @@ mod registry_join;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
 pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
+pub use distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE;
 pub use join_cost::JOIN_COST;
 pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
@@ -629,6 +631,11 @@ impl Config {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect()
+    }
+
+    /// Whether `entry` has an explicitly set value (not its default).
+    pub fn is_set(&self, entry: &ConfigEntry) -> bool {
+        self.values.contains_key(entry.key)
     }
 
     /// The value of `entry`: the set value, else its default.

@@ -86,12 +86,67 @@ wait_for "http://127.0.0.1:${az_port}/devstoreaccount1?comp=list"
 docker run --rm --network host "$AZ_CLI_IMAGE" az storage container create --name krishiv-test \
   --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${AZURITE_KEY};BlobEndpoint=http://127.0.0.1:${az_port}/devstoreaccount1;" >/dev/null
 
+# A read+list container SAS for the CSV read signed with Hadoop ABFS's SAS keys (`azure_csv_reads_with_a_sas`).
+KRISHIV_TEST_AZURE_SAS="$(docker run --rm --network host "$AZ_CLI_IMAGE" az storage container generate-sas \
+  --name krishiv-test --permissions rl --expiry 2030-01-01T00:00:00Z -o tsv \
+  --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${AZURITE_KEY};BlobEndpoint=http://127.0.0.1:${az_port}/devstoreaccount1;")"
+export KRISHIV_TEST_AZURE_SAS
+
+# A second Azurite in OAuth mode for the bearer-token read (`azure_csv_reads_with_a_bearer_token`, lakehouse gate 2).
+# `--oauth basic` serves only https and checks a token's audience, issuer and lifetime, not its signature, so the
+# tokens below are unsigned JWTs: one for Azure Storage's audience and one for another audience, which it must refuse.
+# The certificate is a throw-away CA plus a 127.0.0.1 leaf; the test run trusts it through SSL_CERT_FILE (a bundle of
+# the system roots and this CA), which rustls-platform-verifier reads on Linux.
+mkdir -p "$work/certs"
+(
+  cd "$work/certs"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj "/CN=krishiv-test-ca" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" \
+    -keyout ca-key.pem -out ca.pem 2>/dev/null
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=127.0.0.1" \
+    -keyout key.pem -out leaf.csr 2>/dev/null
+  printf 'subjectAltName=IP:127.0.0.1,DNS:localhost\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' >leaf.ext
+  openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -days 1 -extfile leaf.ext \
+    -out cert.pem 2>/dev/null
+  chmod 644 ./*.pem
+)
+system_roots=""
+for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  if [ -f "$f" ]; then system_roots="$f"; break; fi
+done
+cat ${system_roots:+"$system_roots"} "$work/certs/ca.pem" >"$work/certs/bundle.pem"
+containers+=("krishiv-test-azurite-oauth-$$")
+az_oauth_port="$(start azurite-oauth 10000 -v "$work/certs:/certs:ro" "$AZURITE_IMAGE" azurite-blob --blobHost 0.0.0.0 \
+  --skipApiVersionCheck --oauth basic --cert /certs/cert.pem --key /certs/key.pem)"
+az_oauth="https://127.0.0.1:${az_oauth_port}/devstoreaccount1"
+for _ in $(seq 1 60); do
+  if curl -s -o /dev/null --max-time 2 --cacert "$work/certs/ca.pem" "${az_oauth}?comp=list"; then break; fi
+  sleep 1
+done
+b64url() { base64 | tr -d '\n=' | tr '+/' '-_'; }
+# azure_token <audience>: an unsigned JWT valid from 5 minutes ago for an hour.
+azure_token() {
+  local now tenant="00000000-0000-0000-0000-00000000c0de"
+  now="$(date +%s)"
+  printf '%s.%s.%s' "$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)" \
+    "$(printf '{"aud":"%s","iss":"https://sts.windows.net/%s/","nbf":%d,"iat":%d,"exp":%d,"oid":"%s","tid":"%s"}' \
+      "$1" "$tenant" $((now - 300)) $((now - 300)) $((now + 3600)) "$tenant" "$tenant" | b64url)" \
+    "$(printf 'unsigned' | b64url)"
+}
+KRISHIV_TEST_AZURE_BEARER="$(azure_token https://storage.azure.com)"
+KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE="$(azure_token https://example.com)"
+curl -fsS -o /dev/null --cacert "$work/certs/ca.pem" -X PUT -H "Authorization: Bearer ${KRISHIV_TEST_AZURE_BEARER}" \
+  -H 'x-ms-version: 2025-01-05' -H 'Content-Length: 0' "${az_oauth}/krishiv-test?restype=container"
+export KRISHIV_TEST_AZURE_BEARER KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE
+export KRISHIV_TEST_AZURE_OAUTH_ENDPOINT="$az_oauth"
+
 export KRISHIV_TEST_S3_ENDPOINT="http://127.0.0.1:${s3_port}"
 export KRISHIV_TEST_AZURE_ENDPOINT="http://127.0.0.1:${az_port}/devstoreaccount1"
 
 # Every step runs even when an earlier one fails; the exit status is non-zero if any did.
 status=0
-cargo nextest run -p krishiv-io --features cloud --test object_stores --locked --no-tests=pass --no-fail-fast || status=1
+SSL_CERT_FILE="$work/certs/bundle.pem" cargo nextest run -p krishiv-io --features cloud --test object_stores --locked --no-tests=pass --no-fail-fast || status=1
+SSL_CERT_FILE="$work/certs/bundle.pem" cargo nextest run -p krishiv-connectors-iceberg --features cloud --locked --no-tests=fail --no-fail-fast -E 'test(iceberg_scan_over_abfss)' || status=1
 if [ -n "${KRISHIV_TPCH_DIR:-}" ]; then
   cargo nextest run -p krishiv-session --features cloud --test s3_tpch --locked --no-tests=pass --no-fail-fast || status=1
 fi

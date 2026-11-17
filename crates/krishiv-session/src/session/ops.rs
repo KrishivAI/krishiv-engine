@@ -4,6 +4,61 @@
 use super::*;
 
 impl Session {
+    /// [`Self::sql`] and whether the statement was a command (not a query).
+    pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
+        self.check_open()?;
+        let (session, text) = (self.clone(), query.to_owned());
+        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        let marker = Arc::clone(&row);
+        let (result, cancelled) = self
+            .on_executor_reasoned(async move {
+                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+                use tracing::Instrument as _;
+                let trace = crate::telemetry::QueryTrace::of(seq, &text);
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
+                session
+                    .sql_here_marked(&text, marker)
+                    .instrument(span)
+                    .await
+                    .map(|(df, command)| (df.with_trace(trace), command))
+            })
+            .await;
+        // A statement refused before it ran (parse, analysis, access) is a
+        // row of `system.queries` too, with the text as the session may show it.
+        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
+        // that failed while it ran): that one has its row.
+        if let Err(error) = &result
+            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
+        {
+            let id = self.state.queries.record_refused(
+                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
+                Some(krishiv_sql::redact_sql(query).as_str()),
+                None,
+                error,
+                self.operation_id(),
+            );
+            self.stamp_row(&id);
+            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
+            if let Some(reason) = cancelled {
+                self.state.queries.note_cancel_reason(&id, reason);
+            }
+        }
+        result
+    }
+
+    /// This session's parser options, from its configuration. Public under `unstable-ir`, for a
+    /// Connect server that parses `Expression.expression_string` while it translates a plan.
+    #[cfg(feature = "unstable-ir")]
+    pub fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
+    }
+
+    /// This session's parser options, from its configuration.
+    #[cfg(not(feature = "unstable-ir"))]
+    pub(crate) fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
+    }
+
     /// The directory a write of `text` goes to, as it physically is (links in
     /// its existing part resolved): the policy is asked about the directory
     /// that is written, never about a name that a link sends elsewhere.
@@ -16,15 +71,26 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<crate::access::Checked, KrishivError> {
+        let at = self.locate_write_text(text, options, env)?;
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+    }
+
+    /// The path a write of `text` goes to as the caller wrote it (qualified, `.` and `..` folded in the
+    /// text, no link resolved): what [`Self::locate_write_path`] resolves, and the text its denial names.
+    pub(crate) fn locate_write_text(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        env: &QueryEnv,
+    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
         let stores = self.scoped_stores(&env.config);
-        let at = ObjectPaths::new(
+        ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
             Arc::clone(&self.state.io),
             stores,
         )
-        .locate_with_options(text, options)?;
-        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+        .locate_with_options(text, options)
     }
 
     /// A write's options, before its target is located: locating builds the

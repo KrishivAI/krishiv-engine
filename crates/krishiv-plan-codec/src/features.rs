@@ -157,6 +157,7 @@ registry! {
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_literals, NestedLiterals, POST_MIGRATION_READER_VERSION, Semantic, "An array, map or struct literal value (`Literal::{Array, KeyValueMap, Struct}`). The literal's type is a nested type, so a plan with one lists `nested_types` too."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (observe, Observe, POST_MIGRATION_READER_VERSION, Semantic, "The `CollectMetrics` node (`Dataset.observe`): rows pass through while the metrics of a named observation are folded; a worker without it cannot report them."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
@@ -469,6 +470,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             PhysNode::Sample { .. } => Some(Feature::Sample),
+            PhysNode::CollectMetrics { .. } => Some(Feature::Observe),
             PhysNode::PythonMap { .. }
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
@@ -796,6 +798,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::PythonEval { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::PythonAggregate { .. }
         | PhysNode::Union { .. } => {}
         PhysNode::PythonMap { udf, .. }
@@ -998,6 +1001,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::Aggregate { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
         | PhysNode::Exchange(_)
@@ -1078,6 +1082,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
             out.extend(feature_of(c));
         });
         stack.extend(node.children());
+        stack.extend(node.measure());
     }
     for field in plan.schema().fields() {
         visit_arrow_field(field, &mut |c| out.extend(feature_of(c)));

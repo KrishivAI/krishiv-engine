@@ -1,7 +1,7 @@
 -- query 5: nope(1)
-SELECT sin(a, b) AS c1 FROM t5 WHERE x IN (1, 2) AND y = 'x(sin)';
-SELECT measure(a, b) AS c2 FROM t5 WHERE x IN (1, 2) AND y = 'x(measure)';
-SELECT xpath_string(a, b) AS c3 FROM t5 WHERE x IN (1, 2) AND y = 'x(xpath_string)';
-SELECT legacy_fn_13(a, b) AS c4 FROM t5 WHERE x IN (1, 2) AND y = 'x(legacy_fn_13)';
-SELECT approx_top_k_accumulate(a, b) AS c5 FROM t5 WHERE x IN (1, 2) AND y = 'x(approx_top_k_accumulate)';
-SELECT legacy_fn_1(a, b) AS c6 FROM t5 WHERE x IN (1, 2) AND y = 'x(legacy_fn_1)';
+SELECT sign(a, b) AS c1 FROM t5 WHERE x IN (1, 2) AND y = 'x(sign)';
+SELECT reflect(a, b) AS c2 FROM t5 WHERE x IN (1, 2) AND y = 'x(reflect)';
+SELECT xpath_float(a, b) AS c3 FROM t5 WHERE x IN (1, 2) AND y = 'x(xpath_float)';
+SELECT xpath_string(a, b) AS c4 FROM t5 WHERE x IN (1, 2) AND y = 'x(xpath_string)';
+SELECT from_json(a, b) AS c5 FROM t5 WHERE x IN (1, 2) AND y = 'x(from_json)';
+SELECT transform_keys(a, b) AS c6 FROM t5 WHERE x IN (1, 2) AND y = 'x(transform_keys)';

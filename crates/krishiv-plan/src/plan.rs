@@ -272,6 +272,18 @@ pub enum PlanNode {
         /// The `REPEATABLE` seed; `None` draws one per physical plan.
         seed: Option<i64>,
     },
+    /// `Dataset.observe(name, metrics)` (Spark's `CollectMetrics`): rows
+    /// pass through unchanged while the metrics (aggregate expressions, as
+    /// a global aggregate with no grouping) are folded over the rows that
+    /// flow through; the result is reported under `name`, not as rows.
+    CollectMetrics {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The observation name.
+        name: String,
+        /// The metric expressions (aliased once resolved).
+        metrics: Vec<Arc<Expr>>,
+    },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
     JoinHint {
@@ -517,7 +529,9 @@ pub enum PlanNode {
     /// `mapInPandas` / `mapInArrow` (Spark's `MapInPandas`, `MapInArrow`;
     /// design P3-T085 §3.1): each partition of `input`, every column, goes to
     /// the Python UDF as an iterator of batches; its rows are whatever the
-    /// function yields, typed as `output` declares. Resolved plans only.
+    /// function yields, typed as `output` declares. A front end may build it
+    /// over an unresolved input; the analyzer resolves it (its `output` ids
+    /// are kept once per analysis, then made fresh).
     MapPartitions {
         /// Input.
         input: Arc<LogicalPlan>,
@@ -533,7 +547,8 @@ pub enum PlanNode {
     /// `FlatMapGroupsInPandas`, `FlatMapGroupsInArrow`): the rows of `input`
     /// clustered by `keys` (one group without keys) and sorted by them; the
     /// UDF sees each group's rows, every column, and yields any rows, typed as
-    /// `output` declares. Resolved plans only.
+    /// `output` declares. A front end may build it over an unresolved input
+    /// with unresolved keys; the analyzer binds them over `input`.
     GroupMap {
         /// Input.
         input: Arc<LogicalPlan>,
@@ -547,7 +562,8 @@ pub enum PlanNode {
     /// `groupBy(..).cogroup(groupBy(..)).applyInPandas` / `applyInArrow`
     /// (Spark's `FlatMapCoGroupsInPandas`, `FlatMapCoGroupsInArrow`): the
     /// UDF sees, per key, the left rows then the right rows of that key (an
-    /// empty side for a key on one side only). Resolved plans only.
+    /// empty side for a key on one side only). A front end may build it over
+    /// unresolved inputs and keys, as [`PlanNode::GroupMap`].
     CoGroupMap {
         /// The left relation.
         left: Arc<LogicalPlan>,
@@ -1142,6 +1158,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1202,6 +1219,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1253,7 +1271,11 @@ impl LogicalPlan {
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1354,7 +1376,11 @@ impl LogicalPlan {
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter_mut().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1469,6 +1495,7 @@ impl LogicalPlan {
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Sample { input, .. }
+                | PlanNode::CollectMetrics { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;

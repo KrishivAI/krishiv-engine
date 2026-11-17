@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use krishiv_common::config::Config;
 use krishiv_session::QueryId;
@@ -222,6 +223,99 @@ fn limits_from_config() {
     assert_eq!(l.max_batch_size, 128 << 20);
 }
 
+#[test]
+fn states_follow_the_operation() {
+    let running = op(A, b"p");
+    assert_eq!(running.state(), OperationState::Running);
+    let done = op(A, b"p");
+    assert!(done.finish());
+    assert_eq!(done.state(), OperationState::Succeeded);
+    let failed = op(A, b"p");
+    assert!(failed.fail(), "a running operation fails");
+    assert!(failed.fail(), "failing twice is still failed");
+    assert!(!failed.finish(), "a failed operation does not finish");
+    assert!(!failed.cancel(), "a failed operation is not interrupted");
+    assert_eq!(failed.state(), OperationState::Failed);
+    // An interrupt is TERMINATING until its encoder stopped, then CANCELLED.
+    let cancelled = op(A, b"p");
+    assert!(cancelled.cancel());
+    assert!(!cancelled.fail(), "an interrupt that came first wins");
+    assert_eq!(cancelled.state(), OperationState::Terminating);
+    cancelled.mark_ended();
+    assert_eq!(cancelled.state(), OperationState::Cancelled);
+}
+
+#[test]
+fn ended_operations_keep_their_final_state_for_the_window() {
+    let ops = Operations::default();
+    let done = op(A, b"p");
+    let gone = op(B, b"q");
+    ops.register(&done, 10).unwrap();
+    ops.register(&gone, 10).unwrap();
+    assert!(done.finish());
+    assert_eq!(ops.state_of(A), Some(OperationState::Succeeded));
+    let now = Instant::now();
+    assert!(ops.remove(&done));
+    // Removed while it runs: closed, so interrupted.
+    gone.close();
+    assert!(ops.remove(&gone));
+    assert_eq!(ops.state_of(A), Some(OperationState::Succeeded));
+    // An interrupted operation removed before its encoder stopped ended
+    // cancelled.
+    assert_eq!(ops.state_of(B), Some(OperationState::Cancelled));
+    assert_eq!(ops.state_of("not a uuid"), None);
+    let mut known = ops.known();
+    known.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        known,
+        vec![
+            (QueryId::parse(A).unwrap(), OperationState::Succeeded),
+            (QueryId::parse(B).unwrap(), OperationState::Cancelled),
+        ]
+    );
+    // A lookup by id is an access (Spark's `expireAfterAccess`): A stays,
+    // B, untouched for the whole window, goes.
+    let later = now + ENDED_OPERATION_WINDOW - Duration::from_secs(1);
+    assert!(ops.state_of_at(A, later).is_some());
+    let past = now + ENDED_OPERATION_WINDOW + Duration::from_secs(1);
+    assert_eq!(ops.state_of_at(B, past), None);
+    assert_eq!(
+        ops.known_at(past),
+        vec![(QueryId::parse(A).unwrap(), OperationState::Succeeded)]
+    );
+    let gone_too = later + ENDED_OPERATION_WINDOW + Duration::from_secs(1);
+    assert!(ops.known_at(gone_too).is_empty());
+}
+
+#[test]
+fn ended_operations_are_capped_oldest_first() {
+    let ops = Operations::default();
+    let ids: Vec<String> = (0..=ENDED_OPERATIONS_KEPT)
+        .map(|i| format!("00000000-0000-4000-8000-{i:012x}"))
+        .collect();
+    for id in &ids {
+        let o = op(id, b"p");
+        ops.register(&o, usize::MAX).unwrap();
+        assert!(o.finish());
+        assert!(ops.remove(&o));
+    }
+    assert_eq!(ops.known().len(), ENDED_OPERATIONS_KEPT);
+    assert_eq!(ops.state_of(&ids[0]), None, "the oldest went first");
+    assert_eq!(
+        ops.state_of(&ids[ENDED_OPERATIONS_KEPT]),
+        Some(OperationState::Succeeded)
+    );
+    // A live operation is listed with its live state; close_all records it.
+    let live = op(A, b"p");
+    ops.register(&live, usize::MAX).unwrap();
+    assert!(
+        ops.known()
+            .contains(&(QueryId::parse(A).unwrap(), OperationState::Running))
+    );
+    ops.close_all();
+    assert_eq!(ops.state_of(A), Some(OperationState::Cancelled));
+}
+
 #[tokio::test]
 #[expect(
     clippy::disallowed_methods,
@@ -250,4 +344,43 @@ async fn close_stops_the_encoder_of_a_finished_operation() {
     assert!(late.finish());
     late.close();
     late.closed().await;
+}
+
+/// PR-15c merge review L1: a query finishing while its operation is
+/// released or its session closed is remembered with the state the close's
+/// compare-and-swap left, the one the operation itself reports.
+#[test]
+fn a_release_racing_the_finish_records_the_winner() {
+    type Path = fn(&Operations, &Arc<Operation>);
+    let paths: [(&str, Path); 2] = [
+        ("release_all", |ops, o| {
+            ops.close_and_remove(o);
+        }),
+        ("close_all", |ops, _| {
+            ops.close_all();
+        }),
+    ];
+    for (name, path) in paths {
+        for _ in 0..2_000 {
+            let ops = Operations::default();
+            let o = op(A, b"p");
+            ops.register(&o, 10).unwrap();
+            let barrier = std::sync::Barrier::new(2);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    barrier.wait();
+                    path(&ops, &o);
+                });
+                s.spawn(|| {
+                    barrier.wait();
+                    o.finish();
+                });
+            });
+            assert_eq!(
+                ops.state_of(A),
+                Some(o.final_state()),
+                "{name}: recorded as the operation ended"
+            );
+        }
+    }
 }

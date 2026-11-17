@@ -31,11 +31,15 @@ use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_io::{FileRef, IoContext};
 use serde::{Deserialize, Serialize};
 
+use super::manifest_cache::ManifestCache;
+
 /// What a registration name resolves to.
 #[derive(Clone)]
 pub(crate) struct Registered {
     pub(crate) io: IoContext,
     pub(crate) paths: Arc<dyn PathLocator>,
+    /// Decoded manifests of every table opened through this registration.
+    pub(crate) manifests: Arc<ManifestCache>,
 }
 
 impl fmt::Debug for Registered {
@@ -83,7 +87,14 @@ impl StorageRegistration {
         REGISTRY
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.clone(), Registered { io, paths });
+            .insert(
+                name.clone(),
+                Registered {
+                    io,
+                    paths,
+                    manifests: Arc::default(),
+                },
+            );
         Self { name }
     }
 

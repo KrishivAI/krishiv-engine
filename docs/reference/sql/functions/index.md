@@ -186,7 +186,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`forall`](forall.md) | scalar | yes | Tests whether a predicate holds for all elements in the array. |
 | [`format_number`](format_number.md) | scalar | yes | Formats the number `expr1` like '#,###,###.##', rounded to `expr2` |
 | [`format_string`](format_string.md) | scalar | yes | Returns a formatted string from printf-style format strings. |
-| [`from_avro`](from_avro.md) | - | not yet | Converts a binary Avro value into a Catalyst value. |
+| [`from_avro`](from_avro.md) | - | yes | Converts a binary Avro value into a Catalyst value. |
 | [`from_csv`](from_csv.md) | scalar | yes | Returns a struct value with the given `csvStr` and `schema`. |
 | [`from_json`](from_json.md) | scalar | yes | Returns a struct value with the given `jsonStr` and `schema`. |
 | [`from_protobuf`](from_protobuf.md) | - | not yet | Converts a binary Protobuf value into a Catalyst value. |
@@ -221,7 +221,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`instr`](instr.md) | scalar | yes | Returns the (1-based) index of the first occurrence of `substr` in `str`. |
 | [`int`](int.md) | scalar | yes | Casts the value `expr` to the target data type `int`. |
 | [`is_valid_utf8`](is_valid_utf8.md) | scalar | yes | Returns true if `str` is a valid UTF-8 string, otherwise returns false. |
-| [`is_valid_variant`](is_valid_variant.md) | scalar | not yet | Returns true if the variant is valid, false if it is malformed, NULL if `v` is NULL. |
+| [`is_valid_variant`](is_valid_variant.md) | scalar | yes | Returns true if the variant is valid, false if it is malformed, NULL if `v` is NULL. |
 | [`is_variant_null`](is_variant_null.md) | scalar | yes | Check if a variant value is a variant null. Returns true if and only if the input is a variant null and false otherwise (including in the case of SQL NULL). |
 | [`isnan`](isnan.md) | scalar | yes | Returns true if `expr` is NaN, or false otherwise. |
 | [`isnotnull`](isnotnull.md) | scalar | yes | Returns true if `expr` is not null, or false otherwise. |
@@ -461,7 +461,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`timestamp_millis`](timestamp_millis.md) | scalar | yes | Creates timestamp from the number of milliseconds since UTC epoch. |
 | [`timestamp_seconds`](timestamp_seconds.md) | scalar | yes | Creates timestamp from the number of seconds (can be fractional) since UTC epoch. |
 | [`tinyint`](tinyint.md) | scalar | yes | Casts the value `expr` to the target data type `tinyint`. |
-| [`to_avro`](to_avro.md) | - | not yet | Converts a Catalyst binary input value into its |
+| [`to_avro`](to_avro.md) | - | yes | Converts a Catalyst binary input value into its |
 | [`to_binary`](to_binary.md) | scalar | yes | Converts the input `str` to a binary value based on the supplied `fmt`. |
 | [`to_char`](to_char.md) | scalar | yes | Convert `expr` to a string based on the `format`. |
 | [`to_csv`](to_csv.md) | scalar | yes | Returns a CSV string with a given struct value |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-484 of 574 functions are implemented. The 90 that are not are listed in [functions not implemented yet](not-implemented.md).
+487 of 574 functions are implemented. The 87 that are not are listed in [functions not implemented yet](not-implemented.md).
