@@ -41,6 +41,8 @@ mod dst_tests;
 #[cfg(test)]
 mod evolution_tests;
 #[cfg(test)]
+mod oracle_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod scan_tests;
