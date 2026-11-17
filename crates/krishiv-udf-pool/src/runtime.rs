@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The pool as an executor UDF runtime: one [`SessionUdfs`] per session, implementing
-//! `krishiv_exec::python_eval::UdfRuntime` for the scalar eval types (design `P3-T014-connect-udfs-sandbox.md`
-//! §3.2). Its payload store is filled by the session's registrations (the Connect `udf` module, PR-26d), so
+//! `krishiv_exec::python_eval::UdfRuntime` for the scalar eval types and, through `crate::relation`, the
+//! relation kinds (design `P3-T014-connect-udfs-sandbox.md` §3.2). Its payload store is filled by the session's registrations (the Connect `udf` module, PR-26d), so
 //! the executor and the session need no change to call pool workers.
 
 use std::collections::{BTreeMap, HashMap};
@@ -13,13 +13,16 @@ use arrow_schema::DataType;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivUdfNotAvailable, OperationCanceled,
+    InternalError, KrishivError, KrishivPythonUdfEvalTypeMismatch, KrishivUdfNotAvailable,
+    OperationCanceled,
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
+use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
 use std::os::fd::OwnedFd;
 
 use crate::pool::{CallWatch, Owner, Pool};
-use crate::worker::{PythonPayload, kill_via};
+use crate::relation::PoolSlots;
+use crate::worker::{PythonPayload, Worker, kill_via};
 
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
 static NEXT_PAYLOAD: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +35,8 @@ pub type ConfSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
 pub struct SessionUdfs {
     pool: Pool,
     owner: Owner,
+    /// The session's relation task slots, shared by its relation call sites.
+    slots: Arc<PoolSlots>,
     /// The runner conf (the session's SQL conf subset Spark sends its worker), read when a call is prepared.
     conf: RwLock<Arc<BTreeMap<String, String>>>,
     /// When set, read at each `prepare` instead of `conf`.
@@ -40,9 +45,9 @@ pub struct SessionUdfs {
 }
 
 #[derive(Clone)]
-struct Registered {
-    id: u64,
-    payload: PythonPayload,
+pub(crate) struct Registered {
+    pub(crate) id: u64,
+    pub(crate) payload: PythonPayload,
 }
 
 impl std::fmt::Debug for SessionUdfs {
@@ -57,6 +62,7 @@ impl SessionUdfs {
     /// The UDFs of `owner`'s session, run on `pool`.
     pub fn new(pool: Pool, owner: Owner) -> Self {
         SessionUdfs {
+            slots: Arc::new(PoolSlots::new(pool.clone(), owner.clone())),
             pool,
             owner,
             conf: RwLock::new(Arc::new(BTreeMap::new())),
@@ -94,30 +100,119 @@ impl SessionUdfs {
     }
 }
 
-impl UdfRuntime for SessionUdfs {
-    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
-        let registered = self
-            .payloads
+impl SessionUdfs {
+    /// The payload registered as `(name, version)`.
+    fn registered(&self, name: &str, version: u32) -> Result<Registered, KrishivError> {
+        self.payloads
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&(spec.name.clone(), spec.version))
+            .get(&(name.to_owned(), version))
             .cloned()
             .ok_or_else(|| {
                 KrishivError::from(KrishivUdfNotAvailable {
-                    name: spec.name.clone(),
-                    version: spec.version.to_string(),
+                    name: name.to_owned(),
+                    version: version.to_string(),
                 })
-            })?;
+            })
+    }
+
+    /// The runner conf a call prepared now sends: the [`ConfSource`]'s, else the one
+    /// [`Self::set_runner_conf`] set.
+    fn runner_conf(&self) -> Arc<BTreeMap<String, String>> {
+        match &self.conf_source {
+            Some(source) => Arc::new(source()),
+            None => Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
+        }
+    }
+}
+
+/// The eval types the pool's workers run as scalar calls (`pool_worker.py`): Spark's `SQL_BATCHED_UDF`, its
+/// Arrow-optimized form, the pandas and the Arrow scalar UDF. A scalar call site accepts a payload of any of
+/// them: the worker runs the payload's own (over Connect a plain `@udf` is registered as 100 and planned as
+/// the Arrow-optimized 101, `krishiv-connect`'s `translate/udf.rs`; review R7c-1).
+const SCALAR_EVAL_TYPES: [i32; 4] = [100, 101, 200, 250];
+
+/// The payload store finds a UDF by `(name, version)` only, so a plan's call and the registration may disagree
+/// on its kind (a scalar UDF called as a relation, or the reverse): `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH`,
+/// before any worker starts, rather than a worker running a payload as the wrong kind. A relation call needs
+/// its exact eval type (each relation kind's runner differs).
+pub(crate) fn check_eval_type(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+    called: &str,
+) -> Result<(), KrishivError> {
+    if registered.payload.eval_type == eval_type {
+        return Ok(());
+    }
+    Err(eval_type_mismatch(
+        name, version, registered, eval_type, called,
+    ))
+}
+
+/// As [`check_eval_type`] for a scalar call: any scalar payload ([`SCALAR_EVAL_TYPES`]) fits.
+fn check_scalar_eval_type(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+) -> Result<(), KrishivError> {
+    if SCALAR_EVAL_TYPES.contains(&registered.payload.eval_type) {
+        return Ok(());
+    }
+    Err(eval_type_mismatch(
+        name,
+        version,
+        registered,
+        eval_type,
+        "a scalar function",
+    ))
+}
+
+fn eval_type_mismatch(
+    name: &str,
+    version: u32,
+    registered: &Registered,
+    eval_type: i32,
+    called: &str,
+) -> KrishivError {
+    KrishivError::from(KrishivPythonUdfEvalTypeMismatch {
+        name: name.to_owned(),
+        version: version.to_string(),
+        registered: registered.payload.eval_type.to_string(),
+        called: called.to_owned(),
+        eval_type: eval_type.to_string(),
+    })
+}
+
+impl UdfRuntime for SessionUdfs {
+    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
+        let registered = self.registered(&spec.name, spec.version)?;
+        check_scalar_eval_type(&spec.name, spec.version, &registered, spec.eval_type.code())?;
         Ok(Arc::new(Prepared {
             pool: self.pool.clone(),
             owner: self.owner.clone(),
             registered,
             return_type: spec.return_arrow.clone(),
-            conf: match &self.conf_source {
-                Some(source) => Arc::new(source()),
-                None => Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
-            },
+            conf: self.runner_conf(),
         }))
+    }
+
+    fn prepare_relation(
+        &self,
+        spec: &RelationCallSpec,
+    ) -> krishiv_exec::Result<Arc<dyn PreparedRelationUdf>> {
+        let registered = self.registered(&spec.name, spec.version)?;
+        let session = self.runner_conf();
+        crate::relation::prepare(
+            self.pool.clone(),
+            self.owner.clone(),
+            Arc::clone(&self.slots),
+            registered,
+            spec,
+            &session,
+        )
     }
 }
 
@@ -132,7 +227,7 @@ struct Prepared {
 /// A call's link to its future: dropping the future (the query was cancelled or failed) kills the worker
 /// running it at once (design §3.4 "Cancel").
 #[derive(Default)]
-struct CallState {
+pub(crate) struct CallState {
     cancelled: bool,
     /// The pidfd of the worker running the call; cleared, under this lock, before the worker is given back, so
     /// a late cancel can never signal a worker that already serves another call (and a pidfd never names a
@@ -142,7 +237,7 @@ struct CallState {
     killed: bool,
     /// The call's input until a call thread takes it; a cancel drops it, so a call still queued keeps no
     /// batch in memory (review 2026-11-14 m1).
-    args: Option<RecordBatch>,
+    pub(crate) args: Option<RecordBatch>,
 }
 
 impl CallWatch for Mutex<CallState> {
@@ -162,7 +257,7 @@ impl CallWatch for Mutex<CallState> {
     }
 }
 
-struct CancelOnDrop(Arc<Mutex<CallState>>);
+pub(crate) struct CancelOnDrop(pub(crate) Arc<Mutex<CallState>>);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
@@ -241,6 +336,22 @@ fn run(
     return_type: &DataType,
     call: &Mutex<CallState>,
 ) -> Result<ArrayRef, KrishivError> {
+    let max_result = pool.max_result_bytes();
+    with_worker(pool, owner, registered, call, |worker| {
+        worker.run_batch(registered.id, args, conf, return_type, max_result)
+    })
+}
+
+/// Runs `body` on a worker of `owner` that has `registered` loaded, for the call `call`: a cancel kills the
+/// worker while it starts or while `body` runs, and a worker killed so is never given back (the call then
+/// ends with `OPERATION_CANCELED`). The worker is given back (or stopped) before this returns.
+pub(crate) fn with_worker<T>(
+    pool: &Pool,
+    owner: &Owner,
+    registered: &Registered,
+    call: &Mutex<CallState>,
+    body: impl FnOnce(&mut Worker) -> Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
     let lock = || call.lock().unwrap_or_else(PoisonError::into_inner);
     let mut lease = match pool.checkout(owner, &registered.payload.python_ver, call) {
         Ok(lease) => lease,
@@ -269,10 +380,9 @@ fn run(
         state.running = Some(pidfd);
     }
     let worker = lease.worker()?;
-    let max_result = pool.max_result_bytes();
     let result = worker
         .ensure_loaded(registered.id, &registered.payload)
-        .and_then(|()| worker.run_batch(registered.id, args, conf, return_type, max_result));
+        .and_then(|()| body(worker));
     let mut state = lock();
     state.running = None;
     if state.cancelled {
@@ -282,4 +392,131 @@ fn run(
     }
     drop(state);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::{Field, Schema};
+    use krishiv_common::error::ErrorClass;
+    use krishiv_exec::python_relation::RunnerConf;
+    use krishiv_plan::function::PythonEvalType;
+    use krishiv_types::DataType as SparkType;
+
+    use super::*;
+    use crate::pool::PoolConfig;
+
+    /// The session's UDFs over a pool that cannot start workers: the checks run before any would start.
+    fn udfs() -> SessionUdfs {
+        let pool = Pool::new(PoolConfig {
+            sandbox: false,
+            executables: vec!["/nonexistent/krishiv-test-python".to_owned()],
+            ..PoolConfig::default()
+        })
+        .unwrap();
+        SessionUdfs::new(
+            pool,
+            Owner {
+                principal: "p".to_owned(),
+                session: "s".to_owned(),
+            },
+        )
+    }
+
+    fn payload(eval_type: i32) -> PythonPayload {
+        PythonPayload {
+            command: Arc::from(&b"never loaded"[..]),
+            eval_type,
+            python_ver: "3.11".to_owned(),
+        }
+    }
+
+    fn scalar(name: &str) -> UdfCallSpec {
+        UdfCallSpec {
+            name: name.to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::ArrowBatched,
+            thread_safe: true,
+            arg_types: vec![SparkType::Long],
+            return_type: SparkType::Long,
+            return_arrow: DataType::Int64,
+        }
+    }
+
+    fn relation(name: &str) -> RelationCallSpec {
+        RelationCallSpec {
+            name: name.to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::MapArrowIter,
+            thread_safe: true,
+            input_types: vec![vec![SparkType::Long]],
+            input_names: vec![vec!["v".to_owned()]],
+            key_count: 0,
+            arity: 1,
+            output_names: vec!["v".to_owned()],
+            output_types: vec![SparkType::Long],
+            output_arrow: Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
+            conf: RunnerConf::default(),
+        }
+    }
+
+    /// A scalar-registered UDF called as a relation, and a relation-registered one called as a scalar
+    /// function, are refused with the class (the store finds payloads by name and version only).
+    #[test]
+    fn a_udf_called_as_another_kind_than_registered_is_refused() {
+        let udfs = udfs();
+        udfs.register("s", 1, payload(PythonEvalType::ArrowBatched.code()));
+        udfs.register("m", 1, payload(PythonEvalType::MapArrowIter.code()));
+        let e = udfs
+            .prepare_relation(&relation("s"))
+            .err()
+            .expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(e.message().contains("as a relation (eval type 207)"), "{e}");
+        let e = udfs.prepare(&scalar("m")).err().expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(
+            e.message().contains("registered with eval type 207 but the plan calls it as a scalar function (eval type 101)"),
+            "{e}"
+        );
+        // Each kind as registered prepares.
+        assert!(udfs.prepare(&scalar("s")).is_ok());
+        assert!(udfs.prepare_relation(&relation("m")).is_ok());
+    }
+
+    /// Over Connect a plain `@udf` is registered as `SQL_BATCHED_UDF` (100) and planned as the Arrow-optimized
+    /// 101 (review R7c-1): any scalar payload fits a scalar call; a relation payload called as a scalar
+    /// function is still refused, and a scalar payload called as a relation too.
+    #[test]
+    fn a_scalar_call_takes_any_scalar_payload_and_no_relation_payload() {
+        let udfs = udfs();
+        for (name, code) in [("b", 100), ("a", 101), ("p", 200), ("r", 250)] {
+            udfs.register(name, 1, payload(code));
+            assert!(udfs.prepare(&scalar(name)).is_ok(), "eval type {code}");
+            let e = udfs
+                .prepare_relation(&relation(name))
+                .err()
+                .expect("refused");
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+                "{e}"
+            );
+        }
+        udfs.register("g", 1, payload(PythonEvalType::GroupedMapPandas.code()));
+        let e = udfs.prepare(&scalar("g")).err().expect("refused");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivPythonUdfEvalTypeMismatch,
+            "{e}"
+        );
+        assert!(e.message().contains("registered with eval type 201"), "{e}");
+    }
 }

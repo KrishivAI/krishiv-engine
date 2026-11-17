@@ -1895,3 +1895,35 @@ fn union_output_partitioning_is_a_spark_alias() {
     );
     assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
 }
+
+#[test]
+fn arrow_validate_schema_defaults_off_and_takes_spark_s_key() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&ARROW_PYSPARK_VALIDATE_SCHEMA)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set(
+        "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+        "true",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&ARROW_PYSPARK_VALIDATE_SCHEMA)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    // A Python runner reads it by its canonical key.
+    assert!(c.explicit_registered().contains(&(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+        "true".to_owned()
+    )));
+    assert!(
+        c.set(
+            "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+            "maybe"
+        )
+        .is_err()
+    );
+}
