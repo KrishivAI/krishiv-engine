@@ -975,13 +975,22 @@ impl DataFrame {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     ///
+    /// The plan holds the inlined queries of the `SQL SECURITY DEFINER` views it reads, so it is
+    /// shown as `EXPLAIN` shows one: only to a principal that may read, as invoker, what those
+    /// views read (ADR 0048 A1 §3; P3-T062 review r3 X2).
+    ///
     /// # Errors
-    /// Spark's analysis errors.
+    /// Spark's analysis errors; `KRISHIV_INSUFFICIENT_PERMISSIONS`, redacted, when a definer
+    /// view's reads are not the principal's.
     #[cfg(feature = "unstable-ir")]
     pub async fn analyzed(&self) -> Result<Arc<AnalyzedPlan>, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { Ok(Arc::clone(&df.analysis().await?.analyzed)) })
+            .on_executor(async move {
+                let analyzed = Arc::clone(&df.analysis().await?.analyzed);
+                df.session.authorize_shown_definer_reads(&analyzed).await?;
+                Ok(analyzed)
+            })
             .await
     }
 

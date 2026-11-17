@@ -955,3 +955,44 @@ fn a_function_grant_shows_its_namespace() {
     block_on(c.get_function("fnns.g")).unwrap();
     assert_eq!(rows(&fan, "SELECT fnns.g()"), 1);
 }
+
+/// Review r3 X2: the analysis accessors hand out a plan, so they ask what `EXPLAIN` asks before
+/// returning one that holds a definer view's inlined query the reader may not read as invoker;
+/// the schema, which shows no plan, is still the reader's.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn the_analysis_accessors_ask_what_explain_asks() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t WHERE b = 2 AND a < 424242",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    type Shown = Box<dyn Fn(&Session) -> Result<String, KrishivError>>;
+    let entries: Vec<(&str, Shown)> = vec![
+        (
+            "analyzed",
+            Box::new(|s| block_on(s.table("dv").analyzed()).map(|a| format!("{a:?}"))),
+        ),
+        (
+            "analyzed_for_metadata",
+            Box::new(|s| block_on(s.table("dv").analyzed_for_metadata()).map(|a| format!("{a:?}"))),
+        ),
+    ];
+    for (entry, shown) in &entries {
+        match shown(&bob) {
+            Err(e) if e.error_class().name() == DENIED => {
+                assert_redacted(&e.to_string(), &["424242", "`t`", "`b`", "`ana`"]);
+            }
+            other => panic!("{entry}: expected a denial, got {other:?}"),
+        }
+    }
+    block_on(bob.table("dv").schema_for_metadata()).unwrap();
+    block_on(bob.table("dv").schema()).unwrap();
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    for (entry, shown) in &entries {
+        let text = shown(&bob).unwrap_or_else(|e| panic!("{entry}: {e}"));
+        assert!(text.contains("424242"), "{entry}: {text}");
+    }
+}
