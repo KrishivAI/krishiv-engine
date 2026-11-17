@@ -198,3 +198,42 @@ async fn a_run_belongs_to_its_caller_and_a_viewer_cannot_start_one() {
     let (viewer, _) = call(addr, "POST", "/api/internal/queries/x/cancel", VIEWER, "").await;
     assert_eq!(viewer, 403);
 }
+
+#[tokio::test]
+async fn an_operators_own_cancel_ends_their_query_as_a_user_cancel() {
+    let addr = start().await;
+    let sql = "SELECT count(*) FROM range(0, 1000000000) a CROSS JOIN range(0, 1000000000) b";
+    let (status, body) = call(
+        addr,
+        "POST",
+        "/api/internal/sql",
+        ANN,
+        &json!({"sql": sql}).to_string(),
+    )
+    .await;
+    assert_eq!(status, 202, "{body}");
+    let id = body["run_id"].as_str().unwrap().to_owned();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (_, v) = call(addr, "GET", &format!("/api/internal/sql/{id}"), ANN, "").await;
+    assert_eq!(v["state"], "running", "{v}");
+    let (status, _) = call(
+        addr,
+        "POST",
+        &format!("/api/internal/sql/{id}/cancel"),
+        ANN,
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let start = Instant::now();
+    let done = loop {
+        let (_, v) = call(addr, "GET", &format!("/api/internal/sql/{id}"), ANN, "").await;
+        if v["state"] != "running" {
+            break v;
+        }
+        assert!(start.elapsed() < Duration::from_secs(2), "{v}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(done["state"], "cancelled", "{done}");
+    assert_eq!(done["error_class"], "OPERATION_CANCELED", "{done}");
+}

@@ -90,7 +90,9 @@ impl UiPolicy {
         self
     }
 
-    /// Marks the session cookie `Secure` (the listener is TLS).
+    /// Marks the session cookie `Secure` (the listener is TLS). It also fixes the scheme a browser's `Origin` must
+    /// carry on a change (`https` when set, else `http`): behind a proxy that ends TLS in front of a plain listener
+    /// the browser's `https` origin is refused (fail closed).
     #[must_use]
     pub fn secure_cookie(mut self, on: bool) -> Self {
         self.secure_cookie = on;
@@ -147,7 +149,9 @@ pub(crate) async fn host_guard(
                 "http"
             };
             o.split_once("://").is_some_and(|(got, authority)| {
-                got.eq_ignore_ascii_case(scheme) && authority.eq_ignore_ascii_case(host)
+                !authority.is_empty()
+                    && got.eq_ignore_ascii_case(scheme)
+                    && authority.eq_ignore_ascii_case(host)
             })
         });
         if !same {

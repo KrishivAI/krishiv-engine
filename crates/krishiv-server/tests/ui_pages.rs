@@ -449,6 +449,12 @@ async fn the_session_cookie_is_secure_when_the_listener_is_tls() {
         let cookie = head.lines().find(|l| l.starts_with("set-cookie")).unwrap();
         assert_eq!(cookie.contains("; secure"), want, "{cookie}");
         assert!(
+            cookie.starts_with("set-cookie: krishiv_ui_token=")
+                && cookie.contains("; path=/api/internal")
+                && cookie.contains("; max-age=28800"),
+            "{cookie}"
+        );
+        assert!(
             cookie.contains("httponly") && cookie.contains("samesite=strict"),
             "{cookie}"
         );
@@ -657,9 +663,6 @@ async fn a_source_with_only_rows_and_cancel_offers_no_pages_and_a_caller_prints_
     assert!(s.sql_start("SELECT 1", None).await.is_err());
     assert!(s.sql_status("r", None).await.unwrap().is_none());
     assert!(!s.sql_cancel("r", None).await.unwrap());
-    // A caller no guard identified (or the start-up token's local administrator) runs in the ordinary session.
-    let local = krishiv_server::guard::Caller::local_admin();
-    assert!(s.sql_status("r", Some(&local)).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -681,5 +684,44 @@ async fn the_origin_scheme_must_match_the_listener() {
         )
         .await;
         assert_eq!(status, want, "tls={tls} {origin}");
+    }
+}
+
+#[tokio::test]
+async fn only_an_identified_caller_or_the_local_admin_may_start_a_run() {
+    use krishiv_server::guard::Caller;
+    use krishiv_server::internal::UiSource;
+    let source = SessionSource::new(EngineRuntime::builder().build().unwrap()).unwrap();
+    // A guard that authenticates nobody by name gives an anonymous caller: no rights, no editor.
+    let anonymous = Caller::anonymous();
+    assert!(
+        source
+            .sql_start("SELECT 1", Some(&anonymous))
+            .await
+            .is_err()
+    );
+    // The start-up token's local administrator runs in the ordinary session.
+    let local = Caller::local_admin();
+    let id = source.sql_start("SELECT 1", Some(&local)).await.unwrap();
+    assert!(!id.is_empty());
+}
+
+#[tokio::test]
+async fn the_editor_result_is_exact_at_the_row_cap_boundary() {
+    let addr = start().await;
+    for (rows, truncated) in [(1000, false), (1001, true)] {
+        let (_, body) = post(
+            addr,
+            "/api/internal/sql",
+            &json!({"sql": format!("SELECT id FROM range(0, {rows}) ORDER BY id")}).to_string(),
+        )
+        .await;
+        let run = body["run_id"].as_str().unwrap().to_owned();
+        let done = wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
+        let got = done["rows"].as_array().unwrap();
+        assert_eq!(got.len(), 1000, "{rows} rows");
+        assert_eq!(got[0], json!([0]));
+        assert_eq!(got[999], json!([999]));
+        assert_eq!(done["truncated"], json!(truncated), "{rows} rows");
     }
 }

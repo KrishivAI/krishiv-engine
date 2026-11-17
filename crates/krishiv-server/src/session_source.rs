@@ -61,7 +61,7 @@ struct Run {
     tag: String,
     /// The caller the run belongs to (`None` for an unidentified one).
     owner: Option<String>,
-    /// The principal name the statement's query is recorded under.
+    /// The principal the statement's query is recorded under.
     principal: Option<Principal>,
     cancel_requested: bool,
     state: &'static str,
@@ -236,6 +236,10 @@ async fn execute(
     sql: String,
     tag: String,
 ) -> Result<Option<RunOutput>, KrishivError> {
+    // A cancel that came before the statement started: do not run it at all (a write would otherwise commit).
+    if lock(&run).cancel_requested {
+        return Ok(None);
+    }
     let df = editor
         .sql_with(
             &sql,
@@ -438,9 +442,25 @@ impl UiSource for SessionSource {
 
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         Box::pin(async move {
-            let caller = caller.filter(|c| authenticated(c).is_some());
-            // The statement runs as the caller, under the caller's policy; an unidentified caller (a server with
-            // no authentication) runs in an ordinary session.
+            // The statement runs as the caller, under the caller's policy. Only the local administrator (a server
+            // with no authentication, whoever holds its start-up token) runs in the ordinary session; a caller no
+            // guard identified holds no rights and is refused.
+            let caller = match caller {
+                Some(c) if authenticated(c).is_some() => Some(c),
+                Some(c)
+                    if c.identity.as_deref().is_some_and(
+                        <dyn std::any::Any + Send + Sync>::is::<crate::guard::LocalAdmin>,
+                    ) =>
+                {
+                    None
+                }
+                Some(_) => {
+                    return Err(UiError::new(
+                        "the caller's identity is not one this source knows",
+                    ));
+                }
+                None => None,
+            };
             let (owner, session, principal) = match caller {
                 Some(c) => {
                     let (key, session) = self.session_of(c)?;
@@ -571,8 +591,12 @@ impl SessionSource {
         // What a Connect session is bound to (`SessionOwner`): the method, the principal's kind, tenant and name, so
         // a static token and an OIDC subject of the same name share neither a session nor a run.
         Some(format!(
-            "{:?}/{:?}/{:?}/{}",
-            who.method, who.principal.kind, who.principal.tenant, who.principal.name
+            "{:?}/{:?}/{:?}/{}/{:?}",
+            who.method,
+            who.principal.kind,
+            who.principal.tenant,
+            who.principal.name,
+            who.principal.delegated_by
         ))
     }
 }
