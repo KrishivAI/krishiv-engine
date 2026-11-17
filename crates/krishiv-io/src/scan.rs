@@ -368,6 +368,9 @@ impl ScanStream {
         };
         let mapper = SchemaMapper::new(req, file_schema, &path)?;
         let file_req = mapper.file_request(req);
+        if file_req.projection.is_empty() {
+            check_unchanged(self.io.clone(), self.file.clone(), &path).await?;
+        }
         let units = format
             .plan_units(meta.as_ref(), &split, &file_req)
             .map_err(|e| e.into_error(&path))?;
@@ -742,6 +745,24 @@ impl ScanStream {
     pub fn file(&self) -> &FileRef {
         &self.file
     }
+}
+
+/// A read of no column touches no byte of the file (the row counts come from
+/// the footer, which the metadata cache may already hold), so the file's
+/// presence and version are checked as a column read would find them: a file
+/// deleted or replaced since listing fails as it would there
+/// (`FAILED_READ_FILE.FILE_NOT_EXIST`, which `ignoreMissingFiles` skips, or
+/// `KRISHIV_FILE_CHANGED_DURING_READ`) instead of being counted from a stale
+/// footer.
+async fn check_unchanged(io: IoContext, file: FileRef, path: &str) -> Result<()> {
+    let Some(meta) = io.head(&file.store, &file.path).await? else {
+        return Err(crate::error::not_found(path));
+    };
+    let now = FileRef::from_meta(file.store.clone(), &meta);
+    if now.version != file.version || now.size != file.size {
+        return Err(crate::error::changed(path, &file.version.to_string()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
