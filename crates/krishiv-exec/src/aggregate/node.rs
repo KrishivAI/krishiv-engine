@@ -7,6 +7,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_memory::SpillScope;
 
+use super::distinct::{DistinctChoice, DistinctCount, DistinctCountNode, covers};
 use super::{
     AggInput, AggregateExpr, AggregateOutput, AggregateSpec, HashAggregate, PartialAggregate,
     unsupported,
@@ -81,6 +82,34 @@ pub fn distinct_plan(
     spec: AggregateSpec,
     distinct: &[bool],
 ) -> Result<Arc<dyn ExecNode>> {
+    distinct_plan_with(input, spec, distinct, distinct_count_at_merge(None))
+}
+
+/// `krishiv.exec.agg.distinctCountAtMerge` in `config`, or the entry's
+/// default without one (or without the key set).
+pub(crate) fn distinct_count_at_merge(config: Option<&krishiv_common::config::Config>) -> bool {
+    use krishiv_common::config::{ConfigValue, EXEC_AGG_DISTINCT_COUNT_AT_MERGE as E};
+    config
+        .map_or(E.default.as_ref(), |c| c.get(&E))
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(false)
+}
+
+/// [`distinct_plan`] with `krishiv.exec.agg.distinctCountAtMerge` set to
+/// `count_at_merge`: a single `count(DISTINCT)` in a `GROUP BY` then runs as
+/// one breaker that counts each distinct pair where its tables merge
+/// (`aggregate/distinct.rs`) when the executor runs more than one slot
+/// and `krishiv.deterministicOrder` is off; otherwise it keeps the two
+/// aggregations, as every other spec does.
+///
+/// # Errors
+/// As [`distinct_plan`].
+pub fn distinct_plan_with(
+    input: Arc<dyn ExecNode>,
+    spec: AggregateSpec,
+    distinct: &[bool],
+    count_at_merge: bool,
+) -> Result<Arc<dyn ExecNode>> {
     if distinct.len() != spec.aggregates.len()
         || spec.output != AggregateOutput::Final
         || spec.aggregates.iter().any(|a| a.input != AggInput::Raw)
@@ -112,6 +141,19 @@ pub fn distinct_plan(
     }
     let Some(dargs) = dargs.map(<[usize]>::to_vec) else {
         return Ok(AggregateNode::new(input, HashAggregate::new(spec)?));
+    };
+    // Only beside plain aggregates: there the pairs drop their payload. A
+    // `count(DISTINCT)` alone puts every pair through three tables (pairs,
+    // a merge task's partition counts, the key table) against two in series
+    // (ClickBench q14 shape 1.10x at the merge, q10 shape 0.68x; design
+    // `P3-cb-distinct-in-group`, addendum 2026-11-16).
+    let at_merge = if count_at_merge && spec.aggregates.len() > 1 && covers(&spec, distinct) {
+        Some(DistinctCountNode::new(
+            Arc::clone(&input),
+            DistinctCount::new(&spec, distinct)?,
+        ))
+    } else {
+        None
     };
     let k = spec.group_by.len();
     let first = AggregateSpec {
@@ -153,7 +195,11 @@ pub fn distinct_plan(
         ..spec
     };
     let inner = AggregateNode::new(input, HashAggregate::new(first)?);
-    Ok(AggregateNode::new(inner, HashAggregate::new(second)?))
+    let series = AggregateNode::new(inner, HashAggregate::new(second)?);
+    Ok(match at_merge {
+        Some(at_merge) => DistinctChoice::new(at_merge, series),
+        None => series,
+    })
 }
 
 /// Whether `a` and `b` hold the same column indices, in any order.

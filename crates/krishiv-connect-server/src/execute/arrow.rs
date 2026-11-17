@@ -340,13 +340,31 @@ pub fn ipc_stream(
     batch: &RecordBatch,
     compression: Option<CompressionType>,
 ) -> Result<Vec<u8>, KrishivError> {
+    ipc_stream_of(std::slice::from_ref(batch), compression)
+}
+
+/// `batches` (at least one: its schema is the stream's) as one Arrow IPC stream.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when Arrow cannot write it, or no batch is given.
+pub fn ipc_stream_of(
+    batches: &[RecordBatch],
+    compression: Option<CompressionType>,
+) -> Result<Vec<u8>, KrishivError> {
     let arrow = |e: arrow_schema::ArrowError| internal(format!("writing a result batch: {e}"));
     let options = IpcWriteOptions::default()
         .try_with_compression(compression)
         .map_err(arrow)?;
+    let Some(first) = batches.first() else {
+        return Err(internal(
+            "writing a result stream without a batch".to_owned(),
+        ));
+    };
     let mut writer =
-        StreamWriter::try_new_with_options(Vec::new(), &batch.schema(), options).map_err(arrow)?;
-    writer.write(batch).map_err(arrow)?;
+        StreamWriter::try_new_with_options(Vec::new(), &first.schema(), options).map_err(arrow)?;
+    for batch in batches {
+        writer.write(batch).map_err(arrow)?;
+    }
     writer.finish().map_err(arrow)?;
     writer.into_inner().map_err(arrow)
 }

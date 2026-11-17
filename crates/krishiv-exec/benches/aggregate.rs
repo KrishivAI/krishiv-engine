@@ -38,6 +38,16 @@
 //!   cost of `sum`, `min`, `max`, `count(v)` and `avg` (gap ledger §4 item 15,
 //!   the dense fold kernels).
 //!
+//! - `aggregate/distinct_{q10,q14}_shape`: `count(DISTINCT v)` inside a `GROUP BY` through
+//!   `distinct_plan`, over 1 Mi rows (design `P3-cb-distinct-in-group.md`, ClickBench C3).
+//!   q10: an `Int64` user `v` of 2^18 values whose key (4,096 regions) it determines, beside
+//!   `sum`, `count(*)` and `avg` (about 250k distinct pairs); q14: a 20-byte `Utf8View` key of
+//!   2^16 values and an independent user of 2^18 (nearly every pair distinct), the distinct
+//!   aggregate alone. `…_pairs` is the first phase alone (a plain `group by k, v` with the same
+//!   plain aggregates), so the difference is what the second phase costs; `…_pairs_bare` is
+//!   the same `group by k, v` with no aggregates (the floor of a pairs table with no payload);
+//!   `…_new` is the whole query counted at the merge (`krishiv.exec.agg.distinctCountAtMerge`).
+//!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
 //! tables that abandon, and the parallel final phase.
@@ -60,7 +70,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateNode, AggregateOutput, AggregateSpec,
-    HashAggregate, UdafCall, UdafEnv,
+    HashAggregate, UdafCall, UdafEnv, distinct_plan_with,
 };
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
@@ -483,6 +493,135 @@ fn wide_plan(
     AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
 }
 
+fn scramble(i: u64) -> u64 {
+    i.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11
+}
+
+fn distinct_schema(key: DataType) -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k", key, false),
+        Field::new("v", DataType::Int64, false),
+        Field::new("w", DataType::Int64, false),
+    ]))
+}
+
+/// q10's shape: `v` a user in `0..2^18`, `k = v mod 4096` scrambled (the user's region), `w` a
+/// small measure.
+fn distinct_q10_input() -> Vec<Batch> {
+    let s = distinct_schema(DataType::Int64);
+    (0..ROWS)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let r = start as u64..(start + DEFAULT_BATCH_SIZE).min(ROWS) as u64;
+            let user = |i: u64| scramble(i) % (1 << 18);
+            let k = Int64Array::from_iter_values(
+                r.clone().map(|i| (scramble(user(i) + 7) % 4096) as i64),
+            );
+            let v = Int64Array::from_iter_values(r.clone().map(|i| user(i) as i64));
+            let w = Int64Array::from_iter_values(r.map(|i| (i % 1920) as i64));
+            let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v), Arc::new(w)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&s), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// q14's shape: `k` a 20-byte phrase of 2^16 values, `v` an independent user in `0..2^18`.
+fn distinct_q14_input() -> Vec<Batch> {
+    let s = distinct_schema(DataType::Utf8View);
+    (0..ROWS)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let r = start as u64..(start + DEFAULT_BATCH_SIZE).min(ROWS) as u64;
+            let k = StringViewArray::from_iter_values(
+                r.clone()
+                    .map(|i| format!("search phrase {:06}", scramble(i) % (1 << 16))),
+            );
+            let v = Int64Array::from_iter_values(
+                r.clone().map(|i| (scramble(i ^ 0x5555) % (1 << 18)) as i64),
+            );
+            let w = Int64Array::from_iter_values(r.map(|i| (i % 7) as i64));
+            let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v), Arc::new(w)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&s), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// Which part of a distinct shape runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pairs {
+    /// The whole query through today's `distinct_plan` (two aggregations).
+    Full,
+    /// The whole query counted at the merge
+    /// (`krishiv.exec.agg.distinctCountAtMerge`).
+    AtMerge,
+    /// Its first phase alone: `group by k, v` with the plain aggregates.
+    States,
+    /// `group by k, v` with no aggregates (the pairs table's floor).
+    Bare,
+}
+
+/// `select k, [sum(w), count(*), avg(w),] count(DISTINCT v) group by k` through
+/// `distinct_plan`.
+fn distinct_shape_plan(
+    batches: &[Batch],
+    key: DataType,
+    plain: bool,
+    pairs: Pairs,
+) -> Arc<dyn ExecNode> {
+    let s = distinct_schema(key);
+    let mut aggregates = Vec::new();
+    if plain {
+        aggregates.push(AggregateExpr::new(
+            AggregateFunction::Sum,
+            2,
+            DataType::Int64,
+            "s",
+        ));
+        aggregates.push(AggregateExpr::count_star("c"));
+        aggregates.push(AggregateExpr::new(
+            AggregateFunction::Avg,
+            2,
+            DataType::Int64,
+            "a",
+        ));
+    }
+    aggregates.push(AggregateExpr::new(
+        AggregateFunction::Count,
+        1,
+        DataType::Int64,
+        "u",
+    ));
+    let mut distinct = vec![false; aggregates.len()];
+    if let Some(last) = distinct.last_mut() {
+        *last = true;
+    }
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: vec![0],
+        aggregates,
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    if !matches!(pairs, Pairs::Full | Pairs::AtMerge) {
+        let plain = match pairs {
+            Pairs::States => spec.aggregates[..spec.aggregates.len() - 1].to_vec(),
+            _ => Vec::new(),
+        };
+        let spec = AggregateSpec {
+            group_by: vec![0, 1],
+            aggregates: plain,
+            ..spec
+        };
+        return AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"));
+    }
+    distinct_plan_with(scan, spec, &distinct, pairs == Pairs::AtMerge).expect("distinct plan")
+}
+
 fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
     let s = schema();
     let spec = AggregateSpec {
@@ -681,6 +820,52 @@ fn bench(c: &mut Criterion) {
         let mode = Mode { rows: true, seeded };
         b.iter(|| black_box(run(&runner, &caller, q01_plan(&q01), 1 << 30, mode)));
     });
+    let q10 = distinct_q10_input();
+    let q14 = distinct_q14_input();
+    for (i, (name, batches, key, plain)) in [
+        ("distinct_q10_shape", &q10, DataType::Int64, true),
+        ("distinct_q14_shape", &q14, DataType::Utf8View, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mode = Mode { rows: true, seeded };
+        // Both plans give the same number of rows before either is timed.
+        let full = run(
+            &runner,
+            &caller,
+            distinct_shape_plan(batches, key.clone(), plain, Pairs::Full),
+            1 << 30,
+            mode,
+        );
+        let new = run(
+            &runner,
+            &caller,
+            distinct_shape_plan(batches, key.clone(), plain, Pairs::AtMerge),
+            1 << 30,
+            mode,
+        );
+        assert_eq!(full, new, "{name}: the two plans' row counts differ");
+        let mut variants = [
+            ("", Pairs::Full),
+            ("_new", Pairs::AtMerge),
+            ("_pairs", Pairs::States),
+            ("_pairs_bare", Pairs::Bare),
+        ];
+        // Alternate which of the two plans runs first, so a drift of the
+        // machine over the run does not favour one of them.
+        if i % 2 == 1 {
+            variants.swap(0, 1);
+        }
+        for (suffix, pairs) in variants {
+            g.bench_function(format!("{name}{suffix}"), |b| {
+                b.iter(|| {
+                    let p = distinct_shape_plan(batches, key.clone(), plain, pairs);
+                    black_box(run(&runner, &caller, p, 1 << 30, mode))
+                });
+            });
+        }
+    }
     for keys in [1u64, 64, 1 << 18] {
         let batches = decimal_input(keys);
         for (name, f) in [

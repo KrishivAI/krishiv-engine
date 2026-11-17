@@ -20,6 +20,7 @@ mod plan_stats;
 mod props;
 mod python_relations;
 mod qerror;
+mod rule_differential;
 mod rules;
 mod semi_order;
 mod share_subtree;
