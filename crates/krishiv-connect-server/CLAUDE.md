@@ -102,7 +102,7 @@ Paths are relative to this crate.
   `mapInPandas`/`applyInPandas`/cogroup relations (PR-26d part 2, `relation_python_udf`) take a version the same way
   under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
   `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
-  `admin_runs_apply_in_pandas_per_group`, `admin_runs_a_cogrouped_apply_in_pandas`); `copy_for` gives a
+  `admin_runs_map_in_arrow`, `admin_runs_each_grouped_map_kind_per_group`, `admin_runs_each_cogrouped_map_kind`); `copy_for` gives a
   `CloneSession` clone a runtime of its own (`manager/clone.rs`); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)

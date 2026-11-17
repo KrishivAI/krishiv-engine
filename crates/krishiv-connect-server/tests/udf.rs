@@ -956,55 +956,129 @@ const LEFT: &str = "SELECT id % 2 AS k, id AS v FROM range(6)";
 const RIGHT: &str = "SELECT id % 2 AS k, id * 100 AS w FROM range(3)";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admin_runs_apply_in_pandas_per_group() {
+async fn admin_runs_map_in_arrow() {
     let Some(py) = python() else { return };
     let run = start(Some(&py)).await;
-    // df.groupBy("k").applyInPandas(f, "k long, s long"): eval type 201, one call per group.
+    // range(4).mapInArrow(f, "x long"): eval type 207, pyarrow RecordBatches in and out.
     let f = relation_udf(
         &py,
-        "import pandas as pd\ndef f(pdf):\n    return pd.DataFrame({'k': [pdf.k.iloc[0]], 's': [pdf.v.sum()]})",
-        201,
-        &["k", "s"],
-        vec![col("k"), col("v")],
+        "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(it):\n    for b in it:\n        \
+         yield pa.RecordBatch.from_arrays([pc.multiply(b.column('id'), 10)], ['x'])",
+        207,
+        &["x"],
+        vec![id()],
     );
-    let plan = root(relation(RelType::GroupMap(Box::new(pb::GroupMap {
-        input: Some(Box::new(sql_relation(LEFT))),
-        grouping_expressions: vec![col("k")],
-        func: Some(f),
-        ..Default::default()
-    }))));
+    let plan = root(relation(RelType::MapPartitions(Box::new(
+        pb::MapPartitions {
+            input: Some(Box::new(range(4))),
+            func: Some(f),
+            is_barrier: None,
+            profile_id: None,
+        },
+    ))));
     let responses = execute(&run.channel, plan, ADMIN)
         .await
-        .expect("applyInPandas runs on the session's workers");
-    assert_eq!(long_pairs(&responses), [(0, 6), (1, 9)]);
+        .expect("mapInArrow runs on the session's workers");
+    let mut got = longs(&responses);
+    got.sort_unstable();
+    assert_eq!(got, [Some(0), Some(10), Some(20), Some(30)]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admin_runs_a_cogrouped_apply_in_pandas() {
+async fn admin_runs_each_grouped_map_kind_per_group() {
     let Some(py) = python() else { return };
     let run = start(Some(&py)).await;
-    // l.groupBy("k").cogroup(r.groupBy("k")).applyInPandas(f, "k long, n long"): eval type 206.
-    let f = relation_udf(
-        &py,
-        "import pandas as pd\ndef f(l, r):\n    \
-         return pd.DataFrame({'k': [l.k.iloc[0]], 'n': [len(l) * 10 + len(r)]})",
-        206,
-        &["k", "n"],
-        vec![col("k"), col("v"), col("k"), col("w")],
-    );
-    let plan = root(relation(RelType::CoGroupMap(Box::new(pb::CoGroupMap {
-        input: Some(Box::new(sql_relation(LEFT))),
-        input_grouping_expressions: vec![col("k")],
-        other: Some(Box::new(sql_relation(RIGHT))),
-        other_grouping_expressions: vec![col("k")],
-        func: Some(f),
-        ..Default::default()
-    }))));
-    let responses = execute(&run.channel, plan, ADMIN)
-        .await
-        .expect("the cogroup runs on the session's workers");
-    // Key 0: three left rows (0, 2, 4) and two right (0, 2); key 1: three left and one right.
-    assert_eq!(long_pairs(&responses), [(0, 32), (1, 31)]);
+    // df.groupBy("k").applyInPandas / applyInArrow (f, "k long, s long"), plain and iterator forms.
+    let cases = [
+        (
+            201,
+            "import pandas as pd\ndef f(pdf):\n    \
+             return pd.DataFrame({'k': [pdf.k.iloc[0]], 's': [pdf.v.sum()]})",
+        ),
+        (
+            201,
+            "import pandas as pd\ndef f(key, pdf):\n    \
+             return pd.DataFrame({'k': [key[0]], 's': [pdf.v.sum()]})",
+        ),
+        (
+            209,
+            "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(key, t):\n    \
+             return pa.table({'k': [key[0].as_py()], 's': [pc.sum(t.column('v')).as_py()]})",
+        ),
+        (
+            216,
+            "import pandas as pd\ndef f(key, it):\n    s = sum(int(p.v.sum()) for p in it)\n    \
+             yield pd.DataFrame({'k': [key[0]], 's': [s]})",
+        ),
+        (
+            215,
+            "import pyarrow as pa\nimport pyarrow.compute as pc\ndef f(it):\n    batches = list(it)\n    \
+             s = sum(pc.sum(b.column('v')).as_py() for b in batches)\n    \
+             yield pa.RecordBatch.from_pydict({'k': [batches[0].column('k')[0].as_py()], 's': [s]})",
+        ),
+    ];
+    for (eval_type, body) in cases {
+        let f = relation_udf(&py, body, eval_type, &["k", "s"], vec![col("k"), col("v")]);
+        let plan = root(relation(RelType::GroupMap(Box::new(pb::GroupMap {
+            input: Some(Box::new(sql_relation(LEFT))),
+            grouping_expressions: vec![col("k")],
+            func: Some(f),
+            ..Default::default()
+        }))));
+        let responses = execute(&run.channel, plan, ADMIN)
+            .await
+            .unwrap_or_else(|s| panic!("{eval_type} runs on the session's workers: {s:?}"));
+        assert_eq!(
+            long_pairs(&responses),
+            [(0, 6), (1, 9)],
+            "{eval_type}: {body}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_runs_each_cogrouped_map_kind() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    // l.groupBy("k").cogroup(r.groupBy("k")).applyInPandas / applyInArrow (f, "k long, n long").
+    let cases = [
+        (
+            206,
+            "import pandas as pd\ndef f(l, r):\n    \
+             return pd.DataFrame({'k': [l.k.iloc[0]], 'n': [len(l) * 10 + len(r)]})",
+        ),
+        (
+            210,
+            "import pyarrow as pa\ndef f(l, r):\n    \
+             return pa.table({'k': [l.column('k')[0].as_py()], 'n': [l.num_rows * 10 + r.num_rows]})",
+        ),
+    ];
+    for (eval_type, body) in cases {
+        let f = relation_udf(
+            &py,
+            body,
+            eval_type,
+            &["k", "n"],
+            vec![col("k"), col("v"), col("k"), col("w")],
+        );
+        let plan = root(relation(RelType::CoGroupMap(Box::new(pb::CoGroupMap {
+            input: Some(Box::new(sql_relation(LEFT))),
+            input_grouping_expressions: vec![col("k")],
+            other: Some(Box::new(sql_relation(RIGHT))),
+            other_grouping_expressions: vec![col("k")],
+            func: Some(f),
+            ..Default::default()
+        }))));
+        let responses = execute(&run.channel, plan, ADMIN)
+            .await
+            .unwrap_or_else(|s| panic!("{eval_type} runs on the session's workers: {s:?}"));
+        // Key 0: three left rows (0, 2, 4) and two right (0, 2); key 1: three left and one right.
+        assert_eq!(
+            long_pairs(&responses),
+            [(0, 32), (1, 31)],
+            "{eval_type}: {body}"
+        );
+    }
 }
 
 async fn semantic_hash(channel: &Channel, plan: pb::Plan) -> i32 {
