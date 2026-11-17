@@ -200,13 +200,6 @@ impl SessionPython {
     /// The UDFs of `clone`, a copy of this session built for `principal` (`CloneSession`): a runtime of
     /// its own (its workers serve the clone only) holding every payload this session registered, so the
     /// registrations the clone copied keep running; installed on the clone when it was on this session.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by CloneSession, which lands with PR-15 (#810)"
-        )
-    )]
     pub(crate) fn copy_for(&self, principal: &str, clone: &Session) -> Self {
         let copy = Self::new(self.host.as_ref(), principal, clone);
         let state = self.lock().clone();

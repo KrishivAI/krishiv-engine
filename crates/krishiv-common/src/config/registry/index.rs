@@ -228,6 +228,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.connect.artifacts.maxBytes",
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+    ),
+    (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
@@ -405,6 +409,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &BUCKETING_MAX_BUCKETS,
     ),
     (
+        "krishiv.connect.artifacts.maxTotalBytes",
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
+    ),
+    (
         "krishiv.connect.execute.detachedTimeout",
         &CONNECT_EXECUTE_DETACHED_TIMEOUT,
     ),
@@ -491,6 +499,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "krishiv.connect.artifacts.maxArtifactBytes",
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
     ),
     (
         "krishiv.connect.http2.maxConcurrentStreams",
