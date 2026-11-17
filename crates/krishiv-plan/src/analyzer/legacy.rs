@@ -244,28 +244,6 @@ pub(crate) fn eliminate(
     eliminate_at(plan, policy, 0)
 }
 
-/// `plan` with every `WITH` definition inlined as `spark.sql.legacy.ctePrecedencePolicy=LEGACY`
-/// inlines them before binding: for the query of a stored view inlined on its own, before it is
-/// placed in the reader's plan (Spark analyzes a view's text apart from the query that reads it, so
-/// a reader's definition never replaces one of the view's). A plan without definitions comes back
-/// as it is (the same node), so a node kept by identity (`views::DefinerTexts`) stays itself when
-/// the reader's whole plan is inlined again.
-///
-/// # Errors
-/// `FAILED_TO_PARSE_TOO_COMPLEX` for a plan nested too deep.
-pub fn inline_legacy_ctes(
-    plan: &Arc<LogicalPlan>,
-    case_sensitive: bool,
-) -> Result<Arc<LogicalPlan>, KrishivError> {
-    eliminate(
-        plan,
-        CtePolicy {
-            precedence: super::CtePrecedencePolicy::Legacy,
-            case_sensitive,
-        },
-    )
-}
-
 /// [`eliminate`] for a plan `depth` levels below the root of the walk.
 fn eliminate_at(
     plan: &Arc<LogicalPlan>,
@@ -629,6 +607,8 @@ fn eliminate_expr_body(
 mod tests {
     use std::sync::Arc;
 
+    use krishiv_common::error::KrishivError;
+
     use crate::{Cte, Expr, LogicalPlan, PlanNode, ReadSource};
 
     /// The table names `plan` reads, and whether a `WITH` is left in it.
@@ -641,12 +621,26 @@ mod tests {
         plan.for_each_child(&mut |c| reads(c, names, with));
     }
 
+    /// `WITH` definitions inlined as the `LEGACY` policy inlines them.
+    fn inline_legacy_ctes(
+        plan: &Arc<LogicalPlan>,
+        case_sensitive: bool,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        super::eliminate(
+            plan,
+            super::CtePolicy {
+                precedence: crate::analyzer::CtePrecedencePolicy::Legacy,
+                case_sensitive,
+            },
+        )
+    }
+
     /// Review r3 N3: a plan without definitions comes back as the same node (a definer view's
     /// query keeps its trust by identity), and a plan with them has them inlined.
     #[test]
-    fn inline_legacy_ctes_keeps_a_plan_without_definitions_and_inlines_one_with() {
+    fn legacy_inlining_keeps_a_plan_without_definitions_and_inlines_one_with() {
         let plain = Arc::new(LogicalPlan::table(["t"]).project(vec![Expr::column(["a"])]));
-        let same = super::inline_legacy_ctes(&plain, false).unwrap();
+        let same = inline_legacy_ctes(&plain, false).unwrap();
         assert!(Arc::ptr_eq(&plain, &same));
 
         // `WITH c AS (SELECT a FROM t) SELECT a FROM C`, case-insensitively.
@@ -657,14 +651,14 @@ mod tests {
                 plan: Arc::clone(&plain),
             }],
         }));
-        let inlined = super::inline_legacy_ctes(&with, false).unwrap();
+        let inlined = inline_legacy_ctes(&with, false).unwrap();
         let (mut names, mut left) = (Vec::new(), false);
         reads(&inlined, &mut names, &mut left);
         assert!(!left, "{inlined:?}");
         assert_eq!(names, ["t"], "{inlined:?}");
 
         // Case-sensitively `C` is not `c`: the definition is dropped, the read stays a table's.
-        let kept = super::inline_legacy_ctes(&with, true).unwrap();
+        let kept = inline_legacy_ctes(&with, true).unwrap();
         let (mut names, mut left) = (Vec::new(), false);
         reads(&kept, &mut names, &mut left);
         assert!(!left, "{kept:?}");
