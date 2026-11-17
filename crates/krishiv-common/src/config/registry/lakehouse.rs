@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the lakehouse connectors: the Delta log pool and the catalog parse
-//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6).
+//! The config entries of the lakehouse connectors: the Delta log pool, the catalog parse
+//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and the Iceberg
+//! manifest cache (P3-T026 design note section 2.3).
 
 use std::time::Duration;
 
@@ -53,6 +54,22 @@ pub static CATALOG_MAX_COLUMNS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Bytes of decoded Iceberg manifests kept for planning.
+pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.manifestCache.bytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Estimated bytes of decoded Iceberg manifest entries kept in memory, least recently used \
+          first out, so that planning a snapshot again (a self-join, a CTE, the next query on the \
+          same table) does not fetch and parse its manifests again. Manifests are immutable, so \
+          entries are keyed by path and length and never go stale. One cache per Iceberg storage \
+          registration, shared by every table opened through it; 0 disables it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// How long one catalog call may take before it fails.
 pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.requestTimeout",
@@ -63,6 +80,22 @@ pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
           `KRISHIV_CATALOG_FAILURE` naming the catalog. Redirects from a catalog are never followed.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most data files one Iceberg write task keeps open at once.
+pub static ICEBERG_WRITE_MAX_OPEN_FILES: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.write.maxOpenFiles",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(100)),
+    doc: "Most data files one Iceberg write task (one driver of an append) keeps open at once, \
+          one per partition it is writing. Past the cap the oldest-opened file is closed, and a \
+          partition seen again after its file closed gets a new file, so a write over more \
+          partitions per task than this writes more, smaller files. Read when the write is \
+          planned.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.2.0",
     spark_alias: None,
 };

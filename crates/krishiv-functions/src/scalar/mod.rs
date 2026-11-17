@@ -31,6 +31,7 @@ mod array_edit;
 mod array_scan;
 mod array_set;
 mod array_shape;
+mod avro;
 mod bitwise;
 mod chars;
 mod codec;
@@ -57,6 +58,7 @@ mod session;
 mod shuffle;
 mod string;
 mod r#struct;
+mod time_window;
 mod udf;
 mod url;
 mod variant;
@@ -506,6 +508,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (hash::NAMES, hash::bind),
     (aes::NAMES, aes::bind),
     (interval::NAMES, interval::bind),
+    (avro::NAMES, avro::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),
@@ -527,6 +530,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (xml::NAMES, xml::bind),
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
+    (time_window::NAMES, time_window::bind),
     (collation::NAMES, collation::bind),
     (array_edit::NAMES, array_edit::bind),
     (array_scan::NAMES, array_scan::bind),

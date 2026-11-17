@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-memory"
 description = "Memory management"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -17,8 +20,8 @@ arrow-buffer.workspace = true
 arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 sha2 = { workspace = true }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 thiserror.workspace = true
 tracing = { workspace = true, features = ["std"] }
 

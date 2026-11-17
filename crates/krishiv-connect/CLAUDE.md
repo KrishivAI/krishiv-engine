@@ -12,11 +12,14 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   generated layout implements): size, count, depth (`krishiv.connect.maxPlanDepth`) and field-version checks
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (the server runs `sql_command` and `register_function`; every other command is 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
-- `src/translate/literal.rs` literals (scalars, intervals, nested array/map/struct, specialized arrays); `src/translate/local.rs` the host protocol for local relations; `src/translate/schema.rs` schema texts; `src/translate/names.rs` names and plan-id origins
+- `src/translate/relation_udf.rs` (P3-T014 PR-26d part 2) `MapPartitions` (28), `GroupMap` (31), `CoGroupMap` (32) with a Python UDF: the eval types Spark's planner accepts, the stateful and Scala fields refused, the UDF's reference from the same `UdfHost` inline calls use (`relation_python_udf`, `translate_relation_with`; refused without one)
+- `src/translate/literal.rs` literals (scalars, intervals, nested array/map/struct, specialized arrays); `src/translate/local.rs` the host protocol for local relations; `src/translate/cached.rs` the reserved table a `cached_remote_relation` reads and the ids the translator records for the host; `src/translate/schema.rs` schema texts; `src/translate/names.rs` names and plan-id origins
 - `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
   (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
   (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
+- `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
+  `connect_artifact_name` in `fuzz/`
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
 - `src/coverage.rs` (P3-T012a) the coverage table: an exhaustive `match` per `oneof` (Relation, Expression, Command, Catalog, Literal, DataType) with a row per arm (status, refused fields, IR target, task, group), so a regenerated proto with a new arm does not compile until it has a row; `src/bin/connect-coverage-dump.rs` prints it as JSON for `cargo xtask connect-coverage [--check]`, which writes `docs/reference/connect/coverage.md` and `tests/connect/coverage.json` (CI checks them in the docs-site job). Update the row in the same commit that translates an arm; `tests/coverage.rs` fails when a row disagrees with the translator
