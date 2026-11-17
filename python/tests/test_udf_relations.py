@@ -34,6 +34,10 @@ from krishiv._udf.relations import (  # noqa: E402
     SQL_GROUPED_MAP_PANDAS_UDF,
     SQL_MAP_ARROW_ITER_UDF,
     SQL_MAP_PANDAS_ITER_UDF,
+    SQL_SCALAR_ARROW_ITER_UDF,
+    SQL_SCALAR_PANDAS_ITER_UDF,
+    SQL_WINDOW_AGG_ARROW_UDF,
+    SQL_WINDOW_AGG_PANDAS_UDF,
     FrameError,
 )
 from krishiv.sql.types import LongType, StringType, StructField, StructType  # noqa: E402
@@ -592,6 +596,167 @@ def test_grouped_aggregate_arrow_iterator_form() -> None:
     assert rows(out) == [{"_0": 3}, {"_0": 4}]
     out = run(SQL_GROUPED_AGG_ARROW_ITER_UDF, pairs, LongType(), _agg_frames(), arity=2)
     assert rows(out) == [{"_0": 6 + 60}, {"_0": 44}]
+
+
+# --- window aggregate (PR-26c-3) ---
+def _window_frames() -> list[tuple[Any, ...]]:
+    """Two partitions; the first in two batches."""
+    return [batch(0, v=[1, 2]), batch(0, v=[3]), END_GROUP, batch(0, v=[10]), END_GROUP, END]
+
+
+def _bounded_frames() -> list[tuple[Any, ...]]:
+    """One partition whose rows lead with their frame start and end (rows ``[b, e)`` of the partition)."""
+    return [batch(0, b=[0, 0, 1], e=[1, 2, 3], v=[1, 2, 3]), END_GROUP, END]
+
+
+def test_window_aggregate_pandas_over_an_unbounded_frame(conf: dict[str, str]) -> None:
+    conf["window_bound_types"] = "unbounded"
+    out = run(SQL_WINDOW_AGG_PANDAS_UDF, lambda s: int(s.sum()), LongType(), _window_frames(), arity=1)
+    # One value per row: the partition's value repeated.
+    assert [b.num_rows for b in out] == [3, 1]
+    assert rows(out) == [{"_0": 6}, {"_0": 6}, {"_0": 6}, {"_0": 10}]
+
+
+def test_window_aggregate_pandas_over_a_bounded_frame(conf: dict[str, str]) -> None:
+    conf["window_bound_types"] = "Bounded, unbounded"  # one UDF per task: the first entry, any case
+    out = run(SQL_WINDOW_AGG_PANDAS_UDF, lambda s: int(s.sum()), LongType(), _bounded_frames(), arity=1)
+    assert rows(out) == [{"_0": 1}, {"_0": 3}, {"_0": 5}]
+
+
+def test_window_aggregate_arrow_over_an_unbounded_frame(conf: dict[str, str]) -> None:
+    conf["window_bound_types"] = "unbounded"
+    out = run(SQL_WINDOW_AGG_ARROW_UDF, lambda a: sum(a.to_pylist()), LongType(), _window_frames(), arity=1)
+    assert rows(out) == [{"_0": 6}, {"_0": 6}, {"_0": 6}, {"_0": 10}]
+
+
+def test_window_aggregate_arrow_over_a_bounded_frame(conf: dict[str, str]) -> None:
+    conf["window_bound_types"] = "bounded"
+    out = run(SQL_WINDOW_AGG_ARROW_UDF, lambda a: sum(a.to_pylist()), LongType(), _bounded_frames(), arity=1)
+    assert rows(out) == [{"_0": 1}, {"_0": 3}, {"_0": 5}]
+
+
+def test_window_aggregate_arrow_without_concat_batches(conf: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    conf["window_bound_types"] = "unbounded"
+    monkeypatch.delattr(pa, "concat_batches")
+    out = run(SQL_WINDOW_AGG_ARROW_UDF, lambda a: sum(a.to_pylist()), LongType(), _window_frames(), arity=1)
+    assert rows(out) == [{"_0": 6}, {"_0": 6}, {"_0": 6}, {"_0": 10}]
+
+
+@pytest.mark.parametrize("eval_type", [SQL_WINDOW_AGG_PANDAS_UDF, SQL_WINDOW_AGG_ARROW_UDF])
+def test_a_window_bound_type_spark_does_not_know_is_refused(conf: dict[str, str], eval_type: int) -> None:
+    conf["window_bound_types"] = "sliding"
+    with pytest.raises(kerrors.PySparkRuntimeError) as err:
+        run(eval_type, lambda s: 0, LongType(), _window_frames(), arity=1)
+    assert error_class(err) == "INVALID_WINDOW_BOUND_TYPE"
+    assert params(err) == {"window_bound_type": "sliding"}
+
+
+# --- scalar iterator (PR-26c-3) ---
+def _iter_frames() -> list[tuple[Any, ...]]:
+    return [batch(0, a=[1, 2], b=[10, 20]), batch(0, a=[3], b=[30]), END]
+
+
+def test_scalar_pandas_iterator() -> None:
+    def one(series: Iterator[Any]) -> Iterator[Any]:
+        for s in series:
+            yield s + 1
+
+    def two(pairs: Iterator[Any]) -> Iterator[Any]:
+        for a, b in pairs:
+            yield a * b
+
+    a_only = [batch(0, a=[1, 2]), batch(0, a=[3]), END]
+    out = run(SQL_SCALAR_PANDAS_ITER_UDF, one, LongType(), a_only)
+    assert rows(out) == [{"_0": 2}, {"_0": 3}, {"_0": 4}]
+    out = run(SQL_SCALAR_PANDAS_ITER_UDF, two, LongType(), _iter_frames())
+    assert rows(out) == [{"_0": 10}, {"_0": 40}, {"_0": 90}]
+
+
+def test_scalar_pandas_iterator_yields_in_any_batches() -> None:
+    def joined(series: Iterator[Any]) -> Iterator[Any]:
+        yield pd.concat(list(series), ignore_index=True)
+
+    out = run(SQL_SCALAR_PANDAS_ITER_UDF, joined, LongType(), [batch(0, a=[1, 2]), batch(0, a=[3]), END])
+    assert [b.num_rows for b in out] == [3]
+
+
+def _twice(series: Iterator[Any]) -> Iterator[Any]:
+    for s in series:
+        yield s
+        yield s
+
+
+def _first_only(series: Iterator[Any]) -> Iterator[Any]:
+    yield next(series)
+
+
+def _short(series: Iterator[Any]) -> Iterator[Any]:
+    for s in series:
+        yield s.iloc[:1]
+
+
+@pytest.mark.parametrize(
+    ("f", "klass", "parameters"),
+    [
+        (_twice, "OUTPUT_EXCEEDS_INPUT_ROWS", {}),
+        (_first_only, "INPUT_NOT_FULLY_CONSUMED", {}),
+        (_short, "RESULT_ROWS_MISMATCH", {"output_length": "2", "input_length": "3"}),
+    ],
+)
+def test_scalar_pandas_iterator_checks_the_rows(f: Any, klass: str, parameters: dict[str, str]) -> None:
+    with pytest.raises(kerrors.PySparkRuntimeError) as err:
+        run(SQL_SCALAR_PANDAS_ITER_UDF, f, LongType(), [batch(0, a=[1, 2]), batch(0, a=[3]), END])
+    assert error_class(err) == klass
+    assert params(err) == parameters
+
+
+def test_scalar_pandas_iterator_checks_what_the_udf_returns() -> None:
+    with pytest.raises(kerrors.PySparkTypeError) as err:
+        run(SQL_SCALAR_PANDAS_ITER_UDF, lambda series: ([1] for _ in series), LongType(), _iter_frames())
+    assert error_class(err) == "UDF_RETURN_TYPE"
+    assert params(err) == {"expected": "iterator of pandas.Series", "actual": "iterator of list"}
+
+
+def test_scalar_arrow_iterator() -> None:
+    def one(arrays: Iterator[Any]) -> Iterator[Any]:
+        for a in arrays:
+            yield pa.compute.add(a, 1)
+
+    def two(pairs: Iterator[Any]) -> Iterator[Any]:
+        for a, b in pairs:
+            yield pa.compute.multiply(a, b)
+
+    out = run(SQL_SCALAR_ARROW_ITER_UDF, one, LongType(), [batch(0, a=[1, 2]), batch(0, a=[3]), END])
+    assert rows(out) == [{"_0": 2}, {"_0": 3}, {"_0": 4}]
+    out = run(SQL_SCALAR_ARROW_ITER_UDF, two, LongType(), _iter_frames())
+    assert rows(out) == [{"_0": 10}, {"_0": 40}, {"_0": 90}]
+
+
+def _arrow_short(arrays: Iterator[Any]) -> Iterator[Any]:
+    for a in arrays:
+        yield a.slice(0, 1)
+
+
+@pytest.mark.parametrize(
+    ("f", "klass", "parameters"),
+    [
+        (_twice, "OUTPUT_EXCEEDS_INPUT_ROWS", {}),
+        (_first_only, "INPUT_NOT_FULLY_CONSUMED", {}),
+        (_arrow_short, "RESULT_ROWS_MISMATCH", {"output_length": "2", "input_length": "3"}),
+    ],
+)
+def test_scalar_arrow_iterator_checks_the_rows(f: Any, klass: str, parameters: dict[str, str]) -> None:
+    with pytest.raises(kerrors.PySparkRuntimeError) as err:
+        run(SQL_SCALAR_ARROW_ITER_UDF, f, LongType(), [batch(0, a=[1, 2]), batch(0, a=[3]), END])
+    assert error_class(err) == klass
+    assert params(err) == parameters
+
+
+def test_scalar_arrow_iterator_checks_what_the_udf_returns() -> None:
+    with pytest.raises(kerrors.PySparkTypeError) as err:
+        run(SQL_SCALAR_ARROW_ITER_UDF, lambda arrays: ([1] for _ in arrays), LongType(), _iter_frames())
+    assert error_class(err) == "UDF_RETURN_TYPE"
+    assert params(err) == {"expected": "iterator of pyarrow.Array", "actual": "iterator of list"}
 
 
 # --- the Spark checks, on their own ---

@@ -209,6 +209,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_ARTIFACT_REFUSED" : {
+    "message" : [
+      "The Python artifact <name> cannot be used by UDF workers: <reason>. Add a smaller or a well-formed artifact (zip, jar, tar, tar.gz or tgz archives), or raise the server's artifact limit."
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
     "message" : [
       "The Python UDF <name>@<version> is registered with eval type <registered> but the plan calls it as <called> (eval type <evalType>): register the function on the executing session as the kind of call the query makes."
