@@ -43,13 +43,17 @@
 
 mod access;
 mod action;
+mod admin_view;
 mod admission;
+mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+pub mod catalog_decl;
+pub mod catalog_registry;
 mod char_write;
 mod collation_defaults;
 mod column;
@@ -57,24 +61,33 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+pub mod egress;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
+#[cfg(test)]
+mod lineage_tests;
+#[cfg(feature = "unstable-ir")]
+mod local_relation;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
 mod monitor;
 mod nested_value;
+mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod profile_history;
 mod python_udfs;
 mod query_fold;
 mod recursion;
@@ -85,11 +98,14 @@ mod runtime;
 mod scripting;
 mod session;
 mod sessions;
+pub mod spark_catalog;
 mod sql_functions;
 mod sql_path;
 mod store;
 mod store_catalog;
 mod system;
+mod system_catalogs;
+mod system_groups;
 mod table_commands;
 mod telemetry;
 mod trace_context;
@@ -99,10 +115,12 @@ mod variables;
 mod view_schema;
 mod window;
 
-pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
+pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
-pub use system::register_build_features;
+pub use system::{capabilities, register_build_features, register_surface};
 
 pub mod agent;
 
@@ -111,7 +129,7 @@ pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
-    JoinType, StorageLevel,
+    JoinType, ObservedSink, StorageLevel,
 };
 pub use explain::Estimate;
 pub use explain_graph::{
@@ -132,9 +150,14 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].

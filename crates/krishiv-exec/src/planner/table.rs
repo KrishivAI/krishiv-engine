@@ -16,6 +16,7 @@ use krishiv_types::batch::Batch;
 use crate::error::Result;
 use crate::operator::Sink;
 use crate::operators::{MemoryScan, ScanPushdown, SpilledScan};
+use crate::planner::row_level::{RowLevelOperation, RowLevelTable};
 use crate::planner::write::{TableCapabilities, WriteRequest};
 
 /// A table the executor can read: the scan factory the planner pushes
@@ -41,6 +42,15 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         None
     }
 
+    /// Whether a scan of the table can read no column at all and still
+    /// return its rows: the reader takes each batch's row count from the
+    /// files' own metadata, so a `COUNT(*)` reads only footers. The default
+    /// says no, and the optimizer keeps one column; a table whose rows on
+    /// disk are not its rows (deletion files) must keep the default.
+    fn reads_rows_without_columns(&self) -> bool {
+        false
+    }
+
     /// The write modes the table declared (Spark's `TableCapability`). The
     /// session checks them before planning a write; the default declares
     /// none, so a read-only table is never offered one.
@@ -64,6 +74,14 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         }
         .into())
     }
+
+    /// The table as `op` changes it (`DELETE`, `UPDATE`, `MERGE`; design
+    /// `P3-PR-DML-row-level.md`), at the version this provider reads. The default offers
+    /// none: the statement is refused as Spark refuses it for a v1 table.
+    fn row_level(&self, op: RowLevelOperation) -> Option<Arc<dyn RowLevelTable>> {
+        let _ = op;
+        None
+    }
 }
 
 /// Finds the provider of the table a resolved scan reads, at the version
@@ -84,6 +102,12 @@ pub struct ProviderStatistics(pub Arc<dyn TableProviderResolver>);
 impl Statistics for ProviderStatistics {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
         self.0.provider(scan).ok()?.statistics()
+    }
+
+    fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
+        self.0
+            .provider(scan)
+            .is_ok_and(|p| p.reads_rows_without_columns())
     }
 }
 
@@ -253,7 +277,8 @@ impl TableProviderResolver for MemoryTables {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>> {
         let ReadSource::Table { name, .. } = &scan.source else {
             return Err(KrishivUnsupportedFeature {
-                feature: "reading files by path from in-memory tables".to_owned(),
+                feature: "reading files by path or a local relation from in-memory tables"
+                    .to_owned(),
             }
             .into());
         };

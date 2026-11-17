@@ -40,6 +40,7 @@ use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
 use super::collect::{CollectAcc, VectorAcc};
+use super::histogram::HistAcc;
 use super::hll::{self, HllAcc};
 use super::listagg::ListAggAcc;
 use super::mode::ModeAcc;
@@ -315,6 +316,8 @@ enum Kind {
     Approx(GkAcc),
     /// `approx_count_distinct`: HyperLogLog++ registers (see `hll`).
     Hll(HllAcc),
+    /// `histogram_numeric`: Spark's numeric histograms (see `histogram`).
+    Hist(HistAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -488,6 +491,7 @@ impl Accumulator {
             }
             (F::PercentileApprox { .. }, _) => Kind::Approx(GkAcc::default()),
             (F::ApproxCountDistinct { p }, _) => Kind::Hll(HllAcc::new(*p)),
+            (F::HistogramNumeric { nb }, _) => Kind::Hist(HistAcc::new(*nb)),
             (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
             // `CollectAcc::new` refuses the element types the shared key
             // encoding does not order, as `result_type` does.
@@ -629,7 +633,9 @@ impl Accumulator {
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
             // plain vectors; `size` counts them exactly.
-            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Udf(_) => Vec::new(),
+            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Hist(_) | Kind::Udf(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -643,6 +649,7 @@ impl Accumulator {
             Kind::Exact(e) => e.size(),
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
+            Kind::Hist(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -729,6 +736,7 @@ impl Accumulator {
             Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
+            Kind::Hist(h) => h.projected(new, arg),
             _ => 0,
         };
         vecs + heap
@@ -800,6 +808,7 @@ impl Accumulator {
             Kind::Exact(e) => e.resize(n),
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
+            Kind::Hist(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -882,6 +891,7 @@ impl Accumulator {
             Kind::Exact(e) => e.reserve(new),
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
+            Kind::Hist(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1063,6 +1073,7 @@ impl Accumulator {
             | Kind::MinMaxStruct { .. }
             | Kind::Collect(_)
             | Kind::Approx(_)
+            | Kind::Hist(_)
             | Kind::Hll(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
@@ -1082,6 +1093,13 @@ impl Accumulator {
 }
 
 mod small_fold;
+
+mod dense;
+
+/// The dense folds against the per-row loop.
+#[cfg(test)]
+#[cfg(not(loom))]
+mod dense_tests;
 
 #[cfg(test)]
 #[cfg(not(loom))]
@@ -1109,6 +1127,7 @@ mod struct_extremum_tests;
 
 mod results;
 use results::*;
+pub(crate) use results::{decimal_unscaled_in, narrow};
 
 mod output;
 

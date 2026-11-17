@@ -51,6 +51,7 @@ from .resources import evict_page_cache
 from .runner import cold_record, git_info, load_queries, machine_info
 
 REFERENCE = "duckdb"
+KRISHIV_UNVERIFIED = "unverified: DuckDB gave no answer; the other engines are checked against these rows"
 DEFAULT_ENGINES = ["krishiv", "duckdb", "polars", "datafusion", "sail", "spark-local"]
 SUITE_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
 
@@ -201,11 +202,14 @@ def judge(name: str, r: list, ref: list, qm: Mapping[str, Query], rows: Mapping[
     return v
 
 
-def _note_peak(peaks: dict[str, int], name: str, eng: Engine) -> None:
-    """Keeps the highest per-run peak RSS of ``eng`` (its worker process tree) seen for the query."""
+def _note_peak(peaks: dict[str, int], name: str, eng: Engine, writes: dict[str, int] | None = None) -> None:
+    """Keeps the highest per-run peak RSS of ``eng`` (its worker process tree) seen for the query, and in ``writes``
+    the most bytes one run wrote to storage (spill)."""
     peak = eng.last_peak_rss_bytes
     if peak is not None:
         peaks[name] = max(peaks.get(name, 0), peak)
+    if writes is not None and (w := eng.last_write_bytes) is not None:
+        writes[name] = max(writes.get(name, 0), w)
 
 
 def _baselines(qm, engines, live, nrows, entry, samples) -> dict[str, dict | None]:
@@ -341,6 +345,7 @@ def sequential_query(
     cache: RefCache | None = None,
     suite: str = "",
     cold_root: Path | None = None,
+    krishiv_reference: bool = False,
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
@@ -349,7 +354,10 @@ def sequential_query(
 
     With a ``cache`` the reference engine's answer, samples, CPU and peak are read from it when the same query over the
     same data was measured before with this version, threads, memory and sample count, and stored after a fresh run;
-    the other engines are always run and checked against the cached rows."""
+    the other engines are always run and checked against the cached rows.
+
+    ``krishiv_reference``: when DuckDB gives no answer (out of memory, timeout), Krishiv is still timed, marked
+    unverified, and the later engines are checked against Krishiv's rows instead of failing untimed."""
     load_before = loadavg()
     order = [REFERENCE] + [n for n in ("krishiv",) if n in names and n != REFERENCE]
     order += [n for n in names if n not in order]
@@ -358,6 +366,7 @@ def sequential_query(
     infos: dict[str, dict] = {}
     samples: dict[str, list[float]] = {}
     peaks: dict[str, int] = {}
+    writes: dict[str, int] = {}
     cpus: dict[str, list[float]] = {}
     nrows = 0
     for name in order:
@@ -380,6 +389,8 @@ def sequential_query(
         # Polars' streaming engine ("polars-streaming") and the result says so.
         attempts = [name, "polars-streaming"] if name == "polars" else [name]
         for attempt, run_name in enumerate(attempts):
+            peaks.pop(name, None)  # a crashed attempt's figures are not the retry's
+            writes.pop(name, None)
             eng = ProcessEngine(run_name, threads, memory_gb, timeout_s, cap_gb=cap_gb)
             phase = "answer"
             crashed = False
@@ -391,6 +402,12 @@ def sequential_query(
                 if name == REFERENCE:
                     nrows = result_rows(qm[REFERENCE], rows[name])
                     verdicts[name] = {"status": "ok"}
+                elif REFERENCE not in rows and krishiv_reference and name == "krishiv":
+                    nrows = result_rows(qm[name], rows[name])
+                    verdicts[name] = {"status": "ok", "verified": False, "note": KRISHIV_UNVERIFIED}
+                elif REFERENCE not in rows and krishiv_reference and verdicts.get("krishiv", {}).get("status") == "ok":
+                    verdicts[name] = judge(name, rows[name], rows["krishiv"], qm, {})
+                    verdicts[name]["reference"] = "krishiv (DuckDB gave no answer)"
                 elif REFERENCE not in rows:
                     verdicts[name] = _fail("error", "no DuckDB reference result")
                 else:
@@ -405,7 +422,7 @@ def sequential_query(
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
                     samples[name].append(_timed(eng, qm[name], nrows, baseline, cold_root))
-                    _note_peak(peaks, name, eng)
+                    _note_peak(peaks, name, eng, writes)
                     if (cpu := eng.last_cpu_seconds) is not None:
                         cpus[name].append(cpu)
                 if profile and name == "krishiv":  # one more run, after the samples, in the worker that took them
@@ -442,6 +459,9 @@ def sequential_query(
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}
     _finish(entry, samples, peaks, cpus, qm, {}, False)  # without DuckDB samples: medians and peaks, no ratios
+    for name, w in writes.items():
+        if name in samples:  # most bytes one timed run wrote to storage (spill); absent for a cached reference
+            entry["engines"][name]["spill_bytes_max"] = w
     entry["load_before"], entry["load_after"] = load_before, loadavg()
     return entry, infos
 
@@ -507,6 +527,7 @@ def run_reproduce(
     reference_cache: bool = True,
     refresh_reference: bool = False,
     cold: bool = False,
+    krishiv_reference: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -551,6 +572,7 @@ def run_reproduce(
                 "timeout_s": timeout_s,
                 "mode": "sequential: one engine alive at a time" if sequential else "interleaved",
                 "worker_cgroup_gb": cap_gb,
+                "krishiv_reference": krishiv_reference,
             },
             "theirs": {"runs": runs, "timeout_s": their_timeout_s, "source": pub["source"]},
             "cache_policy": (
@@ -570,7 +592,19 @@ def run_reproduce(
             for qm in queries:
                 qid = qm[REFERENCE].id
                 ent, infos = sequential_query(
-                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite, cold_root
+                    qm,
+                    names,
+                    ds,
+                    threads,
+                    memory_gb,
+                    cap_gb,
+                    2 * reps,
+                    timeout_s,
+                    profile,
+                    cache,
+                    suite,
+                    cold_root,
+                    krishiv_reference,
                 )
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)

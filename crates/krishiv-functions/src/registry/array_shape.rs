@@ -12,7 +12,7 @@
 
 use krishiv_common::error::{
     DatatypeMismatchSequenceWrongInputTypes, DatatypeMismatchUnexpectedInputType, KrishivError,
-    KrishivUnsupportedFeature, WrongNumArgsWithoutSuggestion,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::{ArrayType, DataType};
 
@@ -128,8 +128,49 @@ fn sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
     })
 }
 
+/// The result element type of `sequence(start, stop[, step])` over temporal bounds (Spark 4.2.0): `DATE` for two dates, else a timestamp
+/// (`TIMESTAMP_NTZ` only when no bound is a plain `TIMESTAMP`; a `DATE` beside either takes its type). `None` unless some bound is
+/// temporal and none is anything else.
+fn temporal_sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
+    if c.args().len() < 2 {
+        return None;
+    }
+    let is_time = |t: &DataType| {
+        matches!(
+            t,
+            DataType::Date | DataType::Timestamp | DataType::TimestampNtz
+        )
+    };
+    let bounds: Vec<Option<&DataType>> = (0..2).map(|i| c.data_type(i)).collect();
+    // An untyped NULL bound, or (under ANSI) a string, is cast to the other bound's type; at least one bound is a date or timestamp.
+    let castable = |t: &Option<&DataType>| match t {
+        None => true,
+        Some(DataType::String) => c.ansi(),
+        Some(t) => is_time(t),
+    };
+    if !bounds.iter().any(|t| t.is_some_and(is_time)) || !bounds.iter().all(castable) {
+        return None;
+    }
+    let has = |want: &DataType| bounds.contains(&Some(want));
+    Some(if has(&DataType::Timestamp) {
+        DataType::Timestamp
+    } else if has(&DataType::TimestampNtz) {
+        DataType::TimestampNtz
+    } else {
+        DataType::Date
+    })
+}
+
 /// `sequence`'s inputs: every argument is cast to the widest integral type.
 fn sequence_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if let Some(t) = temporal_sequence_type(c) {
+        // The bounds are cast to the common temporal type; the step keeps its own (checked in the result rule).
+        let mut v = vec![InputType::Exact(t.clone()), InputType::Exact(t)];
+        if c.args().len() > 2 {
+            v.push(InputType::Any);
+        }
+        return v;
+    }
     match sequence_type(c) {
         Some(t) => vec![InputType::Exact(t); c.args().len()],
         None => vec![InputType::Any; c.args().len()],
@@ -155,17 +196,34 @@ fn sequence(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             c.any_nullable(),
         ));
     }
-    let temporal = |t: Option<&DataType>| {
-        matches!(
-            t,
-            Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
-        )
-    };
-    if temporal(c.data_type(0)) || temporal(c.data_type(1)) {
-        return Err(KrishivUnsupportedFeature {
-            feature: "sequence over dates or timestamps".to_owned(),
+    if let Some(t) = temporal_sequence_type(c) {
+        // The step is a calendar, year-month or day-time interval; anything else (an integral, a string, an untyped NULL) is a type error.
+        let interval = |i: usize| {
+            matches!(
+                c.data_type(i),
+                Some(
+                    DataType::CalendarInterval
+                        | DataType::YearMonthInterval { .. }
+                        | DataType::DayTimeInterval { .. }
+                )
+            )
+        };
+        if n == 3 && !interval(2) {
+            return Err(DatatypeMismatchSequenceWrongInputTypes {
+                sql_expr: call_sql("sequence", c),
+                function_name: "`sequence`".to_owned(),
+                start_type: "(\"TIMESTAMP\" or \"TIMESTAMP_NTZ\" or \"DATE\")".to_owned(),
+                step_type:
+                    "(\"INTERVAL\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\")"
+                        .to_owned(),
+                other_start_type: "\"INTEGRAL\"".to_owned(),
+            }
+            .into());
         }
-        .into());
+        return Ok(ArgType::new(
+            DataType::Array(ArrayType::new(t, false).into()),
+            c.any_nullable(),
+        ));
     }
     Err(DatatypeMismatchSequenceWrongInputTypes {
         sql_expr: call_sql("sequence", c),

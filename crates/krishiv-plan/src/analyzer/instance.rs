@@ -158,6 +158,15 @@ pub(super) fn renumbered(
                 input: renumbered(input, s, memo)?,
                 offset: Arc::clone(offset),
             },
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => PlanNode::Sample {
+                input: renumbered(input, s, memo)?,
+                bounds: *bounds,
+                seed: *seed,
+            },
             PlanNode::SubqueryAlias {
                 input,
                 alias,

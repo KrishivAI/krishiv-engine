@@ -85,6 +85,15 @@ pub struct ExecConfig {
     /// hashes take a fixed seed (a constant unless
     /// `krishiv.exec.seed` names one) (`krishiv.deterministicOrder`).
     pub deterministic_order: bool,
+    /// A `UNION ALL` of inputs that are each one partition (Spark's
+    /// `SinglePartition`) is one partition: its inputs run in turn at index
+    /// 0 (`krishiv.sql.unionOutputPartitioning`, Spark's
+    /// `spark.sql.unionOutputPartitioning`).
+    pub union_output_partitioning: bool,
+    /// Drivers join small batches before a sink that asks for it and the
+    /// operators of its pipeline that do (`krishiv.exec.coalesceInput`;
+    /// Polars item 2, J1).
+    pub coalesce_input: bool,
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -111,6 +120,8 @@ impl Default for ExecConfig {
             shared_broadcast_bytes: None,
             join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
+            union_output_partitioning: true,
+            coalesce_input: true,
         }
     }
 }
@@ -163,6 +174,14 @@ impl ExecConfig {
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        let union_output_partitioning = config
+            .get(&krishiv_common::config::UNION_OUTPUT_PARTITIONING)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let coalesce_input = config
+            .get(&krishiv_common::config::EXEC_COALESCE_INPUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -184,6 +203,8 @@ impl ExecConfig {
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
             join_idle_spill_after,
+            union_output_partitioning,
+            coalesce_input,
             ..Self::default()
         }
     }
@@ -226,11 +247,138 @@ pub struct QueryContext {
     /// The scans' decode working sets (`krishiv_io::ScanGate`), made on
     /// first use with a budget of a quarter of the query's memory limit.
     scan_gate: OnceLock<Arc<krishiv_io::ScanGate>>,
+    /// The partial states of each observing node (`Dataset.observe`), by name
+    /// and the planner's instance number (see [`Self::observe_partial`]).
+    observed: Mutex<BTreeMap<(String, u32), Observed>>,
+    /// The memory consumer that holds the retained partial states of `observed` (charged to the
+    /// pool, so a variable-size metric such as `collect_list` cannot outgrow the query's limit).
+    observed_memory: Mutex<Option<Reservation>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
     blocking: AtomicUsize,
     blocking_idle: Event,
+}
+
+/// One instance of an observation's node and the partial states of its
+/// drivers.
+struct Observed {
+    finalizer: Arc<crate::aggregate::Finalizer>,
+    /// The drivers' states, kept in `(partition, lane)` order whatever order they arrived in, so
+    /// an order-sensitive metric (`collect_list`, `first`, a float `sum`) is the same every run.
+    partials: Vec<arrow_array::RecordBatch>,
+    /// The `(partition, lane)` of each of `partials`, ascending.
+    order: Vec<(u32, usize)>,
+}
+
+/// Puts `item` at the place `key` sorts to in `keys`, keeping `items` parallel to them; equal keys
+/// keep their arrival order.
+fn insert_in_order<T>(
+    keys: &mut Vec<(u32, usize)>,
+    items: &mut Vec<T>,
+    key: (u32, usize),
+    item: T,
+) {
+    let at = keys.partition_point(|k| *k <= key);
+    keys.insert(at, key);
+    items.insert(at, item);
+}
+
+#[cfg(test)]
+mod forward_observed_tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+
+    use crate::aggregate::Finalizer;
+    use crate::{ExecConfig, QueryContext, QueryId, WorkloadClass};
+
+    fn states(rows: i64) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
+        )
+        .unwrap()
+    }
+
+    fn query(id: u64, pool: Arc<dyn MemoryPool>) -> Arc<QueryContext> {
+        QueryContext::new(
+            QueryId(id),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool,
+        )
+    }
+
+    fn root() -> Arc<TreePool> {
+        TreePool::new(&MemoryConfig {
+            limit: None,
+            quantum: 1,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        })
+    }
+
+    /// The partials move from the task's pool to the query's: never counted twice, so a query
+    /// pool that holds them once (but not twice) takes them.
+    #[test]
+    fn forwarded_partials_are_moved_not_charged_twice() {
+        let finalizer = Finalizer::count_for_tests("m").unwrap();
+        let (a, b) = (states(40_000), states(40_000));
+        let once = a.get_array_memory_size() + b.get_array_memory_size();
+        let root = root();
+        let parent = query(1, root.child("q", Some(once + once / 2)));
+        let task = query(2, parent.pool().child("task", None));
+        task.observe_partial(&finalizer, (0, 0), a).unwrap();
+        task.observe_partial(&finalizer, (1, 0), b).unwrap();
+        assert_eq!(parent.pool().reserved(), once);
+        task.forward_observed_to(&parent).unwrap();
+        assert_eq!(task.pool().reserved(), 0);
+        assert_eq!(parent.pool().reserved(), once);
+    }
+
+    /// A parent that cannot hold the partials fails the forward and leaves nothing charged to
+    /// the task.
+    #[test]
+    fn a_failed_forward_releases_the_task_charge() {
+        let finalizer = Finalizer::count_for_tests("m").unwrap();
+        let a = states(40_000);
+        let bytes = a.get_array_memory_size();
+        let parent = query(1, root().child("q", Some(bytes / 2)));
+        let task = query(2, root().child("task", None));
+        task.observe_partial(&finalizer, (0, 0), a).unwrap();
+        assert_eq!(task.pool().reserved(), bytes);
+        let e = task.forward_observed_to(&parent).unwrap_err();
+        assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
+        assert_eq!(task.pool().reserved(), 0);
+    }
+}
+
+#[cfg(test)]
+mod observe_order_tests {
+    use super::insert_in_order;
+
+    #[test]
+    fn partials_merge_in_partition_and_lane_order_whatever_the_arrival_order() {
+        let sources = [(0, 0), (0, 1), (1, 0), (2, 0), (2, 1)];
+        for rot in 0..sources.len() {
+            for rev in [false, true] {
+                let mut arrival = sources.to_vec();
+                arrival.rotate_left(rot);
+                if rev {
+                    arrival.reverse();
+                }
+                let (mut keys, mut items) = (Vec::new(), Vec::new());
+                for k in arrival {
+                    insert_in_order(&mut keys, &mut items, k, k);
+                }
+                assert_eq!(items, sources);
+            }
+        }
+    }
 }
 
 impl fmt::Debug for QueryContext {
@@ -266,11 +414,122 @@ impl QueryContext {
             threads: Mutex::new(BTreeMap::new()),
             spills: Mutex::new(BTreeMap::new()),
             scan_gate: OnceLock::new(),
+            observed: Mutex::new(BTreeMap::new()),
+            observed_memory: Mutex::new(None),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
             blocking: AtomicUsize::new(0),
             blocking_idle: Event::default(),
         })
+    }
+
+    /// A driver's partial states of an observation: its task metric, sent
+    /// when the driver's input ended (or was abandoned). The states of one
+    /// instance of the node merge in [`Self::observed`]. The retained states
+    /// are charged to the query's pool.
+    ///
+    /// # Errors
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the pool cannot hold them.
+    pub(crate) fn observe_partial(
+        &self,
+        finalizer: &Arc<crate::aggregate::Finalizer>,
+        source: (u32, usize),
+        states: arrow_array::RecordBatch,
+    ) -> Result<()> {
+        let bytes = states.get_array_memory_size();
+        {
+            let mut held = lock(&self.observed_memory);
+            let reservation = held.get_or_insert_with(|| self.observed_consumer().reservation());
+            reservation.try_grow(bytes)?;
+        }
+        let mut all = lock(&self.observed);
+        let o = all
+            .entry((finalizer.name().to_owned(), finalizer.instance()))
+            .or_insert_with(|| Observed {
+                finalizer: Arc::clone(finalizer),
+                partials: Vec::new(),
+                order: Vec::new(),
+            });
+        insert_in_order(&mut o.order, &mut o.partials, source, states);
+        Ok(())
+    }
+
+    /// Moves this context's observation partials to `parent`, for a task of a staged run whose
+    /// own context ends before the query's (the parent's `observed` then reports them). Each
+    /// partial's bytes move: released from this context's pool before `parent`'s is charged, so
+    /// they are never counted twice (the task's pool is usually a child of the query's).
+    ///
+    /// # Errors
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the parent's pool cannot hold them; this context's charge
+    /// is released all the same.
+    #[doc(hidden)]
+    pub fn forward_observed_to(&self, parent: &Self) -> Result<()> {
+        let taken = std::mem::take(&mut *lock(&self.observed));
+        // Dropped on every exit, an error included: what it still holds goes back.
+        let mut held = lock(&self.observed_memory).take();
+        for o in taken.into_values() {
+            for (source, states) in o.order.into_iter().zip(o.partials) {
+                if let Some(reservation) = held.as_mut() {
+                    reservation.shrink(states.get_array_memory_size());
+                }
+                parent.observe_partial(&o.finalizer, source, states)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn observed_consumer(&self) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register(Arc::clone(&self.pool), "observed-metrics", None)
+    }
+
+    /// The observations (`Dataset.observe`) of the query so far: each name's
+    /// metrics as a one-row batch, the columns named as the metrics are.
+    /// An observation whose node never ran is absent. Where a name has
+    /// several instances in the plan (a self-join of an observed relation)
+    /// the last one's states are the observation's, not their sum, as in
+    /// Spark.
+    ///
+    /// # Errors
+    /// A metric's own error (finalizing runs its expressions), or
+    /// `UNABLE_TO_ACQUIRE_MEMORY` (the first one, by name).
+    #[doc(hidden)]
+    pub fn observed(&self) -> Result<BTreeMap<String, arrow_array::RecordBatch>> {
+        self.observed_each()
+            .into_iter()
+            .map(|(n, r)| Ok((n, r?)))
+            .collect()
+    }
+
+    /// [`Self::observed`] with each observation's own outcome: one whose
+    /// finalization fails does not take the others with it.
+    #[doc(hidden)]
+    pub fn observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
+        let all = lock(&self.observed);
+        // Keys sort by name then instance: the last one of a name overwrites.
+        let last: BTreeMap<&String, &Observed> =
+            all.iter().map(|((name, _), o)| (name, o)).collect();
+        let consumer = self.observed_consumer();
+        last.into_iter()
+            .map(|(name, o)| {
+                // The merge table is charged while it lives.
+                let mut reservation = consumer.reservation();
+                (
+                    name.clone(),
+                    o.finalizer.finalize(&o.partials, &mut reservation),
+                )
+            })
+            .collect()
+    }
+
+    /// [`Self::observed_each`] for the delivery of the observations: the retained partial states
+    /// and their reservation are released after, so a query a caller still holds (an ended result
+    /// stream) keeps no observation memory. A later read sees only states sent since.
+    #[doc(hidden)]
+    pub fn take_observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
+        let out = self.observed_each();
+        lock(&self.observed).clear();
+        *lock(&self.observed_memory) = None;
+        out
     }
 
     /// The query id.
@@ -536,6 +795,15 @@ pub struct TaskContext {
     /// The first partition id of the driver's pipeline-group member (the
     /// offset of a `UNION ALL` child).
     partition_base: u32,
+    /// The first partition id an operator numbers its input's partitions
+    /// from, so that an id minus it is Spark's partition index of the
+    /// operator's input: its `UNION ALL` branch's own base below the union;
+    /// above a plain union, the base that puts this branch after the
+    /// partitions of the branches before it; above a coalesced union, the
+    /// member's own base (every branch at index 0). Computed by
+    /// `numbering.rs` from `Pipeline::origins`. The member's own base for a
+    /// source; the group's top numbering for the sink.
+    numbering_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -568,6 +836,7 @@ impl TaskContext {
             partition: 0,
             lane: None,
             partition_base: 0,
+            numbering_base: 0,
         }
     }
 
@@ -596,7 +865,24 @@ impl TaskContext {
     #[must_use]
     pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
         self.partition_base = base;
+        self.numbering_base = base;
         self
+    }
+
+    /// The same context for an operator that numbers its input's
+    /// partitions from `base` (see [`Self::numbering_base`]).
+    #[must_use]
+    pub(crate) fn with_numbering_base(mut self, base: u32) -> Self {
+        self.numbering_base = base;
+        self
+    }
+
+    /// The first partition id this operator numbers its input's partitions
+    /// from: a partition (or split) id minus this is Spark's partition index
+    /// of the operator's input, so a sample in a `UNION ALL` branch draws as
+    /// the branch's own `SampleExec` does.
+    pub(crate) fn numbering_base(&self) -> u32 {
+        self.numbering_base
     }
 
     /// The first partition id of this driver's pipeline-group member: the
@@ -619,6 +905,9 @@ impl TaskContext {
     /// For a breaker's source side (in `Source::global_state`): the
     /// finalized global state of its sink side (see
     /// [`PipelineBuilder::set_breaker_source`](crate::PipelineBuilder::set_breaker_source)).
+    /// A pipeline's sink sees the same state in `Sink::global_state` (from
+    /// its group's first member, for a fan-in): a sink that continues the
+    /// breaker's state adopts it (`aggregate/distinct.rs` `KeyFeed`).
     pub fn dependency(&self) -> Option<&GlobalState> {
         self.dependency.as_ref()
     }

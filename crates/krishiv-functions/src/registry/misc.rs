@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The misc scalar signatures: `version`, `current_database`
-//! (`current_schema`), `current_catalog`, the `input_file_*` placeholders,
+//! (`current_schema`), `current_catalog`, the `input_file_*` functions (their
+//! no-file binding; the analyzer binds the calls in a file scan's pipeline),
 //! `monotonically_increasing_id`, `spark_partition_id`, `typeof` and the
 //! seeded random functions (`rand` / `random`, `randn`, `uuid`, `uniform`,
 //! `randstr`).

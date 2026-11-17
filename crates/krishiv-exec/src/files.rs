@@ -58,6 +58,7 @@ use krishiv_types::{DataType, StructType};
 use object_store::path::Path;
 
 use crate::error::Result;
+use crate::operators::PathRoots;
 
 mod user_schema;
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
@@ -286,6 +287,16 @@ pub struct FileListing {
     pub partition_columns: Arc<[FieldRef]>,
     /// The parsed read options.
     pub options: FormatOptions,
+    /// The roots `_metadata.file_path` prints the files under: per read path, the scheme and
+    /// authority it was written with.
+    pub path_roots: PathRoots,
+}
+
+/// The store and key of `at` and the root Spark prints the files under it with, for a cloud
+/// path (a local path prints under its store id, `file:`).
+fn spark_root(at: &LocatedPath) -> Option<(StoreId, Path, String)> {
+    let root = parse_object_url(&at.display).ok()?.spark_root()?;
+    Some((at.store.clone(), at.path.clone(), root))
 }
 
 impl fmt::Debug for FileListing {
@@ -473,6 +484,7 @@ impl FileReads {
         mode.skip_all_dirs = mode.skip_foreign_dirs && !partitioned;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
+        let mut roots: Vec<(StoreId, Path, String)> = Vec::new();
         for p in paths {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
@@ -480,7 +492,8 @@ impl FileReads {
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
-                Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                let at = Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                roots.extend(spark_root(&at));
                 continue;
             }
             // The store is instantiated from the plan's option values
@@ -488,7 +501,9 @@ impl FileReads {
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
             Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
+            roots.extend(spark_root(&at));
         }
+        let path_roots = PathRoots::new(roots);
         // By store, then path; of a file reached through overlapping roots the entry with the fewest partition
         // segments (the nearest root's) comes first and is the one kept.
         listed.sort_by(|a, b| {
@@ -564,6 +579,7 @@ impl FileReads {
                 schema,
                 partition_columns: partition_columns.into(),
                 options,
+                path_roots,
             });
         }
         let partition_columns = partition_columns(&discovered, infer)?;
@@ -575,6 +591,7 @@ impl FileReads {
                 schema,
                 partition_columns: partition_columns.into(),
                 options,
+                path_roots,
             });
         }
         if files.is_empty() {
@@ -583,20 +600,33 @@ impl FileReads {
             }
             .into());
         }
+        let scan_options = krishiv_io::ScanOptions::for_read(&self.session, &options);
         let schema = if merge {
             // Every file's own schema, merged by column name in first-seen order; names match
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
             let case_sensitive = self.case_sensitive();
             let mut merged: Option<SchemaRef> = None;
             for file in &files {
-                let one = krishiv_io::infer_schema_cached(
+                let one = match krishiv_io::infer_schema_cached(
                     format.as_ref(),
                     &self.io,
                     std::slice::from_ref(file),
                     &options,
                 )
                 .await
-                .map_err(|e| e.into_error(&file.display_path()))?;
+                {
+                    Ok(one) => one,
+                    // Spark's `readParquetFootersInParallel`: a footer the
+                    // scan settings skip leaves the file out of the merge.
+                    Err(e) => {
+                        let e = e.into_error(&file.display_path());
+                        if !scan_options.skips(&e) {
+                            return Err(e);
+                        }
+                        tracing::warn!(path = file.display_path(), error = %e, "skipped a file whose schema cannot be read");
+                        continue;
+                    }
+                };
                 merged = Some(match merged {
                     None => one,
                     Some(m) => merge_schemas(&m, &one, case_sensitive)?,
@@ -608,9 +638,26 @@ impl FileReads {
                 })
             })?
         } else {
-            krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options)
-                .await
-                .map_err(|e| e.into_error(&files[0].display_path()))?
+            match krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options).await
+            {
+                Ok(schema) => schema,
+                Err(e) => {
+                    // Without `mergeSchema` Spark's Parquet inference reads
+                    // the first file alone: when the scan settings skip its
+                    // error, nothing is left to infer from. Other formats
+                    // read every file (CSV, JSON) or keep their own rule,
+                    // so their errors stand.
+                    let e = e.into_error(&files[0].display_path());
+                    if format.name() != "parquet" || !scan_options.skips(&e) {
+                        return Err(e);
+                    }
+                    tracing::warn!(path = files[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
+                    return Err(UnableToInferSchema {
+                        format: display_name(format.name()),
+                    }
+                    .into());
+                }
+            }
         };
         let schema = with_partition_columns(&schema, &partition_columns, self.case_sensitive());
         Ok(FileListing {
@@ -619,6 +666,7 @@ impl FileReads {
             schema,
             partition_columns: partition_columns.into(),
             options,
+            path_roots,
         })
     }
 
@@ -670,7 +718,7 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         mode: &ListMode,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
-    ) -> Result<()> {
+    ) -> Result<LocatedPath> {
         let first = text.find(['*', '?', '[', '{']).unwrap_or(text.len());
         let cut = text[..first].rfind('/').map_or(0, |i| i + 1);
         let (prefix, rest) = text.split_at(cut);
@@ -791,7 +839,7 @@ impl FileReads {
             };
             Box::pin(self.list_path(&found, &inner, false, out)).await?;
         }
-        Ok(())
+        Ok(at)
     }
 
     /// The `recursiveFileLookup` and `basePath` read options.
@@ -1601,7 +1649,7 @@ mod tests {
             ("gs://bucket/k", "gs://bucket", "k", "gs://bucket/k"),
             (
                 "abfss://cont@acct.dfs.core.windows.net/k",
-                "abfss://cont@acct",
+                "abfss://cont@acct.dfs.core.windows.net",
                 "k",
                 "abfss://cont@acct.dfs.core.windows.net/k",
             ),

@@ -52,7 +52,7 @@ use crate::schema_map::SchemaMapper;
 pub struct ScanOptions {
     /// `krishiv.io.prefetchBytes`.
     pub prefetch_bytes: u64,
-    /// `spark.sql.files.ignoreCorruptFiles` / the `ignoreCorruptFiles`
+    /// `spark.sql.files.ignoreCorruptFiles` / the per-read `ignoreCorruptFiles`
     /// option: a file that cannot be decoded (bad footer, undecodable data)
     /// ends early, keeping the rows already returned. Storage failures
     /// (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`) and changed files are never
@@ -99,6 +99,21 @@ impl ScanOptions {
             ignore_missing_files: flag("spark.sql.files.ignoreMissingFiles"),
             needs: MetadataNeeds::default(),
         }
+    }
+
+    /// The settings of one read: session config `c`, with the read's own
+    /// `ignoreCorruptFiles` / `ignoreMissingFiles` options taking precedence
+    /// over the session conf, as Spark's `FileSourceOptions`.
+    #[must_use]
+    pub fn for_read(c: &Config, options: &FormatOptions) -> Self {
+        let mut o = Self::from_config(c);
+        if let Some(v) = options.ignore_corrupt_files() {
+            o.ignore_corrupt_files = v;
+        }
+        if let Some(v) = options.ignore_missing_files() {
+            o.ignore_missing_files = v;
+        }
+        o
     }
 }
 
@@ -353,6 +368,9 @@ impl ScanStream {
         };
         let mapper = SchemaMapper::new(req, file_schema, &path)?;
         let file_req = mapper.file_request(req);
+        if file_req.projection.is_empty() {
+            check_unchanged(self.io.clone(), self.file.clone(), &path).await?;
+        }
         let units = format
             .plan_units(meta.as_ref(), &split, &file_req)
             .map_err(|e| e.into_error(&path))?;
@@ -729,9 +747,64 @@ impl ScanStream {
     }
 }
 
+/// A read of no column touches no byte of the file (the row counts come from
+/// the footer, which the metadata cache may already hold), so the file's
+/// presence and version are checked as a column read would find them: a file
+/// deleted or replaced since listing fails as it would there
+/// (`FAILED_READ_FILE.FILE_NOT_EXIST`, which `ignoreMissingFiles` skips, or
+/// `KRISHIV_FILE_CHANGED_DURING_READ`) instead of being counted from a stale
+/// footer.
+async fn check_unchanged(io: IoContext, file: FileRef, path: &str) -> Result<()> {
+    let Some(meta) = io.head(&file.store, &file.path).await? else {
+        return Err(crate::error::not_found(path));
+    };
+    let now = FileRef::from_meta(file.store.clone(), &meta);
+    if !unchanged(&file, &now) {
+        return Err(crate::error::changed(path, &file.version.to_string()));
+    }
+    Ok(())
+}
+
+/// Whether a file listed as `listed` is still that file, as `now` (from a
+/// `head`) shows it. A table format's data file (`VersionToken::Immutable`)
+/// never changes in place, and a `head` cannot give it that version, so only
+/// its presence is checked (#847 re-review B1).
+fn unchanged(listed: &FileRef, now: &FileRef) -> bool {
+    matches!(listed.version, crate::io::VersionToken::Immutable)
+        || (now.version == listed.version && now.size == listed.size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Bytes, Chunk, Ready};
+
+    #[test]
+    fn an_immutable_file_is_checked_for_presence_only() {
+        use crate::io::{FileRef, VersionToken};
+        let file = |version: VersionToken, size: u64| FileRef {
+            store: crate::io::StoreId::new("file"),
+            path: object_store::path::Path::from("t/part-0.parquet"),
+            size,
+            version,
+            modified_micros: None,
+        };
+        let now = file(VersionToken::Modified(7), 100);
+        // A table format's data file: a head's mtime is never its version.
+        assert!(super::unchanged(&file(VersionToken::Immutable, 100), &now));
+        // A listed mtime or size that differs is a changed file.
+        assert!(super::unchanged(
+            &file(VersionToken::Modified(7), 100),
+            &now
+        ));
+        assert!(!super::unchanged(
+            &file(VersionToken::Modified(6), 100),
+            &now
+        ));
+        assert!(!super::unchanged(
+            &file(VersionToken::Modified(7), 99),
+            &now
+        ));
+    }
 
     fn chunk(start: u64, len: u64) -> Chunk {
         let bytes: Vec<u8> = (0..len)

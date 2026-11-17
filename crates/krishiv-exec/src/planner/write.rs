@@ -8,6 +8,7 @@
 //! `TableCapabilityCheck` and `QueryCompilationErrors`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use krishiv_common::error::UnsupportedFeatureTableOperation;
@@ -16,7 +17,7 @@ use krishiv_plan::Expr;
 use crate::error::Result;
 
 /// What a write does to the rows already in the table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum WriteMode {
     /// Adds rows: `INSERT INTO`, `append`, `insertInto`, V2 `append`.
@@ -26,7 +27,7 @@ pub enum WriteMode {
     Truncate,
     /// Replaces the rows `filter` selects: a static partition spec, V2
     /// `overwrite(cond)`, `INSERT ... REPLACE WHERE`.
-    OverwriteByFilter(Expr),
+    OverwriteByFilter(Arc<Expr>),
     /// Replaces the partitions the new rows fall in: `partitionOverwriteMode =
     /// dynamic`, V2 `overwritePartitions`.
     OverwriteDynamic,
@@ -48,7 +49,7 @@ impl WriteMode {
 
 /// What one write asks of a table: everything a format's writer needs, so the
 /// trait does not change when the Iceberg and Delta writes arrive.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct WriteRequest {
     /// What the write does to existing rows.
@@ -171,7 +172,7 @@ mod tests {
         [
             WriteMode::Append,
             WriteMode::Truncate,
-            WriteMode::OverwriteByFilter(Expr::literal(Literal::Boolean(true))),
+            WriteMode::OverwriteByFilter(Arc::new(Expr::literal(Literal::Boolean(true)))),
             WriteMode::OverwriteDynamic,
         ]
     }

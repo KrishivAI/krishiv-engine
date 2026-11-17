@@ -215,6 +215,16 @@ pub(crate) fn call(name: &str, args: Vec<PyColumn>) -> PyColumn {
     PyColumn::wrap(call_function(name, args.into_iter().map(|c| c.inner)))
 }
 
+/// The lambda `params -> body` of a higher-order function (`transform`, `filter`, ...): the body
+/// refers to a parameter through `col(name)`.
+#[pyfunction(name = "lambda_function")]
+pub(crate) fn lambda_function(params: Vec<String>, body: &PyColumn) -> PyColumn {
+    PyColumn::wrap(krishiv_session::functions::lambda(
+        params,
+        body.inner.clone(),
+    ))
+}
+
 /// `count(*)`.
 #[pyfunction(name = "count_star")]
 pub(crate) fn count_all() -> PyColumn {

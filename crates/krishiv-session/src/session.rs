@@ -64,6 +64,8 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+#[cfg(feature = "unstable-ir")]
+pub use lifecycle::SqlOutcome;
 #[cfg(test)]
 mod run_task;
 
@@ -117,6 +119,11 @@ pub struct Session {
     pub(crate) deadline: Option<std::time::Duration>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
+    /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
+    /// `Some(None)` is a request without a valid one (no trace), `None` means the session's.
+    pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
+    /// The baggage that came with it (empty without a valid `traceparent`).
+    pub(crate) inbound_baggage: Arc<[(String, String)]>,
 }
 
 impl fmt::Debug for Session {
@@ -143,12 +150,15 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
+    /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
+    /// (P3-T062); `None`: those statements are refused.
+    pub(crate) grants: Option<Arc<crate::grants::GrantsPolicy>>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The registry the builder supplied, if any (child sessions use it too).
     base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
-    udfs: Arc<UdfLibrary>,
+    pub(crate) udfs: Arc<UdfLibrary>,
     /// The session's Python UDFs (P2-T059), shared with the registry above:
     /// plans name them by name and version only.
     pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
@@ -189,6 +199,8 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+    /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
+    pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
 }
 
 impl Drop for SessionState {
@@ -222,6 +234,7 @@ pub struct SessionBuilder {
     profile: SparkProfile,
     principal: Option<Principal>,
     policy: Option<Arc<dyn AccessPolicy>>,
+    grants: Option<Arc<crate::grants::GrantsPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     runtime: Option<Arc<EngineRuntime>>,
@@ -311,6 +324,16 @@ impl SessionBuilder {
         self
     }
 
+    /// The grants provider (P3-T062) the session's `GRANT`, `REVOKE`, `SHOW GRANTS` and role
+    /// statements act on, and whose ownership records its `CREATE` and `DROP` keep. It decides
+    /// access only as the session's [access policy](Self::access_policy): pass it there too
+    /// (wrapped in a `PathPrefixPolicy` in server mode). A builder with grants but no access
+    /// policy is refused, so grants are never managed without being enforced (`tests/grants.rs`).
+    pub fn grants(mut self, grants: Arc<crate::grants::GrantsPolicy>) -> Self {
+        self.grants = Some(grants);
+        self
+    }
+
     /// Runs queries on `executor`, shared with other sessions (default: a
     /// [`TokioExecutor`](krishiv_exec::TokioExecutor) of the session's own).
     ///
@@ -389,10 +412,19 @@ impl SessionBuilder {
                 (runtime, config)
             }
         };
+        if self.grants.is_some() && self.policy.is_none() {
+            return Err(krishiv_common::error::KrishivInvalidConfigValue {
+                value: "grants".to_owned(),
+                key: "\"krishiv.access.provider\"".to_owned(),
+                reason: "a session with grants needs them as its access policy too".to_owned(),
+            }
+            .into());
+        }
         let parts = SessionParts {
             profile: self.profile,
             principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
+            grants: self.grants,
             functions: self.functions,
             admission: self.admission,
         };
@@ -406,6 +438,7 @@ struct SessionParts {
     profile: SparkProfile,
     principal: Arc<Principal>,
     policy: Arc<dyn AccessPolicy>,
+    grants: Option<Arc<crate::grants::GrantsPolicy>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     admission: Option<Arc<dyn AdmissionController>>,
 }
@@ -432,6 +465,7 @@ impl Session {
             profile: SparkProfile::default(),
             principal: None,
             policy: None,
+            grants: None,
             executor: None,
             functions: None,
             runtime: None,
@@ -491,44 +525,7 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        self.check_open()?;
-        let (session, text) = (self.clone(), query.to_owned());
-        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
-        let marker = Arc::clone(&row);
-        let (result, cancelled) = self
-            .on_executor_reasoned(async move {
-                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
-                use tracing::Instrument as _;
-                let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
-                session
-                    .sql_here_marked(&text, marker)
-                    .instrument(span)
-                    .await
-                    .map(|df| df.with_trace(trace))
-            })
-            .await;
-        // A statement refused before it ran (parse, analysis, access) is a
-        // row of `system.queries` too, with the text as the session may show it.
-        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
-        // that failed while it ran): that one has its row.
-        if let Err(error) = &result
-            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
-        {
-            let id = self.state.queries.record_refused(
-                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
-                Some(krishiv_sql::redact_sql(query).as_str()),
-                None,
-                error,
-                self.operation_id(),
-            );
-            self.state.queries.add_request_tags(&id, &self.request_tags);
-            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
-            if let Some(reason) = cancelled {
-                self.state.queries.note_cancel_reason(&id, reason);
-            }
-        }
-        result
+        self.sql_kind(query).await.map(|(df, _)| df)
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
@@ -552,7 +549,9 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+            .await
+            .map(|(df, _)| df)
     }
 
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
@@ -561,7 +560,7 @@ impl Session {
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
         Box::pin(self.sql_here_inner(query, row, Vec::new())).await
     }
@@ -571,7 +570,7 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         let mut env = self.query_env();
         env.row = row;
         let written = query;
@@ -598,18 +597,19 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify(&statement);
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
+        let command = !matches!(statement, Statement::Query(_));
         let df = self.run_statement(statement, env, query, &redacted).await?;
         // Whatever frame the statement returns (a command's result too) shows the statement's
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
-        Ok(df)
+        Ok((df, command))
     }
 
-    /// Runs the parsed, authorized `statement`.
-    pub(crate) async fn run_statement(
+    /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
+    pub(crate) async fn run_statement_here(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -622,12 +622,18 @@ impl Session {
         )?;
         match statement {
             Statement::Query(q) => {
-                let plan = self.lower_identified(&q, &env, redacted)?;
+                let plan = self.lower_identified(&q, &env, redacted).map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                })?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, query, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => {
@@ -651,7 +657,15 @@ impl Session {
             }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
-                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
+                    .await
+                    .map_err(|e| {
+                        crate::execute_immediate::unbound_markers(
+                            e,
+                            query,
+                            env.parser.double_quoted_identifiers,
+                        )
+                    })
             }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
@@ -674,9 +688,15 @@ impl Session {
                 self.exec_alter_view(&a, query, ids).await
             }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => {
-                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
-            }
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query, &env.identifier_spans))
+                .await
+                .map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                }),
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -691,6 +711,14 @@ impl Session {
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
             Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
+            Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
+            Statement::CreateFlow(f) => self.exec_create_flow(&f),
+            Statement::LoadData(l) => self.exec_load_data(&l),
+            // The path write belongs to the session's write path: it has no plan node to lower to yet.
+            Statement::InsertDirectory(_) => {
+                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            }
+            Statement::AccessControl(a) => Box::pin(self.exec_access_control(&a, &env)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
@@ -839,11 +867,6 @@ impl Session {
         )
         .map_err(|e| e.error)?;
         Ok(Column::new((*lowered).clone()))
-    }
-
-    /// This session's parser options, from its configuration.
-    pub(crate) fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
     }
 
     /// Reads files (Spark's `spark.read`).
@@ -1118,6 +1141,57 @@ impl Session {
         ))
     }
 
+    /// As [`Self::from_plan_with`], with each read of a table named in `frames` replaced by that
+    /// frame's plan (the read node's origin, so a client's plan id still names it): a DataFrame
+    /// the host holds under an id (Spark Connect's `CachedRemoteRelation`, the result of a
+    /// checkpoint). The new frame owns what the frames own, so a checkpoint's rows live as long
+    /// as it does even when the host lets go of the frame. A frame that is a lazy checkpoint takes
+    /// its rows here. A read inside a subquery expression is not replaced.
+    ///
+    /// # Errors
+    /// The errors of [`Self::from_plan_with`], and of taking a lazy checkpoint's rows.
+    #[cfg(feature = "unstable-ir")]
+    pub async fn from_plan_over(
+        &self,
+        plan: &Plan,
+        options: crate::QueryOptions,
+        frames: &[(Vec<String>, DataFrame)],
+    ) -> Result<DataFrame, KrishivError> {
+        let session = self.with_options(options)?;
+        if frames.is_empty() {
+            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+        }
+        let frames = frames.to_vec();
+        let root = Arc::clone(plan.root());
+        let (root, keep) = self
+            .on_executor(async move {
+                let mut keep: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
+                let mut plans = Vec::with_capacity(frames.len());
+                for (name, frame) in &frames {
+                    plans.push((name.clone(), frame.plan_with_checkpoints().await?));
+                    for k in &frame.keep {
+                        if !keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                            keep.push(Arc::clone(k));
+                        }
+                    }
+                }
+                let root = root.transform_down(&mut |node| {
+                    let PlanNode::Read(ReadSource::Table { name, .. }) = &node.node else {
+                        return Ok::<_, std::convert::Infallible>(node);
+                    };
+                    Ok(match plans.iter().find(|(n, _)| n == name) {
+                        Some((_, plan)) => {
+                            Arc::new(LogicalPlan::clone(plan).with_origin(node.origin))
+                        }
+                        None => node,
+                    })
+                });
+                Ok((root.unwrap_or_else(|e| match e {}), keep))
+            })
+            .await?;
+        Ok(DataFrame::over_plan(session, root, keep))
+    }
+
     /// Runs `work` on the session's executor, so that it finds the
     /// runtime its I/O needs whatever runtime (if any) polls the caller;
     /// dropping the returned future aborts the work.
@@ -1237,6 +1311,7 @@ impl Session {
                 u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
+            relations: Arc::clone(&self.state.relations),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1254,6 +1329,8 @@ impl Session {
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
+                groups: self.state.runtime.resource_groups.clone(),
+                catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1295,7 +1372,7 @@ impl Session {
                 }),
             )
             .with_path(catalog.sql_path_snapshot())
-            .in_system(catalog.in_system()),
+            .outside_session(!catalog.in_session_catalog()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1310,13 +1387,16 @@ impl Session {
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
             variables: Arc::clone(&variables),
+            // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
+            // `Metadata`; every other analysis may run the plan.
+            mode: krishiv_plan::analyzer::AnalysisMode::Execute,
         };
-        // The epoch the query's catalog reads at: entries it loads are at
-        // least as new.
+        // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
             io,
             config,
+            history_hold: None,
             parser,
             analysis,
             catalog,
@@ -1330,10 +1410,17 @@ impl Session {
             row: Arc::default(),
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
+            observers: Arc::default(),
+            view_keeps: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
             functions_version,
+            sample_salt: {
+                use std::hash::BuildHasher as _;
+                std::collections::hash_map::RandomState::new().hash_one(0_u8)
+            },
+            quiet_denials: false,
         }
     }
 
@@ -1349,8 +1436,10 @@ impl Session {
         // A store setting this session redirected (endpoint, region, account) could send the
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
-        self.authorize_store_options(StatementClass::Read, &env.config, std::iter::empty())
-            .await?;
+        let r = self
+            .check_store_options(&env.config, std::iter::empty())
+            .await;
+        crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
@@ -1369,7 +1458,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
-                in_system: env.catalog.in_system(),
+                outside_session: !env.catalog.in_session_catalog(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
@@ -1377,17 +1466,27 @@ impl Session {
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
+        *env.view_keeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
         let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
-            return Err(e);
+            let e = self.view_text_failure(&views, env, e).await;
+            return crate::access::audit_read(self, env, Err(e));
         }
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
-            Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
+            match Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await {
+                Ok(checked) => checked,
+                Err(e) => {
+                    let e = self.view_text_failure(&views, env, e).await;
+                    return crate::access::audit_read(self, env, Err(e));
+                }
+            };
         let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
@@ -1409,12 +1508,26 @@ impl Session {
             attach_analysis(e, own.as_ref().or(text))
         });
         views.extend(body_views?);
+        let analyzed = match analyzed {
+            Ok(analyzed) => Ok(analyzed),
+            Err(e) => Err(self.view_text_failure(&views, env, e).await),
+        };
         // Analysis checks every read: its denials are the reads' denials.
-        let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        let mut analyzed = crate::access::audit_read(self, env, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
         // concurrent change of the view wins (its entry is no longer the one the read found).
-        for (found, changed) in synced {
-            crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
+        // A difference from Spark (ADR 0008: explicit): a metadata analysis (Connect `AnalyzePlan`, for every
+        // role, admins too) never stores it. Spark syncs in the analysis of every Dataset, `.schema` included;
+        // here an `AnalyzePlan` must not write the catalog (a viewer has `Browse` only and no side effects).
+        // It returns the evolved schema all the same, and the next ordinary query stores it.
+        if env.analysis.mode == krishiv_plan::analyzer::AnalysisMode::Execute {
+            for (found, changed) in synced {
+                crate::store::CatalogStore::replace_table(
+                    &*self.state.catalog.store,
+                    &found,
+                    changed,
+                );
+            }
         }
         // The view side table: where each view the query and its functions' bodies inlined landed.
         inlined.extend(env.sql_functions.body_views());
@@ -1426,7 +1539,7 @@ impl Session {
                     .securables
                     .push(krishiv_plan::analyzer::SecurableUse {
                         securable,
-                        privilege: krishiv_plan::analyzer::Privilege::Select,
+                        privilege: env.analysis.mode.read_privilege(),
                         columns: std::collections::BTreeSet::new(),
                     });
             }
@@ -1489,99 +1602,6 @@ impl Session {
             renames.extend(check.rename);
         }
         Ok((synced, renames))
-    }
-
-    /// The physical plan of `analyzed`, once the files it scans are
-    /// listed and their footers read.
-    pub(crate) async fn physical(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
-        Ok((optimized, physical))
-    }
-
-    /// As [`Self::physical`] for a plan that is only inspected (EXPLAIN,
-    /// estimates): a recursive CTE is not run and reads as an empty table.
-    pub(crate) async fn physical_inspected(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
-        Ok((optimized, physical))
-    }
-
-    /// As [`Self::physical_inspected`] (the plan is only shown, never run);
-    /// with `trace`, also every optimizer rule application that changed the
-    /// plan (`EXPLAIN VERBOSE`).
-    pub(crate) async fn physical_traced(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-        trace: bool,
-    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        self.physical_with(analyzed, env, trace).await
-    }
-
-    async fn physical_with(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-        trace: bool,
-    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        let start = query_start_micros();
-        // A recursive CTE runs as an operator of the physical plan; the
-        // session only tells each loop how many rows its readers need.
-        let limited;
-        let analyzed = if crate::recursion::has_loop(analyzed.plan.root()) {
-            limited = crate::recursion::push_limits(analyzed)?;
-            &limited
-        } else {
-            analyzed
-        };
-        env.catalog.open_files(analyzed.plan.root()).await?;
-        let tables =
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
-        let stats = ProviderStatistics(Arc::clone(&tables));
-        let (optimized, steps) = if trace {
-            krishiv_optimizer::optimize_traced_with_udfs(
-                &analyzed.plan,
-                &stats,
-                &self.state.udfs,
-                &env.config,
-            )?
-        } else {
-            (
-                krishiv_optimizer::optimize_with_udfs(
-                    &analyzed.plan,
-                    &stats,
-                    &self.state.udfs,
-                    &env.config,
-                )?,
-                Vec::new(),
-            )
-        };
-        let cx = PlanningContext::new(tables, Arc::clone(&env.config))
-            .with_query_start(start)
-            .with_user(self.state.principal.name.as_str())
-            .with_udfs(Arc::clone(&self.state.udfs));
-        let physical = self.state.planner.plan(&optimized, &cx)?;
-        // The admission request's estimate, only for a controller that reads it.
-        if self.state.admission.uses_estimate() {
-            env.catalog.set_estimate(crate::explain::estimate_of(
-                &optimized,
-                &physical,
-                &env.catalog,
-            ));
-        }
-        // Spark logs what analysis and planning ignore (hints) as
-        // warnings; `DataFrame::warnings` returns them too.
-        for w in analyzed.warnings.iter().chain(physical.warnings()) {
-            tracing::warn!(target: "krishiv::session::warnings", "{w}");
-        }
-        Ok((optimized, physical, steps))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
@@ -1654,10 +1674,30 @@ impl Session {
         tagging
     }
 
+    /// The trace a statement started now belongs to: its request's
+    /// ([`crate::QueryOptions::inbound_trace`]) when it has one, else the session's.
+    pub(crate) fn trace_now(&self) -> Option<crate::trace_context::RemoteParent> {
+        match &self.inbound_trace {
+            Some(t) => t.as_deref().cloned(),
+            None => self.state.queries.trace(),
+        }
+    }
+
+    /// Stamps the history row `id` with what this statement adds to it: its request tags and, when
+    /// it has its own trace, the trace id.
+    pub(crate) fn stamp_row(&self, id: &str) {
+        self.state.queries.add_request_tags(id, &self.request_tags);
+        if self.inbound_trace.is_some() {
+            self.state
+                .queries
+                .set_row_trace(id, self.trace_now().map(|t| t.trace_id));
+        }
+    }
+
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
-            principal: Arc::from(self.state.principal.name.as_str()),
+            owner: Arc::from(crate::sessions::owner_key(&self.state.principal).as_str()),
             tags: self.effective_tags().into(),
             request_tags: Arc::clone(&self.request_tags),
         }
@@ -1739,9 +1779,7 @@ impl Session {
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
-        self.state
-            .queries
-            .add_request_tags(&log_id, &self.request_tags);
+        self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
@@ -1750,7 +1788,28 @@ impl Session {
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
+    ///
+    /// Every run completes the frame's observations: a delivered stream as it ends, a run that
+    /// fails before it has one (closed session, refused admission, failed submit) with its
+    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
     async fn run_on_query_logged(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+        admitted: Option<Admitted>,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        let pending = crate::dataframe::PendingObservations::new(&env.observers);
+        let started = self
+            .start_query(physical, worker, env, detailed, admitted)
+            .await;
+        pending.settle(started.as_ref().err());
+        started
+    }
+
+    /// [`Self::run_on_query_logged`] up to the delivered stream.
+    async fn start_query(
         &self,
         physical: &PhysicalPlan,
         worker: WorkerContext,
@@ -1809,6 +1868,7 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
+                history: env.history_job(self, &row_id, physical, detailed),
             }),
             None,
         );
@@ -1861,18 +1921,18 @@ impl Session {
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
+                // No stream completes the observations: the failure does, in the caller.
                 Err(error)
             }
             Ok(stream) => {
-                let stream = MetricStream {
-                    inner: stream,
-                    fold: pending.0.take(),
-                };
-                Ok((
+                let (inner, fold) = (stream, pending.0.take());
+                let stream = MetricStream { inner, fold };
+                let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-                    query,
-                    row_id,
-                ))
+                    Arc::clone(&query),
+                    &env.observers,
+                );
+                Ok((stream, query, row_id))
             }
         }
     }
@@ -1895,37 +1955,6 @@ impl Session {
     }
 }
 
-impl Session {
-    /// What a query's plans are instantiated with in this process: the
-    /// query's tables, its UDFs, and its spill scope under the session's
-    /// spill directory (created at instantiation). Writes build their sink
-    /// from the plan with the query's I/O context, formats and configuration;
-    /// batch splits resolve through the session's relation store.
-    fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        let worker = WorkerContext::new(
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
-        )
-        .with_udfs(Arc::clone(&self.state.udfs))
-        .with_relations(Arc::clone(&self.state.relations))
-        .with_spill_scopes(Arc::new(QuerySpill {
-            state: Arc::clone(&self.state),
-        }))
-        .with_io(env.io.clone())
-        .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
-        self.with_python_runtime(worker)
-    }
-}
-
-/// Aborts a task when dropped.
-struct AbortOnDrop(krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -1939,3 +1968,6 @@ mod writes;
 use writes::*;
 
 mod ops;
+use ops::AbortOnDrop;
+
+mod planning;

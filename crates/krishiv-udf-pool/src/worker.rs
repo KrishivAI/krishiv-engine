@@ -6,23 +6,28 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
-use std::io::{BufWriter, Cursor, Read};
+use std::io::{BufWriter, Read};
 use std::os::fd::{AsFd, OwnedFd};
 use std::process::{Child, ExitStatus};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use arrow_array::RecordBatchOptions;
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_ipc::reader::StreamReader;
+use arrow_buffer::Buffer;
+use arrow_ipc::reader::StreamDecoder;
 use arrow_ipc::writer::StreamWriter;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema, SchemaRef};
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivPythonWorkerExited, PythonException,
+    InternalError, KrishivError, KrishivPythonWorkerExited, OperationCanceled, PythonException,
 };
+use krishiv_exec::python_relation::Frame;
 use krishiv_udf_sandbox::{EXIT_SANDBOX_FAILED, SandboxError};
 use rustix::process::{Pid, PidfdFlags, Signal};
 use serde_json::{Value, json};
 
+use crate::pool::CallWatch;
+use crate::validate::SchemaCheck;
 use crate::wire::{self, Message};
 
 /// How long a new worker may take to import its packages and greet the server.
@@ -38,6 +43,8 @@ pub(crate) struct Started {
     pub(crate) private_dir: tempfile::TempDir,
     /// Started through the sandbox trampoline, whose reserved exit status means it could not enter the sandbox.
     pub(crate) sandboxed: bool,
+    /// The session's artifacts the worker reads, kept while it lives.
+    pub(crate) artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 /// A worker that greeted the server.
@@ -61,6 +68,9 @@ pub(crate) struct Worker {
     sandboxed: bool,
     /// True once the worker greeted the server: the trampoline is gone, so an exit status is the worker's own.
     greeted: bool,
+    /// The session's artifacts the worker reads (`Started::artifacts`): their directory is removed only once
+    /// no worker reads it.
+    _artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -84,14 +94,28 @@ pub struct PythonPayload {
     pub python_ver: String,
 }
 
+/// What a running relation task's worker sent.
+#[derive(Debug)]
+pub(crate) enum TaskEvent {
+    /// It waits for the next frame.
+    Want,
+    /// A result batch, checked against the declared schema.
+    Result(RecordBatch),
+    /// The UDF finished (possibly before the last frame).
+    Done,
+}
+
 impl Worker {
-    /// Waits for the worker's greeting and checks its wire version.
-    pub(crate) fn handshake(started: Started) -> Result<Self, KrishivError> {
+    /// Waits for the worker's greeting and checks its wire version. `watch` gets the worker's pidfd before
+    /// the wait, so a call cancelled meanwhile kills the starting worker (review 2026-11-13 n3): the wait
+    /// then ends at once, and the worker is reaped when this returns.
+    pub(crate) fn handshake(started: Started, watch: &dyn CallWatch) -> Result<Self, KrishivError> {
         let Started {
             mut child,
             control,
             private_dir,
             sandboxed,
+            artifacts,
         } = started;
         let pid = Pid::from_child(&child);
         // The child is not reaped yet, so `pid` is still its own.
@@ -123,7 +147,12 @@ impl Worker {
             healthy: false,
             sandboxed,
             greeted: false,
+            _artifacts: artifacts,
         };
+        if !watch.starting(&worker.pidfd) {
+            // Dropping the worker kills and reaps it.
+            return Err(OperationCanceled {}.into());
+        }
         let greeting = rustix::net::sockopt::set_socket_timeout(
             worker.control.as_fd(),
             rustix::net::sockopt::Timeout::Recv,
@@ -248,6 +277,111 @@ impl Worker {
         decode_result(bytes, return_type, args.num_rows()).inspect_err(|_| self.healthy = false)
     }
 
+    /// Starts a relation task over loaded payload `id` (wire `task`) run as `eval_type` (the payload's own, or
+    /// the window kind of a grouped-aggregate payload): `key_count` key columns lead each frame, `arity` data
+    /// columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an aggregate keeps
+    /// before it sends them.
+    pub(crate) fn start_task(
+        &mut self,
+        id: u64,
+        eval_type: i32,
+        key_count: usize,
+        arity: usize,
+        max_rows: usize,
+        conf: &BTreeMap<String, String>,
+    ) -> Result<(), KrishivError> {
+        let header = json!({
+            "t": "task",
+            "udf": id,
+            "eval_type": eval_type,
+            "key_count": key_count,
+            "arity": arity,
+            "max_rows": max_rows,
+            "conf": conf,
+        });
+        self.send_message(&header, &[])
+    }
+
+    /// The next message of a running task: a request for a frame, a result batch (checked against
+    /// `schema`, at most `max_result` bytes), or the end. A Python error ends the task with the worker in
+    /// step (it is reused); anything else leaves it unusable.
+    pub(crate) fn task_event(
+        &mut self,
+        schema: &SchemaRef,
+        check: Option<&SchemaCheck>,
+        max_result: u64,
+    ) -> Result<TaskEvent, KrishivError> {
+        let mut msg = match wire::recv(self.control.as_fd()) {
+            Ok(Some(msg)) => msg,
+            Ok(None) => return Err(self.exited("while it ran a UDF")),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                return Err(self.exited("while it ran a UDF"));
+            }
+            Err(e) => return Err(self.protocol(&e.to_string())),
+        };
+        match msg.kind() {
+            "want" | "done" if !msg.fds.is_empty() => {
+                Err(self.protocol("a task message with a descriptor"))
+            }
+            "want" => Ok(TaskEvent::Want),
+            "done" => Ok(TaskEvent::Done),
+            "result" => {
+                let (Some(len), Some(fd), true) =
+                    (msg.u64_field("len"), msg.fds.pop(), msg.fds.is_empty())
+                else {
+                    return Err(
+                        self.protocol("a result without exactly one descriptor and a length")
+                    );
+                };
+                let bytes = wire::read_untrusted(fd, len, max_result)
+                    .map_err(|e| self.protocol(&e.to_string()))?;
+                // The task stops at a refused result, so the worker is out of step: never reused.
+                decode_checked(bytes, schema, check)
+                    .map(TaskEvent::Result)
+                    .inspect_err(|_| self.healthy = false)
+            }
+            "error" => Err(self.python_error(&msg)),
+            other => Err(self.protocol(&format!("unexpected message {other:?} in a task"))),
+        }
+    }
+
+    /// Sends `frame`, the answer to a [`TaskEvent::Want`].
+    pub(crate) fn send_frame(&mut self, frame: &Frame) -> Result<(), KrishivError> {
+        match frame {
+            Frame::Batch { side, batch } => {
+                let (file, len) = write_input(batch)
+                    .map_err(|e| self.server_failure(&format!("cannot pass a frame: {e}")))?;
+                self.send_message(
+                    &json!({"t": "frame", "side": side, "len": len}),
+                    &[file.as_fd()],
+                )
+            }
+            Frame::EndGroup => self.send_message(&json!({"t": "end_group"}), &[]),
+            Frame::End => self.send_message(&json!({"t": "end"}), &[]),
+        }
+    }
+
+    /// The task stopped mid-way (its operator went away): the worker waits for a frame that never comes, so
+    /// it is killed and not reused.
+    pub(crate) fn abandon(&mut self) {
+        self.healthy = false;
+        self.kill();
+    }
+
+    fn send_message(
+        &mut self,
+        header: &Value,
+        fds: &[std::os::fd::BorrowedFd<'_>],
+    ) -> Result<(), KrishivError> {
+        wire::send(self.control.as_fd(), header, fds).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                self.exited("while it was sent work")
+            } else {
+                self.server_failure(&e.to_string())
+            }
+        })
+    }
+
     /// Sends `header` with `file` attached and waits for the answer.
     fn exchange(&mut self, header: &Value, file: &File) -> Result<Message, KrishivError> {
         if let Err(e) = wire::send(self.control.as_fd(), header, &[file.as_fd()]) {
@@ -280,6 +414,11 @@ impl Worker {
             traceback: msg.str_field("message").to_owned(),
         }
         .into()
+    }
+
+    /// The worker broke the task protocol as `what` says (a `want` after `end`): it is killed and not reused.
+    pub(crate) fn broke(&mut self, what: &str) -> KrishivError {
+        self.protocol(what)
     }
 
     /// The worker broke the protocol (code in it wrote to its control socket, or sent a result it then
@@ -440,49 +579,24 @@ fn write_input(args: &RecordBatch) -> std::io::Result<(File, u64)> {
 }
 
 /// Decodes a worker's result stream as the pool does: the framing checked first ([`check_frames`]), then
-/// arrow-ipc's validating reader, then one column of `return_type`, one batch and `rows` rows. Every failure
+/// arrow-ipc's validating decoder, then one column of `return_type`, one batch and `rows` rows. Every failure
 /// is `PYTHON_EXCEPTION` naming what was wrong. Public for the `udf_result_ipc` fuzz target only, so hidden
 /// from the documentation; not a supported interface.
+///
+/// The decoder slices the column's buffers out of `bytes` rather than copying them (review 2026-11-13 n1):
+/// the pool reads a result into one 64-byte-aligned buffer ([`wire::read_untrusted`]), so it is copied once,
+/// from the memfd. A buffer arrow-ipc finds misaligned (only from a caller that passes unaligned bytes) is
+/// copied into an aligned one.
 ///
 /// # Errors
 /// Anything but a well-formed, uncompressed stream of that shape.
 #[doc(hidden)]
 pub fn decode_result(
-    bytes: Vec<u8>,
+    bytes: impl Into<Buffer>,
     return_type: &DataType,
     rows: usize,
 ) -> Result<ArrayRef, KrishivError> {
-    let invalid = |detail: String| -> KrishivError {
-        PythonException {
-            msg: "The Python worker returned an invalid result".to_owned(),
-            traceback: detail,
-        }
-        .into()
-    };
-    check_frames(&bytes).map_err(invalid)?;
-    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)
-        .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
-    let schema = reader.schema();
-    let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
-        return Err(invalid(format!(
-            "{} columns, expected one",
-            schema.fields().len()
-        )));
-    };
-    if field.data_type() != return_type {
-        return Err(invalid(format!(
-            "a column of type {}, expected {return_type}",
-            field.data_type()
-        )));
-    }
-    let batch = match reader.next() {
-        Some(Ok(batch)) => batch,
-        Some(Err(e)) => return Err(invalid(format!("unreadable Arrow batch: {e}"))),
-        None => return Err(invalid("no batch".to_owned())),
-    };
-    if reader.next().is_some() {
-        return Err(invalid("more than one batch".to_owned()));
-    }
+    let batch = decode_stream(bytes.into(), std::slice::from_ref(return_type))?;
     if batch.num_rows() != rows {
         return Err(invalid(format!(
             "{} rows, expected {rows}",
@@ -492,6 +606,114 @@ pub fn decode_result(
     Ok(Arc::clone(batch.column(0)))
 }
 
+/// A relation task's result batch, decoded as [`decode_result`] decodes a scalar result: framing checked,
+/// arrow-ipc's validating decoder, one batch, and a column of each of `schema`'s types, in order. The batch
+/// gets `schema` (its names and nullability; a null in a non-nullable column is refused). Public for the
+/// `udf_result_ipc` fuzz target only, so hidden from the documentation; not a supported interface.
+///
+/// # Errors
+/// Anything but a well-formed, uncompressed stream of one batch of that schema's types.
+#[doc(hidden)]
+pub fn decode_batch(
+    bytes: impl Into<Buffer>,
+    schema: &SchemaRef,
+) -> Result<RecordBatch, KrishivError> {
+    decode_checked(bytes.into(), schema, None)
+}
+
+/// [`decode_batch`], the stream's schema first passed through Spark's map-kind check when the session turned
+/// it on (`ARROW_TYPE_MISMATCH` before the stricter checks).
+fn decode_checked(
+    bytes: Buffer,
+    schema: &SchemaRef,
+    check: Option<&SchemaCheck>,
+) -> Result<RecordBatch, KrishivError> {
+    if let Some(check) = check
+        && let Some(actual) = stream_schema(bytes.as_slice())?
+    {
+        check.check(&actual)?;
+    }
+    let types: Vec<DataType> = schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect();
+    let batch = decode_stream(bytes, &types)?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(Arc::clone(schema), batch.columns().to_vec(), &options)
+        .map_err(|e| invalid(format!("a result unlike the declared schema: {e}")))
+}
+
+/// `PYTHON_EXCEPTION` for a result the server refuses.
+fn invalid(detail: String) -> KrishivError {
+    PythonException {
+        msg: "The Python worker returned an invalid result".to_owned(),
+        traceback: detail,
+    }
+    .into()
+}
+
+/// The one batch of the stream in `bytes`, whose columns have `types`: the schema checked from the first
+/// message's header before any batch is decoded (review 2026-11-14 m5).
+/// The schema the stream in `bytes` starts with (its framing checked first); `None` for an empty stream.
+fn stream_schema(bytes: &[u8]) -> Result<Option<Schema>, KrishivError> {
+    let first = check_frames(bytes).map_err(invalid)?;
+    let Some(header) = bytes.get(8..first) else {
+        return Ok(None);
+    };
+    let message = arrow_ipc::root_as_message(header)
+        .map_err(|e| invalid(format!("an invalid message header: {e}")))?;
+    let Some(schema) = message.header_as_schema() else {
+        return Err(invalid(
+            "the stream does not start with a schema".to_owned(),
+        ));
+    };
+    arrow_ipc::convert::try_fb_to_schema(schema)
+        .map(Some)
+        .map_err(|e| invalid(format!("an unreadable schema: {e}")))
+}
+
+fn decode_stream(mut bytes: Buffer, types: &[DataType]) -> Result<RecordBatch, KrishivError> {
+    if let Some(schema) = stream_schema(bytes.as_slice())? {
+        if schema.fields().len() != types.len() {
+            return Err(invalid(format!(
+                "{} columns, expected {}",
+                schema.fields().len(),
+                if types.len() == 1 {
+                    "one".to_owned()
+                } else {
+                    types.len().to_string()
+                }
+            )));
+        }
+        for (field, expected) in schema.fields().iter().zip(types) {
+            if field.data_type() != expected {
+                return Err(invalid(format!(
+                    "a column of type {}, expected {expected}",
+                    field.data_type()
+                )));
+            }
+        }
+    }
+    let mut decoder = StreamDecoder::new();
+    let mut batch = None;
+    // `check_frames` saw a whole stream, so the decoder sees every message whole and keeps body slices.
+    while !bytes.is_empty() {
+        let decoded = decoder
+            .decode(&mut bytes)
+            .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
+        if let Some(decoded) = decoded
+            && batch.replace(decoded).is_some()
+        {
+            return Err(invalid("more than one batch".to_owned()));
+        }
+    }
+    decoder
+        .finish()
+        .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
+    batch.ok_or_else(|| invalid("no batch".to_owned()))
+}
+
 /// Walks the stream's messages before arrow-ipc decodes them: each has the continuation marker and a
 /// verified flatbuffer header (`root_as_message`), is a schema, record batch or dictionary batch, has a body
 /// inside the stream, and, for a batch, no compression and buffers inside its body.
@@ -499,7 +721,10 @@ pub fn decode_result(
 /// Compression is refused because arrow-ipc 60 allocates a compressed buffer's declared uncompressed length
 /// before reading it: a worker could declare 2^45 bytes in a 16 KiB stream and abort the server (review
 /// 2026-11-13 M1). The server never asks for a compressed result, and the worker writes without compression.
-fn check_frames(bytes: &[u8]) -> Result<(), String> {
+///
+/// Returns where the first message's header ends (it starts at byte 8), so the schema can be checked before
+/// any batch is decoded; 0 for an empty stream.
+fn check_frames(bytes: &[u8]) -> Result<usize, String> {
     const CONTINUATION: u32 = 0xFFFF_FFFF;
     let word = |at: usize| -> Option<u32> {
         Some(u32::from_le_bytes(
@@ -507,6 +732,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         ))
     };
     let mut at = 0_usize;
+    let mut first = None;
     while at < bytes.len() {
         if word(at) != Some(CONTINUATION) {
             return Err(format!("no continuation marker at byte {at}"));
@@ -516,7 +742,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         if len == 0 {
             // End of stream: nothing may follow.
             return if at == bytes.len() {
-                Ok(())
+                Ok(first.unwrap_or(0))
             } else {
                 Err(format!(
                     "{} bytes after the end of the stream",
@@ -560,9 +786,10 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
                 }
             }
         }
+        first.get_or_insert(meta_end);
         at = body_end;
     }
-    Ok(())
+    Ok(first.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -595,6 +822,37 @@ mod tests {
     }
 
     #[test]
+    fn a_result_is_decoded_without_a_copy() {
+        // Review 2026-11-13 n1: the column's values are a slice of the buffer the result was read into.
+        let bytes = stream(&[longs((0..1024).collect())]);
+        let mut aligned = arrow_buffer::MutableBuffer::new(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let buffer = Buffer::from(aligned);
+        let start = buffer.as_ptr().addr();
+        let range = start..start + buffer.len();
+        let col = decode_result(buffer, &DataType::Int64, 1024).expect("ok");
+        let data = col.to_data();
+        let values = data.buffers()[0].as_ptr().addr();
+        assert!(range.contains(&values), "the values were copied");
+    }
+
+    #[test]
+    fn an_empty_stream_has_no_batch() {
+        let schema_only = {
+            let batch = longs(vec![]);
+            let mut out = Vec::new();
+            let mut w = StreamWriter::try_new(&mut out, &batch.schema()).expect("writer");
+            w.finish().expect("finish");
+            drop(w);
+            out
+        };
+        let err = decode_result(schema_only, &DataType::Int64, 0).expect_err("no batch");
+        assert!(err.to_string().contains("no batch"), "{err}");
+        let err = decode_result(Vec::<u8>::new(), &DataType::Int64, 0).expect_err("nothing");
+        assert!(err.to_string().contains("no batch"), "{err}");
+    }
+
+    #[test]
     fn wrong_results_are_refused() {
         let class = |r: Result<ArrayRef, KrishivError>| r.expect_err("refused").error_class();
         assert_eq!(
@@ -621,6 +879,41 @@ mod tests {
         ])
         .expect("batch");
         assert!(decode_result(stream(&[two]), &DataType::Int64, 1).is_err());
+    }
+
+    #[test]
+    fn a_task_result_gets_the_declared_schema_and_is_checked_against_it() {
+        let declared: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "total",
+            DataType::Int64,
+            true,
+        )]));
+        let batch = decode_batch(stream(&[longs(vec![1, 2])]), &declared).expect("ok");
+        assert_eq!(
+            batch.schema(),
+            declared,
+            "the declared names, not the worker's"
+        );
+        assert_eq!(batch.num_rows(), 2);
+        let strings: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+        let err = decode_batch(stream(&[longs(vec![1])]), &strings).expect_err("another type");
+        assert_eq!(err.error_class(), ErrorClass::PythonException);
+        assert!(err.to_string().contains("expected Utf8View"), "{err}");
+        let two: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let err = decode_batch(stream(&[longs(vec![1])]), &two).expect_err("one column");
+        assert!(err.to_string().contains("1 columns, expected 2"), "{err}");
+        let not_null: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let nulls = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("_0", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![None, Some(1)]))],
+        )
+        .expect("batch");
+        assert!(decode_batch(stream(&[nulls]), &not_null).is_err());
     }
 
     /// An LZ4 stream whose first compressed buffer declares `declared` uncompressed bytes.
@@ -665,7 +958,16 @@ mod tests {
     #[test]
     fn framing_errors_are_refused() {
         let good = stream(&[longs(vec![1])]);
-        assert!(check_frames(&good).is_ok());
+        let first = check_frames(&good).expect("framed");
+        let header = arrow_ipc::root_as_message(&good[8..first]).expect("the first header");
+        assert!(header.header_as_schema().is_some());
+        let batch_first = stream(&[longs(vec![1])])
+            .split_off(first + usize::try_from(header.bodyLength()).expect("small"));
+        let err = decode_result(batch_first, &DataType::Int64, 1).expect_err("no schema");
+        assert!(
+            err.to_string().contains("does not start with a schema"),
+            "{err}"
+        );
         let mut no_marker = good.clone();
         no_marker[0] = 0;
         assert!(

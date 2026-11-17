@@ -57,6 +57,8 @@ pub(crate) struct TextDecoder {
     rows: usize,
     held_text: usize,
     done: bool,
+    /// A reader error held back while the rows read before it are returned.
+    failed: Option<FormatError>,
     metrics: ScanUnitMetrics,
 }
 
@@ -128,6 +130,7 @@ impl TextDecoder {
             rows: 0,
             held_text: 0,
             done: units.units.is_empty(),
+            failed: None,
             metrics,
         })
     }
@@ -233,11 +236,26 @@ impl TextDecoder {
 
 impl Decoder for TextDecoder {
     fn step(&mut self) -> FormatResult<Step> {
+        if let Some(e) = self.failed.take() {
+            self.done = true;
+            return Err(e);
+        }
         if self.done {
             return Ok(Step::Done);
         }
         loop {
-            match self.next()? {
+            let next = match self.next() {
+                Ok(next) => next,
+                // The rows read before a reader error (a compressed stream
+                // that breaks) are returned first, as Spark's scan has handed
+                // them on before the error reaches it.
+                Err(e) if self.rows > 0 => {
+                    self.failed = Some(e);
+                    return Ok(Step::Batch(self.batch()?));
+                }
+                Err(e) => return Err(e),
+            };
+            match next {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Row(row) => {
                     self.add(row);

@@ -11,15 +11,18 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use krishiv_session::auth::{Authenticator, Credentials, Role, RolePolicy, Surface};
+use krishiv_session::auth::{
+    Authenticated, Authenticator, Credentials, DeniedCounts, Role, RolePolicy, Surface,
+};
 use krishiv_session::{PolicyVersion, Privilege, Securable};
 
-use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal};
+use crate::guard::{Access, Caller, Guard, GuardRequest, GuardSurface, Refusal};
 
 /// Authenticates through an [`Authenticator`] and checks the role.
 #[derive(Clone)]
 pub struct SessionGuard {
     auth: Arc<dyn Authenticator>,
+    denials: Option<Arc<DeniedCounts>>,
 }
 
 impl std::fmt::Debug for SessionGuard {
@@ -32,7 +35,18 @@ impl SessionGuard {
     /// A guard over `auth` (normally the server's `ServerAuth`).
     #[must_use]
     pub fn new(auth: Arc<dyn Authenticator>) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            denials: None,
+        }
+    }
+
+    /// The same, counting its denials into `denials` (`krishiv_auth_denied_total`, ADR 0046
+    /// §8; normally `ServerAuth::denials`).
+    #[must_use]
+    pub fn with_denials(mut self, denials: Arc<DeniedCounts>) -> Self {
+        self.denials = Some(denials);
+        self
     }
 }
 
@@ -57,7 +71,29 @@ fn surface(s: GuardSurface) -> Surface {
 
 impl Guard for SessionGuard {
     fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+        Box::pin(async move { self.run(request).await.map(|_| ()) })
+    }
+
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
         Box::pin(async move {
+            let authenticated = self.run(request).await?;
+            Ok(Caller {
+                principal: authenticated.principal.name.clone(),
+                role: authenticated.role.map(|r| r.as_str().to_owned()),
+                method: format!("{:?}", authenticated.method).to_ascii_lowercase(),
+                identity: Some(Arc::new(authenticated)),
+            })
+        })
+    }
+}
+
+impl SessionGuard {
+    /// Authenticates and checks the route's requirement; the authenticated caller on success.
+    async fn run(&self, request: GuardRequest<'_>) -> Result<Authenticated, Refusal> {
+        {
             let surface = surface(request.surface);
             let Some(peer) = request.peer else {
                 tracing::error!(
@@ -69,6 +105,7 @@ impl Guard for SessionGuard {
             };
             let mut credentials = Credentials::new(peer, surface);
             credentials.malformed = request.malformed;
+            credentials.peer_leaf = request.peer_leaf.as_deref();
             if let Some(token) = request.token {
                 credentials = credentials.with_bearer(token);
             }
@@ -78,13 +115,13 @@ impl Guard for SessionGuard {
                 Err(_) => return Err(Refusal::Unauthenticated),
             };
             let Some((securable, privilege)) = requirement(request.access) else {
-                return Ok(());
+                return Ok(authenticated);
             };
             // Client code is not reachable from these routes, so the UDF role does not matter;
             // the strictest value keeps it from ever widening a decision.
             let policy = RolePolicy::new(authenticated.role, Role::Admin, PolicyVersion(0));
             if policy.allows(&securable, privilege) {
-                return Ok(());
+                return Ok(authenticated);
             }
             tracing::warn!(
                 target: "krishiv::audit",
@@ -96,8 +133,11 @@ impl Guard for SessionGuard {
                 error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
                 "access denied"
             );
+            if let Some(d) = &self.denials {
+                d.record(surface, privilege);
+            }
             Err(Refusal::Denied)
-        })
+        }
     }
 }
 

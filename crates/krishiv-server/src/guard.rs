@@ -50,7 +50,7 @@ pub enum GuardSurface {
 }
 
 /// What a surface extracted from one request. Never logged: `Debug` hides the token.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct GuardRequest<'a> {
     /// The presented token, if the surface found one.
@@ -59,6 +59,8 @@ pub struct GuardRequest<'a> {
     pub malformed: bool,
     /// The peer's address, when the listener records it ([`PeerAddr`]).
     pub peer: Option<SocketAddr>,
+    /// The client certificate rustls verified at the TLS handshake, if any.
+    pub peer_leaf: Option<Arc<[u8]>>,
     /// The surface.
     pub surface: GuardSurface,
     /// What the route needs.
@@ -73,6 +75,7 @@ impl<'a> GuardRequest<'a> {
             token: None,
             malformed: false,
             peer: None,
+            peer_leaf: None,
             surface,
             access,
         }
@@ -96,6 +99,13 @@ impl<'a> GuardRequest<'a> {
     #[must_use]
     pub fn with_peer(mut self, peer: Option<SocketAddr>) -> Self {
         self.peer = peer;
+        self
+    }
+
+    /// The same request with the connection's verified client certificate.
+    #[must_use]
+    pub fn with_peer_leaf(mut self, leaf: Option<Arc<[u8]>>) -> Self {
+        self.peer_leaf = leaf;
         self
     }
 }
@@ -126,6 +136,61 @@ pub enum Refusal {
     Misconfigured,
 }
 
+/// Who a guarded request acts for, as the guard resolved it (P3-T066: the admin API needs the
+/// caller to tell its own work from other principals' and to log who acted).
+#[derive(Clone)]
+pub struct Caller {
+    /// The principal's name.
+    pub principal: String,
+    /// The role (`viewer`, `operator`, `admin`), if the credential maps to one.
+    pub role: Option<String>,
+    /// How the caller authenticated (`token`, `mtls`, `oidc`, `startup-token`).
+    pub method: String,
+    /// What the guard resolved, for the implementation behind the admin API to read (a
+    /// `krishiv_session::auth::Authenticated` from a `SessionGuard` (feature `session`)).
+    pub identity: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+/// The identity marker of [`Caller::local_admin`]: the only caller without an `Authenticated`
+/// identity that holds rights. A guard that sets `role` without an identity gets none.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalAdmin;
+
+impl Caller {
+    /// The local administrator of a server without authentication: whoever holds its start-up
+    /// token (loopback only, ADR 0046 section 6).
+    #[must_use]
+    pub fn local_admin() -> Self {
+        Self {
+            principal: "local".to_owned(),
+            role: Some("admin".to_owned()),
+            method: "startup-token".to_owned(),
+            identity: Some(Arc::new(LocalAdmin)),
+        }
+    }
+
+    /// A caller a guard let through without saying who it is: no role, no identity.
+    #[must_use]
+    pub fn anonymous() -> Self {
+        Self {
+            principal: "unknown".to_owned(),
+            role: None,
+            method: "none".to_owned(),
+            identity: None,
+        }
+    }
+}
+
+impl fmt::Debug for Caller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Caller")
+            .field("principal", &self.principal)
+            .field("role", &self.role)
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Decides whether a request may use a guarded route.
 pub trait Guard: Send + Sync + 'static {
     /// `Ok` lets the request through.
@@ -133,6 +198,21 @@ pub trait Guard: Send + Sync + 'static {
     /// # Errors
     /// The [`Refusal`]; the guard has already logged it.
     fn check<'a>(&'a self, request: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>>;
+
+    /// [`Self::check`], returning who the request acts for. A guard that cannot say (the
+    /// default) returns [`Caller::anonymous`], which holds no role.
+    ///
+    /// # Errors
+    /// The [`Refusal`]; the guard has already logged it.
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        Box::pin(async move {
+            self.check(request).await?;
+            Ok(Caller::anonymous())
+        })
+    }
 }
 
 /// One shared secret: the start-up token of a server without authentication.
@@ -169,6 +249,14 @@ impl Guard for TokenGuard {
             Err(Refusal::Unauthenticated)
         }))
     }
+
+    fn authenticate<'a>(
+        &'a self,
+        request: GuardRequest<'a>,
+    ) -> BoxFuture<'a, Result<Caller, Refusal>> {
+        let checked = self.check(request);
+        Box::pin(async move { checked.await.map(|()| Caller::local_admin()) })
+    }
 }
 
 /// Whether `a` and `b` are equal, in time that depends only on their lengths.
@@ -182,20 +270,45 @@ pub(crate) fn same_secret(a: &[u8], b: &[u8]) -> bool {
     std::hint::black_box(diff) == 0
 }
 
-/// The peer address of an admin connection, recorded by [`crate::admin::serve_capped`] as
-/// `ConnectInfo<PeerAddr>` for the failure throttle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PeerAddr(pub SocketAddr);
+/// The peer of an admin connection, recorded by [`crate::admin::serve_capped`] as
+/// `ConnectInfo<PeerAddr>`: its address (the failure throttle's key) and, over TLS, the client
+/// certificate rustls verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerAddr {
+    /// The peer's address.
+    pub addr: SocketAddr,
+    /// The verified client leaf certificate (DER), if the connection is TLS and the client
+    /// sent one.
+    pub leaf: Option<Arc<[u8]>>,
+}
+
+impl PeerAddr {
+    /// A peer at `addr` with no client certificate.
+    #[must_use]
+    pub fn new(addr: SocketAddr) -> Self {
+        Self { addr, leaf: None }
+    }
+}
 
 impl Connected<IncomingStream<'_, crate::admin::CappedListener>> for PeerAddr {
     fn connect_info(stream: IncomingStream<'_, crate::admin::CappedListener>) -> Self {
-        Self(*stream.remote_addr())
+        Self::new(*stream.remote_addr())
+    }
+}
+
+#[cfg(feature = "tls")]
+impl Connected<IncomingStream<'_, crate::tls::TlsCappedListener>> for PeerAddr {
+    fn connect_info(stream: IncomingStream<'_, crate::tls::TlsCappedListener>) -> Self {
+        Self {
+            addr: *stream.remote_addr(),
+            leaf: stream.io().peer_leaf(),
+        }
     }
 }
 
 impl Connected<SocketAddr> for PeerAddr {
     fn connect_info(addr: SocketAddr) -> Self {
-        Self(addr)
+        Self::new(addr)
     }
 }
 
@@ -204,7 +317,15 @@ impl Connected<SocketAddr> for PeerAddr {
 pub fn peer_of(extensions: &axum::http::Extensions) -> Option<SocketAddr> {
     extensions
         .get::<axum::extract::ConnectInfo<PeerAddr>>()
-        .map(|c| c.0.0)
+        .map(|c| c.0.addr)
+}
+
+/// The verified client certificate recorded on `extensions`, if the connection carried one.
+#[must_use]
+pub fn peer_leaf_of(extensions: &axum::http::Extensions) -> Option<Arc<[u8]>> {
+    extensions
+        .get::<axum::extract::ConnectInfo<PeerAddr>>()
+        .and_then(|c| c.0.leaf.clone())
 }
 
 #[cfg(test)]
@@ -244,5 +365,53 @@ mod tests {
         assert!(!same_secret(b"abc", b"abcd"));
         assert!(!same_secret(b"abcd", b"abc"));
         assert!(same_secret(b"", b""));
+    }
+
+    #[test]
+    fn the_local_admin_holds_a_role_and_an_identity_and_an_anonymous_caller_neither() {
+        let a = Caller::local_admin();
+        assert_eq!(a.principal, "local");
+        assert_eq!(a.role.as_deref(), Some("admin"));
+        assert!(a.identity.is_some());
+        let n = Caller::anonymous();
+        assert_eq!(n.principal, "unknown");
+        assert!(n.role.is_none() && n.identity.is_none());
+    }
+
+    #[test]
+    fn a_caller_prints_without_its_identity() {
+        let text = format!("{:?}", Caller::local_admin());
+        assert!(text.contains("local") && text.contains("admin"), "{text}");
+        assert!(!text.contains("LocalAdmin"), "{text}");
+    }
+
+    fn auth_request(token: Option<&str>) -> GuardRequest<'_> {
+        GuardRequest::new(GuardSurface::Ui, Access::Operate).with_token(token)
+    }
+
+    #[tokio::test]
+    async fn the_token_guard_names_the_local_admin_for_the_right_token_only() {
+        let g = TokenGuard::new("s3cret");
+        let caller = g.authenticate(auth_request(Some("s3cret"))).await;
+        assert_eq!(caller.map(|c| c.principal), Ok("local".to_owned()));
+        assert!(g.authenticate(auth_request(Some("nope"))).await.is_err());
+        assert!(g.authenticate(auth_request(None)).await.is_err());
+        let empty = TokenGuard::new("");
+        assert!(empty.authenticate(auth_request(Some(""))).await.is_err());
+    }
+
+    struct AllowAll;
+    impl Guard for AllowAll {
+        fn check<'a>(&'a self, _: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guard_that_cannot_say_who_gets_an_anonymous_caller_with_no_rights() {
+        let caller = AllowAll.authenticate(auth_request(None)).await;
+        let caller = caller.unwrap_or_else(|_| Caller::local_admin());
+        assert_eq!(caller.principal, "unknown");
+        assert!(caller.role.is_none() && caller.identity.is_none());
     }
 }

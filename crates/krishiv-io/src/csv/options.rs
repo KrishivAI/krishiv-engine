@@ -78,6 +78,15 @@ fn conf(
 
 const NONE: OptionDefault = OptionDefault::None;
 
+/// The session conf of CSV column pruning. Spark 4.2's `CSVOptions` reads
+/// `getBool(columnPruning, !multiLine && conf)`, so the conf counts only
+/// without `multiLine` while the read option counts always. It is its own
+/// option, named as the conf, so a plan carrying it to a worker
+/// (`OptionSchema::with_conf_fallbacks`) keeps it apart from the option.
+/// Known divergence: given as a read option it applies (Spark ignores a
+/// conf key among read options).
+const COLUMN_PRUNING_CONF: &str = "spark.sql.csv.parser.columnPruning.enabled";
+
 /// The options as one list (a brace-delimited macro: `rustfmt` leaves the
 /// table one option per line).
 macro_rules! options {
@@ -122,7 +131,9 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
         flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails.");
-        conf("columnPruning", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.csv.parser.columnPruning.enabled", "Parse only the requested columns.");
+        conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
+        flag("columnPruning", None, "Parse only the requested columns (default: `spark.sql.csv.parser.columnPruning.enabled`, off under `multiLine`).");
+        conf(COLUMN_PRUNING_CONF, OptionKind::Bool, OptionDefault::None, COLUMN_PRUNING_CONF, "The session's `spark.sql.csv.parser.columnPruning.enabled`, carried apart from `columnPruning` (Spark ANDs it with `!multiLine`).");
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         string("locale", "The locale of numbers (only en-US).");
@@ -179,6 +190,9 @@ pub(crate) struct CsvOptions {
     pub quote_all: bool,
     pub escape_quotes: bool,
     pub column_pruning: bool,
+    /// `ignoreCorruptFiles` (or `spark.sql.files.ignoreCorruptFiles`): inference keeps the lines of a broken
+    /// compressed file.
+    pub ignore_corrupt_files: bool,
 }
 
 /// A single character option (`quote`, `escape`, `comment`): `None` when
@@ -327,7 +341,13 @@ impl CsvOptions {
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),
-            column_pruning: o.bool("columnPruning").unwrap_or(true),
+            // Spark 4.2's `CSVOptions`: `getBool(COLUMN_PRUNING, !multiLine
+            // && columnPruning)`: the option as given, else the conf (on by
+            // default) only without `multiLine`.
+            column_pruning: o
+                .bool("columnPruning")
+                .unwrap_or_else(|| !multi_line && o.bool(COLUMN_PRUNING_CONF).unwrap_or(true)),
+            ignore_corrupt_files: o.bool("ignoreCorruptFiles").unwrap_or(false),
         })
     }
 }

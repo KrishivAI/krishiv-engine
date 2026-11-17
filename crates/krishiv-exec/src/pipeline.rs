@@ -56,6 +56,17 @@ pub(crate) struct Pipeline {
     pub(crate) operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     /// Per operator: the breaker sink whose finalized state it reads.
     pub(crate) operator_inputs: Vec<Option<OperatorId>>,
+    /// Per operator: the plan point whose partitions it numbers (see
+    /// [`Origin`]). Below a `UNION ALL` that is the operator's own branch
+    /// (each branch numbers its partitions from 0, as Spark's child RDD
+    /// does); above it, the union (the union's partitions follow one
+    /// another, as `UnionRDD`'s, or are one when it coalesces).
+    pub(crate) origins: Vec<Origin>,
+    /// The `UNION ALL`s fanned in at this pipeline, innermost first: each
+    /// one's branches after the first (the first is this pipeline as it
+    /// was before that fan-in, `Origin { pipeline, level: k }` for the
+    /// `k`-th).
+    pub(crate) fans: Vec<Vec<Origin>>,
     pub(crate) sink: (OperatorId, Arc<dyn Sink>),
     /// Pipelines that must finalize first.
     pub(crate) deps: Vec<usize>,
@@ -67,6 +78,17 @@ pub(crate) struct Pipeline {
     pub(crate) second_input: Option<OperatorId>,
 }
 
+/// A point of a pipeline's plan whose partitions an operator numbers:
+/// pipeline `pipeline` above its first `level` fan-ins (`level` 0: its own
+/// source).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct Origin {
+    /// The pipeline's index.
+    pub(crate) pipeline: usize,
+    /// The fan-ins of that pipeline below the point.
+    pub(crate) level: usize,
+}
+
 struct Draft {
     /// The pipelines a fan-in below this one's next operators added: the
     /// operators pushed from now on go into them too.
@@ -76,6 +98,8 @@ struct Draft {
     second_input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     operator_inputs: Vec<Option<OperatorId>>,
+    origins: Vec<Origin>,
+    fans: Vec<Vec<Origin>>,
     sink: (OperatorId, Arc<dyn Sink>),
     deps: Vec<usize>,
     preserve_order: bool,
@@ -104,6 +128,9 @@ pub struct PipelineBuilder {
     nodes: Vec<u32>,
     /// The pipelines of shared plans built so far: the sink ending each and its draft, by plan number.
     shared: HashMap<u64, (OperatorId, usize)>,
+    /// The most drivers one pipeline of this plan runs at once, when the
+    /// runner knows it (see [`Self::parallelism`]).
+    parallelism: Option<usize>,
 }
 
 impl std::fmt::Debug for PipelineBuilder {
@@ -125,6 +152,7 @@ impl PipelineBuilder {
             names: Vec::new(),
             nodes: Vec::new(),
             shared: HashMap::new(),
+            parallelism: None,
         };
         let id = b.id(result.name(), OperatorRole::Sink);
         b.drafts.push(Draft {
@@ -134,11 +162,31 @@ impl PipelineBuilder {
             second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
+            origins: Vec::new(),
+            fans: Vec::new(),
             sink: (id, result),
             deps: Vec::new(),
             preserve_order: false,
         });
         b
+    }
+
+    /// The same builder for a plan whose pipelines run at most
+    /// `parallelism` drivers at once.
+    #[must_use]
+    pub(crate) fn with_parallelism(mut self, parallelism: usize) -> Self {
+        self.parallelism = Some(parallelism);
+        self
+    }
+
+    /// The most drivers one pipeline runs at once: the executor's slots, or
+    /// 1 under `krishiv.deterministicOrder` (one driver per pipeline there,
+    /// and a plan chosen from it never follows the machine or thread
+    /// timing). It is the slot count, not a pipeline's own driver count,
+    /// which its source's `max_parallelism` decides only once it runs.
+    /// `None` when the builder was made outside a runner.
+    pub(crate) fn parallelism(&self) -> Option<usize> {
+        self.parallelism
     }
 
     fn id(&mut self, name: &'static str, role: OperatorRole) -> OperatorId {
@@ -228,14 +276,20 @@ impl PipelineBuilder {
     pub fn push_operator(&mut self, op: Arc<dyn Operator>) -> OperatorId {
         let id = self.id(op.name(), OperatorRole::Operator);
         let (last, rest) = (self.current, self.drafts[self.current].fanned.clone());
+        let origin = Origin {
+            pipeline: last,
+            level: self.drafts[last].fans.len(),
+        };
         for i in rest {
             let draft = &mut self.drafts[i];
             draft.operators.push((id, Arc::clone(&op)));
             draft.operator_inputs.push(None);
+            draft.origins.push(origin);
         }
         let draft = &mut self.drafts[last];
         draft.operators.push((id, op));
         draft.operator_inputs.push(None);
+        draft.origins.push(origin);
         id
     }
 
@@ -304,6 +358,8 @@ impl PipelineBuilder {
             second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
+            origins: Vec::new(),
+            fans: Vec::new(),
             sink: (id, sink),
             deps: Vec::new(),
             preserve_order: false,
@@ -364,6 +420,7 @@ impl PipelineBuilder {
         Arc::clone(first).build_pipelines(self)?;
         let main = self.current;
         let mut added = Vec::new();
+        let mut branches = Vec::with_capacity(rest.len());
         for input in rest {
             let index = self.drafts.len();
             self.drafts.push(Draft {
@@ -373,6 +430,8 @@ impl PipelineBuilder {
                 second_input: None,
                 operators: Vec::new(),
                 operator_inputs: Vec::new(),
+                origins: Vec::new(),
+                fans: Vec::new(),
                 sink: sink.clone(),
                 deps: deps.clone(),
                 preserve_order: order,
@@ -383,8 +442,13 @@ impl PipelineBuilder {
             built?;
             added.push(index);
             added.extend(self.drafts[index].fanned.iter().copied());
+            branches.push(Origin {
+                pipeline: index,
+                level: self.drafts[index].fans.len(),
+            });
         }
         self.draft().fanned.extend(added);
+        self.draft().fans.push(branches);
         Ok(())
     }
 
@@ -405,6 +469,8 @@ impl PipelineBuilder {
                     source,
                     operators: d.operators,
                     operator_inputs: d.operator_inputs,
+                    origins: d.origins,
+                    fans: d.fans,
                     sink: d.sink,
                     deps: d.deps,
                     preserve_order: d.preserve_order,

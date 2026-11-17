@@ -124,6 +124,12 @@ pub struct ScanPushdowns {
     /// [`ScanPushdown::take`] reads the row back by. Only for a scan that
     /// [`supports_take`](ScanPushdown::supports_take).
     pub row_id: bool,
+    /// Read each input partition whole, by one driver, in order, and tag
+    /// its batches with the partition's index ([`Batch::split`]): a
+    /// `TABLESAMPLE` above draws partition `i`'s rows from its own stream
+    /// in row order, however many drivers run. File scans honour it; an
+    /// in-memory scan's morsels are already read so.
+    pub partition_order: bool,
 }
 
 /// The rows of one file [`ScanPushdown::take`] reads.
@@ -206,6 +212,13 @@ pub trait ScanPushdown: Send + Sync {
         Box::pin(std::future::ready(Err(internal(
             "this scan can't read rows by position".to_owned(),
         ))))
+    }
+    /// What `EXPLAIN` adds to the scan's line for a scan built with
+    /// `pushdowns` (for example a table format's snapshot and file counts),
+    /// after its columns and pushed filters. The default adds nothing.
+    fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
+        let _ = pushdowns;
+        None
     }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the
@@ -385,7 +398,9 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate_in(piece.data(), partition)?;
+            // Spark's index of the morsel's partition: a `UNION ALL` branch
+            // numbers its own from 0, as a `Filter` above the scan does.
+            let mask = filter.evaluate_in(piece.data(), partition.wrapping_sub(local.base))?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter

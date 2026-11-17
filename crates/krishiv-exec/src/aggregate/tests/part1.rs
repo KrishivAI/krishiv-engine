@@ -903,8 +903,8 @@ async fn local_spill_keeps_an_unspilled_table_accounted() {
 
 /// An aggregate's spill writes (a driver's table, and the tables combined
 /// into the global state) run under the writing driver's `spilling` guard,
-/// in both table layouts, with another driver's combined table charged to
-/// the writer for the write: the bytes a round waits for are the writer's
+/// in both table layouts, with a combined table charged to the writer for
+/// the write: the bytes a round waits for are the writer's
 /// own, so another driver's round that cannot spill waits for them.
 #[tokio::test]
 async fn a_spill_write_holds_the_spilling_guard() {
@@ -946,7 +946,10 @@ async fn a_spill_write_holds_the_spilling_guard() {
             let mut l = Sink::local_state(&*agg, &other, &g).unwrap();
             agg.sink(batch(), &mut l, &g).unwrap();
             agg.combine(l, &g).unwrap();
-            assert!(other.consumer().consumer().held() > 0);
+            // The table went to the combined tables' consumer, not the
+            // ending driver's (`sink/combined.rs`).
+            assert_eq!(other.consumer().consumer().held(), 0);
+            assert!(q.pool().reserved() > 0);
         };
         // A driver's spill writes its own table and the combined one.
         combine_other().await;

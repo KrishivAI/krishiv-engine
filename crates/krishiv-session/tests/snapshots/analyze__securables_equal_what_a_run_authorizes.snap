@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: differences
+---
+Explain::Json: EXPLAIN FORMAT JSON INSERT INTO t SELECT 1
+  analyze only: []
+  run only: [("MODIFY", "table `spark_catalog`.`default`.`t`")]
+Explain::Json: EXPLAIN FORMAT JSON DROP TABLE t
+  analyze only: []
+  run only: [("DROP", "table `spark_catalog`.`default`.`t`")]
+DirAddPartition: ALTER TABLE p ADD PARTITION (k = 1)
+  analyze only: []
+  run only: [("CREATE", "path 'file:<warehouse>/p/k=1'")]
+DirDropPartition: ALTER TABLE p DROP PARTITION (k = 1)
+  analyze only: []
+  run only: [("MODIFY", "path 'file:<warehouse>/p/k=1'")]

@@ -39,9 +39,10 @@ use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
+use crate::numbering::{MemberShape, Numbering};
 use crate::operator::{GlobalState, Source};
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
-use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
+use crate::pipeline::{ExecNode, Origin, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
 
 /// Plans in, running queries out (spec 13 §4). Embedded and single-node:
@@ -89,9 +90,18 @@ impl QueryRunner {
     ) -> Result<BoxStream<'static, Result<Batch>>> {
         let capacity = query.config().result_buffer_per_slot * self.executor.parallelism();
         let channel = Channel::new(capacity);
+        // Under `krishiv.deterministicOrder` every pipeline runs one driver
+        // (lanes aside, `start_members`), and a plan chosen from this value
+        // must not make its output order follow thread timing: one.
+        let parallelism = if query.config().deterministic_order {
+            1
+        } else {
+            self.executor.parallelism()
+        };
         let mut b = PipelineBuilder::new(Arc::new(ResultSink {
             channel: Arc::clone(&channel),
-        }));
+        }))
+        .with_parallelism(parallelism);
         plan.build_pipelines(&mut b)?;
         let (pipelines, names) = b.finish()?;
         let mut member: HashMap<OperatorId, Vec<u32>> = HashMap::new();
@@ -471,7 +481,15 @@ fn start_group(
         return Err(internal("a pipeline group without pipelines".to_owned()));
     };
     let (sink_id, sink) = &first.sink;
-    let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
+    // A sink sees the breaker its pipeline's source reads, as the source
+    // does (for a fan-in, the first member's): a sink that continues that
+    // breaker's state adopts it (`aggregate/distinct.rs` `KeyFeed`); every
+    // other sink ignores it.
+    let mut sink_ctx = ctx((*sink_id, sink.name()));
+    if let Some(input) = &first.input {
+        sink_ctx = sink_ctx.with_dependency(read(input)?);
+    }
+    let sink_global = sink.global_state(&sink_ctx)?;
     let sink = Arc::clone(sink);
     let mut started = Vec::with_capacity(members.len());
     // Scheduler-assigned globally unique partition ids: the drivers of
@@ -535,8 +553,56 @@ fn start_group(
             source_global,
             drivers,
             base_partition: base,
+            span: span as u64,
+            operator_bases: Vec::new(),
             lanes: lane_count.map(|n| (base, n)),
         });
+    }
+    // Each operator numbers partitions from its origin (`Pipeline::origins`):
+    // its own member below a `UNION ALL`, the union's numbering above it
+    // (`numbering.rs`).
+    let shapes: Vec<MemberShape<'_>> = started
+        .iter()
+        .map(|m| MemberShape {
+            pipeline: usize::try_from(m.pipeline.index).unwrap_or(usize::MAX),
+            base: u64::from(m.base_partition),
+            span: m.span,
+            single_source: m.pipeline.source.1.single_partition(&m.source_global),
+            origins: &m.pipeline.origins,
+            keeps: m
+                .pipeline
+                .operators
+                .iter()
+                .map(|(_, op)| op.keeps_partitioning())
+                .collect(),
+            fans: &m.pipeline.fans,
+        })
+        .collect();
+    // A coalesced union's branches share index 0's streams above it, so they
+    // must run in turn (Spark's one task). A group whose members run together
+    // (a shared operator needs a flush, e.g. a hash-join probe above the
+    // union) keeps the plain numbering, which gives each member its own
+    // streams: deterministic, though not Spark's one stream (known gap,
+    // `numbering.rs`).
+    let sequential = started.len() < 2 || members_run_in_turn(&started);
+    let numbering = Numbering::new(
+        &shapes,
+        query.config().union_output_partitioning && sequential,
+    );
+    // The group's sink is above every fan-in of the first member.
+    let top = shapes.first().map_or(
+        Origin {
+            pipeline: 0,
+            level: 0,
+        },
+        |m| Origin {
+            pipeline: m.pipeline,
+            level: m.fans.len(),
+        },
+    );
+    let bases: Vec<Vec<u32>> = shapes.iter().map(|m| numbering.bases(m, top)).collect();
+    for (m, bases) in started.iter_mut().zip(bases) {
+        m.operator_bases = bases;
     }
     // The members whose rows have a source order (an ordered source, and
     // no operator that emits after a cross-driver flush, where a driver
@@ -580,6 +646,10 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// The partition ids it takes (see `start_group`).
+    span: u64,
+    /// Per operator: the first partition id it numbers partitions from.
+    operator_bases: Vec<u32>,
     /// `(first partition id, lane count)` when its drivers are logical partitions.
     lanes: Option<(u32, usize)>,
 }
@@ -645,11 +715,15 @@ struct GroupStart {
 /// over a sorted child) sees nondeterministic rows. A flush barrier waits
 /// for every driver's arrival, so a group sharing one stays concurrent.
 fn fan_in_is_sequential(group: &GroupStart) -> bool {
-    group.members.len() > 1
-        && group
-            .members
-            .iter()
-            .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
+    group.members.len() > 1 && members_run_in_turn(&group.members)
+}
+
+/// Whether no operator of `members` needs a cross-driver flush (see
+/// [`fan_in_is_sequential`]).
+fn members_run_in_turn(members: &[MemberStart]) -> bool {
+    members
+        .iter()
+        .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
 }
 
 /// The barriers of `member`'s operators.
@@ -708,6 +782,7 @@ fn spawn_group(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
@@ -745,6 +820,7 @@ async fn run_group_sequential(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),

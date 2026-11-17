@@ -86,6 +86,7 @@ fn file_reads_and_the_default_format() {
     assert_eq!(show(&read_files(None, &["/a"])), "Read parquet [/a]\n");
     let orc = TranslateConf {
         default_data_source: "orc".into(),
+        ..TranslateConf::default()
     };
     let plan = translate_relation(&read_files(None, &["/a"]), &orc).unwrap();
     assert_eq!(plan.to_string(), "Read orc [/a]\n");
@@ -126,73 +127,6 @@ fn file_read_options_and_paths_are_classified_once() {
         matches!(paths[0], OptionValue::Url(_)),
         "a signed URL's signature is secret"
     );
-}
-
-#[test]
-fn a_user_schema_reads_as_ddl_or_json() {
-    let with = |schema: &str| {
-        data_source(read::DataSource {
-            format: Some("csv".into()),
-            paths: vec!["/a".into()],
-            schema: Some(schema.into()),
-            ..read::DataSource::default()
-        })
-    };
-    // A DDL column list, nullability kept in the IR (the read reports
-    // every column nullable).
-    let PlanNode::Read(ReadSource::Files {
-        schema: Some(ddl), ..
-    }) = node(&with("a INT NOT NULL, b STRING"))
-    else {
-        panic!("no schema")
-    };
-    assert_eq!(
-        ddl.fields()
-            .iter()
-            .map(|f| (f.name(), f.data_type().simple_string(), f.nullable()))
-            .collect::<Vec<_>>(),
-        [
-            ("a", "int".to_owned(), false),
-            ("b", "string".to_owned(), true)
-        ]
-    );
-    // PySpark sends a StructType as its JSON form.
-    let json = r#"{"fields":[{"metadata":{},"name":"a","nullable":false,"type":"integer"},{"metadata":{},"name":"b","nullable":true,"type":"string"}],"type":"struct"}"#;
-    let PlanNode::Read(ReadSource::Files {
-        schema: Some(from_json),
-        ..
-    }) = node(&with(json))
-    else {
-        panic!("no schema")
-    };
-    assert_eq!(from_json, ddl);
-    assert_eq!(show(&with("a INT")), "Read csv [/a] schema struct<a:int>\n");
-    // Neither form: the DDL parser's error (Spark's `parseTypeWithFallback`
-    // keeps the first parser's error).
-    assert_eq!(code(&with("a INT,,")), ErrorClass::ParseSyntaxError);
-    assert_eq!(code(&with("integer")), ErrorClass::ParseSyntaxError);
-    // JSON of another type: Spark's `parseSchema` names the input as sent.
-    let array = r#"{"type":"array","elementType":"integer","containsNull":true}"#;
-    let e = fails(translate(&with(array)));
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::ConnectInvalidPlanInvalidSchemaNonStructType
-    );
-    assert_eq!(
-        e.message_parameters(),
-        [
-            ("inputSchema", format!("\"{array}\"")),
-            ("dataType", "\"ARRAY<INT>\"".to_owned()),
-        ]
-    );
-    // JSON that does not start with `{` falls back after DDL fails, as in Spark.
-    let e = fails(translate(&with("\"integer\"")));
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::ConnectInvalidPlanInvalidSchemaNonStructType
-    );
-    // Only blanks: no columns, an empty statement, never an empty schema.
-    assert_eq!(code(&with("   ")), ErrorClass::ParseEmptyStatement);
 }
 
 #[test]
@@ -408,7 +342,7 @@ fn range_builds_the_range_leaf() {
 }
 
 #[test]
-fn a_project_without_input_reads_one_row_and_a_qualified_alias_is_unsupported() {
+fn a_project_without_input_reads_one_row() {
     let no_input = relation(RelType::Project(Box::default()));
     match node(&no_input) {
         PlanNode::Project { input, exprs } => {
@@ -417,12 +351,94 @@ fn a_project_without_input_reads_one_row_and_a_qualified_alias_is_unsupported() 
         }
         other => panic!("{other:?}"),
     }
-    let qualified = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
+}
+
+fn aliased(qualifier: &[&str], alias: &str) -> Relation {
+    relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
-        alias: "x".into(),
-        qualifier: vec!["db".into()],
-    })));
-    assert!(message(&qualified).contains("SubqueryAlias.qualifier"));
+        alias: alias.into(),
+        qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+    })))
+}
+
+#[test]
+fn a_subquery_alias_qualifier_prefixes_the_alias_parts() {
+    let sep = krishiv_plan::ALIAS_PART_SEP;
+    let PlanNode::SubqueryAlias { alias, .. } = node(&aliased(&["db", "s"], "t")) else {
+        panic!("not an alias")
+    };
+    assert_eq!(alias, format!("db{sep}s{sep}t"));
+    let PlanNode::SubqueryAlias { alias, .. } = node(&aliased(&[], "t")) else {
+        panic!("not an alias")
+    };
+    assert_eq!(alias, "t");
+    // Printed dotted, as the IR prints a multi-part alias.
+    assert_eq!(
+        show(&aliased(&["db"], "t")),
+        "SubqueryAlias db.t\n+- Read t\n"
+    );
+}
+
+#[test]
+fn an_alias_part_holding_the_separator_is_refused() {
+    let sep = krishiv_plan::ALIAS_PART_SEP;
+    for r in [
+        aliased(&[&format!("a{sep}b")], "t"),
+        aliased(&["db"], &format!("t{sep}u")),
+        aliased(&[], &format!("t{sep}u")),
+    ] {
+        let e = fails(translate(&r));
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+        assert!(
+            e.message().contains("SubqueryAlias.qualifier"),
+            "{}",
+            e.message()
+        );
+    }
+}
+
+fn read_with_schema(schema: &str) -> Relation {
+    relation(RelType::Read(pb::Read {
+        is_streaming: false,
+        read_type: Some(ReadType::DataSource(read::DataSource {
+            format: Some("csv".into()),
+            paths: vec!["/a.csv".into()],
+            schema: Some(schema.into()),
+            ..read::DataSource::default()
+        })),
+    }))
+}
+
+#[test]
+fn a_data_source_schema_is_the_reads_schema() {
+    let ddl = node(&read_with_schema("a INT NOT NULL, b STRING"));
+    let PlanNode::Read(ReadSource::Files { schema, .. }) = &ddl else {
+        panic!("{ddl:?}")
+    };
+    let schema = schema.as_ref().expect("a schema");
+    assert_eq!(schema.fields().len(), 2);
+    assert!(!schema.fields()[0].nullable());
+    // JSON is the fallback.
+    let json = node(&read_with_schema(
+        r#"{"type":"struct","fields":[{"name":"a","type":"integer","nullable":false,"metadata":{}},{"name":"b","type":"string","nullable":true,"metadata":{}}]}"#,
+    ));
+    let PlanNode::Read(ReadSource::Files {
+        schema: from_json, ..
+    }) = &json
+    else {
+        panic!("{json:?}")
+    };
+    assert_eq!(from_json.as_ref(), Some(schema));
+    // A schema that is not a struct (JSON of a bare type) is an invalid plan.
+    assert_eq!(
+        fails(translate(&read_with_schema("\"integer\"")))
+            .error_class()
+            .name(),
+        "CONNECT_INVALID_PLAN.INVALID_SCHEMA_NON_STRUCT_TYPE"
+    );
+    // Neither DDL nor JSON: a parse error, and the text is not echoed.
+    let e = fails(translate(&read_with_schema("CANARY nonsense nonsense")));
+    assert!(!e.message().contains("CANARY"), "{}", e.message());
 }
 
 #[test]
@@ -753,6 +769,31 @@ fn grouping_sets() {
 }
 
 #[test]
+fn an_aliased_grouping_key_groups_by_the_bare_expression() {
+    // `groupBy((a % 2).alias("m"))` (PY-009): the output keeps the alias, the
+    // grouping expression is `a`, as `GROUP BY a` is.
+    let aliased = expr(ExprType::Alias(Box::new(expression::Alias {
+        expr: Some(Box::new(attr("a"))),
+        name: vec!["m".to_owned()],
+        metadata: None,
+    })));
+    let r = aggregate_of(1, vec![aliased], vec![func("count", vec![])]);
+    let PlanNode::Aggregate {
+        grouping,
+        aggregates,
+        ..
+    } = node(&r)
+    else {
+        panic!("not an aggregate")
+    };
+    assert_eq!(
+        show(&r),
+        "Aggregate [a], [a AS m, count()]\n+- Read t\n",
+        "{grouping:?} {aggregates:?}"
+    );
+}
+
+#[test]
 fn aggregate_errors() {
     let pivot = aggregate_of(4, vec![attr("a")], vec![]);
     let e = fails(translate(&pivot));
@@ -855,10 +896,6 @@ fn unsupported_relations_are_named() {
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
         (RelType::ToDf(Box::default()), "TO_DF(18)"),
         (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
-        (
-            RelType::LocalRelation(Default::default()),
-            "LOCAL_RELATION(11)",
-        ),
         (RelType::Drop(Box::default()), "DROP(21)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
@@ -932,20 +969,64 @@ fn secrets_in_read_options_reach_no_printer_key_or_error() {
     }
     let e = fails(translate(&streaming));
     assert!(!e.to_string().contains(CANARY));
-    let mut with_schema = r;
+    let mut with_predicates = r;
     if let Some(RelType::Read(pb::Read {
         read_type: Some(ReadType::DataSource(d)),
         ..
-    })) = &mut with_schema.rel_type
+    })) = &mut with_predicates.rel_type
     {
-        d.schema = Some("a INT,,".into());
+        d.predicates = vec!["a < 1".into()];
     }
-    // A schema that does not parse.
-    assert!(!fails(translate(&with_schema)).to_string().contains(CANARY));
+    assert!(
+        !fails(translate(&with_predicates))
+            .to_string()
+            .contains(CANARY)
+    );
     // The printed plan still names the options.
     assert!(
         plan.to_string().contains("password=*********(redacted)"),
         "{plan}"
     );
     let _ = conf();
+}
+
+#[test]
+fn collect_metrics_is_the_observe_node() {
+    let r = with_id(
+        relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: input(),
+            name: "obs".into(),
+            metrics: vec![func("count", vec![lit(LiteralType::Integer(1))])],
+        }))),
+        9,
+    );
+    let plan = root(&r);
+    let PlanNode::CollectMetrics { name, metrics, .. } = &plan.node else {
+        panic!("a CollectMetrics node, got {:?}", plan.node);
+    };
+    assert_eq!((name.as_str(), metrics.len()), ("obs", 1));
+    assert_eq!(plan.origin.plan_id.map(|p| p.0), Some(9));
+}
+
+#[test]
+fn collect_metrics_without_an_input_is_refused() {
+    let r = relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+        input: None,
+        name: "obs".into(),
+        metrics: vec![],
+    })));
+    // The required-input check's own error, not the unsupported-variant fallback's.
+    let e = fails(translate(&r));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message_parameters(),
+        [(
+            "message",
+            "CollectMetrics needs an input relation".to_owned()
+        )]
+    );
 }

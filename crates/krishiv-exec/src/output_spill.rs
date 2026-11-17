@@ -50,15 +50,16 @@ pub(crate) trait SpillUnread: Send + Sync + 'static {
     fn spill_unread(self: Arc<Self>, target: usize) -> BoxFuture<'static, Result<usize>>;
 }
 
+/// Whether a spill write failed only because the pool refused its scratch.
+pub(crate) fn is_refusal(e: &KrishivError) -> bool {
+    e.error_class() == ErrorClass::UnableToAcquireMemory
+}
+
 /// A spill's outcome when its write failed: a refused scratch reservation
 /// frees nothing and is not an error (the arbitrator moves on); any other
 /// error is.
 pub(crate) fn refused(e: KrishivError) -> Result<usize> {
-    if e.error_class() == ErrorClass::UnableToAcquireMemory {
-        Ok(0)
-    } else {
-        Err(e)
-    }
+    if is_refusal(&e) { Ok(0) } else { Err(e) }
 }
 
 /// Puts `state` to what `next` makes when dropped before

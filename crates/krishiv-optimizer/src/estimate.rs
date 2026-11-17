@@ -417,6 +417,8 @@ impl<'a> Estimator<'a> {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
+            // Rows pass through unchanged.
+            | PlanNode::CollectMetrics { input, .. }
             // A window adds columns (without statistics), never rows.
             | PlanNode::Window { input, .. }
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
@@ -456,6 +458,13 @@ impl<'a> Estimator<'a> {
                 let est = RelStats::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
                 let rows = est.rows.min(n);
+                est.with_rows(rows)
+            }
+            // Spark's `Sample` statistics: the input's rows times the fraction.
+            PlanNode::Sample { input, bounds, .. } => {
+                let est = RelStats::clone(&self.plan(input));
+                let fraction = (bounds.upper - bounds.lower).clamp(0.0, 1.0);
+                let rows = (est.rows * fraction).ceil();
                 est.with_rows(rows)
             }
             PlanNode::Offset { input, offset } => {

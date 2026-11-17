@@ -19,21 +19,7 @@ use krishiv_types::{DataType, StructField, StructType};
 use serde_json::{Value, json};
 
 /// Cases not matched yet, with the reason; each must still differ from Spark.
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    (
-        "json wrong types FAILFAST",
-        "a JSON string for an INT field fails without the CANNOT_PARSE_JSON_FIELD cause (krishiv-io json/convert.rs \
-         parses the string as a number; its own test expects no cause): class and rows match",
-    ),
-    (
-        "json string for int FAILFAST",
-        "as above: the chain lacks CANNOT_PARSE_JSON_FIELD",
-    ),
-    (
-        "json nested struct field absent from data",
-        "the JSON reader has flat types only (KRISHIV_UNSUPPORTED_FEATURE for a struct column)",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// Cases Spark reads but the engine refuses with `KRISHIV_UNSUPPORTED_FEATURE` (checked: never another result).
 const REFUSED: &[(&str, &str)] = &[

@@ -36,7 +36,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::{Privilege, TableColumn};
+use krishiv_plan::analyzer::{Privilege, Securable, TableColumn};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
@@ -249,6 +249,13 @@ impl Session {
             .map_err(|e| internal(format!("cannot create the warehouse directory: {e}")))
     }
 
+    /// The path [`Self::warehouse_dir`] gives, without making the runtime's own directory (the
+    /// analyze API's lookup, review D3: an analysis changes nothing on disk).
+    pub(crate) fn warehouse_path(&self) -> PathBuf {
+        let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
+        self.state.catalog.warehouse.path(configured.as_deref())
+    }
+
     /// Whether `name` is a temporary view (or table) that a bare table name
     /// resolves to before any permanent table.
     pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
@@ -446,23 +453,33 @@ impl Session {
         // Spark's catalog-first rule: unless the statement says NAMESPACE, a
         // first part that names a catalog is the catalog.
         let parts = crate::access::ddl_parts(&u.name, &env)?;
-        let canonical = |p: &str| {
+        // A declared catalog counts only when the principal sees it (design P3-T067 §2.4): a
+        // hidden one is a namespace name like any other.
+        let declared = self.declared_catalogs();
+        let canonical = |p: &str| -> Option<String> {
             if crate::system::is_system(p) {
-                Some("system")
+                Some("system".to_owned())
             } else if p.eq_ignore_ascii_case(crate::catalog::CATALOG) {
-                Some(crate::catalog::CATALOG)
+                Some(crate::catalog::CATALOG.to_owned())
             } else {
-                None
+                declared.canonical(p)
             }
         };
         let quoted = |ps: &[String]| format!("`{}`", ps.join("`.`"));
         if u.kind.is_none()
             && let Some(catalog) = parts.first().and_then(|p| canonical(p))
         {
-            match (catalog, &parts[1..]) {
+            match (catalog.as_str(), &parts[1..]) {
                 (_, []) => {
-                    self.state.catalog.use_catalog(catalog);
+                    self.state.catalog.use_catalog(&catalog);
                     return self.empty_frame().await;
+                }
+                (c, _) if c != "system" && c != crate::catalog::CATALOG => {
+                    // A declared catalog's namespaces are its own: `USE cat.ns` arrives with them.
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("USE of a namespace in the declared catalog `{c}`"),
+                    }
+                    .into());
                 }
                 ("system", rest) => {
                     return Err(SchemaNotFound {
@@ -780,11 +797,8 @@ impl Session {
                 ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
-        if columns.is_empty() {
-            return Err(unsupported(
-                "datasource views without declared column types",
-            ));
-        }
+        // No column list: Spark reads the schema from the files when the view is created (SQL-19, RS-8).
+        let infer = columns.is_empty();
         let mut options = options_of(refuse_secret_options(&v.options, original)?, original);
         let path_key = options
             .keys()
@@ -809,9 +823,11 @@ impl Session {
         let provider = self.provider_of(Some(short_provider(&written)))?;
         // The policy is asked before the path is looked at, so a denial never tells whether it exists.
         for path in paths.iter().filter_map(OptionValue::as_plain) {
+            // Asked in the qualified form a read by path asks (`TargetObject::Path`): it is read, not
+            // written, so it is not resolved as a table's directory is.
             let qualified = self.qualify_path(path)?;
-            self.authorize_path(
-                Path::new(&qualified),
+            self.authorize_securable(
+                &Securable::Path(OptionValue::from_user("path", qualified)),
                 &[Privilege::Select],
                 StatementClass::Ddl,
             )
@@ -826,14 +842,28 @@ impl Session {
                 .into());
             }
         }
-        // The declared columns are the read's user schema (Spark's `CreateTempViewUsing` resolves the relation
-        // with it now): the partition columns under the path come last, typed as declared, else inferred.
-        // Unlike Spark, which keeps the file listing it made here, each query lists the path again, so a
-        // partition directory added later is read (with the columns fixed now).
-        let schema =
-            krishiv_types::StructType::new(columns.iter().map(|c| {
-                krishiv_types::StructField::new(&c.name, c.data_type.clone(), c.nullable)
-            }));
+        let columns = if infer {
+            let plain: Vec<&str> = paths.iter().filter_map(OptionValue::as_plain).collect();
+            if plain.is_empty() {
+                return Err(unsupported(
+                    "datasource views without declared column types",
+                ));
+            }
+            let inferred = self.infer_file_columns(&provider, &plain, &options).await?;
+            if inferred.is_empty() {
+                return Err(unsupported(
+                    "datasource views without declared column types",
+                ));
+            }
+            inferred
+                .into_iter()
+                .map(|c| TableColumn::new(c.name, c.data_type, true))
+                .collect()
+        } else {
+            columns
+        };
+        // A view with no `path` has no files to list: it stays an empty relation of its declared columns.
+        let has_files = !paths.is_empty();
         let options: BTreeMap<String, OptionValue> = options
             .into_iter()
             .map(|(k, val)| {
@@ -841,39 +871,87 @@ impl Session {
                 (k, val)
             })
             .collect();
-        let resolver = env
-            .analysis
-            .files
-            .as_ref()
-            .ok_or_else(|| unsupported("reading files in this session"))?;
-        let columns = resolver
-            .with_schema(&provider, &paths, &options, &schema)
-            .await?
-            .into_iter()
-            .map(|c| TableColumn {
-                nullable: true,
-                ..c
-            })
-            .collect();
-        let source = krishiv_plan::ReadSource::Files {
-            format: provider,
-            paths,
-            options,
-            schema: Some(schema),
+        // Declared columns over files are the read's user schema (Spark's `CreateTempViewUsing` resolves the
+        // relation with it now): the partition columns under the path come last, typed as declared, else
+        // inferred. Unlike Spark, which keeps the file listing it made here, each query lists the path again, so
+        // a partition directory added later is read (with the columns fixed now). Inferred columns read as a read
+        // by path does.
+        let (columns, schema) = if infer || !has_files {
+            (columns, None)
+        } else {
+            let schema = krishiv_types::StructType::new(columns.iter().map(|c| {
+                krishiv_types::StructField::new(&c.name, c.data_type.clone(), c.nullable)
+            }));
+            let resolver = env
+                .analysis
+                .files
+                .as_ref()
+                .ok_or_else(|| unsupported("reading files in this session"))?;
+            let columns = resolver
+                .with_schema(&provider, &paths, &options, &schema)
+                .await?
+                .into_iter()
+                .map(|c| TableColumn {
+                    nullable: true,
+                    data_type: c.data_type.as_nullable(),
+                    ..c
+                })
+                .collect();
+            (columns, Some(schema))
+        };
+        let source = krishiv_plan::ReadSource::files(provider, paths, options);
+        let source = match schema {
+            Some(schema) => source.with_schema(schema),
+            None => source,
         };
         self.state.catalog.put(
             name,
             crate::catalog::TempTable::Files {
                 source,
                 columns,
-                known: false,
+                // A view reads its files as a read by path does, partition directories included, so no registered
+                // partition set stands in for the listing (an empty one read nothing from a partitioned directory:
+                // RS-8). A declared column list is the read's user schema.
+                known: !has_files,
                 permanent: false,
-                partitions: Some(Default::default()),
+                partitions: (!has_files).then(Default::default),
             },
         );
         // A replaced view must not keep serving the rows of the old one.
         self.state.cache.invalidate_table(name);
         self.empty_frame().await
+    }
+
+    /// The columns Spark infers for `USING <format>` over `paths` when a table or view is created without a column list: what
+    /// a read of the same files with the same options returns (CSV `header` and `inferSchema` included).
+    ///
+    /// # Errors
+    /// The read's: a missing path, an unreadable file, an unknown format.
+    pub(crate) async fn infer_file_columns(
+        &self,
+        format: &str,
+        paths: &[&str],
+        options: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoreColumn>, KrishivError> {
+        let mut reader = self.read().format(format);
+        for (k, v) in options {
+            reader = reader.option(k, v);
+        }
+        let schema = reader.load(paths.iter().copied()).schema().await?;
+        schema
+            .fields()
+            .iter()
+            .map(|f| {
+                Ok(StoreColumn {
+                    name: f.name().clone(),
+                    data_type: krishiv_types::DataType::from_arrow_field(f)?,
+                    nullable: true,
+                    default: None,
+                    comment: None,
+                    char_varchar: None,
+                })
+            })
+            .collect()
     }
 
     /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.
@@ -1068,30 +1146,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.table_name(&a.table, &env)?;
-        if self
-            .state
-            .catalog
-            .store
-            .table(&name.namespace, &name.name)
-            .is_some_and(|t| t.view.is_some())
-        {
-            if matches!(a.action, AlterTableAction::SetComment(_)) {
-                // Spark's error for a view here is not recorded in the goldens yet.
-                return Err(unsupported("COMMENT ON TABLE of a view"));
-            }
-            return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
-                operation: "`ALTER TABLE`".to_owned(),
-                view_name: name.quoted(),
-            }
-            .into());
-        }
-        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
-            "COMMENT ON TABLE"
-        } else {
-            "ALTER TABLE"
-        };
-        let table = self.table_for_write(&name, operation, &env)?;
+        let (name, table) = self.altered_table(a, &env)?;
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
@@ -1290,22 +1345,55 @@ impl Session {
         Ok(())
     }
 
-    /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
-    /// between puts the directory back.
-    async fn rename_table(
+    /// The table an `ALTER TABLE` changes, and its name: a view is refused (`ALTER VIEW` changes it), as
+    /// is a temporary view or a missing table (`table_for_write`). The run's first step, and analyze's.
+    pub(super) fn altered_table(
+        &self,
+        a: &AlterTable,
+        env: &QueryEnv,
+    ) -> Result<(TableName, Arc<CatalogTable>), KrishivError> {
+        let name = self.table_name(&a.table, env)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+        {
+            if matches!(a.action, AlterTableAction::SetComment(_)) {
+                // Spark's error for a view here is not recorded in the goldens yet.
+                return Err(unsupported("COMMENT ON TABLE of a view"));
+            }
+            return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
+                operation: "`ALTER TABLE`".to_owned(),
+                view_name: name.quoted(),
+            }
+            .into());
+        }
+        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+            "COMMENT ON TABLE"
+        } else {
+            "ALTER TABLE"
+        };
+        let table = self.table_for_write(&name, operation, env)?;
+        Ok((name, table))
+    }
+
+    /// The checks of `ALTER TABLE old RENAME TO new` before anything moves (the run's and analyze's,
+    /// `questions.rs`): the new name, in the source's namespace when bare (a table never changes namespace,
+    /// Spark 4.2), and not taken.
+    pub(super) fn rename_target(
         &self,
         table: &CatalogTable,
         to: &TableName,
-    ) -> Result<DataFrame, KrishivError> {
-        // A bare target stays in the source's namespace, and a table never changes namespace (Spark 4.2).
+    ) -> Result<TableName, KrishivError> {
         let mut to = to.clone();
         if to.bare {
             to.namespace.clone_from(&table.namespace);
         }
-        let to = &to;
         check_new_name(&to.namespace)?;
         check_new_name(&to.name)?;
-        self.check_namespace(to)?;
+        self.check_namespace(&to)?;
         if to.namespace != table.namespace {
             return Err(krishiv_common::error::LegacyErrorTemp1073 {
                 db: table.namespace.clone(),
@@ -1313,16 +1401,35 @@ impl Session {
             }
             .into());
         }
-        let store = &self.state.catalog.store;
-        if store.table(&to.namespace, &to.name).is_some() {
+        if self
+            .state
+            .catalog
+            .store
+            .table(&to.namespace, &to.name)
+            .is_some()
+        {
             return Err(krishiv_common::error::TableOrViewAlreadyExists {
                 relation_name: to.quoted(),
             }
             .into());
         }
+        Ok(to)
+    }
+
+    /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
+    /// between puts the directory back.
+    async fn rename_table(
+        &self,
+        table: &CatalogTable,
+        to: &TableName,
+    ) -> Result<DataFrame, KrishivError> {
+        let to = &self.rename_target(table, to)?;
+        let store = &self.state.catalog.store;
         let mut renamed = table.clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
+        // The canonical directories moved (to, from), to move back on a failure.
+        let mut moved: Option<(PathBuf, PathBuf)> = None;
         if table.managed {
             let warehouse = self.warehouse_dir()?;
             renamed.location = managed_location(&warehouse, &to.namespace, &to.name);
@@ -1334,30 +1441,28 @@ impl Session {
                 }
             }
             // Authorized before any file moves: the source must be deletable and the target creatable.
-            self.deletable_dir(table).await?;
-            self.authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
+            // Ordering: the files move first, on the canonical paths checked and verified after the move
+            // (`move_checked_dir`, which moves them back if a link was swapped in), then the catalog. If the
+            // catalog change fails the files move back. A move back that fails is the one state left where
+            // the catalog names an empty location: it is logged at error level with both paths and the
+            // statement fails with an internal error; the catalog is never pointed outside the checked paths.
+            let source = self.deletable_dir(table).await?;
+            self.allow_managed_location(&renamed.namespace, &renamed.name, &renamed.location);
+            let target = self
+                .authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
                 .await?;
-            if let Some(parent) = renamed.location.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
-            }
-            std::fs::rename(&table.location, &renamed.location).map_err(|e| {
-                internal(format!(
-                    "cannot move {} to {}: {e}",
-                    table.location.display(),
-                    renamed.location.display()
-                ))
-            })?;
+            let source = source.unwrap_or_else(|| table.location.clone());
+            self.move_checked_dir(&source, &target, StatementClass::Ddl)?;
+            moved = Some((target.path, source));
         }
-        let moved_to = renamed.location.clone();
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
         store.drop_table(&table.namespace, &table.name);
         if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
             let _ = store.create_table(table.clone(), CreateMode::Replace);
-            if table.managed {
-                let _ = std::fs::rename(&moved_to, &table.location);
+            if let Some((target, source)) = moved {
+                self.move_back(&target, &source)?;
             }
             return Err(e);
         }
@@ -1454,33 +1559,8 @@ struct InsertTarget<'a> {
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
 /// Spark's `visitMultiInsertQuery` gives each body the shared relation.
 fn from_source(source: &krishiv_sql::ast::FromClause, c: &InsertClause) -> InsertClause {
-    use krishiv_sql::ast::{FromStatement, Query, SetExpr, SetExprKind};
-    let mut body = (*c.query).clone();
-    let with = body.with.take();
-    let span = c.query.span;
-    let query = Query {
-        with,
-        body: SetExpr {
-            kind: SetExprKind::FromStatement(Box::new(FromStatement {
-                from: source.clone(),
-                bodies: vec![body],
-                span,
-            })),
-            span,
-        },
-        order_by: Vec::new(),
-        order_span: None,
-        organization_span: None,
-        cluster_by: Vec::new(),
-        distribute_by: Vec::new(),
-        sort_by: Vec::new(),
-        windows: Vec::new(),
-        limit: None,
-        offset: None,
-        span,
-    };
     InsertClause {
-        query: Box::new(query),
+        query: Box::new(krishiv_sql::shared_from_query(source, &c.query)),
         ..c.clone()
     }
 }
@@ -1833,6 +1913,8 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 mod files;
+pub(crate) use files::CheckedDir;
+mod questions;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
@@ -1919,3 +2001,6 @@ mod owned_directory_tests;
 mod writes;
 
 mod create;
+
+mod pipeline;
+mod row_level;

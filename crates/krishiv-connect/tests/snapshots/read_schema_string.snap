@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-Read parquet [/data/p] schema struct<a:int,b:string>
+Read parquet [/data/p] schema=a INT, b STRING
 -- plan ids --
 Read plan_id=0

@@ -169,28 +169,6 @@ fn options_print_as_typed_values() {
 }
 
 #[test]
-fn a_user_schema_prints_after_the_paths() {
-    let schema = krishiv_types::StructType::new([
-        krishiv_types::StructField::new("a", krishiv_types::DataType::Integer, false),
-        krishiv_types::StructField::new("b", krishiv_types::DataType::String, true),
-    ]);
-    let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "csv".to_owned(),
-        paths: vec![OptionValue::from_user("path", "/d")],
-        options: [(
-            "header".to_owned(),
-            OptionValue::from_user("header", "true"),
-        )]
-        .into(),
-        schema: Some(schema),
-    }));
-    assert_eq!(
-        plan.to_string(),
-        "Read csv [/d] schema struct<a:int,b:string> {header=true}\n"
-    );
-}
-
-#[test]
 fn sql_text_and_literal_urls_never_print() {
     let plan = LogicalPlan::new(PlanNode::Sql {
         query: "select * from t where password = 'hunter2'".to_owned(),

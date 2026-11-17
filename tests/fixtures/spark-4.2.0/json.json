@@ -1,0 +1,156 @@
+{
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_json_goldens.py",
+ "notes": "JSON-lines reads and inference with flat schemas; each column cast to STRING in a UTC session, or the error classes outermost first.",
+ "reads": [
+  {
+   "name": "boolean strings",
+   "file": "eyJiIjoidHJ1ZSJ9CnsiYiI6IlRSVUUifQp7ImIiOiJGYWxzZSJ9CnsiYiI6InllcyJ9CnsiYiI6IjEifQp7ImIiOiIifQo=",
+   "options": {},
+   "schema": "b boolean, _corrupt_record string",
+   "rows": [
+    [
+     null,
+     "{\"b\":\"true\"}"
+    ],
+    [
+     null,
+     "{\"b\":\"TRUE\"}"
+    ],
+    [
+     null,
+     "{\"b\":\"False\"}"
+    ],
+    [
+     null,
+     "{\"b\":\"yes\"}"
+    ],
+    [
+     null,
+     "{\"b\":\"1\"}"
+    ],
+    [
+     null,
+     "{\"b\":\"\"}"
+    ]
+   ]
+  },
+  {
+   "name": "boolean numbers",
+   "file": "eyJiIjoxfQp7ImIiOjB9CnsiYiI6MC4wfQp7ImIiOjEuNX0KeyJiIjpOYU59CnsiYiI6dHJ1ZX0K",
+   "options": {},
+   "schema": "b boolean",
+   "rows": [
+    [
+     null
+    ],
+    [
+     null
+    ],
+    [
+     null
+    ],
+    [
+     null
+    ],
+    [
+     null
+    ],
+    [
+     "true"
+    ]
+   ]
+  },
+  {
+   "name": "nested is malformed",
+   "file": "eyJhIjoxLCJuIjp7ImIiOjJ9fQp7ImEiOjIsIm4iOiJ4In0KeyJhIjozLCJuIjpbMV19Cg==",
+   "options": {},
+   "schema": "a int, n string, _corrupt_record string",
+   "rows": [
+    [
+     "1",
+     "{\"b\":2}",
+     null
+    ],
+    [
+     "2",
+     "x",
+     null
+    ],
+    [
+     "3",
+     "[1]",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "nested dropmalformed",
+   "file": "eyJhIjoxLCJuIjp7ImIiOjJ9fQp7ImEiOjIsIm4iOiJ4In0K",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, n string",
+   "rows": [
+    [
+     "1",
+     "{\"b\":2}"
+    ],
+    [
+     "2",
+     "x"
+    ]
+   ]
+  },
+  {
+   "name": "flat types",
+   "file": "eyJiIjp0cnVlLCJpIjozLCJmIjoxLjUsInMiOiJhIiwiYmluIjoicXc9PSIsImR0IjoiMjAyMC0wMS0wMiJ9CnsiYiI6IlRSVUUiLCJpIjoxLjAsImYiOiJOYU4iLCJzIjozLCJiaW4iOm51bGx9Cg==",
+   "options": {},
+   "schema": "b boolean, i int, f double, s string, bin binary, dt date, _corrupt_record string",
+   "rows": [
+    [
+     "true",
+     "3",
+     "1.5",
+     "a",
+     "\ufffd",
+     "2020-01-02",
+     null
+    ],
+    [
+     null,
+     null,
+     "NaN",
+     "3",
+     null,
+     null,
+     "{\"b\":\"TRUE\",\"i\":1.0,\"f\":\"NaN\",\"s\":3,\"bin\":null}"
+    ]
+   ]
+  },
+  {
+   "name": "binary bad base64",
+   "file": "eyJiaW4iOiJxdz09In0KeyJiaW4iOiIhISEifQo=",
+   "options": {},
+   "schema": "bin binary, _corrupt_record string",
+   "rows": [
+    [
+     "\ufffd",
+     null
+    ],
+    [
+     null,
+     "{\"bin\":\"!!!\"}"
+    ]
+   ]
+  }
+ ],
+ "infers": [
+  {
+   "name": "widening",
+   "file": "eyJsb25nIjoxLCJkYmwiOjEuNSwic3RyIjoieCIsImIiOnRydWV9CnsibG9uZyI6MiwiZGJsIjoyLCJzdHIiOjMsImIiOmZhbHNlfQp7ImxvbmciOjMuNSwiZGJsIjpudWxsLCJzdHIiOiJ5IiwiYiI6MX0K",
+   "options": {},
+   "inferred": "struct<b:string,dbl:double,long:double,str:string>"
+  }
+ ]
+}

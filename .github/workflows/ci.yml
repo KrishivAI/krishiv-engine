@@ -252,11 +252,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    # Debuginfo of the whole workspace test build does not fit the runner's disk next to the spill tests
-    # ("No space left on device" in the bench-runner spill tests, an ld Bus error in otlp_collector; merge-queue
-    # ejections 2026-11-07/08). Line tables keep panic backtraces and cost a fraction of the space.
+    # The whole workspace test build fills the runner's disk ("No space left on device" in the bench-runner spill
+    # tests, ld Bus errors; merge-queue ejections 2026-11-07/08). Line tables were not enough: on 2026-11-15 the job
+    # started with 119 GB free and ended with 84 MB (#746, #756) or with ld killed by SIGBUS (#772). So the test
+    # build carries no debug info (panic backtraces keep function names, not line numbers; no test reads DWARF),
+    # and the workspace run's test binaries are removed before the feature runs below build their own.
     env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG: "false"
+      CARGO_PROFILE_TEST_DEBUG: "false"
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -265,15 +268,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The runner image ships toolchains and images the build never uses; same list as the nightly jobs.
-      - name: Free runner disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
-            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
-            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
-          df -h /
+      # The runner image ships toolchains and images the build never uses (the job runs no containers).
+      - uses: $/.github/actions/free-disk
       - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
@@ -294,8 +290,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes --no-deps \
+            -r tests/udf-worker/requirements.txt
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass
@@ -305,16 +301,29 @@ jobs:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
       - run: cargo test --workspace --doc --locked
+      # The workspace run's test executables are not reused by the feature runs below (other features, other
+      # hashes); libraries and build-script outputs stay, so those runs still reuse what they can.
+      - name: Remove the workspace run's test binaries
+        run: |
+          df -h /
+          find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
+          du -sh target 2> /dev/null || true
+          df -h /
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
       # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,
       # and the JWT verifier against keys generated per run.
       - run: cargo nextest run -p krishiv-session --features tls,oidc --lib -E 'test(/auth::mtls_tests::tls/) | test(/auth::oidc_tests/)' --locked
       # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
-      - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus --locked
-      - run: cargo nextest run -p krishiv-cli --features server --test server --locked
+      - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus,admin-api --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --locked
+      # The external catalog clients (Hive metastore, Iceberg REST) are feature-gated; their hostile-catalog tests
+      # run here, not only nightly. The Docker acceptance against Apache's REST fixture is env-gated (skipped).
+      - run: cargo nextest run -p krishiv-catalogs --features hive,iceberg-rest --locked
       - name: Disk left
         if: always()
-        run: df -h / "$RUNNER_TEMP"
+        run: |
+          df -h / "$RUNNER_TEMP"
+          du -sh target target/debug/deps target/debug/build 2> /dev/null || true
 
   deny:
     needs: changes
@@ -444,6 +453,52 @@ jobs:
           workspaces: tools/plan-protogen
       - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path tools/plan-protogen/Cargo.toml
+
+  # `krishiv.admin.v1` (design P3-T066 section 6.3): the generated code is current, the snapshots are
+  # what the sources generate, and against the PR's base the surface only grew (a removed or
+  # renumbered field, a changed path or privilege fails). Before the first release that ships it,
+  # the label `admin-api-breaking` allows a non-additive change.
+  admin-protos:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: $/.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/admin-protogen
+      - run: cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --check
+      - uses: $/.github/actions/setup-mold
+      # The label is read now, from the API, as the budget gate does.
+      - name: Snapshots and the additive-only check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            flags="--base $(git merge-base "$BASE_SHA" HEAD)"
+            breaking=$(gh api "repos/$REPO/issues/$PR/labels" --jq 'any(.[]; .name == "admin-api-breaking")')
+            if [ "$breaking" = "true" ]; then flags="$flags --allow-breaking-before-release"; fi
+            cargo run --locked -p xtask -- admin-api $flags
+          else
+            cargo run --locked -p xtask -- admin-api
+          fi
 
   # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
   # so a change to an API they call would break them unseen. Build all of them
@@ -582,7 +637,7 @@ jobs:
           run=true
           if [ "$EVENT" = "pull_request" ]; then
             if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-arrow-bridge/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
               run=false
             fi
           fi
@@ -600,6 +655,9 @@ jobs:
       - name: Miri (Arrow C stream bridge of krishiv-python)
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
+      - name: Miri (Arrow 58 to 60 bridge, krishiv-arrow-bridge)
+        if: steps.gate.outputs.run == 'true'
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-arrow-bridge --locked
       # Wheels are dist builds (release settings, no overflow checks): hostile producer
       # headers must be rejected before arrow-rs computes with them, not by a
       # debug-build overflow panic.
@@ -608,6 +666,69 @@ jobs:
         env:
           CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
+
+  # krishiv-udf-sandbox's suite inside a default Docker container (crate CLAUDE.md, "Tests owned
+  # by later PRs"): Docker's default seccomp profile decides whether Landlock and seccomp are
+  # reachable for a worker started in a container. The binaries are built on the runner and run
+  # in the runner's own OS image (same glibc), pinned by digest, with no extra capabilities and
+  # no seccomp or AppArmor override. `CI` is set, so the probe also asserts Landlock ABI 6+.
+  udf-sandbox-docker:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Path gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+              | grep -qE '^(crates/krishiv-udf-sandbox/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "udf-sandbox-docker: run=$run"
+      - uses: $/.github/actions/setup-rust
+        if: steps.gate.outputs.run == 'true'
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
+      - name: Build the test binaries
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbx"
+          cargo test -p krishiv-udf-sandbox --no-run --locked --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' \
+            | while read -r exe; do cp "$exe" "$RUNNER_TEMP/sbx/"; done
+          ls "$RUNNER_TEMP/sbx"
+          test "$(ls "$RUNNER_TEMP/sbx" | wc -l)" -ge 2
+      - name: Run them in a default container
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          # The digest pins ubuntu:26.04, the image ubuntu-latest runs (same glibc as the build).
+          docker run --rm -e CI=1 -v "$RUNNER_TEMP/sbx:/t:ro" \
+            ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c \
+            bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=3 update -qq
+              apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends python3 > /dev/null
+              cd /tmp
+              for t in /t/*; do echo "== $t"; "$t"; done'
 
   # Budget measurement (pull requests only). This job only measures and uploads
   # `budgets-current.json`; the label-aware gate (`budgets` below)
@@ -675,7 +796,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc"
+            maturin_args: "--no-default-features --features mimalloc,cloud"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})
@@ -690,6 +811,7 @@ jobs:
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
           persist-credentials: false
+      - uses: $/.github/actions/free-disk
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: $/.github/actions/setup-mold
@@ -794,6 +916,9 @@ jobs:
         with:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
+      - name: Disk left
+        if: always()
+        run: df -h /
 
   # P2-T103: every wheel target (wheels.yml), on PRs that can change them and in the nightly run (nightly.yml calls
   # this workflow). Not in the merge queue, and a push to main only measures (main-measure.yml); `wheels-ok` passes.
@@ -1173,6 +1298,7 @@ jobs:
       - layering
       - connect-protos
       - plan-protos
+      - admin-protos
       - fuzz-build
       - msrv
       - docs

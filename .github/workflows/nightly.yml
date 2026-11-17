@@ -9,8 +9,6 @@ on:
   schedule:
     # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
     - cron: "23 22 * * *"
-    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
-    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:
@@ -202,8 +200,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes --no-deps \
+            -r tests/udf-worker/requirements.txt
       - run: cargo xtask coverage --all-features --html --no-branch
         env:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
@@ -445,6 +443,12 @@ jobs:
           ln -s "$(dirname "$lineitem")" "$KRISHIV_TPCH_DIR"
       - name: Object stores against emulators
         run: tests/scripts/object_store_emulators.sh
+      # The Iceberg REST read client (PR-17) against Apache's Java REST fixture: the script names and removes only its
+      # own container. 1.10.0 is the newest fixture tag; the client follows the 1.12.0 spec (read endpoints unchanged).
+      - name: Iceberg REST client against the REST fixture
+        env:
+          ICEBERG_REST_IMAGE: apache/iceberg-rest-fixture@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e # 1.10.0
+        run: tests/scripts/iceberg_rest_fixture.sh
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
@@ -652,6 +656,7 @@ jobs:
         run: cargo install rustdoc-md --version 0.2.0 --locked
       - name: SQL, Python, Rust and configuration pages match the generators
         run: |
+          cargo xtask docs-analyze --check --base origin/main
           cargo xtask docs-sql --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check

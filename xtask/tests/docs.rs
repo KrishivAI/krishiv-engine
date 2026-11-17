@@ -132,7 +132,7 @@ fn the_quickstart_page_runs_the_readme_code() {
         .parent()
         .unwrap();
     let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
-    let page = std::fs::read_to_string(root.join("docs/get-started/quickstart.md")).unwrap();
+    let page = std::fs::read_to_string(root.join("docs/get-started/index.md")).unwrap();
     let python = |t: &str| {
         fenced_blocks(t, t == readme)
             .into_iter()
@@ -142,6 +142,6 @@ fn the_quickstart_page_runs_the_readme_code() {
     assert_eq!(
         python(&readme),
         python(&page),
-        "docs/get-started/quickstart.md drifted from the README"
+        "docs/get-started/index.md drifted from the README"
     );
 }
