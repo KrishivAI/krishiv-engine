@@ -46,8 +46,10 @@
 //!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. After
 //!   [`FIRST_ADAPT_ROWS`] input rows and then every [`ADAPT_ROWS`], it
 //!   switches to **append** (no lookups) when over 95% of the keys are
-//!   unique. This is DuckDB's thread-local
-//!   abandon (fixed-size thread-local tables,
+//!   unique. Append is permanent, so keys unique only in a driver's first
+//!   rows make partial duplicates after that; the early first decision
+//!   trades that for drivers too small to reach [`ADAPT_ROWS`] (TPC-H q13).
+//!   This is DuckDB's thread-local abandon (fixed-size thread-local tables,
 //!   <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
 //!   `radix_partitioned_hashtable.cpp`) with its capacities: 2^15 slots
 //!   above two threads, 2^18 at two. Growing only every [`ADAPT_ROWS`]
@@ -1051,7 +1053,13 @@ impl RowTable {
             a.window = (a.rows, a.pushed);
             a.early = false;
         }
-        if a.rows >= a.next {
+        if a.rows >= a.next && a.rows < ADAPT_ROWS {
+            // The first decision, at FIRST_ADAPT_ROWS, only chooses append:
+            // the early-widening rate keeps its ADAPT_ROWS window (an empty
+            // table counts nearly every early row as new; TPC-DS q22 widens
+            // best at the end).
+            a.next = ADAPT_ROWS;
+        } else if a.rows >= a.next {
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
             a.early = !grew && rate >= EARLY_RATE;

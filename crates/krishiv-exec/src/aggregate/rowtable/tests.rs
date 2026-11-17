@@ -408,7 +408,7 @@ fn modes_and_partial_duplicates() {
     assert!(e.to_string().contains("not growing"), "{e}");
 }
 
-/// After `ADAPT_ROWS` rows, unique keys switch a fixed index to
+/// By `ADAPT_ROWS` rows, unique keys switch a fixed index to
 /// append-only; keys that repeat beyond its capacity grow it to their
 /// count as soon as it has filled with enough partial duplicates, long
 /// before `ADAPT_ROWS`.
