@@ -806,3 +806,62 @@ fn a_definer_views_cte_reads_as_the_definer_under_every_precedence_policy() {
         .unwrap();
     assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
 }
+
+/// Review r2 R3: every DataFrame API that returns an executed plan or its operator metrics asks
+/// what `EXPLAIN ANALYZE` asks: the reads of a definer view's query, as an invoker would be asked.
+#[test]
+fn profiles_of_a_definer_views_plan_ask_what_explain_analyze_asks() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(
+        &ana,
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t WHERE b = 2 AND a < 424242",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+    type Shown = Box<dyn Fn(&Session) -> Result<String, KrishivError>>;
+    let entries: Vec<(&str, Shown)> = vec![
+        (
+            "explain_analyze",
+            Box::new(|s| {
+                block_on(s.table("dv").explain_analyze())
+                    .map(|p| p.to_text(krishiv_session::TextOptions::default()))
+            }),
+        ),
+        (
+            "explain_analyze_with",
+            Box::new(|s| {
+                block_on(
+                    s.table("dv")
+                        .explain_analyze_with(krishiv_session::GraphFormat::Json),
+                )
+            }),
+        ),
+        (
+            "explain_analyze_verbose",
+            Box::new(|s| block_on(s.table("dv").explain_analyze_verbose()).map(|p| p.to_json())),
+        ),
+        (
+            "collect_with_profile",
+            Box::new(|s| block_on(s.table("dv").collect_with_profile()).map(|(_, p)| p.to_json())),
+        ),
+        (
+            "collect_with_metrics",
+            Box::new(|s| {
+                block_on(s.table("dv").collect_with_metrics()).map(|(_, m)| format!("{m:?}"))
+            }),
+        ),
+    ];
+    for (entry, shown) in &entries {
+        match shown(&bob) {
+            Err(e) if e.error_class().name() == DENIED => {
+                assert!(!e.to_string().contains("424242"), "{entry}: {e}");
+            }
+            other => panic!("{entry}: expected a denial, got {other:?}"),
+        }
+    }
+    // Once bob may read the base table, each shows.
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    for (entry, shown) in &entries {
+        shown(&bob).unwrap_or_else(|e| panic!("{entry}: {e}"));
+    }
+}
