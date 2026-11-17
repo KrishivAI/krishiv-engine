@@ -1563,6 +1563,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "datasketches"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17518a0e88b8a18c546a855d9db6455caaea7865774364bff759edf6a4731aca"
+
+[[package]]
 name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3227,6 +3233,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "cbc",
+ "datasketches",
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",

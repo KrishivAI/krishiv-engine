@@ -172,6 +172,7 @@ fancy-regex = { version = "0.19", default-features = false }
 memchr = { version = "2.8", default-features = false }
 # XML reader for `from_xml`; already in the lock file through the object-store stack.
 quick-xml = { version = "0.41", default-features = false }
+datasketches = { version = "=0.6.0", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
 # ICU4X collation sort keys and case mapping for the ICU collations (ADR 0043 s5); compiled data only behind `collations-icu`.
 icu_collator = { version = "2.4", default-features = false }
