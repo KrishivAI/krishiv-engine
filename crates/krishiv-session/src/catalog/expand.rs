@@ -344,10 +344,11 @@ impl Expander<'_> {
             self.in_definer.pop();
         }
         let mut input = input?;
-        // Under `LEGACY` the reader's plan has its `WITH`s inlined before binding, which rebuilds them: a
-        // definer's query has its own inlined here, alone, so the node trusted below is the one bound (review r2
-        // R2), and no definition of the reader's replaces one of the definer's.
-        if definer.is_some() && stored.legacy_ctes {
+        // Under `LEGACY` the reader's plan has its `WITH`s inlined before binding, where an outer definition wins.
+        // Every stored view's query has its own inlined here, alone, as Spark analyzes a view's text apart from
+        // the query that reads it (review r3 M2): no definition of the reader's replaces one of the view's, and a
+        // definer's query keeps the node trusted below through the reader's pass (review r2 R2).
+        if stored.legacy_ctes {
             input = krishiv_plan::analyzer::inline_legacy_ctes(&input, self.case_sensitive)?;
         }
         if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {

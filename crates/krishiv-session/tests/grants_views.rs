@@ -1057,3 +1057,41 @@ fn a_refused_read_names_only_the_columns_the_statement_wrote() {
     assert!(e.contains("`secret_a`"), "{e}");
     assert_eq!(rows(&ana, "SELECT x FROM ct"), 1);
 }
+
+/// Review r3 M2: under `LEGACY` CTE precedence an *invoker* view's own `WITH` is its own too, so
+/// a reader's outer definition of the same name never replaces it (Spark answers 1, not 5).
+///
+/// Spark v4.2.0: a stored view is resolved on its own, `Analyzer.scala` lines 1084-1089
+/// (`resolveViews`: `ViewResolution.resolve(view, .., resolveChild = executeSameContext, ..)`)
+/// and `ViewResolution.scala` lines 35-53 (the view's parsed text, `view.child`, is run through
+/// the whole rule batch inside its own `AnalysisContext`), so `CTESubstitution` substitutes the
+/// view text's `WITH` within that text alone; the reader's `LEGACY` pass
+/// (`CTESubstitution.scala` lines 97-102 and 164-178, `legacyTraverseAndSubstituteCTE`) only
+/// sees the unresolved relation `iv`, never the view's text.
+#[test]
+fn a_views_own_cte_is_its_own_under_legacy_precedence() {
+    let (w, root, ana) = world();
+    let bob = w.user("bob");
+    ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
+    ok(
+        &ana,
+        "CREATE VIEW iv AS WITH c AS (SELECT a FROM t) SELECT a FROM c",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW iv TO user:bob");
+    for policy in ["CORRECTED", "LEGACY"] {
+        bob.conf()
+            .set("spark.sql.legacy.ctePrecedencePolicy", policy)
+            .unwrap();
+        let read = "WITH c AS (SELECT 5 AS a), d AS (SELECT * FROM iv) SELECT * FROM d";
+        assert_eq!(rows(&bob, &format!("{read} WHERE a = 1")), 1, "{policy}");
+        assert_eq!(rows(&bob, &format!("{read} WHERE a = 5")), 0, "{policy}");
+        assert_eq!(
+            rows(
+                &bob,
+                "WITH c AS (SELECT 5 AS a) SELECT * FROM iv WHERE a = 1"
+            ),
+            1,
+            "{policy}"
+        );
+    }
+}
