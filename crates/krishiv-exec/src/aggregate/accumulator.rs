@@ -42,6 +42,7 @@ use krishiv_types::batch::Weights;
 use super::bitmap::{BitmapAcc, BitmapOp};
 use super::collect::{CollectAcc, VectorAcc};
 use super::hll::{self, HllAcc};
+use super::hll_sketch::{HllSketchAcc, HllSketchOp};
 use super::listagg::ListAggAcc;
 use super::mode::ModeAcc;
 use super::moments::Moments;
@@ -318,6 +319,8 @@ enum Kind {
     Hll(HllAcc),
     /// The bitmap aggregates: one 4,096-byte buffer per group (see `bitmap`).
     Bitmap(BitmapAcc),
+    /// `hll_sketch_agg` and `hll_union_agg`: DataSketches HLL sketches per group (see `hll_sketch`).
+    HllSketch(HllSketchAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -494,6 +497,12 @@ impl Accumulator {
             (F::BitmapConstructAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Construct)),
             (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
             (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
+            (F::HllSketchAgg { lg_k }, _) => {
+                Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Sketch(*lg_k))?)
+            }
+            (F::HllUnionAgg { allow_different }, _) => {
+                Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Union(*allow_different))?)
+            }
             (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
             // `CollectAcc::new` refuses the element types the shared key
             // encoding does not order, as `result_type` does.
@@ -635,9 +644,12 @@ impl Accumulator {
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
             // plain vectors; `size` counts them exactly.
-            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Bitmap(_) | Kind::Udf(_) => {
-                Vec::new()
-            }
+            Kind::Exact(_)
+            | Kind::Approx(_)
+            | Kind::Hll(_)
+            | Kind::Bitmap(_)
+            | Kind::HllSketch(_)
+            | Kind::Udf(_) => Vec::new(),
         }
     }
 
@@ -652,6 +664,7 @@ impl Accumulator {
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
             Kind::Bitmap(b) => b.size(),
+            Kind::HllSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -739,6 +752,7 @@ impl Accumulator {
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
             Kind::Bitmap(b) => b.projected(new),
+            Kind::HllSketch(h) => h.projected(new),
             _ => 0,
         };
         vecs + heap
@@ -811,6 +825,7 @@ impl Accumulator {
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
             Kind::Bitmap(b) => b.resize(n),
+            Kind::HllSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -894,6 +909,7 @@ impl Accumulator {
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
             Kind::Bitmap(b) => b.reserve(new),
+            Kind::HllSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1076,7 +1092,8 @@ impl Accumulator {
             | Kind::Collect(_)
             | Kind::Approx(_)
             | Kind::Hll(_)
-            | Kind::Bitmap(_) => 1,
+            | Kind::Bitmap(_)
+            | Kind::HllSketch(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }

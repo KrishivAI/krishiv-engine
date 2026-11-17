@@ -609,6 +609,7 @@ mod csv;
 mod datetime_format;
 mod element;
 mod families;
+mod hll;
 mod json;
 mod json_tuple;
 mod legacy_fast;

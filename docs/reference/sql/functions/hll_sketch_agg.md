@@ -10,7 +10,7 @@ Returns the HllSketch's updatable binary representation.
 `lgConfigK` (optional) the log-base-2 of K, with K is the number of buckets or
 slots for the HllSketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ hll_sketch_agg(expr, lgConfigK)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.5.0 |
@@ -41,6 +41,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

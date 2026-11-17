@@ -1456,6 +1456,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::hashing::specs());
     out.extend(super::crypto::specs());
     out.extend(super::bitmap::specs());
+    out.extend(super::hll::specs());
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());

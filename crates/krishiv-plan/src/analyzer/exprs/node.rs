@@ -997,6 +997,29 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
+                } else if is_builtin_entry(&entry)
+                    && matches!(
+                        (entry.id.name(), n),
+                        ("hll_sketch_agg" | "hll_union_agg", 1) | ("hll_union", 2)
+                    )
+                {
+                    // Spark's constructors write the omitted constants: `hll_sketch_agg(c)` is
+                    // `hll_sketch_agg(c, 12)`, `hll_union_agg(s)` and `hll_union(a, b)` end in `false`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if entry.id.name() == "hll_sketch_agg" {
+                        default_argument(Literal::Integer(12), DataType::Integer, false, e.origin)
+                    } else {
+                        default_argument(
+                            Literal::Boolean(false),
+                            DataType::Boolean,
+                            false,
+                            e.origin,
+                        )
+                    });
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n + 1)
                 } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
                     // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
                     // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.

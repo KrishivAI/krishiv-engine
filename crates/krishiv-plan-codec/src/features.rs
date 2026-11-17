@@ -139,6 +139,7 @@ registry! {
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
+    (hll_sketch_aggregates, HllSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches HLL aggregates (`hll_sketch_agg` with its folded lgConfigK, `hll_union_agg` with its folded allowDifferentLgConfigK): a sketch per group."),
     (indeterminate_collation, IndeterminateCollation, POST_MIGRATION_READER_VERSION, Semantic, "STRING types of the INDETERMINATE collation (`string collate null`: a mixed expression's operands' collations conflict), by its name `null`, alone or inside a nested type."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -684,6 +685,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::BitmapConstructAgg
             | AggregateFunction::BitmapOrAgg
             | AggregateFunction::BitmapAndAgg => Some(Feature::BitmapAggregates),
+            AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
+                Some(Feature::HllSketchAggregates)
+            }
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a

@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Unit tests of the HLL sketch accumulators.
+
+use super::*;
+use krishiv_common::error::ErrorClass;
+
+fn longs(v: &[Option<i64>]) -> ArrayRef {
+    Arc::new(Int64Array::from(v.to_vec()))
+}
+
+fn strs(v: &[Option<&str>]) -> ArrayRef {
+    Arc::new(StringArray::from(v.to_vec()))
+}
+
+fn binaries(v: &[Option<&[u8]>]) -> ArrayRef {
+    Arc::new(BinaryArray::from_iter(v.iter().copied()))
+}
+
+fn estimate(a: &HllSketchAcc, g: u32) -> i64 {
+    let out = a.evaluate(&[g]).unwrap();
+    let b = out.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+    hll::estimate(&hll::from_bytes(b.value(0), "t").unwrap())
+}
+
+#[test]
+fn sketch_counts_distinct_values_per_group_and_skips_nulls_and_empties() {
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(3);
+    a.update(
+        &[0, 0, 0, 0, 1, 1],
+        &longs(&[Some(1), Some(1), Some(2), None, Some(7), Some(8)]),
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(
+        (estimate(&a, 0), estimate(&a, 1), estimate(&a, 2)),
+        (2, 2, 0)
+    );
+    let mut s = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    s.resize(1);
+    s.update(
+        &[0; 4],
+        &strs(&[Some(""), Some("a"), Some("a"), None]),
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(estimate(&s, 0), 1);
+    let mut b = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    b.resize(1);
+    b.update(
+        &[0; 3],
+        &binaries(&[Some(b""), Some(b"a"), Some(b"b")]),
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(estimate(&b, 0), 2);
+}
+
+#[test]
+fn the_filter_mask_drops_rows() {
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(1);
+    a.update(&[0, 0], &longs(&[Some(1), Some(2)]), |i| i == 0)
+        .unwrap();
+    assert_eq!(estimate(&a, 0), 1);
+}
+
+#[test]
+fn a_bad_lg_k_is_refused() {
+    for k in [0_u8, 3, 22] {
+        let e = HllSketchAcc::new(HllSketchOp::Sketch(k)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::HllInvalidLgK);
+    }
+}
+
+#[test]
+fn partial_states_merge_like_one_pass() {
+    let mut p1 = HllSketchAcc::new(HllSketchOp::Sketch(10)).unwrap();
+    let mut p2 = HllSketchAcc::new(HllSketchOp::Sketch(10)).unwrap();
+    p1.resize(1);
+    p2.resize(1);
+    p1.update(&[0; 3], &longs(&[Some(1), Some(2), Some(3)]), |_| true)
+        .unwrap();
+    p2.update(&[0; 3], &longs(&[Some(3), Some(4), Some(5)]), |_| true)
+        .unwrap();
+    let mut f = HllSketchAcc::new(HllSketchOp::Sketch(10)).unwrap();
+    f.resize(1);
+    for p in [&p1, &p2] {
+        let st = p.state(&[0]).unwrap();
+        f.merge(&[0], st[0].as_any().downcast_ref::<BinaryArray>().unwrap())
+            .unwrap();
+    }
+    assert_eq!(estimate(&f, 0), 5);
+}
+
+#[test]
+fn union_takes_the_first_lg_k_and_checks_the_rest() {
+    let sketch = |k: u8, v: i64| {
+        let mut a = HllSketchAcc::new(HllSketchOp::Sketch(k)).unwrap();
+        a.resize(1);
+        a.update(&[0], &longs(&[Some(v)]), |_| true).unwrap();
+        let st = a.state(&[0]).unwrap();
+        st[0]
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .value(0)
+            .to_vec()
+    };
+    let (s12, s20, s12b) = (sketch(12, 1), sketch(20, 1), sketch(12, 2));
+    let input = binaries(&[Some(&s12), None, Some(&s12b)]);
+    let mut u = HllSketchAcc::new(HllSketchOp::Union(false)).unwrap();
+    u.resize(2);
+    u.update(&[0, 0, 0], &input, |_| true).unwrap();
+    assert_eq!((estimate(&u, 0), estimate(&u, 1)), (2, 0));
+    let mixed = binaries(&[Some(&s12), Some(&s20)]);
+    let e = u.update(&[1, 1], &mixed, |_| true).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::HllUnionDifferentLgK);
+    let mut ok = HllSketchAcc::new(HllSketchOp::Union(true)).unwrap();
+    ok.resize(1);
+    ok.update(&[0, 0], &mixed, |_| true).unwrap();
+    assert_eq!(estimate(&ok, 0), 1);
+}
+
+#[test]
+fn union_of_garbage_is_the_buffer_error() {
+    let mut u = HllSketchAcc::new(HllSketchOp::Union(false)).unwrap();
+    u.resize(1);
+    let e = u
+        .update(&[0], &binaries(&[Some(b"abc")]), |_| true)
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::HllInvalidInputSketchBuffer);
+}
+
+#[test]
+fn size_is_charged_up_front() {
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(10);
+    let before = a.size();
+    a.update(&[0; 3], &longs(&[Some(1), Some(2), Some(3)]), |_| true)
+        .unwrap();
+    assert_eq!(a.size(), before);
+    assert!(a.projected(5) >= before + 5 * 4096);
+}

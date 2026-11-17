@@ -550,6 +550,31 @@ pub(super) fn aggregates() -> Vec<Spec> {
             bitmap_agg,
             Aggregate::BitmapAndAgg,
         ),
+        // The HLL sketch aggregates (P3-T086). Spark's `ExpectsInputTypes` without implicit casts: the types as they are;
+        // `lgConfigK` and `allowDifferentLgConfigK` are constants the analyzer fills in when omitted.
+        aggregate(
+            "hll_sketch_agg",
+            Inputs::Expects(vec![
+                InputType::StrictOneOf(vec![
+                    DataType::Integer,
+                    DataType::Long,
+                    DataType::String,
+                    DataType::Binary,
+                ]),
+                InputType::Strict(DataType::Integer),
+            ]),
+            bitmap_agg,
+            Aggregate::HllSketchAgg,
+        ),
+        aggregate(
+            "hll_union_agg",
+            Inputs::Expects(vec![
+                InputType::Strict(DataType::Binary),
+                InputType::Strict(DataType::Boolean),
+            ]),
+            bitmap_agg,
+            Aggregate::HllUnionAgg,
+        ),
         // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
         // an overflow error, ANSI on or off.
         aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),

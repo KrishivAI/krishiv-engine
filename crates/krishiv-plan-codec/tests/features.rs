@@ -474,6 +474,17 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             Some(Feature::BitmapAggregates)
         );
     }
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::HllSketchAgg { lg_k: 12 },
+        krishiv_exec::aggregate::AggregateFunction::HllUnionAgg {
+            allow_different: false,
+        },
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::HllSketchAggregates)
+        );
+    }
     assert_eq!(
         feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
@@ -886,6 +897,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
     for (case, feature) in [
         ("aggregate_bitmaps", "bitmap_aggregates"),
+        ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),

@@ -262,6 +262,31 @@ pub(crate) fn bitmap_aggregate_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+/// One aggregate of each HLL sketch aggregate (values at lgConfigK 14, then sketches allowing mixed lgConfigK).
+pub(crate) fn hll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::HllSketchAgg { lg_k: 14 },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::HllUnionAgg {
+                allow_different: true,
+            },
+            ArrowType::Binary,
+        ),
+    ]
+}
+
 /// One aggregate of each new variant of this change: the exact and
 /// approximate percentiles, the discrete percentile and
 /// `approx_count_distinct`, with their folded parameters.
@@ -1334,6 +1359,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: vec![0],
                     aggregates: bitmap_aggregate_exprs(),
                     distinct: vec![false; 3],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_hll_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: hll_sketch_aggregate_exprs(),
+                    distinct: vec![false; 2],
                     output: AggregateOutput::Final,
                 },
             },

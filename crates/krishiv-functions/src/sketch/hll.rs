@@ -9,7 +9,7 @@
 //! both, so sketches stay interchangeable; only `length`/`hex` of the bytes differ (design note, owner question 2).
 
 use datasketches::hash::value::raw_bytes;
-use datasketches::hll::{HllSketch, HllType, HllUnion};
+pub use datasketches::hll::{HllSketch, HllType, HllUnion};
 use krishiv_common::error::{
     HllInvalidInputSketchBuffer, HllInvalidLgK, HllUnionDifferentLgK, KrishivError,
 };
@@ -84,6 +84,41 @@ pub fn update_bytes(sketch: &mut HllSketch, value: &[u8]) {
     if !value.is_empty() {
         sketch.update(raw_bytes::from_slice(value));
     }
+}
+
+/// The function name Spark puts in `HLL_UNION_DIFFERENT_LG_K` / `HLL_INVALID_INPUT_SKETCH_BUFFER` for `hll_union_agg`.
+pub const UNION_AGG: &str = "hll_union_agg";
+
+/// The sketch of `bytes` as `hll_union_agg` reads it, joined into `union` (created on the first sketch at its lgK,
+/// as Spark's `HllUnionAgg.update`).
+///
+/// # Errors
+/// `HLL_INVALID_INPUT_SKETCH_BUFFER` for a bad buffer, `HLL_UNION_DIFFERENT_LG_K` when the lgK values differ
+/// and `allow_different` is false.
+pub fn union_agg_update(
+    union: &mut Option<HllUnion>,
+    bytes: &[u8],
+    allow_different: bool,
+) -> Result<(), KrishivError> {
+    let sketch = from_bytes(bytes, UNION_AGG)?;
+    if let Some(u) = union.as_ref() {
+        // The union's lgK is the one it started with (`HllUnion::lg_max_k`).
+        if !allow_different && u.lg_max_k() != sketch.lg_config_k() {
+            return Err(HllUnionDifferentLgK {
+                left: u.lg_max_k().to_string(),
+                right: sketch.lg_config_k().to_string(),
+                function: format!("`{UNION_AGG}`"),
+            }
+            .into());
+        }
+    }
+    if union.is_none() {
+        *union = Some(HllUnion::new(sketch.lg_config_k()).map_err(|_| invalid_buffer(UNION_AGG))?);
+    }
+    if let Some(u) = union.as_mut() {
+        u.update(&sketch);
+    }
+    Ok(())
 }
 
 /// The bytes Krishiv stores in a `BINARY` column (compact form, see the module note).

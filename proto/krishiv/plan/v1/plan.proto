@@ -813,6 +813,12 @@ enum AggregateFunction {
   // `bitmap_and_agg(bitmap)`.
   // feature: bitmap_aggregates
   AGGREGATE_FUNCTION_BITMAP_AND_AGG = 51;
+  // `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_SKETCH_AGG = 52;
+  // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_UNION_AGG = 53;
 }
 
 enum AggregateInput {

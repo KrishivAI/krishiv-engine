@@ -44,6 +44,7 @@ mod element;
 mod format;
 mod geo;
 mod hash;
+mod hll;
 mod interval;
 mod json;
 mod json_tuple;
@@ -508,6 +509,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (hash::NAMES, hash::bind),
     (aes::NAMES, aes::bind),
     (bitmap::NAMES, bitmap::bind),
+    (hll::NAMES, hll::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
     (json::NAMES, json::bind),

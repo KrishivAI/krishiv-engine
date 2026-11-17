@@ -68,6 +68,7 @@ mod bitmap;
 mod collect;
 mod distinct;
 mod hll;
+mod hll_sketch;
 mod listagg;
 mod merge_index;
 mod mode;
@@ -335,6 +336,19 @@ pub enum AggregateFunction {
     /// 4,096 `0xFF` bytes and zeroing the bytes past a shorter input; 4,096 `0xFF` bytes
     /// for no value, never NULL. The argument is a `binary`.
     BitmapAndAgg,
+    /// `hll_sketch_agg(x[, lgConfigK])`: an `HLL_8` sketch (Apache DataSketches) of the non-NULL values of an
+    /// `int`, `bigint`, `string` or `binary` (empty strings and binaries skipped); `binary`, never NULL, the
+    /// empty sketch for no value. `lg_k` is in `4..=21`.
+    HllSketchAgg {
+        /// The log-base-2 of the register count.
+        lg_k: u8,
+    },
+    /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of the non-NULL sketches, at the lgK of
+    /// the first; `binary`, never NULL. The argument is a `binary`.
+    HllUnionAgg {
+        /// Whether sketches of different lgK may be mixed (else `HLL_UNION_DIFFERENT_LG_K`).
+        allow_different: bool,
+    },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
     /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
@@ -637,11 +651,23 @@ impl AggregateExpr {
             }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
-            // The bitmap aggregates are a `binary`, on the engine's view carrier (see `bitmap`).
+            // The bitmap and HLL sketch aggregates are a `binary`, on the engine's view carrier (see `bitmap`);
+            // the HLL values are `int`, `bigint`, `string` or `binary`.
             (F::BitmapConstructAgg, DataType::Int64)
-            | (F::BitmapOrAgg | F::BitmapAndAgg, DataType::Binary | DataType::BinaryView) => {
-                DataType::BinaryView
-            }
+            | (
+                F::BitmapOrAgg | F::BitmapAndAgg | F::HllUnionAgg { .. },
+                DataType::Binary | DataType::BinaryView,
+            )
+            | (
+                F::HllSketchAgg { .. },
+                DataType::Int32
+                | DataType::Int64
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::BinaryView,
+            ) => DataType::BinaryView,
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
             {
                 Some((v, k))
@@ -800,6 +826,9 @@ impl AggregateExpr {
             }
             (F::BitmapConstructAgg | F::BitmapOrAgg | F::BitmapAndAgg, _) => {
                 vec![Field::new(n("bitmap"), DataType::Binary, false)]
+            }
+            (F::HllSketchAgg { .. } | F::HllUnionAgg { .. }, _) => {
+                vec![Field::new(n("sketch"), DataType::Binary, false)]
             }
         })
     }
