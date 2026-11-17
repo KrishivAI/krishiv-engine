@@ -89,8 +89,8 @@ impl FileSchemaResolver for Files {
         Box::pin(std::future::ready(result))
     }
 
-    /// The schema's columns as given; under `/data/part` (recorded) then a
-    /// partition column `k`.
+    /// The schema's columns as given (each call recorded with `:schema`);
+    /// under `/data/part` then a partition column `k`.
     fn with_schema<'a>(
         &'a self,
         format: &'a str,
@@ -100,12 +100,10 @@ impl FileSchemaResolver for Files {
     ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>> {
         let path = paths.first().map(ToString::to_string).unwrap_or_default();
         let partitioned = path == "/data/part";
-        if partitioned {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("{format}:{path}:schema"));
-        }
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{format}:{path}:schema"));
         let mut columns: Vec<TableColumn> = schema
             .fields()
             .iter()
@@ -681,16 +679,20 @@ fn read_declared(path: &str) -> LogicalPlan {
     ))
 }
 
-/// A declared schema replaces inference: the resolver is never asked, and
-/// the declared fields are the columns. Nullability keeps the rule of an
+/// A declared schema replaces inference: the resolver is asked only for the
+/// read with that schema (its partition columns), never to infer, and the
+/// declared fields are the columns. Nullability keeps the rule of an
 /// inferred read (every file column nullable); whether Spark keeps a declared
 /// `NOT NULL` per format is golden-pending.
 #[test]
 fn a_declared_schema_skips_inference() {
     let files = Arc::new(Files::default());
-    // The path does not exist for inference: only a declared schema reads it.
     let r = run(read_declared("/data/missing"), &ctx(&files));
-    assert!(files.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        *files.calls.lock().unwrap(),
+        ["parquet:/data/missing:schema"],
+        "no inference"
+    );
     assert_eq!(
         output(&r),
         vec![
@@ -754,7 +756,16 @@ fn a_declared_schema_is_part_of_the_read() {
     assert_eq!(files.calls.lock().unwrap().len(), 1);
     assert_eq!(output(&r), nullable_one());
     let r = run(read_declared("/data/one"), &ctx(&files));
-    assert_eq!(files.calls.lock().unwrap().len(), 1, "no second inference");
+    let calls = files.calls.lock().unwrap().clone();
+    assert_eq!(
+        calls.iter().filter(|c| !c.ends_with(":schema")).count(),
+        1,
+        "no second inference"
+    );
+    assert_eq!(
+        calls.last().map(String::as_str),
+        Some("parquet:/data/one:schema")
+    );
     assert_eq!(output(&r)[0].0, "k");
 }
 
