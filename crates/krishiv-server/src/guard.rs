@@ -367,3 +367,19 @@ mod tests {
         assert!(same_secret(b"", b""));
     }
 }
+
+#[cfg(test)]
+mod caller_tests {
+    use super::*;
+
+    #[test]
+    fn the_local_admin_holds_a_role_and_an_identity_and_an_anonymous_caller_neither() {
+        let a = Caller::local_admin();
+        assert_eq!(a.principal, "local");
+        assert_eq!(a.role.as_deref(), Some("admin"));
+        assert!(a.identity.is_some());
+        let n = Caller::anonymous();
+        assert_eq!(n.principal, "unknown");
+        assert!(n.role.is_none() && n.identity.is_none());
+    }
+}

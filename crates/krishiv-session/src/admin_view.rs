@@ -148,3 +148,38 @@ impl EngineRuntime {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use futures::executor::block_on;
+    use krishiv_plan::analyzer::{Principal, PrincipalKind};
+
+    use crate::Session;
+
+    #[test]
+    fn a_session_and_its_query_show_with_their_owner() {
+        let rt = crate::EngineRuntime::builder().build().unwrap();
+        let alice = Principal::new("alice", PrincipalKind::User);
+        let s = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(alice.clone())
+            .build()
+            .unwrap();
+        block_on(async { s.sql("SELECT 1").await.unwrap().collect().await.unwrap() });
+        let sessions = rt.session_infos();
+        let mine = sessions
+            .iter()
+            .find(|i| i.principal == "alice")
+            .expect("alice's session is listed");
+        assert!(mine.is_owned_by(&alice));
+        assert!(!mine.is_owned_by(&Principal::new("bob", PrincipalKind::User)));
+        assert!(mine.queries_started >= 1);
+        let queries = rt.query_infos();
+        assert!(!queries.is_empty());
+        let q = &queries[0];
+        assert!(q.is_owned_by(&alice));
+        assert!(!q.is_owned_by(&Principal::new("bob", PrincipalKind::User)));
+    }
+}
