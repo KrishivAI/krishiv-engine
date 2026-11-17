@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 use krishiv_plan::AttrId;
 
-use super::{Planned, ScanId};
+use super::{ExplainNode, PhysNode, Planned, ScanId, SharedId};
 
 /// The deciding pass's bodies. Planning every reference of a deterministic definition anew is exponential in a
 /// chain of definitions that each read the previous one twice, so this pass plans each body once, at its first
@@ -16,9 +17,9 @@ use super::{Planned, ScanId};
 /// around the reference and against the definitions the scan belongs to, as it would for the reference's own
 /// copy. The pass then makes the decisions of planning every reference anew in time linear in the plan.
 ///
-/// This holds because no planning step that creates a runtime filter reads a reused reference's node: the
-/// filter-over-scan site check and the top-N bound look only at a `Scan` (or `Filter` over one) directly below,
-/// and a shared definition's body always holds a pipeline breaker, so a reference's node is never one.
+/// This holds because no planning step that creates a runtime filter reads more of a reused reference's node than
+/// its top: the filter-over-scan site check and the top-N bound look only at a `Scan` (or `Filter` over one)
+/// directly below, and a shape keeps such a node (renumbered like its sites) where the body plans to one.
 ///
 /// When the pass finds nothing to share, the second pass still plans every reference anew; a chain of
 /// definitions that runtime filters reach plans in time exponential in its length, as before.
@@ -52,14 +53,29 @@ impl Bodies {
         next_scan: &mut u64,
     ) -> Planned {
         let mut fresh = HashMap::new();
-        for site in &mut shape.sites {
-            let id = *fresh.entry(site.scan.0).or_insert_with(|| {
+        let mut renumber = |scan: &mut ScanId| {
+            let id = *fresh.entry(scan.0).or_insert_with(|| {
                 let id = *next_scan;
                 *next_scan += 1;
                 id
             });
-            self.aliases.insert(id, (site.scan.0, def.to_vec()));
-            site.scan = ScanId(id);
+            self.aliases.insert(id, (scan.0, def.to_vec()));
+            *scan = ScanId(id);
+        };
+        for site in &mut shape.sites {
+            renumber(&mut site.scan);
+        }
+        // A kept scan node (`Planned::shape`) takes the id its sites now name.
+        let scan = match &mut shape.node {
+            PhysNode::Scan(s) => Some(s),
+            PhysNode::Filter { input, .. } => match &mut **input {
+                PhysNode::Scan(s) => Some(s),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(s) = scan {
+            renumber(&mut s.id);
         }
         shape
     }
@@ -79,7 +95,9 @@ impl Bodies {
     }
 
     /// The number of copies of each definition that planning every reference anew makes: a reference inside a
-    /// body counts once per copy of that body (saturating).
+    /// body counts once per copy of that body (saturating). A body planned both live and under a `LIMIT 0` counts
+    /// its references once more than inlining would; it is then referenced at least twice, so no decision (two
+    /// copies or more) changes.
     pub(super) fn copies(&self) -> HashMap<Vec<AttrId>, u64> {
         fn count(
             key: &Vec<AttrId>,
@@ -103,5 +121,32 @@ impl Bodies {
             count(key, &self.references, &mut counts);
         }
         counts
+    }
+}
+
+impl Planned {
+    /// This relation's shape over a leaf stand-in node, which the deciding pass gives a body's later references
+    /// ([`Bodies`]); `name` labels it in `EXPLAIN`.
+    pub(super) fn shape(&self, name: &str) -> Self {
+        // A scan, or a filter over one, is kept: the top-N bound reads it (`Bodies::reuse` renumbers it).
+        let node = match &self.node {
+            PhysNode::Scan(_) => self.node.clone(),
+            PhysNode::Filter { input, .. } if matches!(**input, PhysNode::Scan(_)) => {
+                self.node.clone()
+            }
+            _ => PhysNode::SharedRead {
+                id: SharedId(u64::MAX),
+                layout: self.layout.clone(),
+            },
+        };
+        Self {
+            node,
+            schema: Arc::clone(&self.schema),
+            layout: self.layout.clone(),
+            explain: ExplainNode::leaf("ReusedBody", name),
+            sites: self.sites.clone(),
+            placement: self.placement.clone(),
+            ordering: self.ordering.clone(),
+        }
     }
 }

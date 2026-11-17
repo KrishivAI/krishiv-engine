@@ -252,23 +252,6 @@ pub(crate) struct Planned {
 }
 
 impl Planned {
-    /// This relation's shape over a leaf stand-in node, which the deciding pass gives a body's later references
-    /// ([`Bodies`]); `name` labels it in `EXPLAIN`.
-    fn shape(&self, name: &str) -> Self {
-        Self {
-            node: PhysNode::SharedRead {
-                id: SharedId(u64::MAX),
-                layout: self.layout.clone(),
-            },
-            schema: Arc::clone(&self.schema),
-            layout: self.layout.clone(),
-            explain: ExplainNode::leaf("ReusedBody", name),
-            sites: self.sites.clone(),
-            placement: self.placement.clone(),
-            ordering: self.ordering.clone(),
-        }
-    }
-
     /// The column holding `id`.
     pub(crate) fn column(&self, id: AttrId) -> Result<usize> {
         self.layout
