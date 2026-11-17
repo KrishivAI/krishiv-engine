@@ -199,8 +199,13 @@ pub fn route(
         }
     };
     if columns.is_empty() {
-        // Rows without columns (a projection keeping none) have no hash.
-        out.resize(batch.num_rows(), 0);
+        // Rows without columns (a scan read for its rows alone, `COUNT(*)`)
+        // have no hash: spread them by position, so a round-robin
+        // repartition still balances them.
+        let n = u32::try_from(batch.num_rows()).unwrap_or(u32::MAX);
+        let parts = partitions.max(1);
+        out.clear();
+        out.extend((0..n).map(|i| i % parts));
         return Ok(());
     }
     HashScheme::KeyGroupV1.partitions(&columns, partitions, out)

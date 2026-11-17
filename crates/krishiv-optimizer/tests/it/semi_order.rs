@@ -128,3 +128,21 @@ fn without_statistics_the_stack_keeps_the_written_order() {
         optimized.root()
     );
 }
+
+#[test]
+fn a_not_in_beside_an_exists_is_never_moved() {
+    // `NOT IN` is a null-aware anti join: a NULL key on either side changes
+    // which rows it keeps, so the sort never moves it (L2 review M2). The plan
+    // with the key on is the plan with it off, and both return the rows of the
+    // plan as written.
+    let sql = "SELECT o_orderkey FROM orders \
+               WHERE o_custkey NOT IN (SELECT c_custkey FROM customer WHERE c_acctbal > 0) \
+               AND EXISTS (SELECT 1 FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > 49)";
+    let plan = support::resolve(sql, &support::ctx());
+    let on = run(&plan, true);
+    let off = run(&plan, false);
+    assert!(on.structurally_eq(&off), "{}", on.root());
+    let db = data::tpch(7, 150);
+    let want = eval::rows(&db, plan.root());
+    assert_eq!(eval::rows(&db, on.root()), want);
+}
