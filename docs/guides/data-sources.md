@@ -59,7 +59,7 @@ Run MinIO locally, create a bucket as a directory of its data folder, and point 
 
 ```bash
 mkdir -p data/my-bucket
-docker run --rm -p 9000:9000 -v "$PWD/data:/data" quay.io/minio/minio server /data
+docker run --rm -p 127.0.0.1:9000:9000 -v "$PWD/data:/data" quay.io/minio/minio server /data
 ```
 
 ```python

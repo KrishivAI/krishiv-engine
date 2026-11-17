@@ -69,6 +69,7 @@
 //! catalog functions exist before P3).
 
 mod access;
+pub mod access_control;
 mod aggregate_text;
 mod analytics;
 mod bind;
@@ -111,6 +112,7 @@ mod observe;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
+mod reads;
 mod recursive;
 mod repartition;
 mod resolve;
@@ -143,8 +145,8 @@ use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
 pub use access::{
-    authorize, authorize_secret_refs, insufficient_permissions, namespace_parts, secret_scopes,
-    table_ident,
+    authorize, authorize_reported, authorize_secret_refs, insufficient_permissions,
+    namespace_parts, secret_scopes, table_ident,
 };
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
@@ -1093,8 +1095,23 @@ async fn analyze_with(
     let warm = slot
         .and_then(|(s, _)| s.lock().ok().and_then(|g| g.clone()))
         .filter(|e| e.fingerprint.as_ref() == Some(&context));
-    let (root, output, securables, warnings, output_declared, output_comments, entry, warm_started) =
-        resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
+    let (
+        root,
+        output,
+        mut securables,
+        warnings,
+        output_declared,
+        output_comments,
+        entry,
+        warm_started,
+        hinted,
+    ) = resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
+    // What each table read reads, from the final plan (P3-T062 review B1).
+    let reads = reads::column_reads(&root, &bindings, &hinted);
+    for (used, read) in securables.iter_mut().zip(&reads) {
+        used.columns.clone_from(&read.columns);
+    }
+    access::authorize_columns(ctx, &securables, &reads, plan.root().origin).await?;
     unexecutable::check(&root, ctx.conf.time_type)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {

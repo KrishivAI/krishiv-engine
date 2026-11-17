@@ -150,6 +150,9 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
+    /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
+    /// (P3-T062); `None`: those statements are refused.
+    pub(crate) grants: Option<Arc<crate::grants::GrantsPolicy>>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The registry the builder supplied, if any (child sessions use it too).
     base_functions: Option<Arc<dyn FunctionRegistry>>,
@@ -231,6 +234,7 @@ pub struct SessionBuilder {
     profile: SparkProfile,
     principal: Option<Principal>,
     policy: Option<Arc<dyn AccessPolicy>>,
+    grants: Option<Arc<crate::grants::GrantsPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     runtime: Option<Arc<EngineRuntime>>,
@@ -320,6 +324,16 @@ impl SessionBuilder {
         self
     }
 
+    /// The grants provider (P3-T062) the session's `GRANT`, `REVOKE`, `SHOW GRANTS` and role
+    /// statements act on, and whose ownership records its `CREATE` and `DROP` keep. It decides
+    /// access only as the session's [access policy](Self::access_policy): pass it there too
+    /// (wrapped in a `PathPrefixPolicy` in server mode). A builder with grants but no access
+    /// policy is refused, so grants are never managed without being enforced (`tests/grants.rs`).
+    pub fn grants(mut self, grants: Arc<crate::grants::GrantsPolicy>) -> Self {
+        self.grants = Some(grants);
+        self
+    }
+
     /// Runs queries on `executor`, shared with other sessions (default: a
     /// [`TokioExecutor`](krishiv_exec::TokioExecutor) of the session's own).
     ///
@@ -398,10 +412,19 @@ impl SessionBuilder {
                 (runtime, config)
             }
         };
+        if self.grants.is_some() && self.policy.is_none() {
+            return Err(krishiv_common::error::KrishivInvalidConfigValue {
+                value: "grants".to_owned(),
+                key: "\"krishiv.access.provider\"".to_owned(),
+                reason: "a session with grants needs them as its access policy too".to_owned(),
+            }
+            .into());
+        }
         let parts = SessionParts {
             profile: self.profile,
             principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
+            grants: self.grants,
             functions: self.functions,
             admission: self.admission,
         };
@@ -415,6 +438,7 @@ struct SessionParts {
     profile: SparkProfile,
     principal: Arc<Principal>,
     policy: Arc<dyn AccessPolicy>,
+    grants: Option<Arc<crate::grants::GrantsPolicy>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     admission: Option<Arc<dyn AdmissionController>>,
 }
@@ -441,6 +465,7 @@ impl Session {
             profile: SparkProfile::default(),
             principal: None,
             policy: None,
+            grants: None,
             executor: None,
             functions: None,
             runtime: None,
@@ -583,8 +608,8 @@ impl Session {
         Ok((df, command))
     }
 
-    /// Runs the parsed, authorized `statement`.
-    pub(crate) async fn run_statement(
+    /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
+    pub(crate) async fn run_statement_here(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -693,6 +718,7 @@ impl Session {
             Statement::InsertDirectory(_) => {
                 Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
             }
+            Statement::AccessControl(a) => Box::pin(self.exec_access_control(&a, &env)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
