@@ -241,8 +241,18 @@ impl HashAggregate {
                     task.need = 0;
                 }
                 let query = Arc::clone(ctx.query());
+                let counter = g.counter.get().cloned();
                 running.push(Box::pin(ctx.run_blocking(move || {
                     let stall = task.run(&query)?;
+                    // A `count(DISTINCT)` counted at the merge: the task's
+                    // pairs are distinct and no other task holds them, so
+                    // they are counted here, in parallel, and freed.
+                    if stall.is_none()
+                        && let Some(c) = counter
+                    {
+                        c.count_table(&mut task.table, &query)?;
+                        shrink_to(&mut task.reservation, task.table.memory_size());
+                    }
                     Ok((task, stall))
                 })));
             }

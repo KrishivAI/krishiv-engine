@@ -1502,7 +1502,7 @@ mod tests {
             ("gs://bucket/k", "gs://bucket", "k", "gs://bucket/k"),
             (
                 "abfss://cont@acct.dfs.core.windows.net/k",
-                "abfss://cont@acct",
+                "abfss://cont@acct.dfs.core.windows.net",
                 "k",
                 "abfss://cont@acct.dfs.core.windows.net/k",
             ),
