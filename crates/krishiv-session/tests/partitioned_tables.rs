@@ -2903,3 +2903,55 @@ fn a_partition_equality_next_to_a_raising_conjunct_prunes_in_both_orders() {
         "CAST_INVALID_INPUT"
     );
 }
+
+/// Under ANSI a conjunct on partition columns that may raise prunes no file: `(CAST(p AS INT) > 0 AND p LIKE '2%') OR
+/// p = 'zzz'` raises on `p = 'bad'` (Spark evaluates the whole filter on each partition value), so that partition is
+/// never pruned by the `LIKE` alone and the query raises as the unpruned rows do.
+#[test]
+fn a_partition_conjunct_that_may_raise_under_ansi_prunes_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled=true");
+    run(
+        &s,
+        "CREATE TABLE rp (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO rp PARTITION (p = 'bad') VALUES (1)");
+    run(&s, "INSERT INTO rp PARTITION (p = '2') VALUES (2)");
+    // The unpruned copy: the rows as a view over values, no file to skip.
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW rp_plain AS SELECT * FROM VALUES (1, 'bad'), (2, '2') AS t(a, p)",
+    );
+    let filter = "(CAST(p AS INT) > 0 AND p LIKE '2%') OR p = 'zzz'";
+    for t in ["rp", "rp_plain"] {
+        assert_eq!(
+            class(&s, &format!("SELECT a FROM {t} WHERE {filter}")),
+            "CAST_INVALID_INPUT",
+            "{t}"
+        );
+    }
+    // Without the raising conjunct the `LIKE` prunes `p = 'bad'`: one row decoded.
+    assert_eq!(
+        decoded(
+            &s,
+            "EXPLAIN ANALYZE SELECT a FROM rp WHERE p LIKE '2%' OR p = 'zzz'"
+        ),
+        "1"
+    );
+}
+
+/// A filter that rules out every partition opens no file, and `EXPLAIN ANALYZE` still shows the files it pruned.
+#[test]
+fn a_scan_that_prunes_every_partition_shows_its_pruned_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE ap USING parquet PARTITIONED BY (k) AS SELECT id, CAST(id % 2 AS INT) AS k FROM range(0, 10)",
+    );
+    let plan = rows(&s, "EXPLAIN ANALYZE SELECT id FROM ap WHERE k = 5").join("\n");
+    assert!(plan.contains("scan_splits=0"), "{plan}");
+    assert!(plan.contains("scan_units_pruned=2"), "{plan}");
+    assert!(plan.contains("scan_rows_decoded=0"), "{plan}");
+}

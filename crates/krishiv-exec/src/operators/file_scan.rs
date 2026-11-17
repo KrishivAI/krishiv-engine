@@ -66,7 +66,9 @@ use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
 use object_store::path::Path;
 
-use super::partition_prune::{dropping_filter, reads_partition_column, statically_dropped};
+use super::partition_prune::{
+    dropping_filter, reads_partition_column, static_partition_filters, statically_dropped,
+};
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
@@ -457,14 +459,15 @@ pub struct FileScanMetrics {
 }
 
 impl FileScanMetrics {
-    /// The `EXPLAIN ANALYZE` counters, once a split was read: units
+    /// The `EXPLAIN ANALYZE` counters, once a split was read or a unit pruned: units
     /// (row groups) decoded and skipped, rows and bytes decoded, and how
     /// the row filter ran (`row_filter_*` only where it did); the page
     /// index and stored Bloom filters' work where either pruned or was
     /// rejected; the decode over-commit when there was any.
     pub(super) fn extra(&self) -> crate::metrics::ExtraMetrics {
         let mut out = Vec::new();
-        if self.splits > 0 {
+        // Also when every file was pruned unopened (no split read).
+        if self.splits > 0 || self.units_pruned > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
                 ("scan_files", self.files),
@@ -890,12 +893,7 @@ impl FileScanSource {
             partition_fields,
             layout,
         } = table_request(scan, &p)?;
-        let static_partition = p
-            .filters
-            .iter()
-            .filter(|f| reads_partition_column(&scan.partition_columns, f))
-            .filter_map(|f| f.expr.clone())
-            .collect();
+        let static_partition = static_partition_filters(&scan.partition_columns, &p.filters);
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -1953,9 +1951,8 @@ mod row_level_tests {
                 Ok(BooleanArray::from(vec![true; b.num_rows()]))
             }));
         PushedFilter {
-            predicate,
-            expr: Some(PushdownExpr::Constant(true)),
             rows,
+            ..PushedFilter::typed(predicate, PushdownExpr::Constant(true))
         }
     }
 

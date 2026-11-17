@@ -1851,6 +1851,7 @@ pub(crate) fn scan_filter(
         predicate: Arc::new(Compiled(compiled)),
         expr: crate::planner::pushdown::translate(predicate, &scan.output),
         rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
+        partitions: crate::planner::pushdown::never_raising(predicate, &scan.output, env.ansi),
     })
 }
 

@@ -58,6 +58,22 @@ pub(super) fn statically_dropped(
     filters.iter().any(|e| prune(e, &stats) == TriState::False)
 }
 
+/// The typed trees static partition pruning may drop a file by: of each pushed filter that reads a partition
+/// column, its conjuncts that cannot raise ([`PushedFilter::partitions`]). A conjunct that may raise under ANSI
+/// never prunes a file, so the filter above evaluates it on the file's rows and raises as Spark's listing does
+/// (`(CAST(p AS INT) > 0 AND p LIKE '2%') OR p = 'zzz'` keeps `p = 'bad'`); the others prune in any order, as
+/// Spark splits the partition filters off and prunes by them before any other conjunct runs.
+pub(super) fn static_partition_filters(
+    partition_columns: &[FieldRef],
+    filters: &[PushedFilter],
+) -> Vec<PushdownExpr> {
+    filters
+        .iter()
+        .filter(|f| reads_partition_column(partition_columns, f))
+        .filter_map(|f| f.partitions.clone())
+        .collect()
+}
+
 /// Whether the typed tree of `filter` reads a partition column of the scan
 /// (a filter without one prunes nothing).
 pub(super) fn reads_partition_column(
@@ -84,4 +100,35 @@ pub(super) fn dropping_filter<'a>(
         let mask = filter.evaluate(values.get(*k)?.as_ref())?;
         (mask.is_valid(0) && !mask.value(0)).then_some(filter)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::file_scan::FileScanMetrics;
+
+    /// A scan whose every file was pruned unopened (no split read) still reports its counters.
+    #[test]
+    fn a_scan_that_pruned_every_file_reports_its_counters() {
+        let m = FileScanMetrics {
+            units_pruned: 3,
+            ..FileScanMetrics::default()
+        };
+        let extra: Vec<(String, Option<u64>)> = m
+            .extra()
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.value()))
+            .collect();
+        assert_eq!(
+            extra,
+            [
+                ("scan_splits".to_owned(), Some(0)),
+                ("scan_files".to_owned(), Some(0)),
+                ("scan_units".to_owned(), Some(0)),
+                ("scan_units_pruned".to_owned(), Some(3)),
+                ("scan_rows_decoded".to_owned(), Some(0)),
+                ("scan_bytes".to_owned(), Some(0)),
+            ]
+        );
+        assert!(FileScanMetrics::default().extra().is_empty());
+    }
 }
