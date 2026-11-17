@@ -227,6 +227,8 @@ impl Walk<'_> {
                 | PlanNode::UnionLoopRef { .. }
                 | PlanNode::Project { .. }
                 | PlanNode::Filter { .. }
+                // Rows pass through; the metric expressions are read above (`for_each_expr`).
+                | PlanNode::CollectMetrics { .. }
                 | PlanNode::Aggregate { .. }
                 | PlanNode::PartialAggregate { .. }
                 | PlanNode::Sort { .. }

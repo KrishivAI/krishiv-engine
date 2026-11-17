@@ -23,7 +23,10 @@
 //! ([`readers`]). So are what an offset function's values span and the
 //! states of folds as they open ([`opened`]): they take it from the lent
 //! credit when the evaluation opens, and keep it to the partition's end, so
-//! a pool another consumer took whole does not refuse them. What this module
+//! a pool another consumer took whole does not refuse them. A step's
+//! evaluation is in it as well ([`headroom`]), with the states of a frame's
+//! folds from the file, its fallback when its batches do not fit: those come
+//! from the lent credit and go back to it. What this module
 //! holds beyond that (more batches kept past their read, a state's growth)
 //! is charged to the pool directly, never drawing the credit the readers
 //! need. Batches a frame holds are optional, since it can fold
@@ -41,7 +44,7 @@ use super::eval::{Slice, cost, id};
 use super::frames::{self, FrameKeys, RangeKeys, Target, Walk, is_range_offset};
 use super::spill::Counters;
 use super::stream::{Fold, fold_batch, whole_batch};
-use super::{Env, FrameBound, FrameUnits, Shape, WindowFunction, WindowFunctionPlan, WindowPlan};
+use super::{Env, FrameBound, FrameUnits, Shape, WindowFunction, WindowFunctionPlan};
 use crate::aggregate::AggregateExpr;
 use crate::context::QueryContext;
 use crate::error::{Result, internal};
@@ -625,6 +628,18 @@ fn aggregate_of(f: &WindowFunctionPlan) -> Result<&AggregateExpr> {
     }
 }
 
+/// The bytes one frame's fold from the file holds as it opens ([`fold_from_file`]): an aggregate UDF's state is its
+/// own, counted after it folds.
+fn fold_state_bytes(a: &AggregateExpr, env: &Env) -> Result<usize> {
+    Ok(if super::udaf::is_udf(a) {
+        64
+    } else {
+        crate::aggregate::Accumulator::new(a, env.ansi)?.group_bytes()
+    }
+    .max(64)
+    .saturating_add(size_of::<Fold>()))
+}
+
 /// Each frame's rows folded from the file (see the [module docs](self)).
 fn fold_from_file(
     env: &Env,
@@ -635,16 +650,14 @@ fn fold_from_file(
 ) -> Result<ArrayRef> {
     let (file, consumer, query) = (c.file, c.consumer, c.query);
     let a = aggregate_of(&env.plan.functions[j])?;
-    let mut charge = direct(consumer).unguarded();
-    // An aggregate UDF's state is its own: counted after it folds.
-    let state = if super::udaf::is_udf(a) {
-        64
-    } else {
-        crate::aggregate::Accumulator::new(a, env.ansi)?.group_bytes()
-    }
-    .max(64)
-    .saturating_add(size_of::<Fold>());
-    shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
+    // The folds' states are part of the step's evaluation, which the flush phase's headroom covers ([`headroom`]):
+    // drawn from the lent credit first, and given back to it, so a pool another consumer took whole does not
+    // refuse them.
+    let mut charge = consumer.reservation().releasing_to_credit().unguarded();
+    shed.grow(
+        &mut charge,
+        fold_state_bytes(a, env)?.saturating_mul(frames.len()),
+    )?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
         let fold = Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?;
@@ -742,17 +755,28 @@ fn framed(f: &WindowFunctionPlan) -> Result<bool> {
 
 /// The bytes evaluating a batch of `rows` rows holds out of the flush phase's
 /// headroom: the functions `stream.rs` evaluates, and for each of the others
-/// its output and the keys it reads. What they hold beyond that is
+/// its output and the keys it reads, and the states of the frames' folds
+/// from the file of the aggregate over a frame whose folds hold most, the
+/// fallback when the frames' batches do not fit ([`fold_from_file`]). What they hold beyond that is
 /// charged as they go (see the [module docs](self)).
-pub(super) fn headroom(plan: &WindowPlan, rows: usize) -> Result<usize> {
+pub(super) fn headroom(env: &Env, rows: usize) -> Result<usize> {
+    let plan = &env.plan;
     let mut own = plan.clone();
     own.functions.clear();
     let mut others = 0_usize;
     // The current rows' keys, and a batch's per key reader.
     let mut key_copies = 1_usize;
+    let mut folds = 0_usize;
     for f in &plan.functions {
         if framed(f)? {
             others += 1;
+            // A frame from the partition's start is one fold ([`Prefix`]), never folded from the file. One
+            // function folds at a time, and gives its states back before the next: the largest is what is held.
+            if let WindowFunction::Aggregate(a) = &f.function
+                && f.frame.lower != FrameBound::UnboundedPreceding
+            {
+                folds = folds.max(fold_state_bytes(a, env)?);
+            }
             let (lower, upper) = key_readers(f);
             key_copies += usize::from(lower) + usize::from(upper);
         } else {
@@ -768,7 +792,8 @@ pub(super) fn headroom(plan: &WindowPlan, rows: usize) -> Result<usize> {
     )?;
     Ok(cost
         .saturating_add(rows.saturating_mul(others.saturating_mul(OUTPUT_BYTES)))
-        .saturating_add(rows.saturating_mul(key_copies.saturating_mul(frames::RANGE_KEY_BYTES))))
+        .saturating_add(rows.saturating_mul(key_copies.saturating_mul(frames::RANGE_KEY_BYTES)))
+        .saturating_add(rows.saturating_mul(folds)))
 }
 
 /// The batches an offset or `nth_value` function's [`Values`] holds out of

@@ -212,6 +212,28 @@ fn shared_broadcast_bytes_parses_and_defaults_to_no_cap() {
 }
 
 #[test]
+fn bloom_at_scale_is_on_by_default_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&RUNTIME_FILTER_BLOOM_AT_SCALE)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.runtimeFilter.bloom.atScale", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.atScale", "sometimes")
+            .is_err()
+    );
+    // The experimental key it graduated from never shipped and is not registered.
+    assert!(
+        c.set("krishiv.experimental.runtimeFilterBloomAtScale", "true")
+            .is_err()
+    );
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -903,6 +925,23 @@ fn group_key_code_force_is_experimental_and_off() {
         c.set("krishiv.experimental.groupKeyCodeForce", "maybe")
             .is_err()
     );
+}
+
+#[test]
+fn semi_anti_join_order_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.semiAntiJoinOrder";
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(SEMI_ANTI_JOIN_ORDER.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set(key, "sometimes").is_err());
 }
 
 #[test]

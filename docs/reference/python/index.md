@@ -11,12 +11,14 @@ description: "Every public module of the krishiv Python package: classes, functi
 | [`krishiv`](krishiv.md) | Krishiv: a Rust-native, Spark-compatible batch and streaming engine. |
 | [`krishiv.errors`](krishiv.errors.md) | Exceptions, shaped like `pyspark.errors` (Spark 4.2); no dependency on `pyspark`. |
 | [`krishiv.sql`](krishiv.sql.md) | The PySpark-shaped API: `from krishiv.sql import functions as F`. |
+| [`krishiv.sql.catalog`](krishiv.sql.catalog.md) | The records `spark.catalog` returns, as `pyspark.sql.catalog` defines them (named tuples). |
 | [`krishiv.sql.column`](krishiv.sql.column.md) | `Column`: a column expression, as `pyspark.sql.Column` (a thin wrapper on the native handle). |
 | [`krishiv.sql.conf`](krishiv.sql.conf.md) | `RuntimeConfig`: `spark.conf`. |
 | [`krishiv.sql.dataframe`](krishiv.sql.dataframe.md) | `DataFrame`: a lazily evaluated query, as `pyspark.sql.DataFrame`. |
 | [`krishiv.sql.functions`](krishiv.sql.functions.md) | `pyspark.sql.functions`: column builders. A function resolves by name in the engine's |
 | [`krishiv.sql.group`](krishiv.sql.group.md) | `GroupedData`: a DataFrame grouped by key columns, as `pyspark.sql.GroupedData`. |
 | [`krishiv.sql.na`](krishiv.sql.na.md) | `DataFrameNaFunctions` (`DataFrame.na`): handling of missing data, as `pyspark.sql.DataFrameNaFunctions`. |
+| [`krishiv.sql.observation`](krishiv.sql.observation.md) | `Observation`: named metrics of a DataFrame, collected as an action runs (`pyspark.sql.Observation`, 4.2). |
 | [`krishiv.sql.pandas`](krishiv.sql.pandas.md) | `pyspark.sql.pandas`: the pandas and Arrow vectorized UDFs (`krishiv.sql.pandas.functions`). |
 | [`krishiv.sql.pandas.functions`](krishiv.sql.pandas.functions.md) | `pyspark.sql.pandas.functions`: `pandas_udf` and `arrow_udf`. |
 | [`krishiv.sql.profile_view`](krishiv.sql.profile_view.md) | An offline viewer for `krishiv.query-profile` documents. |

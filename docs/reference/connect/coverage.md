@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 7 done, 6 partial, 45 missing, 4 out of scope.
+62 arms: 8 done, 6 partial, 44 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -40,7 +40,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
 | 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
 | 28 | map_partitions | missing |  | new MapPartitions (Python, T014) | P3-T014 | 6 |
-| 29 | collect_metrics | missing |  | new CollectMetrics (T084) | P3-T084 | 6 |
+| 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
 | 31 | group_map | missing |  | new GroupMap (applyInPandas, T014) | P3-T014 | 6 |
 | 32 | co_group_map | missing |  | new CoGroupMap (T014) | P3-T014 | 6 |
@@ -78,7 +78,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 3 done, 5 partial, 13 missing, 1 out of scope.
+22 arms: 3 done, 6 partial, 12 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -96,7 +96,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
-| 15 | common_inline_user_defined_function | missing |  | Python UDF call (T014); Scala/Java → UNSUPPORTED_USER_DEFINED_FUNCTION_IMPLEMENTATION (T081) | P3-T014 | 6 |
+| 15 | common_inline_user_defined_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Function over the session's encoded name of an unregistered Python UDF (PythonUdf), its payload registered with the session's UDF workers; Usage on System(udf) before any worker starts | P3-T014 | 6 |
 | 16 | call_function | done |  | Function (as #3, by name) | P3-T012 | 1 |
 | 17 | named_argument_expression | partial | outside a function call's arguments | FunctionCall.arg_names | P3-T012 | 1 |
 | 19 | merge_action | missing |  | MERGE actions for merge_into_table_command (T023, T021, T027) | P3-T023 | 11 |
@@ -107,11 +107,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 0 done, 0 partial, 14 missing, 6 out of scope.
+20 arms: 0 done, 1 partial, 13 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
-| 1 | register_function | missing |  | Python UDF registration (T014); JVM → T081's class | P3-T014 | 6 |
+| 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
 | 2 | write_operation | missing |  | DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023 | P3-T023 | 11 |
 | 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
 | 4 | write_operation_v2 | missing |  | DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023 | P3-T023 | 11 |

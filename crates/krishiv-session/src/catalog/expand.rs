@@ -28,6 +28,8 @@ pub(super) struct Expander<'a> {
     /// The definer views whose text the expansion is inside, innermost last (indexes of
     /// [`Self::definers`]): a lookup there is the innermost one's, asked of its definer.
     pub(super) in_definer: Vec<usize>,
+    /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
+    pub(super) keeps: Vec<Keep>,
 }
 
 /// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table: a
@@ -128,9 +130,11 @@ impl Expander<'_> {
                 && let TempTable::View {
                     plan: definition,
                     columns,
+                    keeps,
                     ..
                 } = &*entry
             {
+                self.keeps.extend(keeps.0.iter().cloned());
                 // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
                 let key = format!(
                     "{:?}",

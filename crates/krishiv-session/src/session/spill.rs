@@ -97,25 +97,3 @@ pub(crate) fn job_uuid() -> String {
         lo & 0xFFFF_FFFF_FFFF
     )
 }
-
-impl Session {
-    /// What a query's plans are instantiated with in this process: the
-    /// query's tables, its UDFs, and its spill scope under the session's
-    /// spill directory (created at instantiation). Writes build their sink
-    /// from the plan with the query's I/O context, formats and configuration;
-    /// batch splits resolve through the session's relation store.
-    pub(super) fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        let worker = WorkerContext::new(
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
-        )
-        .with_udfs(Arc::clone(&self.state.udfs))
-        .with_relations(Arc::clone(&self.state.relations))
-        .with_spill_scopes(Arc::new(QuerySpill {
-            state: Arc::clone(&self.state),
-        }))
-        .with_io(env.io.clone())
-        .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
-        self.with_python_runtime(worker)
-    }
-}

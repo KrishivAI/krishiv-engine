@@ -108,6 +108,7 @@ mod instance;
 mod intervals;
 pub(crate) mod legacy;
 pub mod lineage;
+mod observe;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
