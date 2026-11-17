@@ -33,15 +33,15 @@
 //!    **Group-key code**, once, with statistics (`group_code`, design P2b
 //!    D2): an aggregate's keys from one dimension travel as one integer
 //!    code, decoded above it.
+//!    **Derived group keys above**, once, with statistics (`derived_keys`,
+//!    P3-A part 2c; `krishiv.optimizer.derivedKeysAbove`), before eager
+//!    aggregation and the group-key code: a group key computed from other bare
+//!    group keys is computed above the aggregate.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
 //!    tidy repeat until neither changes the plan (folding can leave columns
 //!    unread).
-//!    **Derived group keys above**, once, with statistics (`derived_keys`,
-//!    P3-A part 2c; `krishiv.optimizer.derivedKeysAbove`): a group key computed
-//!    from other bare group keys is computed above the aggregate; then prune
-//!    and tidy again when it moved one.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -502,6 +502,42 @@ fn run(
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options.stats_propagation, joins, &mut t)?;
         }
+        // After the final join order and before the rules that read an aggregate's
+        // shape (eager aggregation, the group-key code), so they see the narrowed
+        // aggregate and a second optimization finds nothing new: a group key
+        // computed from other keys is computed above the aggregate (P3-A part 2c).
+        // Only with a session configuration that switches it on.
+        let derived = options.derived_keys_above
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&DERIVED_KEYS_ABOVE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = match stats {
+            Some(stats) if derived => {
+                let ansi = udfs.is_some_and(|(_, config)| {
+                    config
+                        .get(&ANSI_ENABLED)
+                        .and_then(ConfigValue::as_bool)
+                        .unwrap_or(true)
+                });
+                let (after, notes) = derived_keys::rewrite(
+                    Arc::clone(&root),
+                    stats,
+                    options.stats_propagation,
+                    ansi,
+                )?;
+                t.step("DerivedKeysAbove", 1, "DerivedKeysAbove", &root, &after);
+                t.notes("DerivedKeysAbove", &after, notes);
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    prune_and_tidy(&after, &mut t)?
+                }
+            }
+            _ => root,
+        };
         // After the plan's joins are final, so the rule reads the join it
         // moves below; before pruning, which drops what it leaves unread.
         let eager = options.eager_aggregation
@@ -574,41 +610,6 @@ fn run(
             root
         };
         let root = prune_and_tidy(&root, &mut t)?;
-        // After the first pruning (the keys the aggregate groups by are then the
-        // ones it needs) and before the rules that read the aggregate's shape: a
-        // group key computed from other keys is computed above the aggregate
-        // (P3-A part 2c). Only with a session configuration that switches it on.
-        let derived = options.derived_keys_above
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&DERIVED_KEYS_ABOVE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
-        let root = match stats {
-            Some(stats) if derived => {
-                let ansi = udfs.is_none_or(|(_, config)| {
-                    config
-                        .get(&ANSI_ENABLED)
-                        .and_then(ConfigValue::as_bool)
-                        .unwrap_or(true)
-                });
-                let (after, notes) = derived_keys::rewrite(
-                    Arc::clone(&root),
-                    stats,
-                    options.stats_propagation,
-                    ansi,
-                )?;
-                t.step("DerivedKeysAbove", 1, "DerivedKeysAbove", &root, &after);
-                t.notes("DerivedKeysAbove", &after, notes);
-                if Arc::ptr_eq(&after, &root) {
-                    after
-                } else {
-                    prune_and_tidy(&after, &mut t)?
-                }
-            }
-            _ => root,
-        };
         // After pruning, so a projection on the path holds only what is read
         // above it and the payload is what the path really carries; the moved
         // join is then ordered with the dimension's own joins and its path

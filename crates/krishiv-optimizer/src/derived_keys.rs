@@ -52,6 +52,9 @@
 //!   outputs name it again, which the aggregate would have to carry). A
 //!   derived column key that is refused only stays a key.
 //!
+//! A derived key over a column the project below defines and that is refused (so it stays a key)
+//! is not a base key: the whole aggregate is kept (a follow-up).
+//!
 //! Batch plans only: the session's batch planning is the optimizer's only
 //! production caller and streaming plans never pass through `optimize*`; a
 //! streaming caller must switch the rule off (`Options::derived_keys_above`).
@@ -387,7 +390,7 @@ fn gate(e: &Arc<Expr>, base: &Attrs, rel: &RelStats, ansi: bool) -> Result<(), S
         _ => {}
     });
     if foreign {
-        return Err("it calls a function that is not a built-in".to_owned());
+        return Err("it reads a function that is not a built-in operator".to_owned());
     }
     for c in &columns {
         if !base.contains(&c.id) {

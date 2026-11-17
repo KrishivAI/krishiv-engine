@@ -35,7 +35,18 @@ fn catalog() -> MemoryCatalog {
             char_varchar: None,
         })
         .collect();
-    MemoryCatalog::new("spark_catalog").with_table(&["default"], "h", columns, None)
+    let dim = [("dk", "int"), ("x", "int")]
+        .iter()
+        .map(|(c, t)| TableColumn {
+            name: (*c).to_owned(),
+            data_type: krishiv_types::parse_data_type(t).unwrap(),
+            nullable: true,
+            char_varchar: None,
+        })
+        .collect();
+    MemoryCatalog::new("spark_catalog")
+        .with_table(&["default"], "h", columns, None)
+        .with_table(&["default"], "d", dim, None)
 }
 
 /// A million rows of `h`; the range of `c` and `w` (`None`: no minimum and maximum known).
@@ -50,12 +61,14 @@ impl Statistics for Stats {
         let ReadSource::Table { name, .. } = &scan.source else {
             return None;
         };
-        if name.last()? != "h" {
-            return None;
-        }
+        let rows = match name.last()?.as_str() {
+            "h" => 1_000_000,
+            "d" => 1_000,
+            _ => return None,
+        };
         let columns = scan.output.iter().map(|c| {
             let (min, max) = match (self.0, c.name.as_str()) {
-                (Some((lo, hi)), "c" | "w") => {
+                (Some((lo, hi)), "c" | "w" | "dk" | "x") => {
                     (Some(Literal::Integer(lo)), Some(Literal::Integer(hi)))
                 }
                 _ => (None, None),
@@ -70,7 +83,7 @@ impl Statistics for Stats {
             (c.name.clone(), stats)
         });
         Some(TableStats {
-            rows: 1_000_000,
+            rows,
             columns: columns.collect(),
         })
     }
@@ -78,7 +91,15 @@ impl Statistics for Stats {
 
 /// The session configuration: the rule on (and ANSI as given).
 fn config(ansi: bool) -> Config {
+    config_with(ansi, &[])
+}
+
+/// [`config`] with more keys set.
+fn config_with(ansi: bool, more: &[(&str, &str)]) -> Config {
     let mut c = Config::new();
+    for (k, v) in more {
+        c.set(k, v).unwrap();
+    }
     c.set("krishiv.optimizer.derivedKeysAbove", "true").unwrap();
     c.set(
         "krishiv.sql.ansi.enabled",
@@ -88,7 +109,9 @@ fn config(ansi: bool) -> Config {
     c
 }
 
-/// Rows with NULL keys, duplicates and a key at each end of `int`.
+/// Rows with NULL keys, duplicates and a key at each end of `int`. The keys at the ends of `int`
+/// outrun the `FOOTER` range the tests declare under ANSI, so the interpreter comparison does not
+/// check error order (it wraps); the executor differential (`krishiv-exec` `derived_keys`) does.
 fn db(seed: u64) -> Db {
     let mut r = Rng(seed | 1);
     let mut db = Db::default();
@@ -145,9 +168,14 @@ impl Run {
 /// is a fixed point and (`rows`) that the rows equal the unoptimized plan's and the rule-off plan's
 /// over small data.
 fn run_over(sql: &str, stats: Stats, ansi: bool, rows: bool) -> Run {
+    run_conf(sql, stats, ansi, rows, &[])
+}
+
+/// [`run_over`] with more session keys set.
+fn run_conf(sql: &str, stats: Stats, ansi: bool, rows: bool, more: &[(&str, &str)]) -> Run {
     let ctx = support::ctx_over(catalog());
     let plan = support::resolve(sql, &ctx);
-    let config = config(ansi);
+    let config = config_with(ansi, more);
     let udfs = UdfLibrary::new();
     let (on, steps) = optimize_traced_with_udfs(&plan, &stats, &udfs, &config).unwrap();
     assert_eq!(
@@ -291,10 +319,23 @@ fn a_floating_point_key_refuses() {
 
 #[test]
 fn a_non_binary_collation_refuses() {
-    refused_rows(
-        "SELECT sl, upper(sl) AS u, count(*) AS n FROM h GROUP BY sl, upper(sl)",
-        "",
+    // The collation-key rule runs first: a collated key becomes `__collation_key(sl, ..)`, a
+    // registry function, so the key never reaches the rule as a bare collated column (the type
+    // gate is a second guard) and is refused as not a built-in operator, the note naming it.
+    let r = run_over(
+        "SELECT sl, CAST(sl AS STRING COLLATE UTF8_BINARY) AS t, count(*) AS n FROM h \
+         GROUP BY sl, CAST(sl AS STRING COLLATE UTF8_BINARY)",
+        FOOTER,
+        true,
         false,
+    );
+    assert!(!r.moved(), "{}", r.text());
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("__collation_key") && n.contains("not a built-in operator")),
+        "{:?}",
+        r.notes
     );
 }
 
@@ -302,7 +343,7 @@ fn a_non_binary_collation_refuses() {
 fn a_registry_function_refuses() {
     refused_rows(
         "SELECT s, length(s), count(*) AS n FROM h GROUP BY s, length(s)",
-        "not a built-in",
+        "not a built-in operator",
         false,
     );
 }
@@ -408,4 +449,22 @@ fn switched_off_nothing_moves() {
         "{}",
         off.root()
     );
+}
+
+/// Both switches that read an aggregate's shape on, over a join whose derived key is a dimension
+/// column: the rule runs first, so the group-key code and eager aggregation see the narrowed
+/// aggregate and a second optimization finds nothing more.
+#[test]
+fn a_join_with_the_group_key_code_and_eager_aggregation_on_is_a_fixed_point() {
+    let on = [
+        ("krishiv.optimizer.groupKeyCode", "true"),
+        ("krishiv.optimizer.eagerAggregation", "true"),
+    ];
+    for sql in [
+        "SELECT d.x, d.x - 1 AS y, sum(h.v) AS sv FROM h JOIN d ON h.w = d.dk GROUP BY d.x, d.x - 1",
+        "SELECT d.x, d.x - 1 AS y, count(*) AS n FROM h JOIN d ON h.w = d.dk GROUP BY d.x, d.x - 1",
+    ] {
+        let r = run_conf(sql, FOOTER, true, false, &on);
+        assert!(r.moved(), "{sql}: {:?}\n{}", r.notes, r.text());
+    }
 }
