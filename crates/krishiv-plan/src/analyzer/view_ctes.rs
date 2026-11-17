@@ -194,14 +194,19 @@ pub fn unscoped_read(plan: &LogicalPlan, case_sensitive: bool) -> Option<Vec<Str
         Plan(&'a LogicalPlan),
         Expr(&'a Expr),
     }
+    // Every node is borrowed from `plan` for the whole walk, so its address names it; a scope is
+    // named by a number given when it is made, never by its address, which a scope made after
+    // another is freed may reuse (review r5).
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
-    let mut stack: Vec<(At<'_>, Arc<Vec<String>>)> = vec![(At::Plan(plan), Arc::new(Vec::new()))];
-    while let Some((at, scope)) = stack.pop() {
+    let mut next_scope = 1_usize;
+    let mut stack: Vec<(At<'_>, usize, Arc<Vec<String>>)> =
+        vec![(At::Plan(plan), 0, Arc::new(Vec::new()))];
+    while let Some((at, id, scope)) = stack.pop() {
         let address = match at {
             At::Plan(p) => std::ptr::from_ref(p) as usize,
             At::Expr(e) => std::ptr::from_ref(e) as usize,
         };
-        if !seen.insert((address, Arc::as_ptr(&scope) as usize)) {
+        if !seen.insert((address, id)) {
             continue;
         }
         match at {
@@ -216,21 +221,23 @@ pub fn unscoped_read(plan: &LogicalPlan, case_sensitive: bool) -> Option<Vec<Str
                 PlanNode::WithCte { input, ctes } => {
                     let mut names = (*scope).clone();
                     for c in ctes {
-                        stack.push((At::Plan(&c.plan), Arc::new(names.clone())));
+                        stack.push((At::Plan(&c.plan), next_scope, Arc::new(names.clone())));
+                        next_scope += 1;
                         names.push(c.name.clone());
                     }
-                    stack.push((At::Plan(input), Arc::new(names)));
+                    stack.push((At::Plan(input), next_scope, Arc::new(names)));
+                    next_scope += 1;
                 }
                 _ => {
-                    p.for_each_child(&mut |c| stack.push((At::Plan(c), Arc::clone(&scope))));
-                    p.for_each_expr(&mut |e| stack.push((At::Expr(e), Arc::clone(&scope))));
+                    p.for_each_child(&mut |c| stack.push((At::Plan(c), id, Arc::clone(&scope))));
+                    p.for_each_expr(&mut |e| stack.push((At::Expr(e), id, Arc::clone(&scope))));
                 }
             },
             At::Expr(e) => {
                 if let ExprNode::Subquery { plan, .. } = &e.node {
-                    stack.push((At::Plan(plan), Arc::clone(&scope)));
+                    stack.push((At::Plan(plan), id, Arc::clone(&scope)));
                 }
-                e.for_each_child(&mut |c| stack.push((At::Expr(c), Arc::clone(&scope))));
+                e.for_each_child(&mut |c| stack.push((At::Expr(c), id, Arc::clone(&scope))));
             }
         }
     }
@@ -361,5 +368,44 @@ mod tests {
             None
         );
         assert_eq!(unscoped_read(&sub("c"), false), Some(vec!["c".to_owned()]));
+    }
+
+    /// Review r5 (Y1c nit): one node read in many scopes, each scope freed before the next is
+    /// made, is checked in every one of them. A seen-set keyed by a freed scope's address could
+    /// take a new scope at that address for one already walked and skip the read.
+    #[test]
+    fn a_node_shared_by_scopes_made_one_after_another_is_checked_in_each() {
+        let shared = Arc::new(read("c"));
+        let defining = |input: Arc<LogicalPlan>| {
+            Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input,
+                ctes: vec![Cte {
+                    name: "c".to_owned(),
+                    plan: Arc::new(LogicalPlan::table(["ns", "t"])),
+                }],
+            }))
+        };
+        let empty = |input: Arc<LogicalPlan>| {
+            Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input,
+                ctes: Vec::new(),
+            }))
+        };
+        // Popped last first: every branch but the first defines `c`; the first reads it bare
+        // through a scope made after all the others were freed.
+        for n in 1..64 {
+            let mut inputs = vec![empty(Arc::clone(&shared))];
+            inputs.extend((0..n).map(|_| defining(empty(Arc::clone(&shared)))));
+            let union = LogicalPlan::new(PlanNode::Union {
+                inputs,
+                by_name: false,
+                allow_missing_columns: false,
+            });
+            assert_eq!(
+                unscoped_read(&union, false),
+                Some(vec!["c".to_owned()]),
+                "{n}"
+            );
+        }
     }
 }
