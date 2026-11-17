@@ -1472,35 +1472,9 @@ pub(crate) fn expand_views_in(
     namespace: Option<String>,
     view_path: Option<Vec<Vec<String>>>,
 ) -> Result<Expansion, KrishivError> {
-    let mut expander = Expander {
-        catalog,
-        case_sensitive,
-        path: Vec::new(),
-        stored,
-        view_namespace: namespace,
-        view_path,
-        view_functions: None,
-        reads: Vec::new(),
-        deferred: None,
-        deferred_in_definer: false,
-        stored_reads: Vec::new(),
-        views: Vec::new(),
-        definers: Vec::new(),
-        in_definer: Vec::new(),
-        in_stored_view: 0,
-        keeps: Vec::new(),
-    };
+    let mut expander = Expander::new(catalog, case_sensitive, stored, namespace, view_path);
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
-    Ok(Expansion {
-        plan,
-        reads: expander.reads,
-        deferred: expander.deferred,
-        deferred_in_definer: expander.deferred_in_definer,
-        stored_reads: expander.stored_reads,
-        views: expander.views,
-        definers: expander.definers,
-        keeps: expander.keeps,
-    })
+    Ok(expander.finish(plan))
 }
 
 /// A `SQL SECURITY DEFINER` view the expansion inlined (P3-T062 §2.4): its query reads with its
@@ -1527,6 +1501,9 @@ pub(crate) struct DefinerRead {
     /// The functions it bound when created or last altered (`ViewDef::functions`; empty for one
     /// stored without, so every stored call it reaches must be its definer's).
     pub(crate) bound: crate::store::BoundFunctions,
+    /// The stored views its text inlines (not those inside a definer view in it), each checked
+    /// against [`Self::bound`] and asked about its own reads as its owner (review r10 M10).
+    pub(crate) views: Vec<ReachedView>,
 }
 
 /// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
@@ -1560,6 +1537,8 @@ pub(crate) struct Expansion {
     pub(crate) definers: Vec<DefinerRead>,
     /// What the temporary views inlined kept ([`TempTable::View::keeps`]), from the entries expanded.
     pub(crate) keeps: Vec<Keep>,
+    /// Every stored view inlined, at any depth (review r10 M10).
+    pub(crate) reached: Vec<ReachedView>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
@@ -1919,4 +1898,5 @@ pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
 mod tests;
 
 mod expand;
+pub(crate) use expand::ReachedView;
 use expand::*;

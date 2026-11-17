@@ -57,6 +57,22 @@ impl World {
     fn admin(&self) -> Session {
         self.session(Principal::new("root", PrincipalKind::User), true)
     }
+
+    /// A session of `name` deciding by the grants but with no grants provider (`Session::builder`
+    /// takes the policy and the provider apart): no owner is recorded for what it creates.
+    fn without_provider(&self, name: &str) -> Session {
+        let policy = Arc::new(GrantsPolicy::new(
+            Arc::clone(&self.grants),
+            Arc::new(AllowAll),
+            false,
+        ));
+        Session::builder()
+            .runtime(Arc::clone(&self.rt))
+            .principal(Principal::new(name, PrincipalKind::User))
+            .access_policy(policy as Arc<dyn AccessPolicy>)
+            .build()
+            .unwrap()
+    }
 }
 
 fn ok(s: &Session, sql: &str) {
@@ -88,6 +104,7 @@ fn read(s: &Session, sql: &str) -> Vec<String> {
 
 /// A refusal of a definer's read as its reader sees it: 42501, every parameter redacted, none of
 /// `hidden` shown.
+#[track_caller]
 fn assert_redacted(s: &Session, sql: &str, hidden: &[&str]) {
     let e = match rows(s, sql) {
         Err(e) => e.to_string(),
@@ -780,4 +797,79 @@ fn a_shadowing_function_in_a_nested_invoker_view_or_body_fails_the_definer_view_
     for v in ["dvi", "dva"] {
         assert_eq!(read(&carl, &format!("SELECT * FROM default.{v}")), ["ana"]);
     }
+}
+
+/// Review r10 m1 (a): with no grants provider no owner is recorded, so the body a definer view's
+/// text calls is asked of the author of its pinned version too: bob losing `secret` refuses ana's
+/// view over his body.
+#[test]
+fn a_body_with_no_recorded_owner_reads_as_its_author_too() {
+    let w = World::new();
+    let root = w.admin();
+    let (ana, bob, carl) = (
+        w.without_provider("ana"),
+        w.without_provider("bob"),
+        w.without_provider("carl"),
+    );
+    ok(&root, "CREATE TABLE secret (s STRING) USING parquet");
+    ok(&root, "INSERT INTO secret VALUES ('S3CRET')");
+    ok(&root, "CREATE NAMESPACE ns2");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA ns2 TO user:bob");
+    ok(&root, "GRANT USAGE ON SCHEMA ns2 TO user:ana");
+    for u in ["ana", "bob"] {
+        ok(&root, &format!("GRANT SELECT ON TABLE secret TO user:{u}"));
+    }
+    ok(
+        &bob,
+        "CREATE FUNCTION ns2.bf() RETURNS STRING RETURN (SELECT max(s) FROM default.secret)",
+    );
+    ok(&root, "GRANT SELECT ON FUNCTION ns2.bf TO user:ana");
+    ok(
+        &ana,
+        "CREATE VIEW default.dvx SQL SECURITY DEFINER AS SELECT ns2.bf() AS v",
+    );
+    ok(&root, "GRANT SELECT ON VIEW default.dvx TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvx"), ["S3CRET"]);
+    ok(&root, "REVOKE SELECT ON TABLE secret FROM user:bob");
+    assert_redacted(&carl, "SELECT * FROM default.dvx", &["secret", "S3CRET"]);
+}
+
+/// Review r10 m1 (b): ana owns `g`, but bob (allowed to drop it) wrote its current version, which
+/// ana's view pinned when she altered it. The body is asked of bob too: once he loses `secret`,
+/// ana's view is refused, redacted.
+#[test]
+fn a_body_the_definer_owns_but_another_wrote_reads_as_its_author_too() {
+    let w = World::new();
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(&root, "CREATE TABLE secret (s STRING) USING parquet");
+    ok(&root, "INSERT INTO secret VALUES ('S3CRET')");
+    for u in ["ana", "bob"] {
+        ok(
+            &root,
+            &format!("GRANT CREATE ON SCHEMA default TO user:{u}"),
+        );
+        ok(&root, &format!("GRANT SELECT ON TABLE secret TO user:{u}"));
+    }
+    ok(
+        &ana,
+        "CREATE FUNCTION default.g() RETURNS STRING RETURN 'none'",
+    );
+    ok(&ana, "GRANT DROP ON FUNCTION default.g TO user:bob");
+    ok(
+        &ana,
+        "CREATE VIEW default.dvg SQL SECURITY DEFINER AS SELECT default.g() AS v",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW default.dvg TO user:carl");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvg"), ["none"]);
+    ok(
+        &bob,
+        "CREATE OR REPLACE FUNCTION default.g() RETURNS STRING RETURN (SELECT max(s) FROM default.secret)",
+    );
+    // Not the pinned version, nor one ana last defined.
+    assert_redacted(&carl, "SELECT * FROM default.dvg", &["secret"]);
+    ok(&ana, "ALTER VIEW default.dvg AS SELECT default.g() AS v");
+    assert_eq!(read(&carl, "SELECT * FROM default.dvg"), ["S3CRET"]);
+    ok(&root, "REVOKE SELECT ON TABLE secret FROM user:bob");
+    assert_redacted(&carl, "SELECT * FROM default.dvg", &["secret", "S3CRET"]);
 }

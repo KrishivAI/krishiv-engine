@@ -1430,6 +1430,8 @@ impl Session {
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
+        // What a definer view being created pins (review r10 M10).
+        env.sql_functions.note_views(&expansion.reached);
         *env.view_keeps
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);

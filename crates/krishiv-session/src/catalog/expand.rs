@@ -40,6 +40,81 @@ pub(super) struct Expander<'a> {
     pub(super) in_stored_view: usize,
     /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
     pub(super) keeps: Vec<Keep>,
+    /// The stored views inlined so far, each with the definer view whose text holds it (an index
+    /// of [`Self::definers`], `None` outside one), for [`Expansion::reached`].
+    reached: Vec<(Option<usize>, ReachedView)>,
+    /// The stored views whose text the expansion is inside (indexes of [`Self::reached`]).
+    open_views: Vec<usize>,
+}
+
+/// A stored view an expansion inlined (review r10 M10): inside a definer view's trusted text it is
+/// checked against the version the definer view pinned, and its own reads are asked of its owner
+/// and author too.
+#[derive(Debug, Clone)]
+pub(crate) struct ReachedView {
+    /// The namespace and name the catalog stores.
+    pub(crate) view: (String, String),
+    /// [`ViewDef::revision`] of the entry inlined.
+    pub(crate) revision: u64,
+    /// [`ViewDef::author`] of the entry inlined.
+    pub(crate) author: String,
+    /// The catalog-store lookups of its text and of the invoker views inside it, not those inside
+    /// a definer view in it (which are that definer's).
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// Its text as inlined (`None` when it failed).
+    pub(crate) query: Option<Arc<LogicalPlan>>,
+}
+
+impl<'a> Expander<'a> {
+    /// An expansion of a plan written inside `namespace` (none: the query's own) under `view_path`.
+    pub(super) fn new(
+        catalog: &'a SessionCatalog,
+        case_sensitive: bool,
+        stored: Option<&'a StoredViews<'a>>,
+        namespace: Option<String>,
+        view_path: Option<Vec<Vec<String>>>,
+    ) -> Self {
+        Self {
+            catalog,
+            case_sensitive,
+            path: Vec::new(),
+            stored,
+            view_namespace: namespace,
+            view_path,
+            view_functions: None,
+            reads: Vec::new(),
+            deferred: None,
+            deferred_in_definer: false,
+            stored_reads: Vec::new(),
+            views: Vec::new(),
+            definers: Vec::new(),
+            in_definer: Vec::new(),
+            in_stored_view: 0,
+            keeps: Vec::new(),
+            reached: Vec::new(),
+            open_views: Vec::new(),
+        }
+    }
+
+    /// What the expansion found, with its expanded `plan`.
+    pub(super) fn finish(mut self, plan: Arc<LogicalPlan>) -> Expansion {
+        for (definer, view) in &self.reached {
+            if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
+                d.views.push(view.clone());
+            }
+        }
+        Expansion {
+            plan,
+            reads: self.reads,
+            deferred: self.deferred,
+            deferred_in_definer: self.deferred_in_definer,
+            stored_reads: self.stored_reads,
+            views: self.views,
+            definers: self.definers,
+            keeps: self.keeps,
+            reached: self.reached.into_iter().map(|(_, v)| v).collect(),
+        }
+    }
 }
 
 /// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table: a
@@ -302,6 +377,17 @@ impl Expander<'_> {
                 .filter(|e| e.view.is_some())
                 .map(|e| (e.namespace.clone(), e.name.clone())),
         };
+        // A lookup in a stored view's text is its owner's too (review r10 M10): recorded for each
+        // view whose text holds it, up to the innermost definer view's text.
+        let innermost = self.in_definer.last().copied();
+        for &open in &self.open_views {
+            if let Some((definer, view)) = self.reached.get_mut(open)
+                && *definer == innermost
+                && !view.reads.contains(&candidate)
+            {
+                view.reads.push(candidate.clone());
+            }
+        }
         // Inside a definer view's text a lookup is the definer's to be allowed, not the reader's.
         let reads = match self.in_definer.last() {
             Some(&i) => match self.definers.get_mut(i) {
@@ -389,6 +475,19 @@ impl Expander<'_> {
             namespace.to_owned(),
             table_key.to_owned(),
         ];
+        // Its version and its own lookups, for the definer view whose text holds it (review r10 M10).
+        self.reached.push((
+            self.in_definer.last().copied(),
+            ReachedView {
+                view: (entry.namespace.clone(), entry.name.clone()),
+                revision: view.revision,
+                author: view.author.clone(),
+                reads: Vec::new(),
+                query: None,
+            },
+        ));
+        let reached = self.reached.len() - 1;
+        self.open_views.push(reached);
         // A definer view's text is read with its definer's rights: its lookups are recorded as its own.
         let definer = view.definer.as_ref().map(|definer| {
             self.definers.push(DefinerRead {
@@ -400,6 +499,7 @@ impl Expander<'_> {
                 namespace: view.namespace.clone(),
                 path: view.path.clone(),
                 bound: view.functions.clone().unwrap_or_default(),
+                views: Vec::new(),
             });
             self.definers.len() - 1
         });
@@ -417,6 +517,7 @@ impl Expander<'_> {
         self.in_stored_view += 1;
         let input = self.go(text, &mut Vec::new());
         self.in_stored_view -= 1;
+        self.open_views.pop();
         self.view_namespace = previous;
         self.view_path = previous_path;
         self.view_functions = previous_functions;
@@ -425,6 +526,9 @@ impl Expander<'_> {
             self.in_definer.pop();
         }
         let mut input = input?;
+        if let Some((_, r)) = self.reached.get_mut(reached) {
+            r.query = Some(Arc::clone(&input));
+        }
         if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
             d.query = Some(Arc::clone(&input));
             d.view = self.views.len();

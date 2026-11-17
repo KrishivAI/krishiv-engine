@@ -91,6 +91,21 @@ impl Session {
                 ));
             }
         }
+        // So is every stored view it reaches, nested definer views included: the version the view
+        // pinned, or one its definer owns and last defined (review r10 M10, ADR 0048 A1).
+        let reached: Vec<&crate::catalog::ReachedView> =
+            d.views.iter().chain(&scope.body.views).collect();
+        for v in &reached {
+            if d.bound.views.get(&v.view) != Some(&v.revision)
+                && !self.definer_wrote(&d.definer, &view_securable(&v.view), &v.author)
+            {
+                return Err(krishiv_plan::analyzer::insufficient_permissions(
+                    &definer,
+                    &view_securable(&v.view),
+                    env.analysis.mode.read_privilege(),
+                ));
+            }
+        }
         self.authorize_reads_as(&scope.body.reads, env, &definer, false)
             .await?;
         self.authorize_reads_as(&scope.body.definer_reads, env, &definer, false)
@@ -107,28 +122,54 @@ impl Session {
             )
             .await?;
         }
-        // Each body reads with the intersection of the definer and the function's owner (review
-        // r7 M9): the owner wrote its text, so every read and call in it is asked of the owner too.
+        // Each body reads with the intersection of the definer, the function's owner and the
+        // author of its version (review r7 M9, r10 m1): they wrote its text, so every read and call
+        // in it is asked of them too.
         for owned in &scope.owned {
-            let Some(owner) = self.function_owner(&owned.function) else {
-                continue;
-            };
-            if owner == d.definer {
+            let author = calls
+                .stored_identity(&owned.function)
+                .map(|(_, author)| author.to_owned())
+                .unwrap_or_default();
+            let securable = function_securable(&owned.function);
+            for writer in self.writers(&d.definer, &securable, &author) {
+                let writer = Arc::new(Principal::definer(
+                    writer,
+                    self.state.principal.name.clone(),
+                ));
+                self.authorize_reads_as(&owned.reads.reads, env, &writer, false)
+                    .await?;
+                self.authorize_reads_as(&owned.reads.definer_reads, env, &writer, false)
+                    .await?;
+                self.authorize_calls_as(&owned.calls, &writer, privilege)
+                    .await?;
+            }
+        }
+        // So does each stored view it reaches (review r10 M10): its lookups, and the calls and
+        // bodies' lookups of its text, are asked of its owner and author too.
+        for v in &reached {
+            let writers = self.writers(&d.definer, &view_securable(&v.view), &v.author);
+            if writers.is_empty() {
                 continue;
             }
-            let owner = Arc::new(Principal::definer(owner, self.state.principal.name.clone()));
-            self.authorize_reads_as(&owned.reads.reads, env, &owner, false)
-                .await?;
-            self.authorize_reads_as(&owned.reads.definer_reads, env, &owner, false)
-                .await?;
-            for call in &owned.calls {
-                krishiv_plan::analyzer::authorize(
-                    &*self.state.policy,
-                    &owner,
-                    &function_securable(call),
-                    privilege,
-                )
-                .await?;
+            let under = v
+                .query
+                .as_ref()
+                .map(|q| calls.definer_scope(q, &ctx.definer_texts, self.state.profile));
+            for writer in writers {
+                let writer = Arc::new(Principal::definer(
+                    writer,
+                    self.state.principal.name.clone(),
+                ));
+                self.authorize_reads_as(&v.reads, env, &writer, false)
+                    .await?;
+                if let Some(under) = &under {
+                    self.authorize_reads_as(&under.body.reads, env, &writer, false)
+                        .await?;
+                    self.authorize_reads_as(&under.body.definer_reads, env, &writer, false)
+                        .await?;
+                    self.authorize_calls_as(&under.calls, &writer, privilege)
+                        .await?;
+                }
             }
         }
         env.sql_functions.note_definer_calls(scope.calls);
@@ -162,22 +203,70 @@ impl Session {
         let Some((revision, author)) = functions.stored_identity(call) else {
             return false;
         };
-        if d.bound.versions.get(call) == Some(&revision) {
-            return true;
-        }
-        author == d.definer
-            && (self.state.grants.is_none()
-                || self.function_owner(call).as_deref() == Some(d.definer.as_str()))
+        d.bound.versions.get(call) == Some(&revision)
+            || self.definer_wrote(&d.definer, &function_securable(call), author)
     }
 
-    /// The owner the grants provider records for the stored function `(namespace, name)`; `None`
-    /// without the grants provider, or for a function it records no owner of (then the definer
-    /// alone is asked about its body).
-    fn function_owner(&self, function: &(String, String)) -> Option<String> {
-        self.state
+    /// Whether `definer` last defined `securable` (a stored function or view whose current version
+    /// `author` wrote) and owns it: the grants provider records `definer` as its owner, or no
+    /// grants provider is set (review r9, r10 M10).
+    fn definer_wrote(
+        &self,
+        definer: &str,
+        securable: &krishiv_plan::analyzer::Securable,
+        author: &str,
+    ) -> bool {
+        author == definer
+            && self
+                .state
+                .grants
+                .as_ref()
+                .is_none_or(|g| g.owner_of(securable).as_deref() == Some(definer))
+    }
+
+    /// Besides `definer`, who wrote `securable` (a stored function or view whose current version
+    /// `author` wrote), each asked about what its text reads (review r7 M9, r10 m1 and M10): the
+    /// owner the grants provider records, and the author, when not the definer. Empty when the
+    /// definer wrote it alone.
+    fn writers(
+        &self,
+        definer: &str,
+        securable: &krishiv_plan::analyzer::Securable,
+        author: &str,
+    ) -> Vec<String> {
+        let mut writers = Vec::new();
+        if let Some(owner) = self
+            .state
             .grants
-            .as_ref()?
-            .owner_of(&function_securable(function))
+            .as_ref()
+            .and_then(|g| g.owner_of(securable))
+            && owner != definer
+        {
+            writers.push(owner);
+        }
+        if !author.is_empty() && author != definer && !writers.iter().any(|w| w == author) {
+            writers.push(author.to_owned());
+        }
+        writers
+    }
+
+    /// Asks the policy whether `principal` may call each stored function of `calls`.
+    async fn authorize_calls_as(
+        &self,
+        calls: &[(String, String)],
+        principal: &Principal,
+        privilege: Privilege,
+    ) -> Result<(), KrishivError> {
+        for call in calls {
+            krishiv_plan::analyzer::authorize(
+                &*self.state.policy,
+                principal,
+                &function_securable(call),
+                privilege,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// The views the bodies of the functions a query called read, once the policy allows them; a
@@ -290,6 +379,15 @@ fn function_securable((namespace, name): &(String, String)) -> krishiv_plan::ana
         namespace.clone(),
         name.clone(),
     ])
+}
+
+/// The stored view `(namespace, name)` of the session catalog as a securable.
+fn view_securable((namespace, name): &(String, String)) -> krishiv_plan::analyzer::Securable {
+    krishiv_plan::analyzer::Securable::View(krishiv_plan::analyzer::TableIdent {
+        catalog: crate::catalog::CATALOG.to_owned(),
+        namespace: vec![namespace.clone()],
+        name: name.clone(),
+    })
 }
 
 /// The query's catalogs as a stored view's text sees them (Spark's `viewCatalogAndNamespace` and

@@ -205,6 +205,9 @@ struct Bodies {
     reads: Mutex<Vec<BodyReads>>,
     /// The views the bodies inlined, for the query's view side table (`AnalyzedPlan::views`).
     views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
+    /// The stored views the query's own expansions inlined, with their versions
+    /// ([`QueryFunctions::note_views`], review r10 M10).
+    views_noted: Mutex<BTreeMap<(String, String), u64>>,
 }
 
 /// The catalog-store lookups of one body's expansion (see [`crate::catalog::Expansion`]).
@@ -221,6 +224,8 @@ pub(crate) struct BodyReads {
     pub(crate) definer_reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, and whether it is inside a definer's.
     pub(crate) deferred: Option<(KrishivError, bool)>,
+    /// The stored views it inlined, at any depth (review r10 M10).
+    pub(crate) views: Vec<crate::catalog::ReachedView>,
 }
 
 impl BodyReads {
@@ -239,6 +244,7 @@ impl BodyReads {
         if self.deferred.is_none() {
             self.deferred.clone_from(&other.deferred);
         }
+        self.views.extend(other.views.iter().cloned());
         self
     }
 }
@@ -695,6 +701,7 @@ impl QueryFunctions {
                     deferred: expansion
                         .deferred
                         .map(|e| (e, expansion.deferred_in_definer)),
+                    views: expansion.reached,
                 };
                 self.bodies
                     .reads
@@ -980,6 +987,7 @@ impl QueryFunctions {
         for (function, revision) in self.called_versions() {
             bound.versions.entry(function).or_insert(revision);
         }
+        bound.views = self.viewed_versions();
         bound
     }
 }
@@ -996,6 +1004,39 @@ impl QueryFunctions {
                 Some(((namespace, name), revision))
             })
             .collect()
+    }
+
+    /// Records `views`, stored views an expansion of the query inlined, with their versions: what a
+    /// definer view being created reaches, pinned with it (review r10 M10).
+    pub(crate) fn note_views(&self, views: &[crate::catalog::ReachedView]) {
+        let mut noted = self
+            .bodies
+            .views_noted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for v in views {
+            noted.entry(v.view.clone()).or_insert(v.revision);
+        }
+    }
+
+    /// Each stored view the query's expansions and the bodies expanded so far inlined, with the
+    /// version inlined (the first, if one was inlined twice).
+    fn viewed_versions(&self) -> BTreeMap<(String, String), u64> {
+        let mut all = self
+            .bodies
+            .views_noted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let bodies = self
+            .bodies
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for v in bodies.iter().flat_map(|b| &b.views) {
+            all.entry(v.view.clone()).or_insert(v.revision);
+        }
+        all
     }
 
     /// The revision and author of the stored function `(namespace, name)` in this registry's

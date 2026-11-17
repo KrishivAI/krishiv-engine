@@ -1530,6 +1530,8 @@ mod tests {
             definer: None,
             cte_precedence: None,
             functions: None,
+            revision: 0,
+            author: String::new(),
         });
         let current = c.store.table("db", "v").unwrap();
         assert!(c.store.replace_table(&current, view));
@@ -1883,6 +1885,8 @@ mod tests {
             definer: None,
             cte_precedence: None,
             functions: None,
+            revision: 0,
+            author: String::new(),
         });
         assert!(c.store.replace_table(&current, view));
         let e = rename(c, "v", "w").unwrap_err();

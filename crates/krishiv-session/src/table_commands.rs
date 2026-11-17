@@ -688,6 +688,9 @@ impl Session {
                 // Spark captures the session's SQL configs with the view (`views.scala` line 557).
                 cte_precedence: Some(cte_precedence),
                 functions,
+                // The store sets the version (review r10 M10).
+                revision: 0,
+                author: self.state.principal.name.clone(),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1096,6 +1099,9 @@ impl Session {
                     // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
                     cte_precedence: Some(cte_precedence),
                     functions,
+                    // A new text: the store gives it a new version (review r10 M10).
+                    revision: 0,
+                    author: self.state.principal.name.clone(),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
