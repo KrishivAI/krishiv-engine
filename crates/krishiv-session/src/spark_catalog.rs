@@ -331,8 +331,14 @@ impl Catalog<'_> {
     pub async fn get_database(&self, name: &str) -> Result<Database, KrishivError> {
         self.authorize_as(&format!("DESCRIBE NAMESPACE {}", quoted(name)))
             .await?;
+        self.visible_database(name).await
+    }
+
+    /// [`Self::lookup_database`], with a namespace the principal may not list reading as missing
+    /// (review B3; `Session::namespace_hidden`, the predicate of the SQL namespace lookups): every
+    /// by-namespace entry point of this API resolves its namespace here.
+    async fn visible_database(&self, name: &str) -> Result<Database, KrishivError> {
         let found = self.lookup_database(name)?;
-        // One the principal may not list reads as missing (review B3).
         if self.session.namespace_hidden(&found.name).await {
             return Err(Self::database_not_found(name));
         }
@@ -467,7 +473,8 @@ impl Catalog<'_> {
             }
         } else {
             let db = match database {
-                Some(d) => self.lookup_database(d)?.name,
+                // As `SHOW TABLES IN`: one the principal may not list reads as missing (review r3 X1).
+                Some(d) => self.visible_database(d).await?.name,
                 None => self.current_database(),
             };
             // Only what the principal may see, as `SHOW TABLES` lists (P3-T062 §2.4).

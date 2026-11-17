@@ -150,6 +150,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         // A namespace lister holds nothing on (review B3).
         "CREATE NAMESPACE vaultns",
         "CREATE TABLE vaultns.vt (a INT) USING parquet",
+        "CREATE FUNCTION vaultns.f() RETURNS INT RETURN 1",
         // A definer view ana may read over `pub` (review B1).
         "CREATE VIEW dpub SQL SECURITY DEFINER AS SELECT a FROM pub",
         "GRANT SELECT ON VIEW dpub TO user:ana",
@@ -588,7 +589,92 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         ("vaultns", "nosuchns", statement("DESCRIBE {}.vt")),
         ("vaultns", "nosuchns", statement("SHOW COLUMNS IN vt IN {}")),
         ("vaultns", "nosuchns", statement("DESCRIBE FUNCTION {}.f")),
+        // Review r3 X1: the rest of the by-namespace lookups, SQL and `spark.catalog`.
+        ("vaultns", "nosuchns", statement("DESCRIBE EXTENDED {}.vt")),
+        ("vaultns", "nosuchns", statement("SHOW TBLPROPERTIES {}.vt")),
+        ("vaultns", "nosuchns", statement("SHOW COLUMNS IN {}.vt")),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("DESCRIBE FUNCTION EXTENDED {}.f"),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW TABLES IN spark_catalog.{}"),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW VIEWS FROM {} LIKE '*'"),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            statement("SHOW FUNCTIONS FROM {} LIKE '*'"),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().list_tables(Some(n), None)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(
+                    s.catalog()
+                        .list_tables(Some(&format!("spark_catalog.{n}")), Some("v*")),
+                )
+                .map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().get_table(&format!("{n}.vt"))).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().table_exists(&format!("{n}.vt"))).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().list_columns(&format!("{n}.vt"))).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().get_function(&format!("{n}.f"))).map(|t| format!("{t:?}"))
+            }),
+        ),
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().function_exists(&format!("{n}.f"))).map(|t| format!("{t:?}"))
+            }),
+        ),
         // Last: a `USE` that succeeds moves the session.
+        (
+            "vaultns",
+            "nosuchns",
+            Box::new(|s: &Session, n: &str| {
+                block_on(s.catalog().set_current_database(n)).map(|t| format!("{t:?}"))
+            }),
+        ),
+        ("vaultns", "nosuchns", statement("USE NAMESPACE {}")),
         ("vaultns", "nosuchns", statement("USE {}")),
     ];
     // The name's last part, wherever the text quotes it.
