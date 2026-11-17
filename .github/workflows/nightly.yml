@@ -648,12 +648,12 @@ jobs:
         run: rustup show active-toolchain
       - uses: $/.github/actions/setup-uv
       - name: Build the server
-        run: cargo build -p krishiv-cli --release --locked
+        run: cargo build -p krishiv-cli --features server --release --locked
       - name: Spark test sources (sparse checkout of the tag)
         run: |
           git clone --quiet --depth 1 --filter=blob:none --sparse --branch "v${{ matrix.spark }}" \
             https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
-          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark bin assembly
       - name: Version venv
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/venv"
