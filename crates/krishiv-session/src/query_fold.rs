@@ -88,6 +88,8 @@ impl QueryStart {
             state.queries.note_error(log_id, e);
         }
         let metrics = query.metrics();
+        // The totals of a withheld plan's scans and pipelines are left out with its operators.
+        let shown = |total: i64| (!withhold_operators).then_some(total);
         let wall = metrics.wall_time;
         // A zero wall time means the query never finished (a cancelled
         // stream dropped early): the duration then runs from query start
@@ -125,42 +127,52 @@ impl QueryStart {
                         .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
                         .max(),
                     // The query's own counters (its I/O context), since it started.
-                    bytes_read: i64::try_from(
-                        IoCounters::get(&self.io.counters().bytes_read)
-                            .saturating_sub(self.bytes_read),
-                    )
-                    .unwrap_or(i64::MAX),
+                    bytes_read: shown(
+                        i64::try_from(
+                            IoCounters::get(&self.io.counters().bytes_read)
+                                .saturating_sub(self.bytes_read),
+                        )
+                        .unwrap_or(i64::MAX),
+                    ),
                     bytes_written: i64::try_from(
                         IoCounters::get(&self.io.counters().bytes_written)
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
-                    files_read: metrics
-                        .operators
-                        .values()
-                        .filter(|e| {
-                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
-                        })
-                        .flat_map(|e| e.extra.iter())
-                        .filter(|(n, _)| n == "scan_files")
-                        .map(|(_, m)| match m {
-                            krishiv_exec::Metric::Count(n) => i64::try_from(*n).unwrap_or(i64::MAX),
-                            _ => 0,
-                        })
-                        .fold(0, i64::saturating_add),
+                    files_read: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .filter(|e| {
+                                e.role == krishiv_exec::OperatorRole::Source
+                                    && e.name.ends_with("Scan")
+                            })
+                            .flat_map(|e| e.extra.iter())
+                            .filter(|(n, _)| n == "scan_files")
+                            .map(|(_, m)| match m {
+                                krishiv_exec::Metric::Count(n) => {
+                                    i64::try_from(*n).unwrap_or(i64::MAX)
+                                }
+                                _ => 0,
+                            })
+                            .fold(0, i64::saturating_add),
+                    ),
                     files_written: i64::try_from(
                         IoCounters::get(&self.io.counters().files_written)
                             .saturating_sub(self.files_written),
                     )
                     .unwrap_or(i64::MAX),
-                    rows_read: metrics
-                        .operators
-                        .values()
-                        .filter(|e| {
-                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
-                        })
-                        .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
+                    rows_read: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .filter(|e| {
+                                e.role == krishiv_exec::OperatorRole::Source
+                                    && e.name.ends_with("Scan")
+                            })
+                            .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
                     rows_written: metrics
                         .operators
                         .values()
@@ -169,17 +181,21 @@ impl QueryStart {
                         .fold(0, i64::saturating_add),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
-                    spill_bytes: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    spill_files: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
+                    spill_bytes: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
+                    spill_files: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
+                    pipelines: shown(i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX)),
                     workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
                 }),
             },

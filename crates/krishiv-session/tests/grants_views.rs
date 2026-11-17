@@ -665,10 +665,21 @@ fn operators_of_a_definer_views_plan_stay_with_those_who_may_see_it() {
     };
     assert_eq!(rows(&bob, "SELECT * FROM dv"), 1);
     assert_eq!(operators(&bob), 0, "bob's operators");
+    // Nor the totals that sum the withheld scans (review r2 item 5); the rows it produced stay.
+    let totals = "SELECT CAST(rows_produced AS STRING), \
+                  CAST(rows_read IS NULL AND bytes_read IS NULL AND files_read IS NULL \
+                  AND spill_bytes IS NULL AND spill_files IS NULL AND pipelines IS NULL AS STRING) \
+                  FROM system.queries WHERE query_text = 'SELECT * FROM dv'";
+    let shown = ok(&bob, totals);
+    assert!(
+        shown.contains("\"1\"") && shown.contains("\"true\""),
+        "{shown}"
+    );
     // Once bob may read the base table, his next query's operators are kept.
     ok(&root, "GRANT SELECT ON TABLE t TO user:bob");
     assert_eq!(rows(&bob, "SELECT * FROM dv"), 1);
     assert!(operators(&bob) > 0, "bob's operators");
+    assert!(ok(&bob, totals).contains("\"false\""), "bob's totals");
     // ana, the definer, sees her own.
     assert_eq!(rows(&ana, "SELECT * FROM dv"), 1);
     assert!(operators(&ana) > 0);
