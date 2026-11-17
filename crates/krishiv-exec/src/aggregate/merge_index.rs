@@ -36,7 +36,9 @@ fn slots_for(keys: usize) -> usize {
 }
 
 /// The first slot of `g` among `len`: the low [`POS_BITS`] bits of `g`
-/// scaled to `len` (multiply-shift; the salt bits are not used).
+/// scaled to `len` (multiply-shift; the salt bits are not used). `g` must be
+/// a mixed hash (the table's `fin`): one with entropy only in its low bits
+/// would put every key in the first slots.
 #[inline]
 fn first(g: u64, len: usize) -> usize {
     let x = u128::from(g & ID_MASK);
@@ -87,7 +89,9 @@ impl MergeIndex {
         self.slots.capacity() * size_of::<u64>()
     }
 
-    /// Whether `new` more keys need a larger directory: past load 5/8.
+    /// Whether `new` more keys need a larger directory: past load 5/8. A
+    /// miss there walks about 4.1 slots (2.5 at load 1/2, where the
+    /// directory is sized), still mostly inside one cache line.
     fn must_grow(&self, new: usize) -> bool {
         self.keys.saturating_add(new).saturating_mul(8) > self.slots.len().saturating_mul(5)
     }
@@ -240,10 +244,15 @@ mod tests {
     /// Inserts `g(r)` for each `r` of `rows` (all new keys).
     fn fill(index: &mut MergeIndex, rows: std::ops::Range<u32>, g: impl Fn(u32) -> u64) {
         for r in rows {
-            let Slot::Empty(at) = index.walk(g(r), index.start(g(r))) else {
-                panic!("key {r} seen twice");
+            // A same-salt slot holds another key (keys are distinct here).
+            let mut at = index.start(g(r));
+            let free = loop {
+                match index.walk(g(r), at) {
+                    Slot::Empty(free) => break free,
+                    Slot::Candidate(x, _) => at = index.after(x),
+                }
             };
-            index.insert(at, g(r), r);
+            index.insert(free, g(r), r);
         }
     }
 
@@ -274,6 +283,41 @@ mod tests {
                 index.walk(g(r), index.start(g(r))),
                 Slot::Candidate(_, x) if x == r
             ));
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn every_key_survives_any_growth_sequence(
+            estimate in 1_usize..5_000,
+            steps in proptest::collection::vec(1_u32..700, 1..8),
+            len in 1_usize..100_000_000,
+            g in proptest::num::u64::ANY,
+        ) {
+            proptest::prop_assert!(first(g, len) < len);
+            let mix = |r: u32| u64::from(r).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (u64::from(r) << 40);
+            let mut index = MergeIndex::new(estimate).unwrap();
+            let mut next = 0_u32;
+            for n in steps {
+                let before = index.bytes();
+                let peak = index.projected(n as usize);
+                let grew = index.reserve(n as usize, mix).unwrap();
+                proptest::prop_assert_eq!(peak, if grew { before + index.bytes() } else { before });
+                fill(&mut index, next..next + n, mix);
+                next += n;
+                proptest::prop_assert!(index.keys * 8 <= index.slots() * 5);
+            }
+            for r in 0..next {
+                let mut at = index.start(mix(r));
+                let found = loop {
+                    match index.walk(mix(r), at) {
+                        Slot::Empty(_) => break false,
+                        Slot::Candidate(_, x) if x == r => break true,
+                        Slot::Candidate(x, _) => at = index.after(x),
+                    }
+                };
+                proptest::prop_assert!(found, "key {} lost", r);
+            }
         }
     }
 

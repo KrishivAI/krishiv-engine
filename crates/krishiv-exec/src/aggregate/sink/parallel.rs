@@ -246,6 +246,9 @@ impl HashAggregate {
                     stalled = running.is_empty();
                     break;
                 }
+                // A task without per-partition estimates (the one-wide
+                // fallback) has no pages to presize.
+                debug_assert!(task.pages == 0 || !task.part_groups.is_empty());
                 if task.pages > 0 {
                     // Presized pages only when the pool grants them now;
                     // never a reason to wait.
