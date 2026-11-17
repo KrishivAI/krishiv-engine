@@ -147,7 +147,7 @@ pub struct Caller {
     /// How the caller authenticated (`token`, `mtls`, `oidc`, `startup-token`).
     pub method: String,
     /// What the guard resolved, for the implementation behind the admin API to read (a
-    /// `krishiv_session::auth::Authenticated` from a [`crate::session_guard::SessionGuard`]).
+    /// `krishiv_session::auth::Authenticated` from a `SessionGuard` (feature `session`)).
     pub identity: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
