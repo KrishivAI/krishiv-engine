@@ -154,6 +154,34 @@ fn column_grants_allow_only_their_columns() {
     assert_eq!(ok(&ana, "SELECT count(*), max(b) FROM t"), 1);
 }
 
+/// `observe()` metrics read the columns they name: a metric over a column without a grant refuses
+/// the action, even when the frame's output (a projection above the observation) needs only
+/// granted columns.
+#[test]
+fn observe_metrics_need_a_grant_on_their_columns() {
+    use krishiv_session::Observation;
+    use krishiv_session::functions::{col, max};
+    let w = World::new();
+    table(&w, "t");
+    let (root, ana) = (w.admin(), w.user("ana"));
+    ok(&root, "GRANT SELECT (a) ON t TO user:ana");
+    let count = |metric: &str| {
+        block_on(async {
+            let obs = Observation::new();
+            let df = ana
+                .table("t")
+                .observe(&obs, [max(col(metric))])?
+                .select([col("a")]);
+            df.collect().await.map(|b| b.len())
+        })
+    };
+    count("a").unwrap_or_else(|e| panic!("observe(max(a)): {e}"));
+    match count("b") {
+        Err(e) if e.error_class().name() == DENIED => assert!(e.to_string().contains("`b`"), "{e}"),
+        other => panic!("observe(max(b)): expected a denial, got {other:?}"),
+    }
+}
+
 /// `ROLLUP`, `CUBE` and `GROUPING SETS` read the columns they name and no other: a column grant
 /// on exactly those runs them, and one referenced column without a grant refuses them.
 #[test]

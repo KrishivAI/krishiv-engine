@@ -160,10 +160,8 @@ fn declared_catalog_resolves_through_its_factory() {
         strings(&s, "SHOW CATALOGS", 0),
         ["lake", "spark_catalog", "system"]
     );
-    assert_eq!(
-        s.catalog().list_catalogs(),
-        ["lake", "spark_catalog", "system"]
-    );
+    // The Catalog API leaves out `system` (Spark has no such catalog); `SHOW CATALOGS` lists it.
+    assert_eq!(s.catalog().list_catalogs(), ["lake", "spark_catalog"]);
     run(&s, "USE lake").unwrap();
     assert_eq!(strings(&s, "SELECT current_catalog()", 0), ["lake"]);
     assert_eq!(strings(&s, "SHOW CURRENT NAMESPACE", 0), ["lake"]);
