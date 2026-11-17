@@ -136,7 +136,22 @@ impl SqliteCatalog {
             conn.pragma_update(None, "synchronous", "FULL")?;
             store::migrate(conn, case_sensitive)
         };
-        setup(&mut conn).map_err(|f| self_fault(&name, "", f))?;
+        // SQLite does not run the busy handler for every lock conflict while a database is being set up: switching a
+        // new file to WAL, and the first schema transaction, answer "database is locked" at once when another
+        // connection is doing the same. Setup is idempotent (the migration is one transaction), so try again until
+        // the busy timeout is spent.
+        let started = std::time::Instant::now();
+        loop {
+            match setup(&mut conn) {
+                Ok(()) => break,
+                Err(Failure::Sql(detail))
+                    if detail.contains("locked") && started.elapsed() < BUSY_TIMEOUT =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(f) => return Err(self_fault(&name, "", f)),
+            }
+        }
         Ok(Self {
             name,
             case_sensitive,
