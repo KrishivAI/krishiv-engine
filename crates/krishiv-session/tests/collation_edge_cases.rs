@@ -253,3 +253,23 @@ fn correlated_scalar_subquery_over_a_collated_equality() {
         .collect();
     assert_eq!(got, ["a:2", "b:0"]);
 }
+
+/// Review M1: a correlation key that is an array of collated strings is never answered by the
+/// binary comparison: it is refused (or keyed), so `array('a')` never silently misses `array('A')`.
+#[test]
+fn correlated_scalar_subquery_over_a_collated_array_is_not_answered_binary() {
+    let s = Session::new().unwrap();
+    let q = "with x as (select array(cast('a' as string collate utf8_lcase)) as c), \
+             y as (select array(cast('A' as string collate utf8_lcase)) as d) \
+             select (select count(*) from y where y.d = x.c) from x";
+    let outcome = match block_on(s.sql(q)) {
+        Err(e) => Err(e.to_string()),
+        Ok(df) => block_on(df.collect())
+            .map(|b| format!("{:?}", b[0].columns()[0]))
+            .map_err(|e| e.to_string()),
+    };
+    match outcome {
+        Err(e) => assert!(e.contains("COLLATION") || e.contains("UNSUPPORTED"), "{e}"),
+        Ok(dump) => assert!(dump.contains('1'), "binary answer: {dump}"),
+    }
+}
