@@ -75,13 +75,14 @@ impl Session {
     /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
     ///
     /// # Errors
-    /// What [`crate::view_schema::check_read`] raises.
+    /// What [`crate::view_schema::check_read`] raises, with whether the failing view is a definer view or lies
+    /// inside one's text ([`crate::view_schema::StoredRead::in_definer`], review r2 R1).
     pub(super) async fn check_stored_views(
         &self,
         reads: &[crate::view_schema::StoredRead],
         env: &QueryEnv,
         analysis: &AnalysisContext,
-    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
+    ) -> Result<crate::view_schema::StoredViewChecks, (KrishivError, bool)> {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
         let mut renames = Vec::new();
@@ -109,7 +110,8 @@ impl Session {
             };
             let case_sensitive = env.analysis.conf.case_sensitive;
             let check =
-                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)
+                    .map_err(|e| (e, read.in_definer))?;
             if let Some(changed) = check.changed {
                 synced.push((Arc::clone(&read.entry), changed));
             }

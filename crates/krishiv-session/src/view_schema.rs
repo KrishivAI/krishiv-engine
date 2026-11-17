@@ -322,6 +322,9 @@ pub(crate) struct StoredRead {
     /// Whether the read renamed its query's columns by position ([`read_names`]), to be replaced by a rename by
     /// name and ordinal once the query is analyzed.
     pub(crate) renamed: bool,
+    /// Whether the view is a definer view or lies inside one's text (review r2 R1): a failure of its check is
+    /// the definer's, told to the reader redacted (`Session::definer_failure`).
+    pub(crate) in_definer: bool,
 }
 
 /// What `Session::check_stored_views` returns: the evolved view entries to store (as found, as changed) and the

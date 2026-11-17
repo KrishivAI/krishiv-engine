@@ -355,6 +355,7 @@ impl Expander<'_> {
             entry: Arc::clone(entry),
             query: Arc::clone(&input),
             mode,
+            in_definer: definer.is_some() || !self.in_definer.is_empty(),
             renamed: projection != crate::view_schema::ReadProjection::Output
                 && view.query_columns.len() == columns.len()
                 && crate::view_schema::repeats_names(&view.query_columns),

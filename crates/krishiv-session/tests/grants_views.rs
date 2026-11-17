@@ -673,3 +673,90 @@ fn operators_of_a_definer_views_plan_stay_with_those_who_may_see_it() {
     assert_eq!(rows(&ana, "SELECT * FROM dv"), 1);
     assert!(operators(&ana) > 0);
 }
+
+/// Review r2 R1: a schema-binding failure inside a definer view (an up-cast its base column no
+/// longer allows, a column its base table lost) reaches the reader as the other definer failures
+/// do: its class and SQLSTATE, no definer table or column name, no stored view text.
+#[test]
+fn a_schema_binding_failure_inside_a_definer_view_is_redacted() {
+    let (w, root, ana) = world();
+    let (bob, carl) = (w.user("bob"), w.user("carl"));
+    ok(
+        &root,
+        "CREATE TABLE vault_base (secret_col INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO vault_base VALUES (424242)");
+    ok(
+        &root,
+        "CREATE TABLE vault_two (secret_two INT) USING parquet",
+    );
+    ok(&root, "GRANT SELECT ON TABLE vault_base TO user:ana");
+    ok(&root, "GRANT SELECT ON TABLE vault_two TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(
+        &ana,
+        "CREATE VIEW inner_v WITH SCHEMA BINDING SQL SECURITY DEFINER AS \
+         SELECT * FROM vault_base WHERE secret_col > 7",
+    );
+    ok(
+        &ana,
+        "CREATE VIEW inner_two WITH SCHEMA BINDING SQL SECURITY DEFINER AS SELECT * FROM vault_two",
+    );
+    ok(&ana, "GRANT SELECT ON VIEW inner_v TO user:bob");
+    // carl reads this one directly: the outermost view is the definer's.
+    ok(&ana, "GRANT SELECT ON VIEW inner_two TO user:carl");
+    ok(
+        &bob,
+        "CREATE VIEW outer_v SQL SECURITY DEFINER AS SELECT * FROM inner_v",
+    );
+    ok(&bob, "GRANT SELECT ON VIEW outer_v TO user:carl");
+    assert_eq!(rows(&carl, "SELECT * FROM outer_v"), 1);
+    assert_eq!(rows(&carl, "SELECT * FROM inner_two"), 0);
+    let canary = [
+        "`ana`",
+        "`bob`",
+        "inner_v",
+        "vault_base",
+        "vault_two",
+        "secret_col",
+        "secret_two",
+        "> 7",
+    ];
+    let shown = |e: &KrishivError| {
+        let mut text = e.to_string();
+        for c in e.query_contexts() {
+            text.push_str(&format!("{c:?}"));
+        }
+        text
+    };
+    // The base column widened: the binding's up-cast fails.
+    ok(&root, "DROP TABLE vault_base");
+    ok(
+        &root,
+        "CREATE TABLE vault_base (secret_col BIGINT) USING parquet",
+    );
+    ok(&root, "GRANT SELECT ON TABLE vault_base TO user:ana");
+    let e = run(&carl, "SELECT * FROM outer_v").unwrap_err();
+    assert_eq!(e.error_class().name(), "CANNOT_UP_CAST_DATATYPE", "{e}");
+    assert_redacted_any(&shown(&e), &canary);
+    // The base table lost the column: the binding's schema change is incompatible (its message
+    // names the view carl wrote, and would print the view's stored text).
+    ok(&root, "DROP TABLE vault_two");
+    ok(&root, "CREATE TABLE vault_two (other INT) USING parquet");
+    ok(&root, "GRANT SELECT ON TABLE vault_two TO user:ana");
+    let e = run(&carl, "SELECT * FROM inner_two").unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "INCOMPATIBLE_VIEW_SCHEMA_CHANGE",
+        "{e}"
+    );
+    assert_redacted_any(&shown(&e), &canary);
+}
+
+/// [`assert_redacted`] for an error of any class: every parameter redacted, none of `hidden`.
+fn assert_redacted_any(e: &str, hidden: &[&str]) {
+    assert!(e.contains(krishiv_common::secret::REDACTED), "{e}");
+    for h in hidden {
+        assert!(!e.contains(h), "{h}: {e}");
+    }
+}

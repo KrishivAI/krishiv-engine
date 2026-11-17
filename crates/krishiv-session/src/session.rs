@@ -1470,7 +1470,9 @@ impl Session {
                 .await
             {
                 Ok(checked) => checked,
-                Err(e) => {
+                // A definer view's binding, or one inside a definer's text, is the definer's (review r2 R1).
+                Err((e, true)) => return Err(self.definer_failure(env, e)),
+                Err((e, false)) => {
                     let e = self.view_text_failure(&views, env, e).await;
                     return crate::access::audit_read(self, env, Err(e));
                 }
