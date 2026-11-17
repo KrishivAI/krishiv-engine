@@ -39,6 +39,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Read at build time by krishiv-python (`build_info()["commit"]`) and krishiv-session (`krishiv.build.info`).
+  KRISHIV_GIT_SHA: ${{ github.sha }}
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
   FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud

@@ -36,12 +36,18 @@ for dep in pyarrow polars duckdb pandas numpy; do
 done
 cd "$work"
 "$py" - "$flavour" <<'PY'
+import os
 import sys
 
 import krishiv
 
 print(krishiv.build_info(), sys.version)
 assert krishiv.build_info()["allocator"] == "mimalloc"
+# The wheel workflow stamps the commit (KRISHIV_GIT_SHA at build time); a wheel built inside a
+# container that did not get the variable would report "unknown".
+expected = os.environ.get("KRISHIV_GIT_SHA")
+if expected:
+    assert krishiv.build_info()["commit"] == expected, (krishiv.build_info(), expected)
 # The acceptance smoke: a session, a query, an Arrow table. `toArrow` needs
 # pyarrow; a target without a pyarrow wheel (noticed above) runs `count`,
 # which needs no Arrow library.
