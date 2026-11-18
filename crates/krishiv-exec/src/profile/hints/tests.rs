@@ -419,3 +419,12 @@ fn settings_read_the_config_keys() {
     assert!(!s.enabled);
     assert_eq!(HintSettings::default().max_hints, 32);
 }
+
+#[test]
+fn a_key_with_a_literal_is_left_out_of_the_hint_text() {
+    use super::only_column_refs;
+    assert!(only_column_refs("k#1, o_orderkey#12"));
+    assert!(!only_column_refs("k#1, 5"));
+    assert!(!only_column_refs("substr(name#3, 'secret')"));
+    assert!(!only_column_refs(""));
+}

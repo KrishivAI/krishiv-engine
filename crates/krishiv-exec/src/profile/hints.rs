@@ -361,9 +361,27 @@ fn node_keys(plan: &ProfileNode, node: Option<u32>) -> String {
         return String::new();
     };
     match (n.detail.find('['), n.detail.find(']')) {
-        (Some(a), Some(b)) if a < b => format!("; the key {} is skewed", &n.detail[a..=b]),
+        (Some(a), Some(b)) if a < b && only_column_refs(&n.detail[a + 1..b]) => {
+            format!("; the key {} is skewed", &n.detail[a..=b])
+        }
         _ => String::new(),
     }
+}
+
+/// True when every comma-separated key is a bare column reference (`name#id`): an expression key could carry a
+/// literal, and the stored profile must not (the hint text is not masked).
+fn only_column_refs(keys: &str) -> bool {
+    !keys.trim().is_empty()
+        && keys.split(',').all(|k| {
+            k.trim().split_once('#').is_some_and(|(name, id)| {
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                    && !id.is_empty()
+                    && id.chars().all(|c| c.is_ascii_digit())
+            })
+        })
 }
 
 fn operator_at<'a>(
