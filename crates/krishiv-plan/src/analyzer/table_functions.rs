@@ -59,6 +59,16 @@ impl Resolver<'_> {
             );
             return self.rel(&select, env);
         }
+        if let Some(entry) = self.ctx.table_functions.python_udtf(name) {
+            return self.python_udtf_call(p, &entry, args, env);
+        }
+        // Only a Python table function takes a `TABLE(...)` argument.
+        if args
+            .iter()
+            .any(|a| super::python_udtf::is_table_argument(a))
+        {
+            return Err(super::bind::unsupported("table-valued functions", o));
+        }
         match self.ctx.table_functions.lookup(name, self.ctx.profile) {
             TableFunctionLookup::NotFound => {
                 // A SQL-bodied table function of the session or its catalog.

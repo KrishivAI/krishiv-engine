@@ -325,6 +325,34 @@ pub trait TableFunctionRegistry: Send + Sync {
     /// Changes whenever a lookup could answer differently; part of the
     /// context fingerprint.
     fn version(&self) -> u64;
+
+    /// The Python UDTF the session registered as `name` (any case), which
+    /// a call resolves to before the built-in table functions (Spark's
+    /// `spark.udtf.register` makes a temporary table function). `name` is
+    /// the call's name as [`PlanNode::TableFunction`](crate::PlanNode)
+    /// carries it. The default has none.
+    fn python_udtf(&self, _name: &str) -> Option<crate::udtf::PythonUdtfEntry> {
+        None
+    }
+
+    /// Runs the static `analyze` of a Python UDTF registered without a
+    /// return type, for one call (design P3-T085 §3.3 "UDTF analyze").
+    /// The default runs none.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` without a runtime that runs it;
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` when `analyze`
+    /// fails or returns something Spark refuses.
+    fn analyze_python_udtf(
+        &self,
+        spec: &crate::udtf::UdtfAnalyzeSpec,
+    ) -> Result<crate::udtf::UdtfAnalysis, KrishivError> {
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
 }
 
 /// The built-in table functions: `range` and `sql_keywords`, plus the

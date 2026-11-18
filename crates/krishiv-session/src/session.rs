@@ -37,8 +37,8 @@ use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, Spill
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -1383,7 +1383,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: Arc::new(BuiltinTableFunctions::new()),
+            table_functions: self.table_functions(),
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
             variables: Arc::clone(&variables),

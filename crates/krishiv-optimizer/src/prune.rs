@@ -174,6 +174,14 @@ impl Graph {
             PlanNode::PythonTableFunction {
                 table_arg: Some(t), ..
             } => child(&t.input, None),
+            // A lateral call carries what is read above and reads its arguments' columns.
+            PlanNode::PythonTableFunction {
+                lateral: Some(l), ..
+            } => {
+                let mut need = req.clone();
+                p.for_each_expr(&mut |e| references_into(e, &mut need));
+                child(l, Some(need));
+            }
             _ => {}
         }
         subqueries(p, &mut |kind, s| {

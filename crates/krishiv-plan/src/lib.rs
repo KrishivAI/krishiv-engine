@@ -154,8 +154,8 @@ pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
     FunctionCall, NullOrdering, PipeClause, ResolvedExpr, ResolvedFunction, SortDirection,
-    SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
-    WindowSpecRef,
+    SortOrder, Star, SubqueryKind, TableArgSpec, TypedLiteralKind, WindowExpr, WindowFrame,
+    WindowSpec, WindowSpecRef,
 };
 pub use function::{
     Builtin, FunctionId, FunctionKind, PythonEvalType, PythonUdfKind, PythonUdfRef, QuantifiedLike,

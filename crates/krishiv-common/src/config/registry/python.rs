@@ -54,6 +54,24 @@ pub static PYTHON_UDF_ARROW_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
 };
 
+/// `krishiv.sql.execution.pythonUDTF.arrow.enabled` (Spark's
+/// `spark.sql.execution.pythonUDTF.arrow.enabled`, `SQLConf.scala` at
+/// v4.2.0: `true`; `false` at v3.5 to v4.1).
+pub static PYTHON_UDTF_ARROW_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.pythonUDTF.arrow.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Python `@udtf` without `useArrow` is Arrow-optimized (eval type 301) rather \
+          than a plain UDTF (300). The client reads it when it defines the UDTF (PySpark's \
+          `_create_py_udtf`) and sends the eval type it chose; the engine runs that eval type \
+          and never reads this setting. The default is Spark 4.2.0's (`true`); Spark 3.5 to \
+          4.1 default to `false`.",
+    scope: Scope::Session,
+    version_added: "0.2.1",
+    spark_alias: Some("spark.sql.execution.pythonUDTF.arrow.enabled"),
+    settable_by: SettableBy::User,
+};
+
 /// `krishiv.python.udf.threads`.
 pub static PYTHON_UDF_THREADS: ConfigEntry = ConfigEntry {
     key: "krishiv.python.udf.threads",

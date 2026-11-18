@@ -56,9 +56,42 @@ pub struct PythonUdfLibrary {
     inner: RwLock<Inner>,
 }
 
+/// What a Python table function (UDTF, eval types 300, 301, 302) is
+/// registered with (Spark's `spark.udtf.register`; Spark Connect's
+/// `CommonInlineUserDefinedTableFunction` sends the same fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonUdtfDef {
+    /// The name, as registered (resolved ASCII case-insensitively).
+    pub name: String,
+    /// The eval type the client chose (`@udtf` is 300 or 301 by the
+    /// client's `spark.sql.execution.pythonUDTF.arrow.enabled`, `@arrow_udtf`
+    /// 302): kept as sent, never re-derived from the server's settings.
+    pub eval_type: PythonEvalType,
+    /// The declared result (a struct), or `None` for a UDTF whose static
+    /// `analyze` gives it per call.
+    pub return_type: Option<DataType>,
+    /// Spark's `deterministic` (`asDeterministic()` sets it; `False` by
+    /// default for a UDTF).
+    pub deterministic: bool,
+}
+
+/// One UDTF registration: the definition and the version it was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonUdtfEntry {
+    /// The definition.
+    pub def: PythonUdtfDef,
+    /// The registration version: plans and the runtime name the UDTF by
+    /// `(name, version)`. Drawn from the same allocator as the scalar
+    /// UDFs', so a UDTF and a UDF of one name never share a version.
+    pub version: u32,
+}
+
 #[derive(Debug, Default, Clone)]
 struct Inner {
     udfs: HashMap<String, PythonUdfEntry>,
+    /// The session's Python table functions, a namespace of their own (as
+    /// Spark's table-function registry is).
+    udtfs: HashMap<String, PythonUdtfEntry>,
     /// The last version given to each name, kept after a replacement so a
     /// version is never reused. Shared with the libraries copied from this
     /// one ([`PythonUdfLibrary::copy`]): a clone shares its source's Python
@@ -105,6 +138,57 @@ impl PythonUdfLibrary {
         inner.udfs.insert(key, entry.clone());
         inner.epoch = inner.epoch.wrapping_add(1);
         entry
+    }
+
+    /// Registers the Python UDTF `def` under its lower-case name, replacing
+    /// any UDTF of that name, and returns the registration with its new
+    /// version.
+    ///
+    /// # Errors
+    /// `KRISHIV_INTERNAL_ERROR` when `def.eval_type` is not a table kind or
+    /// its return type is not a struct.
+    pub fn register_udtf(&self, def: PythonUdtfDef) -> Result<PythonUdtfEntry, KrishivError> {
+        if def.eval_type.kind() != PythonUdfKind::Udtf
+            || def
+                .return_type
+                .as_ref()
+                .is_some_and(|t| !matches!(t, DataType::Struct(_)))
+        {
+            return Err(InternalError {
+                message: format!(
+                    "a Python UDTF registration needs a table eval type (300, 301, 302) and a struct result (got {} for {})",
+                    def.eval_type.code(),
+                    def.name
+                ),
+            }
+            .into());
+        }
+        let key = def.name.to_lowercase();
+        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let version = {
+            let mut versions = inner
+                .versions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let version = versions.get(&key).copied().unwrap_or(0).saturating_add(1);
+            versions.insert(key.clone(), version);
+            version
+        };
+        let entry = PythonUdtfEntry { def, version };
+        inner.udtfs.insert(key, entry.clone());
+        inner.epoch = inner.epoch.wrapping_add(1);
+        Ok(entry)
+    }
+
+    /// The UDTF registration of `name` (any case).
+    #[must_use]
+    pub fn get_udtf(&self, name: &str) -> Option<PythonUdtfEntry> {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .udtfs
+            .get(&name.to_lowercase())
+            .cloned()
     }
 
     /// The registration of `name` (any case).
@@ -259,7 +343,96 @@ pub(crate) fn decode_anonymous(name: &str) -> Option<(PythonUdfDef, u32)> {
     ))
 }
 
+/// The table functions a session's queries resolve: the built-ins, then
+/// its Python UDTFs, whose `analyze` runs through the session's Python
+/// runtime (the one analysis path of SQL and Spark Connect).
+pub(crate) struct SessionTableFunctions {
+    pub(crate) builtins: krishiv_plan::analyzer::BuiltinTableFunctions,
+    pub(crate) library: Arc<PythonUdfLibrary>,
+    pub(crate) runtime: Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>,
+}
+
+impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
+    fn lookup(
+        &self,
+        name: &str,
+        profile: krishiv_plan::analyzer::SparkProfile,
+    ) -> krishiv_plan::analyzer::TableFunctionLookup {
+        self.builtins.lookup(name, profile)
+    }
+
+    fn version(&self) -> u64 {
+        self.library.version()
+    }
+
+    fn python_udtf(&self, name: &str) -> Option<krishiv_plan::udtf::PythonUdtfEntry> {
+        // One part only: `session.f` and catalog names are not UDTF names.
+        if name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP) {
+            return None;
+        }
+        let PythonUdtfEntry { def, version } = self.library.get_udtf(name)?;
+        Some(krishiv_plan::udtf::PythonUdtfEntry {
+            udf: krishiv_plan::PythonUdfRef {
+                name: def.name.to_lowercase(),
+                version,
+                eval_type: def.eval_type,
+                thread_safe: true,
+                deterministic: def.deterministic,
+            },
+            return_type: def.return_type,
+        })
+    }
+
+    fn analyze_python_udtf(
+        &self,
+        spec: &krishiv_plan::udtf::UdtfAnalyzeSpec,
+    ) -> Result<krishiv_plan::udtf::UdtfAnalysis, KrishivError> {
+        let Some(runtime) = &self.runtime else {
+            return Err(krishiv_common::error::KrishivUdfNotAvailable {
+                name: spec.name.clone(),
+                version: spec.version.to_string(),
+            }
+            .into());
+        };
+        // The runtime runs `analyze` on its own threads; this only waits.
+        futures::executor::block_on(runtime.analyze_udtf(spec))
+    }
+}
+
 impl crate::Session {
+    /// Registers a Python table function (UDTF, PR-26c-4) under `def.name`,
+    /// replacing any UDTF of that name: SQL's `FROM name(..)` and
+    /// `LATERAL name(..)`, and Spark Connect's `register_table_function`,
+    /// resolve it through this one registration. The callable stays with
+    /// the runtime ([`set_python_udf_runtime`](Self::set_python_udf_runtime)),
+    /// which the caller gives the payload under the returned
+    /// `(name, version)`; a UDTF without a return type runs its `analyze`
+    /// through that runtime when a query calling it is analyzed.
+    ///
+    /// # Errors
+    /// `KRISHIV_INTERNAL_ERROR` when `def.eval_type` is not 300, 301 or 302
+    /// or the return type is not a struct.
+    pub fn register_python_udtf(
+        &self,
+        def: PythonUdtfDef,
+    ) -> Result<PythonUdtfEntry, KrishivError> {
+        self.state.python_udfs.register_udtf(def)
+    }
+
+    /// The table functions a query of this session resolves.
+    pub(crate) fn table_functions(&self) -> Arc<dyn krishiv_plan::analyzer::TableFunctionRegistry> {
+        Arc::new(SessionTableFunctions {
+            builtins: krishiv_plan::analyzer::BuiltinTableFunctions::new(),
+            library: Arc::clone(&self.state.python_udfs),
+            runtime: self
+                .state
+                .python_runtime
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        })
+    }
+
     /// Registers a Python UDF (P2-T059) under `def.name`, replacing any
     /// Python UDF of that name; the entry carries the new registration
     /// version, which plans name the UDF by. The callable itself stays with

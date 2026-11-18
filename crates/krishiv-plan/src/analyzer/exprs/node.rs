@@ -1783,6 +1783,14 @@ impl Resolver<'_> {
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
                     SubqueryKind::In(_) => (Some(DataType::Boolean), true),
+                    // A `TABLE(...)` argument outside a Python table
+                    // function's call (which takes it before binding).
+                    SubqueryKind::Table(_) => {
+                        return Err(crate::analyzer::bind::unsupported(
+                            "a TABLE argument of this function",
+                            e.origin,
+                        ));
+                    }
                 };
                 let (kind, plan, values) = match kind {
                     SubqueryKind::In(_) => {
