@@ -546,6 +546,22 @@ pub(super) fn add_deletes(
     catalog: &Arc<Catalog>,
     make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
 ) {
+    foreign_deletes(env, catalog, make, false);
+}
+
+/// A foreign `delete` snapshot that removes every live delete file and adds
+/// none (as a compaction or `removeDeletes` would).
+pub(super) fn remove_all_deletes(env: &Env, catalog: &Arc<Catalog>) {
+    foreign_deletes(env, catalog, |_| Vec::new(), true);
+}
+
+/// [`add_deletes`], also removing every live delete file when `remove`.
+fn foreign_deletes(
+    env: &Env,
+    catalog: &Arc<Catalog>,
+    make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
+    remove: bool,
+) {
     let m = catalog.metadata();
     let io = env.reg.file_io();
     let parent = m.current_snapshot().unwrap();
@@ -569,6 +585,32 @@ pub(super) fn add_deletes(
         .unwrap();
         for d in deletes {
             w.add_file(d, UNASSIGNED_SEQUENCE_NUMBER).unwrap();
+        }
+        if remove {
+            let mut kept = Vec::new();
+            for mf in base {
+                if mf.content != ManifestContentType::Deletes {
+                    kept.push(mf);
+                    continue;
+                }
+                let bytes = io
+                    .new_input(&mf.manifest_path)
+                    .unwrap()
+                    .read()
+                    .await
+                    .unwrap();
+                for e in iceberg::spec::Manifest::parse_avro(&bytes)
+                    .unwrap()
+                    .entries()
+                {
+                    if e.is_alive() {
+                        let seq = e.sequence_number().unwrap_or(mf.sequence_number);
+                        w.add_delete_file(e.data_file().clone(), seq, Some(seq))
+                            .unwrap();
+                    }
+                }
+            }
+            base = kept;
         }
         base.push(w.write_manifest_file().await.unwrap());
         let list = env.at("snap-rowdelta.avro");
