@@ -1519,7 +1519,7 @@ async fn a_udtf_with_analyze_and_no_return_type() {
 /// (cloudpickled by value, as `export_cases.py` pickles it) sent as a stock client sends the call, compared with
 /// PySpark 4.2.0's answer in `goldens.json` (rows sorted, as the case orders them by every column; these rows
 /// do not depend on the Spark version, so they stand for 4.3.0 too). The other
-/// DataFrame cases need `t.asTable()` (a `TABLE` argument, refused) or `lateralJoin` (relation 44, not translated).
+/// DataFrame cases need `t.asTable()` (a `TABLE` argument, refused) or `lateralJoin` (`the_lateral_join_udtf_goldens`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_dataframe_udtf_goldens_that_relation_38_runs() {
     let Some(py) = python() else { return };
@@ -1531,30 +1531,10 @@ async fn the_dataframe_udtf_goldens_that_relation_38_runs() {
     .expect("json");
     let run = start(Some(&py)).await;
     for kind in ["300", "301", "302"] {
-        let code = format!(
-            "import sys\nsys.path.insert(0, {:?})\nfrom pyspark import cloudpickle\n\
-             from pyspark_udf.udtf import cases\ncloudpickle.register_pickle_by_value(cases)\n\
-             f = cases.make_repeat(cases.Api('pyspark'), {kind:?})\n\
-             assert f.evalType == {kind}, f.evalType\n\
-             sys.stdout.buffer.write(cloudpickle.dumps(f.func))",
-            cases.display().to_string()
-        );
-        // `pyspark.sql.connect` imports `pyspark.testing.sqlutils`, which looks for a Spark home at import time
-        // (a client-only install has none): any directory satisfies it.
-        let out = Command::new(&py)
-            .args(["-c", &code])
-            .env("SPARK_HOME", repo.join("python"))
-            .output()
-            .expect("run the interpreter");
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
         let eval_type: i32 = kind.parse().expect("kind");
         let message = udtf_message(
             "Repeat",
-            (out.stdout, python_ver(&py)),
+            (repeat_class(&py, &repo, kind), python_ver(&py)),
             eval_type,
             Some("a int, i int"),
             vec![lit_int(7), lit_int(3)],
@@ -1689,4 +1669,198 @@ async fn a_typed_analyze_plan_of_an_inline_udtf_leaves_no_udtf_behind() {
         release(&run.channel, token).await;
     }
     assert_eq!(run.pool.live_workers(), 0);
+}
+
+/// The class `make_repeat(Api('pyspark'), kind)` of `cases.py`, cloudpickled by value as `export_cases.py`
+/// pickles it, by `python`.
+fn repeat_class(python: &Path, repo: &Path, kind: &str) -> Vec<u8> {
+    let cases = repo.join("python/tests");
+    let code = format!(
+        "import sys\nsys.path.insert(0, {:?})\nfrom pyspark import cloudpickle\n\
+         from pyspark_udf.udtf import cases\ncloudpickle.register_pickle_by_value(cases)\n\
+         f = cases.make_repeat(cases.Api('pyspark'), {kind:?})\n\
+         assert f.evalType == {kind}, f.evalType\n\
+         sys.stdout.buffer.write(cloudpickle.dumps(f.func))",
+        cases.display().to_string()
+    );
+    // `pyspark.sql.connect` looks for a Spark home at import time (a client-only install has none).
+    let out = Command::new(python)
+        .args(["-c", &code])
+        .env("SPARK_HOME", repo.join("python"))
+        .output()
+        .expect("run the interpreter");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout
+}
+
+/// The result's schema (`name:type`, as `simpleString`, for int, bigint and string columns) and its rows as
+/// JSON arrays, sorted as text.
+fn json_rows(responses: &[pb::ExecutePlanResponse]) -> (String, Vec<String>) {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int32Type, Int64Type};
+    use arrow_schema::DataType as A;
+    let mut schema = String::new();
+    let mut rows = Vec::new();
+    for r in responses {
+        let Some(ResponseType::ArrowBatch(b)) = &r.response_type else {
+            continue;
+        };
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(b.data.to_vec()), None)
+                .expect("ipc");
+        for batch in reader {
+            let batch: RecordBatch = batch.expect("batch");
+            let fields: Vec<String> = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| {
+                    let t = match f.data_type() {
+                        A::Int32 => "int".to_owned(),
+                        A::Int64 => "bigint".to_owned(),
+                        A::Utf8 | A::LargeUtf8 | A::Utf8View => "string".to_owned(),
+                        other => other.to_string(),
+                    };
+                    format!("{}:{t}", f.name())
+                })
+                .collect();
+            schema = format!("struct<{}>", fields.join(","));
+            for i in 0..batch.num_rows() {
+                let row: Vec<serde_json::Value> = batch
+                    .columns()
+                    .iter()
+                    .map(|c| {
+                        if c.is_null(i) {
+                            return serde_json::Value::Null;
+                        }
+                        match c.data_type() {
+                            A::Int32 => c.as_primitive::<Int32Type>().value(i).into(),
+                            A::Int64 => c.as_primitive::<Int64Type>().value(i).into(),
+                            A::Utf8 => c.as_string::<i32>().value(i).into(),
+                            A::LargeUtf8 => c.as_string::<i64>().value(i).into(),
+                            A::Utf8View => c.as_string_view().value(i).into(),
+                            other => other.to_string().into(),
+                        }
+                    })
+                    .collect();
+                rows.push(serde_json::Value::Array(row).to_string());
+            }
+        }
+    }
+    rows.sort();
+    (schema, rows)
+}
+
+/// A known gap of the pool's LATERAL UDTF runner (opus-B's `python/krishiv/_udf/udtf.py` `_carry`): a carried
+/// left column of type `string_view` (`t.g`) fails pyarrow's `take` (`array_take` has no `string_view`
+/// kernel). The full `dataframe_lateral` goldens must fail with it until it is fixed; when they match, this
+/// check fails, so the gap cannot go stale.
+const LATERAL_STRING_VIEW_GAP: &str = "no kernel matching input types (string_view";
+
+/// The lateral join of `rows/udtf<k>/dataframe_lateral` over the left relation `left` (SQL).
+fn lateral_repeat(python: &Path, repo: &Path, kind: &str, left: &str) -> pb::Plan {
+    let id = || col("id");
+    let minus_three = expr(ExprType::UnresolvedFunction(
+        pb::expression::UnresolvedFunction {
+            function_name: "-".to_owned(),
+            arguments: vec![id(), lit_int(3)],
+            ..Default::default()
+        },
+    ));
+    let call = relation(RelType::CommonInlineUserDefinedTableFunction(udtf_message(
+        "Repeat",
+        (repeat_class(python, repo, kind), python_ver(python)),
+        kind.parse().expect("kind"),
+        Some("a int, i int"),
+        vec![id(), minus_three],
+    )));
+    let right = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
+        input: Some(Box::new(call)),
+        alias: "f".to_owned(),
+        qualifier: Vec::new(),
+    })));
+    root(relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
+        left: Some(Box::new(sql_relation(left))),
+        right: Some(Box::new(right)),
+        join_condition: None,
+        join_type: pb::join::JoinType::Inner as i32,
+    }))))
+}
+
+/// `rows/udtf<k>/dataframe_lateral` (relation 44): `t.lateralJoin(make_repeat(api, kind)(col("id").outer(),
+/// col("id").outer() - 3).alias("f"))` as PySpark 4.3.0 sends it (`Column.outer()` is the plain attribute; the
+/// left side is the cases' table `t`), compared with PySpark 4.2.0's answer (these rows and the 302 refusal do
+/// not depend on the Spark version).
+/// - 302: `LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED`, as the golden.
+/// - 300 and 301: the full case hits [`LATERAL_STRING_VIEW_GAP`]; the same join with `t`'s string column `g`
+///   left out gives the golden's rows and schema without `g`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_lateral_join_udtf_goldens() {
+    const T: &str = "SELECT * FROM VALUES (2, 'a', 20), (1, 'a', 10), (4, 'b', CAST(NULL AS INT)), \
+                     (3, 'b', 30), (5, 'c', 50) AS t(id, g, v)";
+    let Some(py) = python() else { return };
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let goldens: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join("python/tests/pyspark_udf/udtf/goldens.json"))
+            .expect("goldens"),
+    )
+    .expect("json");
+    let run = start(Some(&py)).await;
+    for kind in ["300", "301", "302"] {
+        let want = &goldens["cases"][format!("rows/udtf{kind}/dataframe_lateral")];
+        let got = execute(&run.channel, lateral_repeat(&py, &repo, kind, T), ADMIN).await;
+        if let Some(condition) = want["error"]["condition"].as_str() {
+            let s = got.expect_err(kind);
+            assert_eq!(error_class(&s), condition, "{kind}: {s:?}");
+            continue;
+        }
+        let s = got.expect_err("the string_view gap (remove it from this test once fixed)");
+        // A long traceback: the status carries the class in the message and the SQLSTATE.
+        assert!(
+            s.message().starts_with("[PYTHON_EXCEPTION]"),
+            "{kind}: {s:?}"
+        );
+        assert_eq!(
+            info(&s).metadata.get("sqlState").map(String::as_str),
+            Some("38000")
+        );
+        assert!(
+            s.message().contains(LATERAL_STRING_VIEW_GAP),
+            "{kind}: {s:?}"
+        );
+        // The join itself: `t` without `g` gives the golden without `g`.
+        let without_g = format!("SELECT id, v FROM ({T})");
+        let responses = execute(
+            &run.channel,
+            lateral_repeat(&py, &repo, kind, &without_g),
+            ADMIN,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        let (schema, rows) = json_rows(&responses);
+        assert_eq!(
+            schema,
+            want["schema"]
+                .as_str()
+                .expect("schema")
+                .replace("g:string,", ""),
+            "{kind}"
+        );
+        let mut want_rows: Vec<String> = want["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| {
+                let mut r = r.as_array().expect("row").clone();
+                r.remove(1);
+                serde_json::Value::Array(r).to_string()
+            })
+            .collect();
+        want_rows.sort();
+        assert_eq!(rows, want_rows, "{kind}");
+    }
 }
