@@ -3086,6 +3086,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-connectors-iceberg",
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-plan",
