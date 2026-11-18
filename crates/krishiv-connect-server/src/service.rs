@@ -246,10 +246,17 @@ impl ConnectService {
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         if self.is_draining() {
-            return self
-                .manager
-                .get(caller, session_id, observed)
-                .map_err(|_| Self::draining_status());
+            return self.manager.get(caller, session_id, observed).map_err(|e| {
+                // Only an unknown (or foreign) id is the drain's refusal; a stale or closed
+                // session keeps its own answer so a client can tell them apart.
+                if e.error_class()
+                    == krishiv_common::error::ErrorClass::InvalidHandleSessionNotFound
+                {
+                    Self::draining_status()
+                } else {
+                    status_of(&e)
+                }
+            });
         }
         self.session(caller, session_id, observed, user)
     }

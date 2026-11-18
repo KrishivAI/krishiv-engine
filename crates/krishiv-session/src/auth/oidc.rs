@@ -155,7 +155,7 @@ impl JwksCache {
         let keys = jose::parse_jwks(document)?;
         let n = keys.len();
         let mut state = self.state();
-        if n == 0 && !state.keys.is_empty() {
+        if n == 0 {
             return Err(JoseError::Invalid("no usable key"));
         }
         state.keys = keys.into();

@@ -1724,7 +1724,9 @@ impl Session {
             return Ok(self.exempt_permit(log_id));
         }
         if self.state.runtime.is_draining() {
-            return Err(krishiv_common::error::KrishivServerDraining {}.into());
+            let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+            self.state.queries.record_failed_row(log_id, &error);
+            return Err(error);
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
