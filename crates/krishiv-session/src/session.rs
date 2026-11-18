@@ -1641,7 +1641,28 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        Ok((crate::run_site::resolve_sites(stream, env), query))
+        let stream = crate::run_site::resolve_sites(stream, env);
+        Ok((self.name_spill_failure(stream), query))
+    }
+
+    /// `stream` with a memory error reported as the spill directory's failure while that directory
+    /// cannot be set up: the query needed to spill and could not (PY-078).
+    fn name_spill_failure(&self, stream: RecordBatchStream) -> RecordBatchStream {
+        let state = Arc::clone(&self.state);
+        Box::pin(futures::StreamExt::map(stream, move |r| {
+            r.map_err(|e| {
+                if e.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+                    return e;
+                }
+                let failure = state
+                    .runtime
+                    .spill_failure
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                failure.map_or(e.clone(), |f| f.with_cause(e))
+            })
+        }))
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as

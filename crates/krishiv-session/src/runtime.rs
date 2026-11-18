@@ -62,6 +62,9 @@ pub struct EngineRuntime {
     pub(crate) metrics: Arc<MetricsRegistry>,
     /// The spill directory, opened by the first query that spills.
     pub(crate) spill: Arc<Mutex<Option<SpillManager>>>,
+    /// Why the spill directory could not be set up, while it cannot (PY-078): a query that then
+    /// fails for want of memory reports it instead of the bare memory error.
+    pub(crate) spill_failure: Mutex<Option<KrishivError>>,
     pub(crate) formats: Arc<FormatRegistry>,
     /// The worker-local index of the next query: unique across the
     /// runtime's sessions, so they share one runner.
@@ -415,6 +418,7 @@ impl EngineRuntime {
             memory_tree,
             metrics,
             spill: Arc::new(Mutex::new(None)),
+            spill_failure: Mutex::new(None),
             formats: Arc::new(FormatRegistry::with_defaults()),
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),

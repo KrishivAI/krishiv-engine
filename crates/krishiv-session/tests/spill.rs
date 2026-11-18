@@ -266,3 +266,22 @@ fn an_unusable_spill_directory_does_not_fail_a_query_that_never_spills() {
     let got = block_on(df.collect()).unwrap();
     assert_eq!(got[0].column(0).as_primitive::<Int64Type>().value(0), 1000);
 }
+
+/// PY-078: a query that has to spill, with a spill directory that cannot be made, fails naming
+/// `krishiv.spill.dir` and the OS error (`KRISHIV_SPILL_IO_ERROR`), not a bare memory error.
+#[test]
+fn a_spilling_query_with_an_unusable_spill_directory_names_the_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let dir = file.join("spill");
+    let s = session(&dir, Some("4MB"));
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await }).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+    assert!(err.to_string().contains("a_file"), "{err}");
+}
