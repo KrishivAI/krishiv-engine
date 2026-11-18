@@ -571,10 +571,21 @@ def _carry(batch: Any, cursor: _Cursor, carried: int) -> Any:
         cols = [pa.nulls(n, type=f.type) for f in fields]
     else:
         row = cursor.ref[1]
-        take = pa.array([row] * n, type=pa.int64())
-        cols = [raw.column(raw.num_columns - carried + j).take(take) for j in range(carried)]
+        # The input row repeated by slicing, not ``take``: pyarrow has no ``take`` kernel for the view types
+        # (``string_view``, ``binary_view``) the engine sends.
+        cols = [_repeat_row(raw.column(raw.num_columns - carried + j), row, n) for j in range(carried)]
     out = pa.schema([pa.field(f.name, f.type) for f in fields] + list(batch.schema))
     return pa.RecordBatch.from_arrays(cols + list(batch.columns), schema=out)
+
+
+def _repeat_row(column: Any, row: int, n: int) -> Any:
+    """``column``'s value at ``row``, ``n`` times, of ``column``'s type (any Arrow type)."""
+    import pyarrow as pa
+
+    one = column.slice(row, 1)
+    if n == 0:
+        return column.slice(row, 0)
+    return pa.concat_arrays([one] * n)
 
 
 def _spark_batch(batch: Any, conf: RunnerConf) -> Any:

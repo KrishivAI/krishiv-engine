@@ -636,3 +636,25 @@ def test_analyze_gets_a_constant_through_from_internal(analyze_api: None, monkey
     udtf.analyze_udtf(Dated, "f", [{"type": '"date"', "column": 0, "is_table": False, "name": None}], values)
     assert seen[0].value == datetime.date(2024, 1, 2)
     assert seen[0].isConstantExpression
+
+
+@pytest.mark.parametrize(
+    ("values", "typ"),
+    [
+        (["x", None, "yz"], pa.string_view()),
+        ([b"x", None, b"yz"], pa.binary_view()),
+        (["x", None, "yz"], pa.string()),
+        ([1, None, 3], pa.int64()),
+    ],
+)
+def test_a_lateral_call_carries_its_input_row_of_any_type(values: list[Any], typ: Any) -> None:
+    # A LATERAL call leads each result row with its input row's carried columns; pyarrow has no ``take`` for the
+    # view types the engine sends (opus-1's Connect lateralJoin goldens, rows/udtf30{0,1}/dataframe_lateral).
+    raw = pa.record_batch([pa.array([10, 20, 30], pa.int64()), pa.array(values, typ)], names=["x", "g"])
+    cursor = udtf._Cursor()
+    cursor.ref = (raw, 2)
+    out = udtf._carry(pa.record_batch([pa.array([7, 8], pa.int64())], names=["r"]), cursor, 1)
+    assert out.schema.names == ["g", "r"]
+    assert out.schema.field("g").type == typ
+    assert out.column(0).to_pylist() == [values[2], values[2]]
+    assert udtf._carry(pa.record_batch([pa.array([], pa.int64())], names=["r"]), cursor, 1).num_rows == 0
