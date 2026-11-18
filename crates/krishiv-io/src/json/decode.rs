@@ -907,22 +907,19 @@ impl JsonDecoder {
                     let Some(t) = text.as_deref() else {
                         return Ok(Next::End);
                     };
-                    let (top, raw, next) = match parse_next(t, *pos, self.syntax) {
-                        // A truncated tail is one malformed record, then
-                        // the end: no bytes are skipped silently.
-                        Err(reason) => {
-                            let raw = t.get(*pos..).unwrap_or("").to_owned();
-                            *pos = t.len();
-                            return Ok(Next::Record(Err(reason), raw));
-                        }
-                        Ok(None) => return Ok(Next::End),
-                        Ok(Some((top, end))) => {
-                            let raw = t.get(*pos..end).unwrap_or("").to_owned();
-                            (top, raw, end)
-                        }
-                    };
-                    *pos = next;
-                    return Ok(Next::Record(Ok(top), raw));
+                    // The file is one record: its first value, as Spark's
+                    // `JacksonParser` reads one root from the whole stream;
+                    // whatever follows it is not read. The record's text
+                    // (the corrupt column) is the whole file, as Spark's.
+                    if *pos > 0 {
+                        return Ok(Next::End);
+                    }
+                    *pos = t.len().max(1);
+                    return Ok(match parse_next(t, 0, self.syntax) {
+                        Ok(None) => Next::End,
+                        Ok(Some((top, _))) => Next::Record(Ok(top), t.to_owned()),
+                        Err(reason) => Next::Record(Err(reason), t.to_owned()),
+                    });
                 }
             }
         }

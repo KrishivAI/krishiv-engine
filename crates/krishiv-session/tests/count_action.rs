@@ -120,3 +120,46 @@ fn every_file_format_counts_with_no_column() {
     };
     assert_eq!((col(0), col(1)), (4, 4));
 }
+
+/// A JSON `count()` parses each record and converts no value: Spark 4.2.0
+/// drops only the records that are not JSON objects under `DROPMALFORMED`
+/// (7 of 9 here; the inferred schema converts every other record, so
+/// `collect()` keeps 7 too) and counts every one under `PERMISSIVE`;
+/// `FAILFAST` fails on the line that is not JSON. A `multiLine` file is its
+/// first value (1 row). With a declared schema the count and the rows differ
+/// (`krishiv-io` `json/count_tests.rs`).
+#[test]
+fn count_of_a_json_converts_no_value_as_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.json");
+    std::fs::write(
+        &path,
+        "{\"id\":1,\"name\":\"a\"}\n{\"id\":\"x\",\"name\":\"b\"}\nnot json\n\
+         {\"id\":3,\"name\":4}\n{\"id\":4}\n[{\"id\":5},{\"id\":6}]\n\n7\n{\"id\":{\"z\":1}}\n",
+    )
+    .unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    let read = |mode: &str, multi: &str| {
+        s.read()
+            .format("json")
+            .option("mode", mode)
+            .option("multiLine", multi)
+            .load([path.as_str()])
+    };
+    let rows = |df: krishiv_session::DataFrame| -> usize {
+        block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum()
+    };
+    assert_eq!(block_on(read("PERMISSIVE", "false").count()).unwrap(), 9);
+    assert_eq!(block_on(read("DROPMALFORMED", "false").count()).unwrap(), 7);
+    assert_eq!(rows(read("DROPMALFORMED", "false")), 7);
+    assert!(block_on(read("FAILFAST", "false").count()).is_err());
+    for mode in ["PERMISSIVE", "DROPMALFORMED", "FAILFAST"] {
+        assert_eq!(block_on(read(mode, "true").count()).unwrap(), 1, "{mode}");
+        assert_eq!(rows(read(mode, "true")), 1, "{mode}");
+    }
+}
