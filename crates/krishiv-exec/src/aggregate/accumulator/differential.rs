@@ -6,6 +6,8 @@
 //! `i128::MAX`) under NULL slots, IVM weights of both signs including
 //! `i64::MIN`/`i64::MAX`, ANSI on and off, and repeated, nested merges.
 
+use arrow_array::StringViewArray;
+
 use super::*;
 use proptest::prelude::*;
 

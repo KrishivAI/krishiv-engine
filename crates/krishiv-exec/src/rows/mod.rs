@@ -55,6 +55,7 @@ mod layout;
 mod pages;
 #[cfg(any(test, feature = "row-table-prototype"))]
 mod table;
+mod text;
 
 #[cfg(test)]
 mod flooding_tests;
@@ -70,3 +71,4 @@ pub use layout::{EncodedKeys, GatheredRows, RowLayout, finalize};
 pub use pages::RowPages;
 #[cfg(any(test, feature = "row-table-prototype"))]
 pub use table::{HashbrownTable, NO_ROW, RowIndex, SaltedTable};
+pub(crate) use text::text_array;

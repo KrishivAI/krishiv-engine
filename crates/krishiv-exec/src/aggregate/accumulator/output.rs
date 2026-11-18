@@ -191,15 +191,13 @@ impl Accumulator {
                     DataType::Binary => Arc::new(it.collect::<BinaryArray>()),
                     DataType::BinaryView => Arc::new(it.collect::<BinaryViewArray>()),
                     _ => {
-                        let s: Vec<Option<&str>> = it
-                            .map(|b| b.map(std::str::from_utf8).transpose())
-                            .collect::<Result<_, _>>()
-                            .map_err(|e| internal(e.to_string()))?;
-                        if *t == DataType::Utf8 {
-                            Arc::new(StringArray::from(s))
+                        let s: Vec<Option<&[u8]>> = it.collect();
+                        let t = if matches!(t, DataType::Utf8 | DataType::LargeUtf8) {
+                            t
                         } else {
-                            Arc::new(StringViewArray::from(s))
-                        }
+                            &DataType::Utf8View
+                        };
+                        crate::rows::text_array(t, &s)?
                     }
                 }
             }

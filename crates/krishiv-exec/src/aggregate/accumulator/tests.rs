@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Unit tests of the accumulator: decimal conversion, running folds and edge cases.
 
+use arrow_array::{StringArray, StringViewArray};
+
 use super::*;
 
 /// A double becomes a decimal through its shortest text, rounded half up

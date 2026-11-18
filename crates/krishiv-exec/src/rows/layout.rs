@@ -1038,21 +1038,11 @@ fn gather<const N: usize>(out: &mut [u8], rows: &[&[u8]], at: usize) {
 
 /// An array of string or binary `data_type` holding `values`.
 fn strings_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<ArrayRef> {
-    use arrow_array::{
-        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
-        StringViewArray,
-    };
-    let text = || {
-        values
-            .iter()
-            .map(|v| v.map(std::str::from_utf8).transpose())
-            .collect::<std::result::Result<Vec<Option<&str>>, _>>()
-            .map_err(|e| internal(format!("a row string is not UTF-8: {e}")))
-    };
+    use arrow_array::{BinaryArray, BinaryViewArray, LargeBinaryArray};
     Ok(match data_type {
-        DataType::Utf8 => Arc::new(StringArray::from(text()?)),
-        DataType::LargeUtf8 => Arc::new(LargeStringArray::from(text()?)),
-        DataType::Utf8View => Arc::new(StringViewArray::from(text()?)),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            super::text_array(data_type, values)?
+        }
         DataType::Binary => Arc::new(BinaryArray::from(values.to_vec())),
         DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values.to_vec())),
         DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),

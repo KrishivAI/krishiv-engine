@@ -30,7 +30,7 @@ use arrow_array::types::{
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float32Array,
-    Float64Array, Int64Array, ListArray, PrimitiveArray, StringArray, StringViewArray, UInt32Array,
+    Float64Array, Int64Array, ListArray, PrimitiveArray, UInt32Array,
 };
 use arrow_buffer::{NullBuffer, i256};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
