@@ -21,7 +21,7 @@ pub static SQL_TIMESTAMP_TYPE: ConfigEntry = ConfigEntry {
 /// `spark.sql.session.localRelationCacheThreshold`.
 pub static LOCAL_RELATION_CACHE_THRESHOLD: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.session.localRelationCacheThreshold",
-    value_type: ValueType::Int,
+    value_type: ValueType::NonNegativeInt,
     default: Some(ConfigValue::Int(1024 * 1024)),
     doc: "The size in bytes from which a client uploads a local relation (`createDataFrame`) once and refers to it by hash. Read by Spark Connect clients.",
     scope: Scope::Session,
@@ -153,7 +153,7 @@ pub static ARROW_USE_LARGE_VAR_TYPES: ConfigEntry = ConfigEntry {
 /// `spark.sql.execution.pandas.structHandlingMode`.
 pub static PANDAS_STRUCT_HANDLING_MODE: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.execution.pandas.structHandlingMode",
-    value_type: ValueType::Enum(&["legacy", "row", "dict"]),
+    value_type: ValueType::ExactEnum(&["legacy", "row", "dict"]),
     default: Some(ConfigValue::String(Cow::Borrowed("legacy"))),
     doc: "How a client converts a struct column when it builds a pandas DataFrame: `legacy`, `row` (a Row object) or `dict` (a dict with suffixed names for repeated fields). Read by Spark Connect clients.",
     scope: Scope::Session,

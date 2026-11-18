@@ -1975,3 +1975,20 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
 }
+
+#[test]
+fn client_read_settings_refuse_what_spark_refuses() {
+    let mut c = Config::new();
+    assert!(
+        c.set("krishiv.sql.session.localRelationCacheThreshold", "-1")
+            .is_err()
+    );
+    assert!(
+        c.set("krishiv.sql.session.localRelationCacheThreshold", "0")
+            .is_ok()
+    );
+    let key = "krishiv.sql.execution.pandas.structHandlingMode";
+    assert!(c.set(key, "ROW").is_err());
+    assert!(c.set(key, "row").is_ok());
+    assert_eq!(ValueType::NonNegativeInt.to_string(), "non-negative int");
+}

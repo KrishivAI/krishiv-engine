@@ -99,6 +99,9 @@ pub enum ValueType {
     /// A signed 64-bit integer that must be at least 1 (Spark's
     /// `checkValue(_ > 0)` settings such as partition counts).
     PositiveInt,
+    /// A signed 64-bit integer that must be at least 0 (Spark's
+    /// `checkValue(_ >= 0)` settings).
+    NonNegativeInt,
     /// A byte count: a number with an optional binary unit suffix
     /// `b`, `k`/`kb`, `m`/`mb`, `g`/`gb`, `t`/`tb`, `p`/`pb` (as Spark);
     /// no suffix means bytes.
@@ -123,6 +126,9 @@ pub enum ValueType {
     /// One of the listed values, matched ASCII case-insensitively and
     /// stored in the listed spelling.
     Enum(&'static [&'static str]),
+    /// One of the listed values, matched exactly (case-sensitive, no
+    /// trimming), as Spark's `stringConf.checkValues` does.
+    ExactEnum(&'static [&'static str]),
 }
 
 impl ValueType {
@@ -149,6 +155,12 @@ impl ValueType {
                 .filter(|v: &i64| *v > 0)
                 .map(ConfigValue::Int)
                 .ok_or_else(|| "expected a positive integer".to_owned()),
+            ValueType::NonNegativeInt => s
+                .parse()
+                .ok()
+                .filter(|v: &i64| *v >= 0)
+                .map(ConfigValue::Int)
+                .ok_or_else(|| "expected a non-negative integer".to_owned()),
             ValueType::Size => parse_with_unit(s, SIZE_UNITS, "b")
                 .map(ConfigValue::Size)
                 .ok_or_else(|| "expected a byte size such as `128m` or `1g`".to_owned()),
@@ -192,6 +204,11 @@ impl ValueType {
                 .find(|a| a.eq_ignore_ascii_case(s))
                 .map(|a| ConfigValue::String(Cow::Borrowed(*a)))
                 .ok_or_else(|| format!("expected one of {}", allowed.join(", "))),
+            ValueType::ExactEnum(allowed) => allowed
+                .iter()
+                .find(|a| **a == raw)
+                .map(|a| ConfigValue::String(Cow::Borrowed(*a)))
+                .ok_or_else(|| format!("expected one of {}", allowed.join(", "))),
         }
     }
 }
@@ -202,13 +219,14 @@ impl fmt::Display for ValueType {
             ValueType::Bool => f.write_str("bool"),
             ValueType::Int => f.write_str("int"),
             ValueType::PositiveInt => f.write_str("positive int"),
+            ValueType::NonNegativeInt => f.write_str("non-negative int"),
             ValueType::Size => f.write_str("size"),
             ValueType::SignedSize => f.write_str("signed size"),
             ValueType::Duration => f.write_str("duration"),
             ValueType::Millis => f.write_str("duration (bare number: ms)"),
             ValueType::String => f.write_str("string"),
             ValueType::TimeZone => f.write_str("time zone"),
-            ValueType::Enum(allowed) => {
+            ValueType::Enum(allowed) | ValueType::ExactEnum(allowed) => {
                 let list: Vec<String> = allowed.iter().map(|a| format!("`{a}`")).collect();
                 write!(f, "enum ({})", list.join(", "))
             }
