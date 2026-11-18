@@ -67,7 +67,7 @@ starts after the pipelines publishing the filters worth the wait (`scan_waits`: 
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
 ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.
 `operators/late_fetch.rs` (design P2-T063) `LateFetch`: a breaker above a `TopN` over a narrow scan (`ScanNode::row_id` appends `_krishiv_row_file`, `_krishiv_row_index`) that reads the deferred columns of its rows through `ScanPushdown::take`, in the rows' order. Planned by `Planner::late_fetch` under the rules of the note's §4, up to `krishiv.exec.lateFetch.maxRows`; a partition column stays in the narrow scan, and an expression projection above the scan disables it.
-A filter on a partition column skips the files of partitions it drops (dynamic partition pruning, `file_scan.rs`).
+A filter on a partition column skips the files of partitions it drops (static pruning from the pushed filters, and dynamic pruning from runtime filters; `file_scan.rs`).
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
 `Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
@@ -122,6 +122,7 @@ them as written, for tests), whose drivers record the `ExchangeStats` (`exchange
 partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
+- `src/profile/scans.rs` `profile_scans`: the named tables a plan scans and the columns its filters compare with values by `=`/`IN` (with the statistics a caller supplies); the profile's `scans` member (minor 6), the partition advisor's input (P3-T025)
 Paths are relative to this crate.
 - `src/carrier.rs` moves a value between decimal carriers and between the calendar struct and `Interval(MonthDayNano)` (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`

@@ -4,7 +4,7 @@ description: "Read and write Parquet, CSV and other files on local disk and on S
 
 # Data sources
 
-Krishiv reads and writes files from your own disk and, from 0.2.1, from cloud object stores: Amazon S3 (`s3://`, `s3a://`),
+Krishiv reads and writes files from your own disk (below) and, from 0.2.1, from cloud object stores: Amazon S3 (`s3://`, `s3a://`),
 Google Cloud Storage (`gs://`) and Azure Blob Storage (`az://`, `abfs://`, `abfss://`). The wheels from PyPI include the
 object-store support; the 0.2.0 wheels did not, and failed with `KRISHIV_UNSUPPORTED_FEATURE` on these URLs.
 
@@ -16,6 +16,33 @@ spark.conf.set("fs.s3a.endpoint.region", "eu-west-1")
 df = spark.read.parquet("s3://my-bucket/events/")
 df.write.mode("overwrite").parquet("s3://my-bucket/summary/")
 ```
+
+## Read and write local files
+
+A CSV file with a header row, read with its column types inferred, summed by group and written back as Parquet:
+
+```python
+import krishiv
+
+spark = krishiv.session()
+df = spark.read.csv("trips.csv", header=True, inferSchema=True)
+summary = df.groupBy("region").sum("amount")
+summary.write.mode("overwrite").parquet("summary/")
+print(sorted(tuple(r) for r in spark.read.parquet("summary/").collect()))
+# [('east', 15.5), ('west', 20.0)]
+```
+
+The output above is for a `trips.csv` of `region,amount` followed by the rows `east,10.0`, `west,20.0` and `east,5.5`.
+
+`spark.read.json` and `spark.read.parquet` work the same way, and `df.write` has `parquet`, `csv`
+and `json`, with `.mode("overwrite")` or `"append"` and `.option(key, value)` such as `.option("header", True)` for
+CSV.
+
+A write creates a directory, not a single file: `part-*` data files, a `_SUCCESS` marker and a `_krishiv_log/`
+directory that records each commit (see [known differences](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory)).
+To write a new directory without it, set `krishiv.sql.files.commitProtocol` to `NONE` on the session
+(`spark.conf.set("krishiv.sql.files.commitProtocol", "NONE")`); the data reads back the same. A directory that already
+has a `_krishiv_log/` keeps using it.
 
 ## Credentials and options
 
