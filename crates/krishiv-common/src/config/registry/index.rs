@@ -35,6 +35,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("krishiv.ui.allowedHosts", &UI_ALLOWED_HOSTS),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
