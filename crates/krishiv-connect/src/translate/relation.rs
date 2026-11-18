@@ -256,6 +256,23 @@ impl Translator<'_> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // The analyzer keeps every input column no column set references, so a column that is
+        // both an id and a value (Spark keeps it and unpivots it) or a value listed twice would
+        // lose its id copy and make the projection ambiguous. Refuse it by name, ignoring case
+        // (over-refusing is safe), until the IR can keep a referenced column.
+        let mut seen = std::collections::HashSet::new();
+        for e in ids.iter().chain(values.iter()) {
+            if let ExprNode::Column(c) = &e.node {
+                let key: Vec<String> = c.name.iter().map(|p| p.to_lowercase()).collect();
+                if !seen.insert(key) {
+                    return Err(unsupported_field(
+                        "Unpivot",
+                        "values",
+                        "unpivot of a column that is also an id or listed twice",
+                    ));
+                }
+            }
+        }
         let projected = Arc::new(
             LogicalPlan::new(PlanNode::Project {
                 input,
