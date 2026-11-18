@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::builder::make_view;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
+    ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
     StructArray, TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
@@ -66,6 +66,9 @@ use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
 use object_store::path::Path;
 
+use super::partition_prune::{
+    dropping_filter, reads_partition_column, static_partition_filters, statically_dropped,
+};
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
@@ -173,6 +176,9 @@ pub struct FileScan {
     constants: Option<Arc<FileConstants>>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
+    /// `spark.sql.caseSensitive`: table columns find file columns by exact
+    /// name (Spark's Parquet reader), unless the pushdown maps otherwise.
+    case_sensitive: bool,
     /// The roots `_metadata.file_path` prints files under.
     roots: PathRoots,
 }
@@ -210,8 +216,17 @@ impl FileScan {
             partition_columns: Arc::from([]),
             constants: None,
             min_morsel_bytes: splits.open_cost_in_bytes,
+            case_sensitive: false,
             roots: PathRoots::default(),
         }
+    }
+
+    /// The same scan with table columns matched to file columns by exact
+    /// name (`spark.sql.caseSensitive=true`); the default folds case.
+    #[must_use]
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
     }
 
     /// The same scan printing its files' `_metadata.file_path` under `roots` (the scheme and
@@ -339,7 +354,7 @@ impl ScanPushdown for FileScan {
     }
 
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
-        if reads_partition_column(self, filter) {
+        if reads_partition_column(&self.partition_columns, filter) {
             return FilterPushdown::Unsupported;
         }
         // Pruning keeps a superset of the matching rows; the row evaluator
@@ -469,14 +484,15 @@ pub struct FileScanMetrics {
 }
 
 impl FileScanMetrics {
-    /// The `EXPLAIN ANALYZE` counters, once a split was read: units
+    /// The `EXPLAIN ANALYZE` counters, once a split was read or a unit pruned: units
     /// (row groups) decoded and skipped, rows and bytes decoded, and how
     /// the row filter ran (`row_filter_*` only where it did); the page
     /// index and stored Bloom filters' work where either pruned or was
     /// rejected; the decode over-commit when there was any.
     pub(super) fn extra(&self) -> crate::metrics::ExtraMetrics {
         let mut out = Vec::new();
-        if self.splits > 0 {
+        // Also when every file was pruned unopened (no split read).
+        if self.splits > 0 || self.units_pruned > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
                 ("scan_files", self.files),
@@ -582,6 +598,9 @@ pub struct FileScanSource {
     /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
     /// (of one split, or of splits that do not start at byte 0) are read.
     opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
+    /// The pushed filters that read a partition column, as the typed trees they are: a file whose partition
+    /// values none of them can match is never opened (static partition pruning, P3-T025).
+    static_partition: Vec<PushdownExpr>,
     /// Whether the row id ends the output.
     row_id: bool,
     /// One morsel per partition, its batches tagged with the partition's
@@ -703,31 +722,6 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
     Ok(())
 }
 
-/// Whether the typed tree of `filter` reads a partition column of `scan`
-/// (a filter without one prunes nothing).
-fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
-    if scan.partition_columns.is_empty() {
-        return false;
-    }
-    filter.expr.as_ref().is_some_and(|e| {
-        e.columns()
-            .iter()
-            .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
-    })
-}
-
-/// The runtime filter that no row of a file with these partition values
-/// passes, if any.
-fn dropping_filter<'a>(
-    filters: &'a [(usize, ScanFilter)],
-    values: &[ArrayRef],
-) -> Option<&'a ScanFilter> {
-    filters.iter().find_map(|(k, filter)| {
-        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
-        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
-    })
-}
-
 /// Where a column of a partitioned scan's output comes from.
 #[derive(Clone, Copy, Debug)]
 enum Slot {
@@ -769,9 +763,18 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
         .partition_columns
         .iter()
         .map(|f| {
-            scan.table
-                .field_with_name(f.name())
-                .map_or_else(|_| Arc::clone(f), |t| Arc::new(t.clone()))
+            scan.table.field_with_name(f.name()).map_or_else(
+                |_| Arc::clone(f),
+                |t| {
+                    // The listing's mark of a column a user schema typed
+                    // (how its values read) stays on the table's field.
+                    let mut metadata = t.metadata().clone();
+                    if let Some(mark) = f.metadata().get(krishiv_io::PARTITION_VALUE_KEY) {
+                        metadata.insert(krishiv_io::PARTITION_VALUE_KEY.to_owned(), mark.clone());
+                    }
+                    Arc::new(t.clone().with_metadata(metadata))
+                },
+            )
         })
         .collect();
     let partition_of = |c: &ColumnPath| {
@@ -802,7 +805,7 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     let usable: Vec<PushedFilter> = p
         .filters
         .iter()
-        .take_while(|f| !reads_partition_column(scan, f))
+        .take_while(|f| !reads_partition_column(&scan.partition_columns, f))
         .cloned()
         .collect();
     let exprs: Vec<PushdownExpr> = usable.iter().filter_map(|f| f.expr.clone()).collect();
@@ -816,7 +819,15 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     request.limit = p.limit.filter(|_| p.filters.is_empty());
     request.metadata_cols = p.metadata;
     request.metadata_cols.row_index |= p.row_id;
-    request.mapping = p.mapping.clone();
+    request.mapping = match &p.mapping {
+        // A pushdown that names no mapping takes the session's case rule.
+        krishiv_io::FieldMapping::ByName {
+            case_sensitive: false,
+        } if scan.case_sensitive => krishiv_io::FieldMapping::ByName {
+            case_sensitive: true,
+        },
+        other => other.clone(),
+    };
     let decoded = Arc::clone(SchemaMapper::new(&request, data_table, "")?.output_schema());
     let (mapped, layout) = if partition_fields.is_empty() {
         (decoded, Vec::new())
@@ -924,6 +935,7 @@ impl FileScanSource {
             partition_fields,
             layout,
         } = table_request(scan, &p)?;
+        let static_partition = static_partition_filters(&scan.partition_columns, &p.filters);
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -942,6 +954,7 @@ impl FileScanSource {
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             opened_files: Arc::default(),
+            static_partition,
             row_id: p.row_id,
             partition_order: p.partition_order,
             roots: scan.roots.clone(),
@@ -1087,10 +1100,7 @@ impl FileScanSource {
                     return None;
                 }
                 let file = self.files.get(s.file)?;
-                let dropped = !partition_filters.is_empty()
-                    && self
-                        .partition_values(file)
-                        .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+                let dropped = self.drops_file(partition_filters, file);
                 if dropped {
                     splits.push(Vec::new());
                     continue;
@@ -1152,11 +1162,7 @@ impl FileScanSource {
         if let Some(file) = self.files.get(wanted) {
             // A file its partition's filter drops is never opened. (An error
             // reading its path is reported by the open.)
-            let dropped = !partition_filters.is_empty()
-                && self
-                    .partition_values(file)
-                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
-            if dropped {
+            if self.drops_file(partition_filters, file) {
                 return;
             }
             let fut = self.io.prefetch_metadata(
@@ -1187,6 +1193,18 @@ impl FileScanSource {
         // Dynamic partition pruning: no row of the file passes.
         if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
             filter.filter().stats().add_split(range.len());
+            return Ok(());
+        }
+        // Static partition pruning: the filters on partition columns rule the file out.
+        if statically_dropped(
+            &self.static_partition,
+            &self.partition_fields,
+            &partition_values,
+        ) {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .units_pruned += 1;
             return Ok(());
         }
         if let Some((f, _)) = &local.ahead
@@ -1331,6 +1349,15 @@ impl FileScanSource {
                 Some((k, ScanFilter::at(f, Some(column))))
             })
             .collect()
+    }
+
+    /// Whether a runtime filter or a filter on a partition column rules out the file: it is never opened.
+    fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
+        (!partition_filters.is_empty() || !self.static_partition.is_empty())
+            && self.partition_values(file).is_ok_and(|v| {
+                dropping_filter(partition_filters, &v).is_some()
+                    || statically_dropped(&self.static_partition, &self.partition_fields, &v)
+            })
     }
 
     /// The values of `file`'s partition columns, one row each.

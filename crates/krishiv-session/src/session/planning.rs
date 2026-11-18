@@ -99,24 +99,37 @@ impl Session {
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         };
         let stats = ProviderStatistics(Arc::clone(&tables));
-        let (optimized, steps) = if trace {
-            krishiv_optimizer::optimize_traced_with_udfs(
-                &analyzed.plan,
-                &stats,
-                &self.state.udfs,
-                &env.config,
-            )?
-        } else {
-            (
+        let optimize = || {
+            if trace {
+                krishiv_optimizer::optimize_traced_with_udfs(
+                    &analyzed.plan,
+                    &stats,
+                    &self.state.udfs,
+                    &env.config,
+                )
+            } else {
                 krishiv_optimizer::optimize_with_udfs(
                     &analyzed.plan,
                     &stats,
                     &self.state.udfs,
                     &env.config,
-                )?,
-                Vec::new(),
-            )
+                )
+                .map(|p| (p, Vec::new()))
+            }
         };
+        // Key counts (design P2b A5 (d)): the optimizer asks for the keys it
+        // could use; with `krishiv.optimizer.discoverKeys` on they are
+        // counted and, when one is proven, the plan is optimized once more
+        // (never again). A withheld plan never counts: it must not depend on
+        // the data, and its providers record no request.
+        if !withheld {
+            env.catalog.clear_key_requests();
+        }
+        let (mut optimized, mut steps) = optimize()?;
+        // Boxed: the count's future would deepen every caller's (layout depth).
+        if !withheld && Box::pin(env.catalog.discover_keys()).await {
+            (optimized, steps) = optimize()?;
+        }
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_query_start(start)
             .with_sample_salt(env.sample_salt)
