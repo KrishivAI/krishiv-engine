@@ -112,6 +112,12 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet),
         "org.apache.spark.sql.connect.common.InvalidPlanInput"
     );
+    // A Python UDTF's non-struct return type: the planner's `InvalidPlanInput`, not the 42K09
+    // `AnalysisException` the SQLSTATE would give.
+    assert_eq!(
+        first(ErrorClass::InvalidSchemaTypeNonStruct),
+        "org.apache.spark.sql.connect.common.InvalidPlanInput"
+    );
     assert_eq!(
         first(ErrorClass::KrishivOperationLimit),
         "org.apache.spark.SparkException"

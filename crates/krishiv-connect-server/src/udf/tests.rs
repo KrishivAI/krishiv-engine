@@ -511,3 +511,93 @@ fn analysis_types_an_inline_udtf_without_a_payload_until_analyze_needs_one() {
         2
     );
 }
+
+#[test]
+fn a_typed_analysis_leaves_the_session_without_a_udf_runtime() {
+    let host = Host::default();
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "carol", &s);
+    let mut typed = InlineUdfs::analysis(&python);
+    typed
+        .inline_python_udtf(&udtf("T", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    typed
+        .prepare_analysis(&s, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    // No runtime was installed on the session: no plan of it can start a worker.
+    assert!(!python.lock().installed);
+    assert!(python.lock().payloads.is_empty());
+}
+
+#[test]
+fn a_registration_under_a_hidden_name_makes_the_inline_udtf_register_again() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    let inline_run = || {
+        let mut inline = InlineUdfs::execution(&python);
+        let name = inline
+            .inline_python_udtf(&udtf("Repeat", b"a", row()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        inline.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+        name
+    };
+    let name = inline_run();
+    // The client registers its own UDTF under the hidden name (command 10).
+    python
+        .register_udtf(&s, &udtf(&name, b"other", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    // The inline call does not resolve to that registration: its definition is registered again,
+    // under the library's next version.
+    assert_eq!(inline_run(), name);
+    let key = name.to_lowercase();
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered,
+        [(0, key.clone(), 1), (0, key.clone(), 2), (0, key, 3)]
+    );
+}
+
+#[test]
+fn a_clone_keeps_the_sources_inline_udtf_without_registering_it_again() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let source = session();
+    let python = SessionPython::new(Some(&host), "alice", &source);
+    let mut inline = InlineUdfs::execution(&python);
+    let name = inline
+        .inline_python_udtf(&udtf("Repeat", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    inline.grant(&source).unwrap_or_else(|e| panic!("{e}"));
+    let clone = source.clone_session().unwrap_or_else(|e| panic!("{e}"));
+    let copy = python.copy_for("alice", &clone);
+    // The clone's runtime got the payload at the source's version.
+    let key = name.to_lowercase();
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered,
+        [(0, key.clone(), 1), (1, key, 1)]
+    );
+    // The same relation in the clone resolves to the copied registration: nothing new.
+    let mut in_clone = InlineUdfs::execution(&copy);
+    assert_eq!(
+        in_clone
+            .inline_python_udtf(&udtf("Repeat", b"a", row()))
+            .unwrap_or_else(|e| panic!("{e}")),
+        name
+    );
+    in_clone.grant(&clone).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .len(),
+        2
+    );
+}

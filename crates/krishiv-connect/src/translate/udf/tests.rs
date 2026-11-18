@@ -199,7 +199,15 @@ fn register_function_is_a_command_the_server_runs() {
 fn a_string_return_type_is_parsed_as_the_planner_parses_it() {
     // `udf(f, "long")` and `udf(f, "a int, b string")`: the client sends the string as `unparsed`
     // (the planner's `transformDataType`, v4.3.0).
-    for (text, expected) in [("long", DataType::Long), ("bigint", DataType::Long)] {
+    let row = krishiv_types::parse_data_type("struct<a: int, b: string>")
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(row, DataType::Struct(_)));
+    for (text, expected) in [
+        ("long", DataType::Long),
+        ("bigint", DataType::Long),
+        // A table schema is a struct of its fields (`parseTableSchema` first).
+        ("a int, b string", row),
+    ] {
         let mut f = inline(Some(Function::PythonUdf(python(100))), Vec::new());
         if let Some(Function::PythonUdf(p)) = &mut f.function {
             p.output_type = Some(proto_type(Kind::Unparsed(pb::data_type::Unparsed {
