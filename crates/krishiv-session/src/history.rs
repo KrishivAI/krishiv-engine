@@ -136,6 +136,7 @@ pub struct QueryOptions {
     pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
     pub(crate) inbound_credential:
         Option<(crate::auth::Method, Option<crate::auth::InboundCredential>)>,
+    pub(crate) query_start_micros: Option<i64>,
 }
 
 impl QueryOptions {
@@ -176,6 +177,15 @@ impl QueryOptions {
         credential: Option<crate::auth::InboundCredential>,
     ) -> Self {
         self.inbound_credential = Some((method, credential));
+        self
+    }
+
+    /// Fixes the start instant of each query the statement plans, in microseconds since the
+    /// epoch: `current_timestamp()`, `now()`, `current_date()` and `localtimestamp()` read it
+    /// instead of the planning clock. A caller that runs the same statement again with the same
+    /// instant (an Arrow Flight SQL ticket fetched twice, P3-T101) gets the same clock values.
+    pub fn query_start(mut self, micros: i64) -> Self {
+        self.query_start_micros = Some(micros);
         self
     }
 
