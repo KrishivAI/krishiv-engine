@@ -1036,6 +1036,8 @@ impl Session {
     /// ```
     pub fn clear_cache(&self) {
         self.state.cache.clear();
+        // The key counts' answers (design P2b A5 (d)) are counted again.
+        self.state.io.key_facts().clear();
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
@@ -1061,6 +1063,10 @@ impl Session {
     /// ```
     pub fn refresh_table(&self, name: &str) {
         self.state.cache.invalidate_table(name);
+        // The key facts are keyed by file version, not by table: every one
+        // is counted again (a file rewritten in place within the store's
+        // modification-time resolution keeps its version).
+        self.state.io.key_facts().clear();
     }
 
     /// Drops the cached relations reading files by path (Spark's
@@ -1312,6 +1318,7 @@ impl Session {
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
             relations: Arc::clone(&self.state.relations),
+            memory: Arc::clone(&self.state.memory),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),

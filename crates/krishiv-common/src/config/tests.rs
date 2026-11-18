@@ -1424,6 +1424,8 @@ fn late_payload_join_defaults_on_and_parses() {
     assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
 }
 
+mod payload_above;
+
 #[test]
 fn history_entries_parse_and_default() {
     let mut c = Config::new();
