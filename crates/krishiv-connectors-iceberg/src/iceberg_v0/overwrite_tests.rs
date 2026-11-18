@@ -952,3 +952,44 @@ fn a_dynamic_overwrite_replaces_a_partition_of_a_promoted_column() {
     got.sort();
     assert_eq!(got, ["5|10", "6|3"]);
 }
+
+/// A spec of only `void` fields is unpartitioned (`PartitionSpec.isUnpartitioned`):
+/// a dynamic overwrite under it replaces the files of every older spec too
+/// (`BaseReplacePartitions.apply`, review 36b2b round 3).
+#[test]
+fn a_dynamic_overwrite_under_a_void_only_spec_replaces_every_spec() {
+    let env = env();
+    let t = create(&env, 2, true, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 6));
+    let void = iceberg::spec::UnboundPartitionSpec::builder()
+        .add_partition_field(2, "x_void", Transform::Void)
+        .unwrap()
+        .build();
+    let m = iceberg::spec::TableMetadataBuilder::new_from_metadata(catalog.metadata(), None)
+        .add_partition_spec(void)
+        .unwrap()
+        .set_default_partition_spec(-1)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+    assert_eq!(m.default_partition_spec_id(), 1);
+    let path = env.at("void-spec.metadata.json");
+    std::fs::write(
+        path.strip_prefix("file://").unwrap(),
+        serde_json::to_vec(&m).unwrap(),
+    )
+    .unwrap();
+    let catalog = Catalog::at(&path);
+    overwrite(
+        &env,
+        &catalog,
+        WriteMode::OverwriteDynamic,
+        &[],
+        vec![range(40, 42)],
+    )
+    .unwrap();
+    assert_eq!(read_back(&env, &catalog), expected(40..42));
+    live(&env, &catalog.metadata());
+}

@@ -491,9 +491,13 @@ fn replaced_partitions(
     entries: &[(i32, iceberg::spec::DataFile)],
 ) -> Result<(), KrishivError> {
     let schema = base.current_schema();
+    // Java's `PartitionSpec.isUnpartitioned`: no field, or only `void` fields.
     let unpartitioned = entries.iter().all(|(spec_id, _)| {
-        base.partition_spec_by_id(*spec_id)
-            .is_some_and(|s| s.fields().is_empty())
+        base.partition_spec_by_id(*spec_id).is_some_and(|s| {
+            s.fields()
+                .iter()
+                .all(|f| f.transform == iceberg::spec::Transform::Void)
+        })
     });
     if unpartitioned {
         o.removals.row_filter = Some(krishiv_io::PushdownExpr::Constant(true));
