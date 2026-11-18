@@ -10,6 +10,9 @@ Multi-endpoint tickets and stored results are P5 (P5-T030, P5-T047).
 
 ## Key files
 Paths are relative to this crate.
+- `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
+  another owner's id answers as unknown; `HandleLimits` (TTL since last use, per session, per owner:
+  `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`, expired handles dropped first); `remove_session`, `sweep(now, alive)`
 - `src/status.rs` `flight_status` / `code_of` (design §6): a `KrishivError` as the Flight SQL gRPC status, from its
   client-safe form (`KrishivError::for_client`); Spark's message text, trailing metadata `x-krishiv-error-class`,
   `x-krishiv-sqlstate`, `x-krishiv-error-id`. Connect's `status_of` is not used here.
