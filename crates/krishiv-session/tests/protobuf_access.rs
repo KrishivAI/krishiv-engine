@@ -40,6 +40,10 @@ fn session(allowed: &std::path::Path) -> Session {
 fn run(s: &Session, sql: &str) -> Result<usize, krishiv_common::error::KrishivError> {
     block_on(async {
         let batches = s.sql(sql).await?.collect().await?;
+        // A conversion that yields NULL is a failure of the call, not a pass.
+        for b in &batches {
+            assert_eq!(b.column(0).null_count(), 0, "{sql} returned NULL");
+        }
         Ok(batches.iter().map(arrow_array::RecordBatch::num_rows).sum())
     })
 }
