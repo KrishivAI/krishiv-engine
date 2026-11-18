@@ -156,6 +156,19 @@ impl Surface {
         Self::FlightSql,
     ];
 
+    /// The surface whose requests a session of `transport` serves: `Connect`, `FlightSql` and
+    /// `Ui` map to themselves; an embedded or MCP session arrives on no listener, so `None`
+    /// (P3-T101 §2 H3: a Flight SQL session counts its denials under `flight-sql`).
+    #[must_use]
+    pub fn of(transport: crate::Transport) -> Option<Self> {
+        match transport {
+            crate::Transport::Connect => Some(Self::Connect),
+            crate::Transport::FlightSql => Some(Self::FlightSql),
+            crate::Transport::Ui => Some(Self::Ui),
+            crate::Transport::Embedded | crate::Transport::Mcp => None,
+        }
+    }
+
     /// The label value: `connect`, `admin`, `metrics`, `ui` or `flight-sql`.
     #[must_use]
     pub fn as_str(self) -> &'static str {

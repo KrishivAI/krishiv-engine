@@ -356,6 +356,7 @@ pub krishiv_session::auth::Surface::Ui
 impl krishiv_session::auth::Surface
 pub const krishiv_session::auth::Surface::ALL: [Self; 5]
 pub fn krishiv_session::auth::Surface::as_str(self) -> &'static str
+pub fn krishiv_session::auth::Surface::of(transport: krishiv_session::Transport) -> core::option::Option<Self>
 impl core::clone::Clone for krishiv_session::auth::Surface
 pub fn krishiv_session::auth::Surface::clone(&self) -> krishiv_session::auth::Surface
 impl core::cmp::Eq for krishiv_session::auth::Surface
