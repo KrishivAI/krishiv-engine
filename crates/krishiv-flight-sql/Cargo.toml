@@ -10,3 +10,7 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+tonic.workspace = true
