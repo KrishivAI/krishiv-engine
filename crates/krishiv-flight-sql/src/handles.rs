@@ -53,6 +53,17 @@ impl HandleId {
     }
 }
 
+/// A handle [`Handles::insert`] or [`Handles::reserve`] stored, and the sessions of the handles
+/// it removed to make room (expired or evicted; design §4.1), one entry per handle removed, for
+/// the caller to release a provisional session left with none (v4 review m4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inserted {
+    /// The new handle.
+    pub id: HandleId,
+    /// The session id of each handle removed to make room.
+    pub evicted: Vec<String>,
+}
+
 /// The limits of a [`Handles`] map (`krishiv.flightSql.{handleTtl,maxHandlesPerSession,
 /// maxHandlesPerPrincipal,maxHandleBytesPerPrincipal}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,7 +189,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         bytes: usize,
         prepared: bool,
         now: Instant,
-    ) -> Result<HandleId, KrishivError> {
+    ) -> Result<Inserted, KrishivError> {
         self.insert_with(owner, session_id, payload, bytes, prepared, now, 0)
     }
 
@@ -196,7 +207,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         bytes: usize,
         prepared: bool,
         now: Instant,
-    ) -> Result<HandleId, KrishivError> {
+    ) -> Result<Inserted, KrishivError> {
         self.insert_with(owner, session_id, payload, bytes, prepared, now, 1)
     }
 
@@ -232,7 +243,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         prepared: bool,
         now: Instant,
         live: usize,
-    ) -> Result<HandleId, KrishivError> {
+    ) -> Result<Inserted, KrishivError> {
         let id = HandleId::random()?;
         let mut inner = self.lock();
         let full = |inner: &Inner<K, P>| {
@@ -273,8 +284,9 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 self.limits.bytes_per_owner,
             ));
         }
+        let mut evicted = Vec::new();
         if full(&inner).is_some() {
-            self.expire_locked(&mut inner, now);
+            evicted = self.expire_locked(&mut inner, now);
         }
         while let Some((name, limit, in_session)) = full(&inner) {
             let victim = inner
@@ -293,7 +305,9 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 .map(|(id, _)| *id);
             match victim {
                 Some(v) => {
-                    Self::remove_locked(&mut inner, &v);
+                    if let Some((session, _)) = Self::remove_locked(&mut inner, &v) {
+                        evicted.push(session);
+                    }
                 }
                 None => return Err(refuse(name, limit)),
             }
@@ -321,7 +335,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 idle_since: now,
             },
         );
-        Ok(id)
+        Ok(Inserted { id, evicted })
     }
 
     /// The session id and payload of `id` for `owner`, without starting an operation (cancel,
@@ -423,7 +437,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         self.len() == 0
     }
 
-    fn expire_locked(&self, inner: &mut Inner<K, P>, now: Instant) {
+    fn expire_locked(&self, inner: &mut Inner<K, P>, now: Instant) -> Vec<String> {
         let ttl = self.limits.ttl;
         let ids: Vec<HandleId> = inner
             .entries
@@ -431,9 +445,9 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
             .filter(|(_, e)| e.is_expired(ttl, now))
             .map(|(id, _)| *id)
             .collect();
-        for id in &ids {
-            Self::remove_locked(inner, id);
-        }
+        ids.iter()
+            .filter_map(|id| Self::remove_locked(inner, id).map(|(session, _)| session))
+            .collect()
     }
 
     fn remove_locked(inner: &mut Inner<K, P>, id: &HandleId) -> Option<(String, P)> {
@@ -473,7 +487,7 @@ mod tests {
     fn a_handle_is_its_owners_only() {
         let h: Handles<&str, u32> = Handles::new(HandleLimits::default());
         let now = Instant::now();
-        let id = h.insert(&"alice", "s1", 7, 0, false, now).unwrap();
+        let id = h.insert(&"alice", "s1", 7, 0, false, now).unwrap().id;
         assert_eq!(h.get(&"alice", &id, now), Some(("s1".to_owned(), 7)));
         assert_eq!(h.get(&"bob", &id, now), None);
         assert_eq!(h.remove(&"bob", &id), None);
@@ -495,7 +509,7 @@ mod tests {
     fn a_handle_expires_after_its_ttl_since_its_last_operation_ended() {
         let h: Handles<&str, u32> = Handles::new(limits(4, 4));
         let t0 = Instant::now();
-        let id = h.insert(&"a", "s", 1, 0, false, t0).unwrap();
+        let id = h.insert(&"a", "s", 1, 0, false, t0).unwrap().id;
         let at = |s| t0 + Duration::from_secs(s);
         // A lookup without an operation does not extend the TTL.
         assert!(h.get(&"a", &id, at(8)).is_some());
@@ -511,7 +525,7 @@ mod tests {
     fn a_handle_with_a_live_operation_does_not_expire() {
         let h: Handles<&str, u32> = Handles::new(limits(4, 4));
         let t0 = Instant::now();
-        let id = h.insert(&"a", "s", 1, 0, false, t0).unwrap();
+        let id = h.insert(&"a", "s", 1, 0, false, t0).unwrap().id;
         let at = |s| t0 + Duration::from_secs(s);
         // Two concurrent fetches; a long one outlives the TTL many times over.
         assert!(h.begin(&"a", &id, at(1)).is_some());
@@ -532,7 +546,7 @@ mod tests {
     fn the_owner_byte_limit_counts_handle_bytes_and_frees_them() {
         let h: Handles<&str, u32> = Handles::new(limits(100, 100));
         let now = Instant::now();
-        let a = h.insert(&"a", "s", 1, 60, false, now).unwrap();
+        let a = h.insert(&"a", "s", 1, 60, false, now).unwrap().id;
         // Fetching, so not evictable: 60 + 41 is over 100.
         h.begin(&"a", &a, now).unwrap();
         let e = h.insert(&"a", "t", 2, 41, false, now).unwrap_err();
@@ -551,8 +565,8 @@ mod tests {
     fn a_full_scope_refuses_only_when_every_handle_is_fetching() {
         let h: Handles<&str, u32> = Handles::new(limits(2, 100));
         let now = Instant::now();
-        let x = h.insert(&"a", "s", 1, 0, false, now).unwrap();
-        let y = h.insert(&"a", "s", 2, 0, false, now).unwrap();
+        let x = h.insert(&"a", "s", 1, 0, false, now).unwrap().id;
+        let y = h.insert(&"a", "s", 2, 0, false, now).unwrap().id;
         h.begin(&"a", &x, now).unwrap();
         h.begin(&"a", &y, now).unwrap();
         let e = h.insert(&"a", "s", 3, 0, false, now).unwrap_err();
@@ -571,13 +585,39 @@ mod tests {
     }
 
     #[test]
+    fn an_insert_reports_the_sessions_of_the_handles_it_removed() {
+        let h: Handles<&str, u32> = Handles::new(limits(100, 2));
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        assert!(
+            h.insert(&"a", "p1", 1, 0, false, at(0))
+                .unwrap()
+                .evicted
+                .is_empty()
+        );
+        h.insert(&"a", "p2", 2, 0, false, at(1)).unwrap();
+        // The owner cap: the oldest idle handle (session p1) makes room.
+        assert_eq!(
+            h.insert(&"a", "p3", 3, 0, false, at(2)).unwrap().evicted,
+            ["p1"]
+        );
+        // Past the TTL both remaining handles expire first.
+        let mut gone = h
+            .insert(&"a", "p4", 4, 0, false, at(20_000))
+            .unwrap()
+            .evicted;
+        gone.sort();
+        assert_eq!(gone, ["p2", "p3"]);
+    }
+
+    #[test]
     fn a_session_runs_more_statements_than_its_cap() {
         let h: Handles<&str, u32> = Handles::new(limits(4, 100));
         let t0 = Instant::now();
         let mut ids = Vec::new();
         for i in 0..100_u32 {
             let at = t0 + Duration::from_millis(u64::from(i));
-            let id = h.insert(&"a", "s", i, 0, false, at).unwrap();
+            let id = h.insert(&"a", "s", i, 0, false, at).unwrap().id;
             h.begin(&"a", &id, at).unwrap();
             h.end(&id, at);
             ids.push(id);
@@ -596,13 +636,13 @@ mod tests {
         let h: Handles<&str, u32> = Handles::new(limits(3, 100));
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
-        let prepared = h.insert(&"a", "s", 1, 0, true, at(0)).unwrap();
-        let older = h.insert(&"a", "s", 2, 0, false, at(1)).unwrap();
-        let newer = h.insert(&"a", "s", 3, 0, false, at(2)).unwrap();
+        let prepared = h.insert(&"a", "s", 1, 0, true, at(0)).unwrap().id;
+        let older = h.insert(&"a", "s", 2, 0, false, at(1)).unwrap().id;
+        let newer = h.insert(&"a", "s", 3, 0, false, at(2)).unwrap().id;
         // `older` was fetched last, so `newer` has been idle longest.
         h.begin(&"a", &older, at(3)).unwrap();
         h.end(&older, at(4));
-        let fourth = h.insert(&"a", "s", 4, 0, false, at(5)).unwrap();
+        let fourth = h.insert(&"a", "s", 4, 0, false, at(5)).unwrap().id;
         assert!(h.get(&"a", &newer, at(5)).is_none());
         assert!(h.get(&"a", &older, at(5)).is_some());
         // Only the prepared handle and fetching ones left idle: refused, the prepared one kept.
@@ -617,7 +657,7 @@ mod tests {
         let h: Handles<&str, u32> = Handles::new(limits(1, 100));
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
-        let slot = h.reserve(&"a", "s", 0, 10, false, at(0)).unwrap();
+        let slot = h.reserve(&"a", "s", 0, 10, false, at(0)).unwrap().id;
         // A concurrent GetFlightInfo cannot evict the running statement's slot.
         assert!(h.insert(&"a", "s", 1, 0, false, at(1)).is_err());
         assert!(h.set_payload(&"a", &slot, 7, 30));
@@ -634,10 +674,11 @@ mod tests {
     fn the_owner_limit_counts_across_sessions_and_evicts_in_any() {
         let h: Handles<&str, u32> = Handles::new(limits(100, 2));
         let t0 = Instant::now();
-        let s = h.insert(&"a", "s", 1, 0, false, t0).unwrap();
+        let s = h.insert(&"a", "s", 1, 0, false, t0).unwrap().id;
         let t = h
             .insert(&"a", "t", 2, 0, false, t0 + Duration::from_millis(1))
-            .unwrap();
+            .unwrap()
+            .id;
         h.begin(&"a", &t, t0).unwrap();
         h.insert(&"a", "u", 3, 0, false, t0 + Duration::from_millis(2))
             .unwrap();
@@ -646,7 +687,7 @@ mod tests {
             "the idle one of session s went"
         );
         // `u` is idle: it makes room for `v`; with `t` and `v` fetching the owner is full.
-        let v = h.insert(&"a", "v", 4, 0, false, t0).unwrap();
+        let v = h.insert(&"a", "v", 4, 0, false, t0).unwrap().id;
         h.begin(&"a", &v, t0).unwrap();
         let e = h.insert(&"a", "w", 5, 0, false, t0).unwrap_err();
         assert!(e.to_string().contains("maxHandlesPerPrincipal"), "{e}");
@@ -658,7 +699,7 @@ mod tests {
     fn a_full_map_drops_expired_handles_before_evicting() {
         let h: Handles<&str, u32> = Handles::new(limits(1, 1));
         let t0 = Instant::now();
-        let x = h.insert(&"a", "s", 1, 0, false, t0).unwrap();
+        let x = h.insert(&"a", "s", 1, 0, false, t0).unwrap().id;
         h.begin(&"a", &x, t0).unwrap();
         assert!(h.insert(&"a", "s", 2, 0, false, t0).is_err());
         h.end(&x, t0);
@@ -683,13 +724,15 @@ mod tests {
     fn the_sweep_drops_expired_handles_and_those_of_gone_sessions() {
         let h: Handles<&str, u32> = Handles::new(limits(8, 8));
         let t0 = Instant::now();
-        let old = h.insert(&"a", "live", 1, 0, false, t0).unwrap();
+        let old = h.insert(&"a", "live", 1, 0, false, t0).unwrap().id;
         let fresh = h
             .insert(&"a", "live", 2, 0, false, t0 + Duration::from_secs(5))
-            .unwrap();
+            .unwrap()
+            .id;
         let orphan = h
             .insert(&"a", "gone", 3, 0, false, t0 + Duration::from_secs(5))
-            .unwrap();
+            .unwrap()
+            .id;
         let removed = h.sweep(t0 + Duration::from_secs(12), |s| s == "live");
         assert_eq!(removed, 2);
         let at = t0 + Duration::from_secs(12);
