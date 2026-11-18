@@ -245,11 +245,7 @@ fn descriptor_sets_find_top_level_messages_by_short_or_full_name() {
 
 #[test]
 fn bytes_that_are_not_a_descriptor_set_do_not_parse() {
-    for bad in [
-        &[0x0a, 0x0b][..],
-        &[0xff][..],
-        &[0x0a, 0x04, 0x1a, 0x02, 0x78, 0x78][..],
-    ] {
+    for bad in [&[0x0a, 0x0b][..], &[0xff][..]] {
         assert_eq!(
             DescriptorSet::parse(bad).unwrap_err().error_class().name(),
             "CANNOT_PARSE_PROTOBUF_DESCRIPTOR"
@@ -417,4 +413,15 @@ fn a_chain_of_distinct_types_within_the_cap_reads() {
     assert!(super::Decoder::new(&set, "M0", std::iter::empty()).is_ok());
     let set = DescriptorSet::parse(&chain(super::schema::MAX_NESTING + 1)).unwrap();
     assert!(super::Decoder::new(&set, "M0", std::iter::empty()).is_err());
+}
+
+#[test]
+fn a_missing_import_is_protobuf_dependency_not_found() {
+    // Spark's `ProtobufUtils.buildFileDescriptor`: the first import (depth first, files in set order) the set does not hold.
+    let m = build::message("M", &[build::field("v", 1, 1, 5, "")], &[], false);
+    let mut set = build::file("a.proto", &["b.proto"], &[m]);
+    set.extend(build::file("b.proto", &["c.proto", "d.proto"], &[]));
+    let err = DescriptorSet::parse(&set).unwrap_err();
+    assert_eq!(err.error_class().name(), "PROTOBUF_DEPENDENCY_NOT_FOUND");
+    assert!(err.to_string().contains("c.proto"), "{err}");
 }

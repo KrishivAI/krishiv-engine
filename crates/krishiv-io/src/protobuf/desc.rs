@@ -131,23 +131,31 @@ impl EnumValue {
     }
 }
 
-/// Reads a `FileDescriptorSet`. `Err` for bytes that are not one, an unresolvable type name or a missing dependency;
-/// `Ok(Err(feature))` for a file this reader refuses (editions).
-pub(crate) fn parse(bytes: &[u8]) -> Result<Result<Arc<Pool>, String>, Malformed> {
+/// A descriptor set this reader does not build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// A feature it does not read (editions).
+    Unsupported(String),
+    /// An import the set does not hold.
+    MissingDependency(String),
+}
+
+/// Reads a `FileDescriptorSet`. `Err` for bytes that are not one or an unresolvable type name; `Ok(Err(..))` for a file this
+/// reader refuses (editions) or an import that is not in the set.
+pub(crate) fn parse(bytes: &[u8]) -> Result<Result<Arc<Pool>, Refused>, Malformed> {
     let mut files: Vec<FileProto> = Vec::new();
     for (number, raw) in tagged_values(bytes)? {
         if let (1, Raw::Len(b)) = (number, raw) {
             files.push(file_proto(b)?);
         }
     }
-    let known: std::collections::HashSet<&str> = files.iter().map(|f| f.name.as_str()).collect();
-    for f in &files {
-        if f.syntax == "editions" {
-            return Ok(Err("protobuf editions descriptors".to_owned()));
-        }
-        if f.dependencies.iter().any(|d| !known.contains(d.as_str())) {
-            return Err(Malformed);
-        }
+    if let Some(missing) = missing_dependency(&files) {
+        return Ok(Err(Refused::MissingDependency(missing)));
+    }
+    if files.iter().any(|f| f.syntax == "editions") {
+        return Ok(Err(Refused::Unsupported(
+            "protobuf editions descriptors".to_owned(),
+        )));
     }
     // Full names first (a field may name a type of a later file), then the bodies.
     let mut pool = Pool::default();
@@ -187,6 +195,40 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Result<Arc<Pool>, String>, Malformed
         data.by_number = by_number;
     }
     Ok(Ok(Arc::new(pool)))
+}
+
+/// The first import the set does not hold, in the order Spark's `ProtobufUtils.buildFileDescriptor` meets it: files in set order,
+/// each file's imports in order, an import's own imports before the next one (depth first). Walked with a stack of its own, so a
+/// long chain of imports cannot overflow the thread's.
+fn missing_dependency(files: &[FileProto]) -> Option<String> {
+    let by_name: HashMap<&str, &FileProto> = files.iter().map(|f| (f.name.as_str(), f)).collect();
+    let mut done: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for root in files {
+        // (file, index of its next import to visit).
+        let mut stack: Vec<(&FileProto, usize)> = vec![(root, 0)];
+        while let Some((file, next)) = stack.pop() {
+            if done.contains(file.name.as_str()) {
+                continue;
+            }
+            let Some(dep) = file.dependencies.get(next) else {
+                done.insert(file.name.as_str());
+                continue;
+            };
+            stack.push((file, next + 1));
+            match by_name.get(dep.as_str()) {
+                None => return Some(dep.clone()),
+                // An import cycle (which protobuf-java refuses) is not followed round again.
+                Some(d)
+                    if !done.contains(d.name.as_str())
+                        && !stack.iter().any(|(f, _)| f.name == d.name) =>
+                {
+                    stack.push((d, 0));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    None
 }
 
 fn is_map_entry_shape(fields: &[FieldData]) -> bool {

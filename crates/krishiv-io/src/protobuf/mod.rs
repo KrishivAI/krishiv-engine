@@ -35,12 +35,12 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     CannotLoadProtobufClass, CannotParseProtobufDescriptor, KrishivError,
-    ProtobufDescriptorFileNotFound, ProtobufMessageNotFound,
+    ProtobufDependencyNotFound, ProtobufDescriptorFileNotFound, ProtobufMessageNotFound,
 };
 use krishiv_types::DataType;
 
 pub use self::decode::Decoder;
-use self::desc::{MessageDescriptor, Pool};
+use self::desc::{MessageDescriptor, Pool, Refused};
 pub use self::encode::{Encoder, spark_type_of};
 pub use self::options::{ParseMode, ProtoOptions};
 
@@ -145,11 +145,16 @@ impl DescriptorSet {
     /// Parses the bytes of a `FileDescriptorSet`.
     ///
     /// # Errors
-    /// `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` when the bytes are not a descriptor set or a file's imports are missing.
+    /// `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` when the bytes are not a descriptor set, `PROTOBUF_DEPENDENCY_NOT_FOUND` naming the
+    /// first import the set does not hold (Spark's order).
     pub fn parse(bytes: &[u8]) -> Result<Self, KrishivError> {
         match desc::parse(bytes) {
             Ok(Ok(pool)) => Ok(Self { pool }),
-            Ok(Err(feature)) => Err(unsupported(feature)),
+            Ok(Err(Refused::Unsupported(feature))) => Err(unsupported(feature)),
+            Ok(Err(Refused::MissingDependency(name))) => Err(ProtobufDependencyNotFound {
+                dependency_name: name,
+            }
+            .into()),
             Err(_) => Err(CannotParseProtobufDescriptor {}.into()),
         }
     }
