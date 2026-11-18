@@ -87,6 +87,9 @@ impl Graph {
         let mut out = Vec::new();
         let mut child = |c: &Arc<LogicalPlan>, d: Option<Attrs>| out.push((self.id(c), d));
         match &p.node {
+            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+                child(input, Some(Attrs::default()));
+            }
             PlanNode::Project { input, exprs } => child(input, Some(refs(&keep(exprs, req)))),
             PlanNode::Aggregate {
                 input, aggregates, ..
@@ -263,6 +266,13 @@ impl Rewrite<'_> {
                         ..scan.clone()
                     }),
                 )
+            }
+            // Read for its rows alone: whichever column the input keeps
+            // first stands in, as when join ordering drops the projection and
+            // a join narrows the input again (otherwise the next run, after
+            // CSE left the old column unread below, picks another one).
+            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+                narrow(input, &Attrs::default())
             }
             PlanNode::Project { input, exprs } => {
                 let kept = if has_required_cse(exprs, req) {
@@ -484,6 +494,17 @@ fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
         }
         _ => false,
     })
+}
+
+/// Whether a projection is read for its row count alone: nothing above reads
+/// its output and every entry is a bare column, so dropping it changes no
+/// value and raises nothing.
+fn placeholder(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+    req.is_empty()
+        && !exprs.is_empty()
+        && exprs
+            .iter()
+            .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
 }
 
 /// The output entries of a projection or aggregate that are read, keeping
