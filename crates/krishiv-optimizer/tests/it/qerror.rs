@@ -470,11 +470,15 @@ fn report_theta(suite: &str, exact: &Errors, theta: impl FnOnce() -> Errors) {
     }
     let (m_e, p_e, _) = exact.summary();
     let (m_t, p_t, _) = sketched.summary();
-    println!(
-        "q-error {suite:<6} sketch cost: median x{:.3}  p95 x{:.3}",
-        m_t / m_e,
-        p_t / p_e
-    );
+    if exact.q.is_empty() {
+        println!("q-error {suite:<6} sketch cost: no joins or aggregates measured");
+    } else {
+        println!(
+            "q-error {suite:<6} sketch cost: median x{:.3}  p95 x{:.3}",
+            m_t / m_e,
+            p_t / p_e
+        );
+    }
 }
 
 pub(crate) fn suites() -> HashSet<String> {
@@ -647,8 +651,11 @@ fn theta_distinct_counts_stay_near_exact() {
                 c.distinct.unwrap_or(0) as f64,
                 theta.0[table].columns[col].distinct.unwrap_or(0) as f64,
             );
+            // Below the sketch's capacity it is exact, so this is an equality
+            // there (not a bound that cannot fail).
+            let factor = if e <= 4_000.0 { 1.0 } else { 1.1 };
             assert!(
-                s.max(1.0) / e.max(1.0) <= 1.1 && e.max(1.0) / s.max(1.0) <= 1.1,
+                s.max(1.0) / e.max(1.0) <= factor && e.max(1.0) / s.max(1.0) <= factor,
                 "{table}.{col}: {e} exact, {s} sketched"
             );
         }
