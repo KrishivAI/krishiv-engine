@@ -102,6 +102,51 @@ fn an_empty_file_must_match_and_cannot() {
     assert!(!must(Pred::Unknown, &file(3)));
 }
 
+/// Something no evaluator answers, or a column the schema lacks, may match
+/// (review 36b2b B1): the file is then never kept silently, it fails with
+/// the partial-match error unless proven to match whole.
+#[test]
+fn unknowns_and_unresolved_columns_might_match() {
+    let f = stats(10, 30, 79, 0, 0);
+    assert!(might(Pred::Unknown, &f));
+    assert!(!must(Pred::Unknown, &f));
+    let gone = leaf("gone", Leaf::Eq(S::Int64(1)));
+    assert!(might(gone.clone(), &f));
+    assert!(!must(gone, &f));
+    // Under `and`, a leaf ruled out still rules the file out.
+    let ruled_out = Pred::And(vec![leaf("id", Leaf::Lt(S::Int64(0))), Pred::Unknown]);
+    assert!(!might(ruled_out, &f));
+    let maybe = Pred::Or(vec![leaf("id", Leaf::Lt(S::Int64(0))), Pred::Unknown]);
+    assert!(might(maybe, &f));
+}
+
+/// The leaves the strict side cannot evaluate, which an overwrite refuses
+/// up front (`Pred::unsupported`).
+#[test]
+fn unsupported_parts_are_named() {
+    let fields = fields();
+    let contains = Pred::from_spark(&PushdownExpr::Contains {
+        column: col("s"),
+        needle: "a".to_owned(),
+        collation: Collation::Utf8Binary,
+    });
+    assert!(contains.unsupported(&fields).is_some());
+    let lt_nan = Pred::from_spark(&PushdownExpr::cmp(
+        col("f"),
+        CmpOp::Lt,
+        S::Float64(f64::NAN),
+    ));
+    assert!(lt_nan.unsupported(&fields).is_some());
+    let struct_is_null = Pred::from_spark(&PushdownExpr::IsNull(col("st")));
+    assert!(struct_is_null.unsupported(&fields).is_some());
+    let fine = Pred::from_spark(&PushdownExpr::And(vec![
+        PushdownExpr::cmp(col("id"), CmpOp::Lt, S::Int64(3)),
+        PushdownExpr::cmp(col("f"), CmpOp::Eq, S::Float64(f64::NAN)),
+        PushdownExpr::IsNull(ColumnPath(vec!["st".to_owned(), "n".to_owned()])),
+    ]));
+    assert_eq!(fine.unsupported(&fields), None);
+}
+
 #[test]
 fn comparisons_need_bounds_and_no_nulls() {
     let f = stats(10, 30, 79, 0, 0);
@@ -122,11 +167,11 @@ fn comparisons_need_bounds_and_no_nulls() {
     let n = stats(10, 30, 79, 1, 0);
     assert!(!must(id(Leaf::Lt(S::Int64(80))), &n));
     assert!(!must(id(Leaf::GtEq(S::Int64(30))), &n));
-    // A null-count map without the column says "no nulls" (Java's
-    // `canContainNulls`), so the bounds decide.
+    // A null-count map without the column may hide nulls (Java's
+    // `canContainNulls` says no; a divergence, review 36b2b B2).
     let mut m = stats(10, 30, 79, 0, 0);
     m.null_counts.remove(&1);
-    assert!(must(id(Leaf::Lt(S::Int64(80))), &m));
+    assert!(!must(id(Leaf::Lt(S::Int64(80))), &m));
     // No bounds: never.
     let mut b = stats(10, 30, 79, 0, 0);
     b.lower_bounds.clear();
@@ -181,10 +226,18 @@ fn null_predicates() {
     let none = stats(5, 0, 9, 0, 0);
     assert!(must(id(Leaf::NotNull), &none));
     // Unknown null counts: `mayContainNull`.
-    let mut unknown = none;
+    let mut unknown = none.clone();
     unknown.null_counts.clear();
     assert!(!must(id(Leaf::NotNull), &unknown));
     assert!(!must(id(Leaf::IsNull), &unknown));
+    // A null-count map that lacks the column may hide null rows, which no
+    // comparison holds for (a divergence from Java's `canContainNulls`,
+    // review 36b2b B2).
+    let mut lacking = none;
+    lacking.null_counts.remove(&1);
+    assert!(!lacking.null_counts.is_empty());
+    assert!(!must(id(Leaf::Lt(S::Int64(100))), &lacking));
+    assert!(!must(id(Leaf::Gt(S::Int64(-100))), &lacking));
 }
 
 #[test]
@@ -200,12 +253,35 @@ fn nan_rules() {
     let all = stats(4, 0, 0, 0, 4);
     assert!(must(f(Leaf::IsNaN), &all));
     assert!(must(f(Leaf::NotEq(S::Float64(1.5))), &all));
-    // Unknown NaN counts: `canContainNaNs` says no (comparisons proceed),
-    // `mayContainNaN` says maybe.
+    // Unknown NaN counts (a deliberate divergence from Java's
+    // `canContainNaNs`, review 36b2b B2): a NaN row is FALSE under `<`,
+    // `<=`, `=` and `IN`, so none of them is proven; `>` and `>=` hold for
+    // NaN in Spark and stay proven by the lower bound.
     let mut unknown = none.clone();
     unknown.nan_counts.clear();
-    assert!(must(f(Leaf::Lt(S::Float64(3.0))), &unknown));
+    assert!(!must(f(Leaf::Lt(S::Float64(3.0))), &unknown));
+    assert!(!must(f(Leaf::LtEq(S::Float64(2.0))), &unknown));
     assert!(!must(f(Leaf::NotNaN), &unknown));
+    assert!(must(f(Leaf::Gt(S::Float64(0.5))), &unknown));
+    assert!(must(f(Leaf::GtEq(S::Float64(1.0))), &unknown));
+    let mut single = unknown.clone();
+    single
+        .upper_bounds
+        .insert(2, encode(&S::Float64(1.0), &T::Double).unwrap());
+    let mut single_known = single.clone();
+    single_known.nan_counts.insert(2, 0);
+    assert!(must(f(Leaf::Eq(S::Float64(1.0))), &single_known));
+    assert!(must(f(Leaf::In(vec![S::Float64(1.0)])), &single_known));
+    assert!(!must(f(Leaf::Eq(S::Float64(1.0))), &single));
+    assert!(!must(f(Leaf::In(vec![S::Float64(1.0)])), &single));
+    // A NaN-count map that lacks the column is unknown as well.
+    let mut other = unknown.clone();
+    other.nan_counts.insert(9, 0);
+    assert!(!must(f(Leaf::Lt(S::Float64(3.0))), &other));
+    // A non-float column cannot hold NaN: no NaN count needed.
+    let mut ints = stats(4, 1, 2, 0, 0);
+    ints.nan_counts.clear();
+    assert!(must(leaf("id", Leaf::Lt(S::Int64(3))), &ints));
     // A NaN lower bound refuses `gt`, `notEq` and `notIn`.
     let mut nan_lower = none.clone();
     nan_lower

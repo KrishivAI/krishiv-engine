@@ -17,12 +17,24 @@
 //!   is guarded by `not_null(x)`; `x = NaN` is `is_nan(x)` (Iceberg refuses a
 //!   NaN literal) and a range comparison with NaN, a non-binary collation,
 //!   `contains` and runtime filters are unknown (never "every row matches").
-//! - **Strict metrics** (`StrictEvalVisitor.java:99-457`, notes §4), faithful:
-//!   a file of no rows matches; the null and NaN helpers as Java's
-//!   (`canContainNulls` false when the null-count map lacks the column; an
-//!   empty map stands for Java's absent one, so it is unknown here); NaN
-//!   lower bounds refuse `gt`, `gtEq`, `notEq`, `notIn`; nested columns refuse
-//!   everything but `is_nan`/`not_nan`.
+//! - **Strict metrics** (`StrictEvalVisitor.java:99-457`, notes §4): a file
+//!   of no rows matches; NaN lower bounds refuse `gt`, `gtEq`, `notEq`,
+//!   `notIn`; nested columns refuse everything but `is_nan`/`not_nan`. The
+//!   null and NaN helpers diverge from Java's on purpose (review 36b2b B2):
+//!   Java's `canContainNulls` is false when the null-count map lacks the
+//!   column and `canContainNaNs` false when the NaN count is missing, so a
+//!   float file written without NaN counts (older Java writers, other
+//!   engines) has `x < v` proven by its upper bound (bounds exclude NaN) and
+//!   is removed with its NaN rows, which Spark's `x < v` keeps (NaN is the
+//!   greatest value). Krishiv reads a missing null count as "may hold
+//!   nulls", and a missing NaN count of a `float`/`double` column as "may
+//!   hold NaN" for `lt`, `ltEq`, `eq` and `in` (`gt`/`gtEq` hold for NaN in
+//!   Spark and keep Java's rule), as `prune.rs` does: the file is kept, so
+//!   the overwrite fails with the partial-match error instead.
+//! - **Unknowns** (review 36b2b B1): a leaf with no Iceberg form
+//!   ([`Pred::Unknown`]) or a column the schema lacks never proves a match
+//!   and always may match, so such a file is never kept silently. The
+//!   overwrite refuses such a filter up front ([`Pred::unsupported`]).
 //! - **Strict projections** (`Projections.strict`, notes §5): the OR over the
 //!   partition fields of the column; identity copies the predicate; bucket
 //!   only `notEq`/`notIn` and the unary ones; truncate of ints and longs `lt
@@ -112,6 +124,31 @@ pub(crate) enum Pred {
     Leaf(ColumnPath, Leaf),
     /// Something no evaluator can answer: never a match, always a maybe.
     Unknown,
+}
+
+impl Pred {
+    /// The first part of the predicate the strict side cannot evaluate over
+    /// `fields` (a leaf Krishiv cannot translate, or a column that is not a
+    /// primitive column of the table, such as a struct under `IS NULL`), as
+    /// text; `None` when every part can be. An overwrite refuses such a
+    /// filter up front (Java's `SparkV2Filters.convert` / bind failure).
+    pub(crate) fn unsupported(&self, fields: &[SchemaField]) -> Option<String> {
+        match self {
+            Self::Const(_) => None,
+            Self::And(xs) | Self::Or(xs) => xs.iter().find_map(|x| x.unsupported(fields)),
+            Self::Unknown => Some(
+                "a predicate Iceberg's strict evaluator cannot answer (a substring match, a \
+                 range comparison with NaN, a non-binary collation or a runtime filter)"
+                    .to_owned(),
+            ),
+            Self::Leaf(c, _) => (!fields.iter().any(|f| &f.path == c)).then(|| {
+                format!(
+                    "the column {}, which is not a primitive column of the table",
+                    c.0.join(".")
+                )
+            }),
+        }
+    }
 }
 
 impl Pred {
@@ -292,7 +329,7 @@ impl<'a> RowFilter<'a> {
     /// cannot).
     pub(crate) fn rows_might_match(&self, file: &ContentFile) -> bool {
         file.record_count > 0
-            && self.eval(&self.pred, file, &|field, leaf| {
+            && self.eval(&self.pred, file, true, &|field, leaf| {
                 let Some(op) = inclusive_op(leaf) else {
                     return true;
                 };
@@ -305,7 +342,7 @@ impl<'a> RowFilter<'a> {
     /// strict metrics evaluator on the residual; a file of no rows does).
     pub(crate) fn rows_must_match(&self, file: &ContentFile) -> bool {
         file.record_count == 0
-            || self.eval(&self.pred, file, &|field, leaf| {
+            || self.eval(&self.pred, file, false, &|field, leaf| {
                 let options = metric_options(self.metrics, field.id, PruneOptions::default());
                 strict_metrics(file, field, options, leaf)
             })
@@ -313,21 +350,25 @@ impl<'a> RowFilter<'a> {
 
     /// `p` with each leaf answered as its residual for `file`'s partition
     /// would be: true when the strict projection holds, false when the
-    /// inclusive one fails, else `metrics`.
+    /// inclusive one fails, else `metrics`. `might`: the might-match side,
+    /// where something unknown (an untranslated leaf, a column the schema
+    /// lacks) may match; on the must-match side it never does (review 36b2b
+    /// B1: either way the file is never kept silently).
     fn eval(
         &self,
         p: &Pred,
         file: &ContentFile,
+        might: bool,
         metrics: &dyn Fn(&SchemaField, &Leaf) -> bool,
     ) -> bool {
         match p {
             Pred::Const(b) => *b,
-            Pred::And(xs) => xs.iter().all(|x| self.eval(x, file, metrics)),
-            Pred::Or(xs) => xs.iter().any(|x| self.eval(x, file, metrics)),
-            Pred::Unknown => false,
+            Pred::And(xs) => xs.iter().all(|x| self.eval(x, file, might, metrics)),
+            Pred::Or(xs) => xs.iter().any(|x| self.eval(x, file, might, metrics)),
+            Pred::Unknown => might,
             Pred::Leaf(c, leaf) => {
                 let Some(field) = self.fields.iter().find(|f| &f.path == c) else {
-                    return false;
+                    return might;
                 };
                 let spec = self
                     .specs
@@ -379,6 +420,8 @@ fn inclusive_op(leaf: &Leaf) -> Option<Op<'_>> {
 struct Stats<'f> {
     file: &'f ContentFile,
     id: i32,
+    /// A `float` or `double` column (the only ones that can hold NaN).
+    float: bool,
 }
 
 impl Stats<'_> {
@@ -402,11 +445,10 @@ impl Stats<'_> {
         )
     }
 
-    /// `canContainNulls`: a null-count map without the column says no, as
-    /// Java's (an empty map stands for an absent one: yes).
+    /// `canContainNulls`, but an unknown count (a map without the column
+    /// too) says yes, where Java's says no (module docs: a divergence).
     fn can_contain_nulls(&self) -> bool {
-        let m = &self.file.null_counts;
-        m.is_empty() || Self::count(m, self.id).is_some_and(|n| n > 0)
+        self.may_contain_null()
     }
 
     /// `mayContainNaN`.
@@ -425,9 +467,17 @@ impl Stats<'_> {
         )
     }
 
-    /// `canContainNaNs`: unknown counts say no, as Java's.
+    /// `canContainNaNs`: unknown counts say no, as Java's (used where a NaN
+    /// row matches in Spark: `gt`, `gtEq`).
     fn can_contain_nans(&self) -> bool {
         Self::count(&self.file.nan_counts, self.id).is_some_and(|n| n > 0)
+    }
+
+    /// Whether NaN rows are not ruled out: a float column whose NaN count is
+    /// unknown or above 0 (`lt`, `ltEq`, `eq`, `in`, where a NaN row does
+    /// not match; module docs: a divergence).
+    fn nan_possible(&self) -> bool {
+        self.float && self.may_contain_nan()
     }
 }
 
@@ -463,7 +513,11 @@ fn strict_metrics(
     options: Option<PruneOptions>,
     leaf: &Leaf,
 ) -> bool {
-    let s = Stats { file, id: field.id };
+    let s = Stats {
+        file,
+        id: field.id,
+        float: matches!(field.ty, IcebergType::Float | IcebergType::Double),
+    };
     let nested = field.path.0.len() > 1;
     let bounds = options.filter(|_| field.ty != IcebergType::Uuid);
     let lower = bounds
@@ -482,6 +536,9 @@ fn strict_metrics(
         _ => false,
     };
     let no_nulls_or_nans = !(s.can_contain_nulls() || s.can_contain_nans());
+    // `lt`, `ltEq`, `eq` and `in` are FALSE on a NaN row: a NaN count must
+    // rule NaN out, not merely be missing.
+    let no_nulls_nor_nan_rows = no_nulls_or_nans && !s.nan_possible();
     match leaf {
         Leaf::IsNull => !nested && s.contains_nulls_only(),
         Leaf::NotNull => !nested && !s.may_contain_null(),
@@ -490,7 +547,9 @@ fn strict_metrics(
         _ if nested => false,
         Leaf::Lt(v) | Leaf::LtEq(v) => {
             let le = matches!(leaf, Leaf::LtEq(_));
-            no_nulls_or_nans && !unordered(v) && upper.as_ref().is_some_and(|u| below(u, v, le))
+            no_nulls_nor_nan_rows
+                && !unordered(v)
+                && upper.as_ref().is_some_and(|u| below(u, v, le))
         }
         Leaf::Gt(v) | Leaf::GtEq(v) => {
             let ge = matches!(leaf, Leaf::GtEq(_));
@@ -499,13 +558,13 @@ fn strict_metrics(
                 && lower.as_ref().is_some_and(|l| !is_nan(l) && gt(l, v, ge))
         }
         Leaf::Eq(v) => {
-            no_nulls_or_nans
+            no_nulls_nor_nan_rows
                 && !unordered(v)
                 && exact_single(lower.as_ref(), upper.as_ref())
                     .is_some_and(|x| compare(x, v) == Some(Ordering::Equal))
         }
         Leaf::In(vs) => {
-            no_nulls_or_nans
+            no_nulls_nor_nan_rows
                 && exact_single(lower.as_ref(), upper.as_ref()).is_some_and(|x| {
                     vs.iter()
                         .any(|v| !unordered(v) && compare(x, v) == Some(Ordering::Equal))

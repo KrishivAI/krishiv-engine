@@ -11,7 +11,10 @@
 //! - **Overwrite by filter** (`table.newOverwrite().overwriteByRowFilter(expr)`,
 //!   `SparkWrite.java:381-390`): the request's filter translated exactly
 //!   ([`WriteRequest::overwrite_filter_pushdown`]); one that does not
-//!   translate is refused (`KRISHIV_UNSUPPORTED_FEATURE`), never widened.
+//!   translate is refused (`KRISHIV_UNSUPPORTED_FEATURE`), never widened,
+//!   and so is one holding a part the strict evaluator cannot answer
+//!   (`Pred::unsupported`: `LIKE '%a%'`, `x < NaN`, `IS NULL` on a struct;
+//!   review 36b2b B1).
 //!   `filter.rs` removes every file whose rows all match, on every attempt's
 //!   base; a data file some of whose rows match fails with Java's "Cannot
 //!   delete file where some, but not all, rows match filter %s: %s"
@@ -56,6 +59,7 @@ use krishiv_exec::planner::{WriteMode, WriteRequest};
 use krishiv_io::PushdownExpr;
 
 use super::filter::Removals;
+use super::scan::schema_fields;
 use super::sink::{IcebergWriteSink, Overwrite, WriteTarget};
 use super::validate::{Checks, Isolation, Validation};
 use crate::plan::strict::Pred;
@@ -86,7 +90,8 @@ fn unsupported(feature: String) -> KrishivError {
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a filter that does not translate
-/// exactly, an unknown isolation level or a `validate-from-snapshot-id`
+/// exactly or holds a part the strict evaluator cannot answer (a substring
+/// match, a range comparison with NaN, a non-primitive column), an unknown isolation level or a `validate-from-snapshot-id`
 /// that is not a number; [`IcebergWriteSink::try_rewrite`]'s errors.
 pub(crate) fn sink(
     target: Arc<WriteTarget>,
@@ -155,7 +160,21 @@ pub(crate) fn sink(
     }
     let removals = match &filter {
         Some(f) => {
-            validation.filter_text = Pred::from_spark(f).to_string();
+            let pred = Pred::from_spark(f);
+            // Every part must be one the strict side evaluates (review 36b2b
+            // B1); Java refuses such a filter when it converts or binds it.
+            let fields = schema_fields(target.base.current_schema());
+            if let Some(part) = pred.unsupported(&fields) {
+                let text = match &request.mode {
+                    WriteMode::OverwriteByFilter(e) => e.to_string(),
+                    _ => pred.to_string(),
+                };
+                return Err(unsupported(format!(
+                    "an overwrite of the Iceberg table {} by the filter {text}: it holds {part}",
+                    request.table_name
+                )));
+            }
+            validation.filter_text = pred.to_string();
             validation.filter = Some(f.clone());
             Removals {
                 row_filter: Some(f.clone()),
