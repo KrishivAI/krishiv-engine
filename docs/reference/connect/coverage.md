@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 11 done, 9 partial, 38 missing, 4 out of scope.
+62 arms: 12 done, 13 partial, 33 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -23,9 +23,9 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
-| 12 | sample | missing |  | new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order) | P3-T012 | 3 |
+| 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | missing |  | lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
@@ -35,10 +35,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
-| 24 | hint | missing |  | Hint | P3-T012 | 3 |
-| 25 | unpivot | missing |  | Unpivot | P3-T012 | 2 |
+| 24 | hint | done |  | Hint | P3-T012 | 3 |
+| 25 | unpivot | partial | absent values and values that are not columns | Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis | P3-T012 | 2 |
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
-| 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
+| 27 | repartition_by_expression | partial | num_partitions | Repartition (hash); a partition count needs an IR field | P3-T012 | 3 |
 | 28 | map_partitions | partial | is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes | MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers | P3-T014 | 6 |
 | 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
