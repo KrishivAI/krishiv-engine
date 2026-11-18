@@ -6,6 +6,8 @@ use std::time::Duration;
 use super::*;
 use crate::error::ErrorClass;
 
+mod readiness;
+
 #[test]
 fn defaults_are_returned_when_unset() {
     let c = Config::new();
@@ -1623,30 +1625,6 @@ fn server_entries_parse_default_and_take_sparks_names() {
         c.get(&SERVER_SHUTDOWN_TIMEOUT)
             .and_then(ConfigValue::as_duration),
         Some(Duration::from_secs(30))
-    );
-    assert_eq!(
-        c.get(&SERVER_READINESS_INTERVAL)
-            .and_then(ConfigValue::as_duration),
-        Some(Duration::from_secs(10))
-    );
-    assert_eq!(
-        c.get(&SERVER_READINESS_TIMEOUT)
-            .and_then(ConfigValue::as_duration),
-        Some(Duration::from_secs(2))
-    );
-    assert_eq!(
-        c.get(&SERVER_READINESS_FAILURE_THRESHOLD)
-            .and_then(ConfigValue::as_int),
-        Some(3)
-    );
-    assert_eq!(
-        c.get(&SERVER_READINESS_REQUIRED)
-            .and_then(ConfigValue::as_str),
-        Some("")
-    );
-    assert!(
-        c.set("krishiv.server.readiness.failureThreshold", "0")
-            .is_err()
     );
     c.set("spark.connect.grpc.binding.port", "16000").unwrap();
     c.set("spark.connect.session.manager.maintenanceInterval", "5s")
