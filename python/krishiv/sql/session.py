@@ -35,6 +35,25 @@ SPARK_VERSION = "4.2.0"
 _lock = threading.Lock()
 _active: SparkSession | None = None
 
+# Settings that choose a cluster deployment: Krishiv runs in the process (or one `krishiv server`),
+# so they are stored and read back but change nothing. A script written for a cluster must still
+# start, so this warns (naming the key) and does not fail.
+_CLUSTER_MASTER_PREFIXES = ("yarn", "k8s", "mesos", "spark://")
+_CLUSTER_KEY_PREFIXES = ("spark.executor.", "spark.submit.", "spark.driver.", "spark.dynamicAllocation.")
+
+
+def _warn_if_cluster_setting(key: str, value: str) -> None:
+    ignored = key.startswith(_CLUSTER_KEY_PREFIXES) or (
+        key == "spark.master" and value.lower().startswith(_CLUSTER_MASTER_PREFIXES)
+    )
+    if ignored:
+        warnings.warn(
+            f"{key}={value} has no effect: Krishiv runs in this process (or in one `krishiv server`), "
+            "not on a cluster manager.",
+            UserWarning,
+            stacklevel=4,
+        )
+
 
 class SparkSession:
     """An embedded session. Create one with ``SparkSession.builder.getOrCreate()``."""
@@ -56,6 +75,7 @@ class SparkSession:
                     self.config(k, v)
             if key is not None:
                 self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+                _warn_if_cluster_setting(key, self._config[key])
             return self
 
         def appName(self, name: str) -> SparkSession.Builder:
@@ -63,6 +83,10 @@ class SparkSession:
 
         def master(self, master: str) -> SparkSession.Builder:
             return self.config("spark.master", master)
+
+        def enableHiveSupport(self) -> SparkSession.Builder:
+            """Not supported: there is no Hive metastore in Krishiv (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+            raise unsupported_feature("SparkSession.Builder.enableHiveSupport (there is no Hive metastore)")
 
         def remote(self, url: str) -> SparkSession.Builder:
             raise not_implemented("remote sessions")
@@ -109,6 +133,11 @@ class SparkSession:
     @property
     def version(self) -> str:
         return SPARK_VERSION
+
+    @property
+    def sparkContext(self) -> Any:
+        """Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API."""
+        raise unsupported_feature("SparkSession.sparkContext (SparkContext and RDDs; use the DataFrame API)")
 
     @property
     def conf(self) -> RuntimeConfig:

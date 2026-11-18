@@ -1804,6 +1804,11 @@ class DataFrame:
         """
         return iter(self.collect())
 
+    @property
+    def rdd(self) -> Any:
+        """Not supported: Krishiv has no RDDs; use the DataFrame API."""
+        raise unsupported_feature("DataFrame.rdd (RDDs; use the DataFrame API)")
+
     def toJSON(self, use_unicode: bool = True) -> DataFrame:
         """Converts a :class:`DataFrame` into one of JSON strings, one row per document, in a
         single ``string`` column ``value`` (Spark Connect's form; classic PySpark returns an
