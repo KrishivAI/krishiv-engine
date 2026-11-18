@@ -47,6 +47,12 @@ pip install "krishiv[pyarrow]"
 cargo add krishiv   # needs Rust 1.97 or newer
 ```
 
+**Command line** (the `krishiv` binary, for `krishiv sql -e "SELECT 1"`):
+
+```bash
+cargo install krishiv-cli   # needs Rust 1.97 or newer
+```
+
 Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64
 and aarch64 (manylinux and musllinux x86_64) and macOS arm64. For an x86-64 CPU without AVX2 use
 `pip install krishiv-compat` ([Supported CPUs](#supported-cpus)).

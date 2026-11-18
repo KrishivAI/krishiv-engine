@@ -12,6 +12,8 @@ Krishiv 0.2 is on PyPI (you can also build the wheel from the repository with `m
 pip install krishiv
 ```
 
+To use Krishiv from the shell, install the command line with `cargo install krishiv-cli` (Rust 1.97 or newer). Then run `krishiv sql -e "SELECT 1"`.
+
 Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` and `toArrow()` return Arrow data.
 
 SQL and DataFrames:
