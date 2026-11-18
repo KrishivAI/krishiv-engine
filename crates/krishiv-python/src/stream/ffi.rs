@@ -37,7 +37,7 @@ use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow_data::ArrayData;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
-use krishiv_common::error::{KrishivError, KrishivInvalidArrowData};
+use krishiv_common::error::{KrishivError, KrishivInvalidArrowData, KrishivUnsupportedFeature};
 
 /// The capsule name of an `ArrowArrayStream` (Arrow PyCapsule interface).
 pub(crate) const STREAM_CAPSULE: &std::ffi::CStr = c"arrow_array_stream";
@@ -943,6 +943,99 @@ fn nul_free(e: ArrowError) -> ArrowError {
     } else {
         e
     }
+}
+
+/// The name a top-level field with a NUL in its name is exported under: pyarrow's C data import rejects a NUL in
+/// a field name, and the Arrow C data interface has no way to carry one. `taken` are the names already in use.
+fn nul_placeholder(index: usize, taken: &[&str]) -> String {
+    let mut name = format!("__krishiv_nul_name_{index}");
+    while taken.contains(&name.as_str()) {
+        name.push('_');
+    }
+    name
+}
+
+/// The first field name in `field`'s type tree (children of structs, lists and maps, and so on) that holds a NUL.
+fn nested_nul_name(field: &Field) -> Option<String> {
+    let children: Vec<&Field> = match field.data_type() {
+        DataType::Struct(fields) => fields.iter().map(AsRef::as_ref).collect(),
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => vec![f.as_ref()],
+        DataType::Dictionary(_, value) => {
+            return nested_nul_name(&Field::new("", value.as_ref().clone(), true));
+        }
+        DataType::RunEndEncoded(_, values) => vec![values.as_ref()],
+        DataType::Union(fields, _) => fields.iter().map(|(_, f)| f.as_ref()).collect(),
+        _ => Vec::new(),
+    };
+    children.into_iter().find_map(|c| {
+        if c.name().contains('\0') {
+            Some(c.name().clone())
+        } else {
+            nested_nul_name(c)
+        }
+    })
+}
+
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a NUL in the field name `name` of `column`, as the C data interface cannot
+/// carry it.
+fn nul_name_error(what: &str, name: &str, column: &str) -> KrishivError {
+    let shown = |s: &str| s.replace('\0', "\\u0000");
+    KrishivUnsupportedFeature {
+        feature: format!(
+            "a NUL character in {what} `{}` (column `{}`) in an Arrow export",
+            shown(name),
+            shown(column)
+        ),
+    }
+    .into()
+}
+
+/// How a schema with a NUL in a column name is exported: the C data interface (pyarrow's import) refuses a NUL in a
+/// field name, so with `rename` each top-level name that holds one is replaced by a unique placeholder, and the
+/// consumer renames the columns back from [`ArrowStream::names`](super::ArrowStream). `None` when no name holds a NUL.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when a NUL is in a nested field name (a JSON key, a struct field), or in a column
+/// name and `rename` is false (a consumer that cannot rename, such as Polars or DuckDB reading the bare capsule):
+/// it cannot be renamed back after the import, so it is refused here instead of failing in the consumer with an
+/// Arrow error.
+pub(crate) fn nul_safe_schema(
+    schema: &Schema,
+    rename: bool,
+) -> Result<Option<SchemaRef>, KrishivError> {
+    for f in schema.fields() {
+        if let Some(name) = nested_nul_name(f) {
+            return Err(nul_name_error("the nested field name", &name, f.name()));
+        }
+    }
+    if !schema.fields().iter().any(|f| f.name().contains('\0')) {
+        return Ok(None);
+    }
+    if !rename && let Some(f) = schema.fields().iter().find(|f| f.name().contains('\0')) {
+        return Err(nul_name_error("the column name", f.name(), f.name()));
+    }
+    let taken: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            if f.name().contains('\0') {
+                f.as_ref().clone().with_name(nul_placeholder(i, &taken))
+            } else {
+                f.as_ref().clone()
+            }
+        })
+        .collect();
+    Ok(Some(Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))))
 }
 
 /// Exports `reader` as a C stream, under `requested` if given.

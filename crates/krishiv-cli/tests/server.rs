@@ -314,7 +314,7 @@ fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -759,7 +759,7 @@ fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpS
 fn tls_healthz_on(
     mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
 ) -> (Vec<u8>, String) {
-    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .expect("write");
     let mut out = Vec::new();
     // The server may close without `close_notify`; keep what came.
@@ -802,7 +802,7 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     plain
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
-    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut out = Vec::new();
     let _ = plain.read_to_end(&mut out);
     assert!(
@@ -840,4 +840,46 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     assert_eq!(leaf, first, "the old connection keeps its certificate");
     let _ = server.child.kill();
+}
+
+#[cfg(feature = "ui")]
+#[test]
+fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        dir.path(),
+        &["krishiv.ui.allowedHosts=ui.example.com".to_owned()],
+    );
+    let line = server
+        ._stdout
+        .next()
+        .expect("the open line")
+        .expect("utf-8");
+    let token = line
+        .split("?token=")
+        .nth(1)
+        .expect("token")
+        .trim()
+        .to_owned();
+    let named = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "ui.example.com",
+        Some(&token),
+    );
+    assert!(named.starts_with("HTTP/1.1 200"), "{named}");
+    let local = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "localhost",
+        Some(&token),
+    );
+    assert!(local.starts_with("HTTP/1.1 200"), "{local}");
+    let other = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "evil.example",
+        Some(&token),
+    );
+    assert!(other.starts_with("HTTP/1.1 403"), "{other}");
 }

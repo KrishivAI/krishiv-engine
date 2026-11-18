@@ -54,11 +54,14 @@ use krishiv_io::{
     register, register_with_options,
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
-use krishiv_types::DataType;
+use krishiv_types::{DataType, StructType};
 use object_store::path::Path;
 
 use crate::error::Result;
 use crate::operators::PathRoots;
+
+mod user_schema;
+use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
 /// Spark 4.2's built-in data sources that read no files:
 /// `UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY`.
@@ -306,8 +309,13 @@ impl fmt::Debug for FileListing {
     }
 }
 
-/// What identifies a read: format, paths and options.
-type ReadKey = (String, Vec<OptionValue>, BTreeMap<String, OptionValue>);
+/// What identifies a read: format, paths, options and the user's schema.
+type ReadKey = (
+    String,
+    Vec<OptionValue>,
+    BTreeMap<String, OptionValue>,
+    Option<StructType>,
+);
 
 /// The reads by path of one query: lists each once and keeps the listing.
 /// Make one per query; the next query lists the files again.
@@ -361,11 +369,40 @@ impl FileReads {
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
     ) -> Result<Arc<FileListing>> {
-        let key = (format.to_ascii_lowercase(), paths.to_vec(), options.clone());
+        self.listing_with_schema(format, paths, options, None).await
+    }
+
+    /// [`Self::listing`] of a read with the user's `schema`
+    /// (`spark.read.schema`), when it has one: the files are listed as for
+    /// any read, nothing is inferred from them (and no files is no error),
+    /// and the listing's schema is the user's data columns in their order,
+    /// then the partition columns found under the paths, typed as the schema
+    /// names them (inferred when it does not), as Spark's
+    /// `PartitioningAwareFileIndex` combines them. Every column is nullable.
+    ///
+    /// # Errors
+    /// As [`Self::listing`], plus `INVALID_PARTITION_VALUE` for a partition
+    /// value that does not cast to the schema's type, and the text format's
+    /// checks of the schema (`_LEGACY_ERROR_TEMP_1290`,
+    /// `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE`).
+    pub async fn listing_with_schema(
+        &self,
+        format: &str,
+        paths: &[OptionValue],
+        options: &BTreeMap<String, OptionValue>,
+        schema: Option<&StructType>,
+    ) -> Result<Arc<FileListing>> {
+        let key = (
+            format.to_ascii_lowercase(),
+            paths.to_vec(),
+            options.clone(),
+            schema.cloned(),
+        );
         if let Some(l) = self.cached(&key) {
             return Ok(l);
         }
-        let listing = Arc::new(self.list(&key.0, paths, options).await?);
+        let listing =
+            Arc::new(Box::pin(self.list_with(&key.0, paths, options, None, schema)).await?);
         let mut listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
         // A concurrent call may have listed it first: keep one listing.
         if let Some((_, l)) = listed.iter().find(|(k, _)| *k == key) {
@@ -405,6 +442,7 @@ impl FileReads {
             paths,
             options,
             Some((schema, partitions)),
+            None,
         ))
         .await?;
         Ok(Arc::new(listing))
@@ -418,23 +456,16 @@ impl FileReads {
             .map(|(_, l)| Arc::clone(l))
     }
 
-    async fn list(
-        &self,
-        format: &str,
-        paths: &[OptionValue],
-        options: &BTreeMap<String, OptionValue>,
-    ) -> Result<FileListing> {
-        Box::pin(self.list_with(format, paths, options, None)).await
-    }
-
-    /// [`Self::list`]; with `known` the schema and the partition columns
-    /// are given, not inferred.
+    /// Lists a read; with `known` the schema and the partition columns
+    /// are given, not inferred; with `user` the data columns are the user's
+    /// ([`Self::listing_with_schema`]).
     async fn list_with(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
         known: Option<(SchemaRef, &KnownPartitions)>,
+        user: Option<&StructType>,
     ) -> Result<FileListing> {
         let mut mode = self.list_mode(options)?;
         // A partitioned catalog table reads its registered partitions only
@@ -533,6 +564,24 @@ impl FileReads {
         // A known table's partition values take its declared types: they
         // are never inferred (nor refused for looking like timestamps).
         let infer = known.is_none() && self.infers_partition_types();
+        if let Some(user) = user {
+            let rules = UserPartitions {
+                infer,
+                case_sensitive: self.case_sensitive(),
+                validate: self.validates_partition_columns(),
+                exact_scale_decimals: matches!(format.name(), "parquet" | "orc"),
+            };
+            let (schema, partition_columns, data) = user_schema_columns(user, &discovered, rules)?;
+            check_user_schema(format.name(), &data)?;
+            return Ok(FileListing {
+                format,
+                files: files.into(),
+                schema,
+                partition_columns: partition_columns.into(),
+                options,
+                path_roots,
+            });
+        }
         let partition_columns = partition_columns(&discovered, infer)?;
         if let Some((schema, declared)) = known {
             let partition_columns = declared_partitions(&schema, declared, &partition_columns)?;
@@ -555,10 +604,7 @@ impl FileReads {
         let schema = if merge {
             // Every file's own schema, merged by column name in first-seen order; names match
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
-            let case_sensitive = self
-                .session
-                .get_unregistered("spark.sql.caseSensitive")
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+            let case_sensitive = self.case_sensitive();
             let mut merged: Option<SchemaRef> = None;
             for file in &files {
                 let one = match krishiv_io::infer_schema_cached(
@@ -613,7 +659,7 @@ impl FileReads {
                 }
             }
         };
-        let schema = with_partition_columns(schema, &partition_columns)?;
+        let schema = with_partition_columns(&schema, &partition_columns, self.case_sensitive());
         Ok(FileListing {
             format,
             files: files.into(),
@@ -622,6 +668,20 @@ impl FileReads {
             options,
             path_roots,
         })
+    }
+
+    /// `spark.sql.caseSensitive` (default false).
+    fn case_sensitive(&self) -> bool {
+        self.session
+            .get_unregistered("spark.sql.caseSensitive")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    }
+
+    /// `spark.sql.sources.validatePartitionColumns` (default true).
+    fn validates_partition_columns(&self) -> bool {
+        self.session
+            .get_unregistered("spark.sql.sources.validatePartitionColumns")
+            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
     }
 
     /// Whether partition values are typed by inference:
@@ -1257,36 +1317,66 @@ fn is_registered(
     registered.contains(values.as_slice())
 }
 
-/// `schema` followed by `partitions`.
-///
-/// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` when a partition column has the name of a
-/// data column.
-fn with_partition_columns(schema: SchemaRef, partitions: &[FieldRef]) -> Result<SchemaRef> {
+/// The schema of an inferred read: the files' `schema` with the partition
+/// columns, as Spark 4.2.0's `HadoopFsRelation` combines them. A data
+/// column that has a partition column's name (compared under
+/// `case_sensitive`) keeps its position and takes the partition column's
+/// name, type and value (from the directory); the other partition columns
+/// come last, in directory order.
+fn with_partition_columns(
+    schema: &SchemaRef,
+    partitions: &[FieldRef],
+    case_sensitive: bool,
+) -> SchemaRef {
     if partitions.is_empty() {
-        return Ok(schema);
+        return Arc::clone(schema);
     }
-    if let Some(p) = partitions.iter().find(|p| {
-        schema
-            .fields()
+    let same = |a: &str, b: &str| {
+        if case_sensitive {
+            a == b
+        } else {
+            krishiv_types::equals_ignore_case(a, b)
+        }
+    };
+    let mut placed = vec![false; partitions.len()];
+    let mut fields: Vec<FieldRef> = Vec::with_capacity(schema.fields().len() + partitions.len());
+    for f in schema.fields() {
+        match partitions.iter().position(|p| same(f.name(), p.name())) {
+            Some(i) => {
+                placed[i] = true;
+                fields.push(Arc::clone(&partitions[i]));
+            }
+            None => fields.push(Arc::clone(f)),
+        }
+    }
+    fields.extend(
+        partitions
             .iter()
-            .any(|f| f.name().eq_ignore_ascii_case(p.name()))
-    }) {
-        return Err(unsupported(format!(
-            "a partition column ({}) with the name of a data column",
-            p.name()
-        )));
-    }
-    let fields: Vec<FieldRef> = schema
-        .fields()
-        .iter()
-        .cloned()
-        .chain(partitions.iter().cloned())
-        .collect();
-    Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
+            .zip(&placed)
+            .filter(|(_, placed)| !**placed)
+            .map(|(p, _)| Arc::clone(p)),
+    );
+    Arc::new(arrow_schema::Schema::new_with_metadata(
         fields,
         schema.metadata().clone(),
-    )))
+    ))
+}
+
+/// The columns of a listing's schema.
+fn listing_columns(listing: &FileListing) -> std::result::Result<Vec<TableColumn>, KrishivError> {
+    listing
+        .schema
+        .fields()
+        .iter()
+        .map(|f| {
+            Ok(TableColumn {
+                name: f.name().clone(),
+                data_type: DataType::from_arrow_field(f)?,
+                nullable: f.is_nullable(),
+                char_varchar: None,
+            })
+        })
+        .collect()
 }
 
 impl FileSchemaResolver for FileReads {
@@ -1336,19 +1426,25 @@ impl FileSchemaResolver for FileReads {
                 check_sql_location(text)?;
             }
             let listing = self.listing(format, paths, options).await?;
-            listing
-                .schema
-                .fields()
-                .iter()
-                .map(|f| {
-                    Ok(TableColumn {
-                        name: f.name().clone(),
-                        data_type: DataType::from_arrow_field(f)?,
-                        nullable: f.is_nullable(),
-                        char_varchar: None,
-                    })
-                })
-                .collect()
+            listing_columns(&listing)
+        })
+    }
+
+    fn with_schema<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        options: &'a BTreeMap<String, OptionValue>,
+        schema: &'a StructType,
+    ) -> BoxFuture<'a, std::result::Result<Vec<TableColumn>, KrishivError>> {
+        Box::pin(async move {
+            for text in paths.iter().filter_map(OptionValue::as_plain) {
+                check_sql_location(text)?;
+            }
+            let listing = self
+                .listing_with_schema(format, paths, options, Some(schema))
+                .await?;
+            listing_columns(&listing)
         })
     }
 }
@@ -1396,6 +1492,40 @@ fn unsupported(feature: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_overlapped_data_column_keeps_its_place_as_the_partition_column() {
+        use arrow_schema::{DataType as A, Field, Schema};
+        let files: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("a", A::Utf8View, true),
+            Field::new("K", A::Utf8View, true),
+            Field::new("v", A::Utf8View, true),
+        ]));
+        let parts: Vec<FieldRef> = vec![
+            Arc::new(Field::new("k", A::Int32, true)),
+            Arc::new(Field::new("j", A::Int32, true)),
+        ];
+        let names = |s: &SchemaRef| {
+            s.fields()
+                .iter()
+                .map(|f| format!("{}:{}", f.name(), f.data_type()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&with_partition_columns(&files, &parts, false)),
+            ["a:Utf8View", "k:Int32", "v:Utf8View", "j:Int32"]
+        );
+        assert_eq!(
+            names(&with_partition_columns(&files, &parts, true)),
+            [
+                "a:Utf8View",
+                "K:Utf8View",
+                "v:Utf8View",
+                "k:Int32",
+                "j:Int32"
+            ]
+        );
+    }
 
     fn locate(path: &str) -> Result<LocatedPath> {
         LocalPaths::new(StoreId::new("file"), "/work/dir").locate(path)

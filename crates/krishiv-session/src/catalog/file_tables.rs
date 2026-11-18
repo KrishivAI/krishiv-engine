@@ -66,21 +66,6 @@ impl QueryCatalog {
                 continue;
             };
             let listing = match key {
-                // A declared schema is the table: nothing is inferred. Which
-                // directories a declared-schema read descends into (partition
-                // discovery per format) is golden-pending, so none beyond the
-                // root files, as a catalog table without partitions.
-                FilesKey::Read(_) if schema.is_some() => {
-                    self.files
-                        .listing_known(
-                            format,
-                            paths,
-                            options,
-                            Arc::clone(table),
-                            &krishiv_exec::files::KnownPartitions::default(),
-                        )
-                        .await?
-                }
                 FilesKey::Table(_) | FilesKey::Reference { known: true, .. } => {
                     let Some(partitions) = partitions else {
                         return Err(krishiv_common::error::KrishivUnsupportedFeature {
@@ -92,6 +77,14 @@ impl QueryCatalog {
                     };
                     self.files
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
+                        .await?
+                }
+                // A user schema: its columns, then the partition columns under
+                // the paths (Spark 4.2.0's `userSpecifiedSchema`); nothing is
+                // inferred from the files' contents.
+                _ if schema.is_some() => {
+                    self.files
+                        .listing_with_schema(format, paths, options, schema.as_ref())
                         .await?
                 }
                 _ => match self.files.listing(format, paths, options).await {

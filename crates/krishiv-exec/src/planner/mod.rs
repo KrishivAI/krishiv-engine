@@ -32,6 +32,7 @@ pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
+mod key_count;
 mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
@@ -60,6 +61,7 @@ pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
+pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
@@ -112,6 +114,10 @@ pub struct PlanningContext {
     /// its sampled rows across actions (Spark's Dataset keeps its executed
     /// plan). `None`: each plan draws fresh seeds.
     pub sample_salt: Option<u64>,
+    /// The plan is only shown (`EXPLAIN`, estimates), never run: checks Spark makes when the plan
+    /// executes, such as `QUERY_ONLY_CORRUPT_RECORD_COLUMN` (raised by the file format's reader), are
+    /// skipped.
+    pub inspect: bool,
 }
 
 impl PlanningContext {
@@ -124,7 +130,15 @@ impl PlanningContext {
             udfs: None,
             query_start_micros: None,
             sample_salt: None,
+            inspect: false,
         }
+    }
+
+    /// The same context for a plan that is only inspected when `inspect`.
+    #[must_use]
+    pub fn with_inspection(mut self, inspect: bool) -> Self {
+        self.inspect = inspect;
+        self
     }
 
     /// The same context drawing unseeded sample seeds from `salt`.
