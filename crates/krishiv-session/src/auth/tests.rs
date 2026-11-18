@@ -1074,3 +1074,14 @@ fn lookup_refuses_an_expired_token() {
     );
     assert!(tokens.lookup(TOKEN_B).is_none(), "expired now");
 }
+
+/// P3-T101 §2 H3: a session's transport names the surface its denials count under.
+#[test]
+fn a_transport_maps_to_its_listener_surface() {
+    use crate::Transport;
+    assert_eq!(Surface::of(Transport::Connect), Some(Surface::Connect));
+    assert_eq!(Surface::of(Transport::FlightSql), Some(Surface::FlightSql));
+    assert_eq!(Surface::of(Transport::Ui), Some(Surface::Ui));
+    assert_eq!(Surface::of(Transport::Embedded), None);
+    assert_eq!(Surface::of(Transport::Mcp), None);
+}
