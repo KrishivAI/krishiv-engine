@@ -408,6 +408,12 @@ fn from_csv_converts_every_kind_and_reports_the_parsed_row() {
 }
 
 proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { 256 },
+        failure_persistence: None,
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
     /// The `memchr` length of an unquoted value is where the character walk
     /// stops, for each record end the fast path takes.
     #[test]
@@ -456,6 +462,12 @@ fn plain_len_leaves_other_separators_to_the_char_walk() {
 }
 
 proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { 256 },
+        failure_persistence: None,
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
     /// The split fast path gives the walk's values, end and error, whenever
     /// it applies.
     #[test]

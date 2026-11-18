@@ -97,15 +97,22 @@ fn count_star_over_a_partitioned_directory() {
 }
 
 #[test]
-fn other_formats_count_as_before() {
+fn csv_and_json_counts_read_no_column() {
+    // CSV and JSON have no footer: the scan reads every record but decodes
+    // no column (PY-013).
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("c").display().to_string();
     let s = Session::new().unwrap();
     let df = block_on(s.sql("SELECT id FROM range(42)")).unwrap();
-    block_on(df.write().csv(&path)).unwrap();
-    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM csv.`{path}`"));
+    let csv = dir.path().join("c").display().to_string();
+    block_on(df.write().csv(&csv)).unwrap();
+    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM csv.`{csv}`"));
     assert_eq!(n, 42);
-    assert!(!scans_no_column(&plan), "{plan}");
+    assert!(scans_no_column(&plan), "{plan}");
+    let json = dir.path().join("j").display().to_string();
+    block_on(df.write().json(&json)).unwrap();
+    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM json.`{json}`"));
+    assert_eq!(n, 42);
+    assert!(scans_no_column(&plan), "{plan}");
 }
 
 #[test]
