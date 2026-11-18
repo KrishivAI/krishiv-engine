@@ -22,12 +22,9 @@ static HEAP: Counting<System> = Counting(System);
 const ROWS: i32 = 8_192;
 const DIM: usize = 768;
 
-/// Fails today: `array(a, b, ...)` (`krishiv-functions/src/scalar/array.rs`) broadcasts each literal element to the
-/// batch's rows, so a written-out `array(...)` query vector costs about half a broadcast (13 MB of 25 MB here) per
-/// batch before the distance kernel sees it. A column or parameter query vector does not (the kernel reads a literal
-/// at row 0). Fix: fold `array(literals)` to one literal row; then drop the `ignore`.
+/// `array(literals)` folds to one array literal (`krishiv-optimizer` `fold.rs`), which a vector kernel reads at its one
+/// row. Unfolded, `array()` broadcast each element to the batch's rows (13 MB of a 25 MB broadcast per batch here).
 #[test]
-#[ignore = "array(literals) is rebuilt per batch; see the doc comment"]
 fn a_literal_query_vector_is_not_copied_per_row() {
     let field = Arc::new(Field::new("element", DataType::Float32, true));
     let schema = Arc::new(Schema::new(vec![

@@ -316,3 +316,19 @@ fn the_plan_has_a_top_n_and_no_sort() {
         "a full sort in the plan:\n{text}"
     );
 }
+
+/// `array(literals)` folds to one literal; the values, NULL elements, a column element and the empty array are as
+/// they were.
+#[test]
+fn array_of_literals_keeps_its_values() {
+    let s = Session::new().unwrap();
+    let text = |sql: &str| -> String {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        arrow_cast::display::array_value_to_string(b[0].column(0), 0).unwrap()
+    };
+    assert_eq!(text("SELECT array(1, 2, 3)"), "[1, 2, 3]");
+    assert_eq!(text("SELECT array(1, NULL, 3)"), "[1, , 3]");
+    assert_eq!(text("SELECT array(CAST(1.5 AS FLOAT), 2)"), "[1.5, 2.0]");
+    assert_eq!(text("SELECT array()"), "[]");
+    assert_eq!(text("SELECT array(1, id) FROM (SELECT 7 AS id)"), "[1, 7]");
+}
