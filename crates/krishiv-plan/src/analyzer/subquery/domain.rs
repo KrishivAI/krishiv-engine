@@ -25,6 +25,12 @@ impl Rewriter {
             ));
         }
         let domain = plan_outer_columns(input);
+        if domain.iter().any(|c| c.data_type.is_collated_string()) && collated_outer_misuse(input) {
+            return Err(unsupported(
+                "a correlation over collated strings compared under another collation",
+                input.origin,
+            ));
+        }
         let visible: HashSet<AttrId> = output(base)?.iter().map(|c| c.id).collect();
         if !domain.iter().all(|c| visible.contains(&c.id)) {
             return Err(unsupported(

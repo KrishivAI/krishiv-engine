@@ -273,3 +273,36 @@ fn correlated_scalar_subquery_over_a_collated_array_is_not_answered_binary() {
         Ok(dump) => assert!(dump.contains('1'), "binary answer: {dump}"),
     }
 }
+
+/// Review of #854: a correlation compared under another collation than the outer column's
+/// (`COLLATE UTF8_BINARY`, a cast) must not be keyed on the column's own `UTF8_LCASE` key, which
+/// would copy one case variant's answer to its twins. Spark answers `1,0` / `2,3` here; the
+/// engine refuses instead of answering `1,1` / `2,1`.
+#[test]
+fn a_correlation_under_another_collation_is_refused_not_keyed_wrongly() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create temporary view hx as select * from (values \
+         (cast('a' as string collate utf8_lcase), 1), (cast('A' as string collate utf8_lcase), 2)) v(c, n)",
+        "create temporary view hy as select * from (values \
+         (cast('A' as string collate utf8_lcase)), (cast('A' as string collate utf8_lcase)), \
+         (cast('a' as string collate utf8_lcase))) v(d)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    for q in [
+        "select n, (select count(*) from hy where hy.d = hx.c collate utf8_binary) from hx",
+        "select n, (select count(*) from hy where cast(hy.d as string) = cast(hx.c as string)) from hx",
+    ] {
+        match block_on(s.sql(q)) {
+            Err(_) => {}
+            Ok(df) => {
+                let rows = block_on(df.collect()).map(|b| format!("{b:?}"));
+                assert!(
+                    rows.is_err(),
+                    "{q}: answered {rows:?} (Spark: 1,0 / 2,3), expected a refusal"
+                );
+            }
+        }
+    }
+}

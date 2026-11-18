@@ -41,7 +41,7 @@ use krishiv_types::DataType;
 
 use super::bind::{addr, unsupported};
 use super::catalog::{FunctionLookup, FunctionRegistry};
-use super::exprs::{builtin_name, literal_type, pretty};
+use super::exprs::{builtin_name, has_key, literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
 use super::subquery_shapes::{
     Bounded, aggregates_below, bounded, check_in, constant_side, fold_one_row_bounds,
@@ -449,7 +449,7 @@ fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool) 
 /// operator is what the analyzer's guard refuses), else over the values.
 pub(super) fn keyed_eq(op: Builtin, a: Arc<Expr>, b: Arc<Expr>) -> Arc<Expr> {
     let keyed = |e: Arc<Expr>| -> Arc<Expr> {
-        let Some(t) = typed(&e).0.filter(DataType::is_collated_string) else {
+        let Some(t) = typed(&e).0.filter(|t| t.is_collated_string() && has_key(t)) else {
             return e;
         };
         let profile = SparkProfile::ALL.into_iter().max().unwrap_or_default();

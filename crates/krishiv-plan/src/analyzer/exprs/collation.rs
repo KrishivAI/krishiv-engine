@@ -265,7 +265,7 @@ pub(super) fn string_of(c: Collation) -> DataType {
 
 /// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`, and ICU with the
 /// `collations-icu` feature).
-fn has_key(t: &DataType) -> bool {
+pub(in crate::analyzer) fn has_key(t: &DataType) -> bool {
     !t.any_type(&|x| {
         matches!(x, DataType::CollatedString(c) if !matches!(
             c.family(),
