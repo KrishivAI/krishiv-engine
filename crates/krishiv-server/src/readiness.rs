@@ -59,6 +59,30 @@ pub struct CheckOutcome {
     pub failure: Option<String>,
 }
 
+/// The state of one check as the admin API reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    /// Passed in the last round.
+    Ok,
+    /// Failed in the last round.
+    Failed,
+    /// No round has run yet.
+    Unknown,
+}
+
+/// One check in [`Readiness::report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckReport {
+    /// The check's name.
+    pub name: String,
+    /// Its state.
+    pub state: CheckState,
+    /// Whether its failure fails `/readyz`.
+    pub required: bool,
+    /// Failures in a row.
+    pub consecutive_failures: u32,
+}
+
 struct Round {
     at: Instant,
     outcomes: Vec<CheckOutcome>,
@@ -148,6 +172,43 @@ impl Readiness {
                     !self.is_required(o.name) || *streak < self.failure_threshold
                 })
         })
+    }
+
+    /// Every check with its state, for the admin API: the serving check first, then each
+    /// registered check (`unknown` before the first round).
+    #[must_use]
+    pub fn report(&self) -> Vec<CheckReport> {
+        let mut out = vec![CheckReport {
+            name: "serving".to_owned(),
+            state: if self.serving.load(Ordering::Acquire) {
+                CheckState::Ok
+            } else {
+                CheckState::Failed
+            },
+            required: true,
+            consecutive_failures: 0,
+        }];
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        for (i, check) in self.checks.iter().enumerate() {
+            let (state, failures) = match last.as_ref() {
+                None => (CheckState::Unknown, 0),
+                Some(r) => (
+                    if r.outcomes.get(i).is_some_and(|o| o.failure.is_none()) {
+                        CheckState::Ok
+                    } else {
+                        CheckState::Failed
+                    },
+                    r.streaks.get(i).copied().unwrap_or(0),
+                ),
+            };
+            out.push(CheckReport {
+                name: check.name().to_owned(),
+                state,
+                required: self.is_required(check.name()),
+                consecutive_failures: failures,
+            });
+        }
+        out
     }
 
     /// The outcomes of the last round (empty before the first).
@@ -321,6 +382,29 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(r.is_ready());
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn the_report_names_every_check_with_its_state() {
+        let up = Arc::new(AtomicBool::new(false));
+        let r = Readiness::with_policy(
+            Arc::new(AtomicBool::new(true)),
+            vec![Arc::new(Fixed("warehouse", up))],
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            3,
+            vec![],
+        );
+        let before = r.report();
+        assert_eq!(before[1].state, CheckState::Unknown);
+        r.run_round().await;
+        r.run_round().await;
+        let after = r.report();
+        assert_eq!(after[0].name, "serving");
+        assert_eq!(after[0].state, CheckState::Ok);
+        assert_eq!(after[1].state, CheckState::Failed);
+        assert_eq!(after[1].consecutive_failures, 2);
+        assert!(!after[1].required);
     }
 
     #[tokio::test]

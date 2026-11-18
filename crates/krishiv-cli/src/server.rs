@@ -318,15 +318,6 @@ async fn run_listeners(
         required,
     );
     let checker = readiness.spawn();
-    let app = admin_router(
-        &runtime,
-        config,
-        guard,
-        authenticated.then(|| Arc::clone(&auth)),
-        Arc::clone(&readiness),
-        admin_bound,
-        tls.is_some(),
-    )?;
     // The drain controller (design P3-T066 §5.1) decides when the listeners stop: once held work
     // is done or the grace period and the stop bound passed. The Connect server then has nothing
     // left to wait for, so its own grace is zero.
@@ -334,6 +325,24 @@ async fn run_listeners(
     let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
         &ready,
     )));
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let drainer = Arc::new(Drainer {
+        drain: Arc::clone(&drain),
+        runtime: Arc::clone(&runtime),
+        manager: Arc::clone(&manager),
+        stop: stop_tx,
+        driving: AtomicBool::new(false),
+    });
+    let ops = Arc::new(drainer.ops(Arc::clone(&readiness), grace));
+    let app = admin_router(
+        &runtime,
+        config,
+        guard,
+        authenticated.then(|| Arc::clone(&auth)),
+        &ops,
+        admin_bound,
+        tls.is_some(),
+    )?;
     let mut connect_config = ConnectServerConfig::from_config(config);
     connect_config.shutdown_timeout = Duration::ZERO;
     let mut connect = ConnectServer::new(Arc::clone(&manager), connect_config)
@@ -349,19 +358,11 @@ async fn run_listeners(
         connect = connect.with_tls(&tls.server_config());
     }
 
-    let (stop_tx, stop_rx) = watch::channel(false);
     // Installed before the addresses are printed: a SIGTERM right after
     // readiness must start the drain, not kill the process.
     let handlers = Signals::install()
         .map_err(|e| format!("cannot install the SIGTERM/SIGINT handlers: {e}"))?;
-    let signals = tokio::spawn(watch_signals(
-        handlers,
-        Arc::clone(&drain),
-        Arc::clone(&runtime),
-        Arc::clone(&manager),
-        grace,
-        stop_tx,
-    ));
+    let signals = tokio::spawn(watch_signals(handlers, Arc::clone(&drainer), grace));
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
@@ -443,7 +444,7 @@ fn admin_router(
     config: &Config,
     guard: Arc<dyn Guard>,
     auth: Option<Arc<ServerAuth>>,
-    readiness: Arc<krishiv_server::readiness::Readiness>,
+    ops: &Arc<krishiv_server::admin_v1::DrainOps>,
     bound: SocketAddr,
     tls: bool,
 ) -> Result<axum::Router, String> {
@@ -488,7 +489,8 @@ fn admin_router(
     let admin_v1 = krishiv_server::admin_v1::router(
         Arc::new(
             krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
-                .with_denials(admin_denials),
+                .with_denials(admin_denials)
+                .with_ops(Arc::clone(ops)),
         ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
@@ -526,7 +528,9 @@ fn admin_router(
         krishiv_server::api_router()
     };
     let app = base
-        .merge(krishiv_server::admin::health_routes_cached(readiness))
+        .merge(krishiv_server::admin::health_routes_cached(Arc::clone(
+            &ops.readiness,
+        )))
         .merge(admin_v1)
         .merge(metrics);
     // With authentication configured the deprecated version alias needs a credential like
@@ -613,52 +617,105 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
 /// The first SIGTERM or SIGINT starts the drain (`Drain { grace_period = shutdownTimeout,
 /// exit_when_drained = true }`, design P3-T066 §5.1a); a second exits at once.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-async fn watch_signals(
-    mut signals: Signals,
-    drain: Arc<krishiv_server::drain::DrainController>,
-    runtime: Arc<EngineRuntime>,
-    manager: Arc<SessionManager>,
-    grace: Duration,
-    stop: watch::Sender<bool>,
-) {
+async fn watch_signals(mut signals: Signals, drainer: Arc<Drainer>, grace: Duration) {
     signals.next().await;
     eprintln!("krishiv server: draining (a second signal exits at once)");
-    let driver = tokio::spawn(drive_drain(drain, runtime, manager, grace, stop));
+    drainer.start(grace, true);
     signals.next().await;
-    driver.abort();
     eprintln!("krishiv server: second signal, exiting");
     std::process::exit(130);
 }
 
-/// Starts the drain and steps it until `DRAINED`: new work is refused at once, held work gets
-/// `grace`, what is left is cancelled with `CancelReason::Drain`, and the listeners stop when
-/// the controller says so.
-#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-pub(crate) async fn drive_drain(
+/// What starts, drives and undoes a drain: the signal handler and the admin API's `Drain` /
+/// `ResumeServing` share it, so there is one driver.
+pub(crate) struct Drainer {
     drain: Arc<krishiv_server::drain::DrainController>,
     runtime: Arc<EngineRuntime>,
     manager: Arc<SessionManager>,
-    grace: Duration,
     stop: watch::Sender<bool>,
-) {
-    use krishiv_server::drain::DrainStep;
-    runtime.set_draining(true);
-    drain.start(std::time::Instant::now(), grace, true);
-    loop {
-        match drain.step(std::time::Instant::now(), manager.busy()) {
-            DrainStep::Wait => {}
-            DrainStep::CancelRemaining => {
-                let n = runtime.cancel_all(krishiv_session::CancelReason::Drain);
-                eprintln!("krishiv server: drain deadline, cancelled {n} queries");
-            }
-            DrainStep::Drained { exit } => {
-                if exit {
-                    let _ = stop.send(true);
-                }
-                return;
-            }
+    driving: AtomicBool,
+}
+
+impl Drainer {
+    /// Starts a drain, or shortens a running one, and makes sure one task drives it: new work is
+    /// refused at once, held work gets `grace`, what is left is cancelled with
+    /// `CancelReason::Drain`, and the listeners stop (with `exit`) when the controller says so.
+    pub(crate) fn start(self: &Arc<Self>, grace: Duration, exit: bool) {
+        self.runtime.set_draining(true);
+        self.drain.start(std::time::Instant::now(), grace, exit);
+        self.ensure_driver();
+    }
+
+    fn ensure_driver(self: &Arc<Self>) {
+        if !self.driving.swap(true, Ordering::AcqRel) {
+            tokio::spawn(Arc::clone(self).drive());
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// Back to serving after the controller allowed it.
+    fn resumed(&self) {
+        self.runtime.set_draining(false);
+    }
+
+    fn load(&self) -> (i64, i64) {
+        let queries = i64::try_from(self.manager.busy()).unwrap_or(i64::MAX);
+        let sessions = i64::try_from(self.manager.counts().live).unwrap_or(i64::MAX);
+        (queries, sessions)
+    }
+
+    /// What the admin API's `Drain`, `ResumeServing`, `GetDrainStatus` and `GetReadiness` act on.
+    pub(crate) fn ops(
+        self: &Arc<Self>,
+        readiness: Arc<krishiv_server::readiness::Readiness>,
+        default_grace: Duration,
+    ) -> krishiv_server::admin_v1::DrainOps {
+        let (start, resume, load) = (Arc::clone(self), Arc::clone(self), Arc::clone(self));
+        krishiv_server::admin_v1::DrainOps {
+            drain: Arc::clone(&self.drain),
+            readiness,
+            start: Box::new(move |grace, exit| start.start(grace, exit)),
+            resume: Box::new(move || resume.resumed()),
+            load: Box::new(move || load.load()),
+            default_grace,
+        }
+    }
+
+    #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+    async fn drive(self: Arc<Self>) {
+        use krishiv_server::drain::{DrainState, DrainStep};
+        loop {
+            match self
+                .drain
+                .step(std::time::Instant::now(), self.manager.busy())
+            {
+                DrainStep::Wait => {
+                    if self.drain.status().state == DrainState::Serving {
+                        // Resumed. A drain that started right after this check sees the flag
+                        // cleared and spawns the next driver itself.
+                        self.driving.store(false, Ordering::Release);
+                        if self.drain.status().state == DrainState::Serving
+                            || self.driving.swap(true, Ordering::AcqRel)
+                        {
+                            return;
+                        }
+                    }
+                }
+                DrainStep::CancelRemaining => {
+                    let n = self
+                        .runtime
+                        .cancel_all(krishiv_session::CancelReason::Drain);
+                    eprintln!("krishiv server: drain deadline, cancelled {n} queries");
+                }
+                DrainStep::Drained { exit } => {
+                    self.driving.store(false, Ordering::Release);
+                    if exit {
+                        let _ = self.stop.send(true);
+                    }
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
 
@@ -769,13 +826,14 @@ mod tests {
             &ready,
         )));
         let (stop_tx, mut stop_rx) = watch::channel(false);
-        let driver = tokio::spawn(drive_drain(
-            Arc::clone(&drain),
-            Arc::clone(&runtime),
-            Arc::clone(&manager),
-            Duration::from_millis(300),
-            stop_tx,
-        ));
+        let drainer = Arc::new(Drainer {
+            drain: Arc::clone(&drain),
+            runtime: Arc::clone(&runtime),
+            manager: Arc::clone(&manager),
+            stop: stop_tx,
+            driving: AtomicBool::new(false),
+        });
+        drainer.start(Duration::from_millis(300), true);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!ready.load(Ordering::SeqCst), "readiness flips first");
         let refused = session.sql("SELECT 1").await.unwrap().collect().await;
@@ -787,7 +845,6 @@ mod tests {
             .await
             .expect("the drain finishes")
             .unwrap();
-        driver.await.unwrap();
         let e = tokio::time::timeout(Duration::from_secs(20), query)
             .await
             .expect("the cancelled query ends")
