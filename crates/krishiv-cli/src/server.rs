@@ -315,6 +315,7 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
+    let late_metrics = LateMetrics::default();
     let app = admin_router(
         &runtime,
         config,
@@ -323,6 +324,7 @@ async fn run_listeners(
         Arc::clone(&ready),
         admin_bound,
         tls.is_some(),
+        Arc::clone(&late_metrics),
     )?;
     let mut connect = ConnectServer::new(
         Arc::clone(&manager),
@@ -349,6 +351,9 @@ async fn run_listeners(
     #[cfg(feature = "flight-sql")]
     if let Some((flight, _)) = &flight {
         connect = connect.with_routes(flight.routes());
+        // `krishiv.flight_sql.requests` in the scrape (design §7, review m6).
+        let counted = flight.clone();
+        let _ = late_metrics.set(Box::new(move || counted.metrics()));
     }
 
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -441,6 +446,15 @@ async fn run_listeners(
     served
 }
 
+/// Samples another service adds to `/metrics` once it exists (the Flight SQL service is built
+/// after the admin router).
+type LateMetrics =
+    Arc<std::sync::OnceLock<Box<dyn Fn() -> krishiv_session::MetricsSnapshot + Send + Sync>>>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the admin listener's parts, each built by `run`"
+)]
 fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
@@ -449,6 +463,7 @@ fn admin_router(
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
     tls: bool,
+    late: LateMetrics,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -469,6 +484,9 @@ fn admin_router(
             let mut snapshot = snapshot_runtime.metrics();
             if let Some(auth) = &auth {
                 snapshot.merge(&auth.metrics());
+            }
+            if let Some(more) = late.get() {
+                snapshot.merge(&more());
             }
             snapshot
         }),

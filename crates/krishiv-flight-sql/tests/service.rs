@@ -743,3 +743,20 @@ async fn dropped_get_flight_info_returns_slot() {
     assert_eq!(h.flight.handle_count(), 0);
     wait_busy(&h, 0).await;
 }
+
+/// The request counts the server's `/metrics` merges (design §7, review m6).
+#[tokio::test(flavor = "multi_thread")]
+async fn requests_reach_the_metrics_snapshot() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT 1").await.expect("info");
+    fetch(&mut h, OPS, cookie.as_deref(), ticket(&i))
+        .await
+        .expect("fetch");
+    let snapshot = h.flight.metrics();
+    let ok_query = snapshot.counters.iter().any(|c| {
+        c.name == "krishiv.flight_sql.requests"
+            && c.labels.contains(&("outcome".to_owned(), "ok".to_owned()))
+            && c.value >= 1.0
+    });
+    assert!(ok_query, "{:?}", snapshot.counters);
+}

@@ -111,28 +111,92 @@ async fn flight_sql_disabled_answers_unimplemented() {
     assert!(msg.contains("not implemented"), "{msg}");
 }
 
-/// `adbc_flight_sql_tpch_q1` (design §11): TPC-H q1 through the ADBC Flight SQL driver equals
-/// the Spark Connect run, types included. Needs `uv` and the network for the driver: runs only
-/// with `KRISHIV_TEST_ADBC=1` (`tests/scripts/flight_sql_adbc.py`).
-#[test]
-fn adbc_flight_sql_tpch_q1() {
-    if std::env::var_os("KRISHIV_TEST_ADBC").is_none() {
-        eprintln!("skipped: set KRISHIV_TEST_ADBC=1 (needs uv) to run the ADBC end-to-end test");
-        return;
+const ADMIN_TOKEN: &str = "adbc-admin-token-0123456789abcdef0123";
+
+/// The conf of a token-authenticated server (one admin token, its secret in a 0600 file), plus
+/// TLS from the session crate's test fixtures when `tls`; and the CA path to trust.
+#[cfg(unix)]
+fn auth_conf(dir: &std::path::Path, tls: bool) -> (Vec<String>, Option<std::path::PathBuf>) {
+    use std::os::unix::fs::PermissionsExt;
+    let secret = dir.join("admin.token");
+    std::fs::write(&secret, ADMIN_TOKEN).expect("write secret");
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let mut conf = vec![
+        format!("krishiv.auth.tokens.adbc.secret=file:{}", secret.display()),
+        "krishiv.auth.tokens.adbc.principal=adbc".to_owned(),
+        "krishiv.auth.tokens.adbc.role=admin".to_owned(),
+        // The confinement of server mode (ADR 0046 §3a): q1 reads the generated file there.
+        format!("krishiv.io.local.allowedRoots={}", data_dir(dir).display()),
+    ];
+    if !tls {
+        return (conf, None);
     }
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-session/tests/fixtures/tls");
+    let (cert, key) = (dir.join("server.pem"), dir.join("server.key"));
+    std::fs::copy(fixtures.join("server.pem"), &cert).expect("cert");
+    std::fs::copy(fixtures.join("server.key"), &key).expect("key");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    conf.push(format!("krishiv.server.tls.certFile={}", cert.display()));
+    conf.push(format!("krishiv.server.tls.keyFile={}", key.display()));
+    (conf, Some(fixtures.join("ca.pem")))
+}
+
+/// Where the script writes `lineitem.parquet` (made first: an allowed root must exist).
+fn data_dir(dir: &std::path::Path) -> std::path::PathBuf {
+    let d = dir.join("data");
+    std::fs::create_dir_all(&d).expect("data dir");
+    d.canonicalize().expect("canonical data dir")
+}
+
+/// TPC-H q1 at SF 0.01's row count through the ADBC Flight SQL driver with a bearer token equals
+/// the Spark Connect run, types included (design §0, §11, §16 m7; `tests/scripts/flight_sql_adbc.py`).
+#[cfg(unix)]
+fn adbc_q1(tls: bool) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (server, flight) = start(dir.path(), &[]);
+    let (conf, ca) = auth_conf(dir.path(), tls);
+    let conf: Vec<&str> = conf.iter().map(String::as_str).collect();
+    let (server, flight) = start(dir.path(), &conf);
     assert!(flight);
+    let addr = server
+        .connect
+        .split(';')
+        .next()
+        .expect("address")
+        .trim_end_matches('/')
+        .to_owned();
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/scripts/flight_sql_adbc.py");
-    let out = Command::new("uv")
-        .args(["run", "--quiet", "--script"])
+    let mut cmd = Command::new("uv");
+    cmd.args(["run", "--quiet", "--script"])
         .arg(&script)
-        .args(["--addr", &server.connect])
-        .output()
-        .expect("uv runs");
+        .args(["--addr", &addr, "--token", ADMIN_TOKEN])
+        .arg("--data")
+        .arg(data_dir(dir.path()));
+    if let Some(ca) = &ca {
+        cmd.arg("--ca").arg(ca);
+    }
+    let out = cmd.output().expect("uv runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stdout}\n{stderr}");
     eprintln!("{stdout}");
+}
+
+/// Plaintext loopback with token auth. Needs `uv` and the network for the drivers, so it is
+/// ignored by default: `cargo nextest run -p krishiv-cli --features flight-sql --test flight_sql
+/// --run-ignored only`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs uv and the network (ADBC and PySpark drivers): --run-ignored only"]
+fn adbc_flight_sql_tpch_q1() {
+    adbc_q1(false);
+}
+
+/// The same over TLS (the test CA).
+#[cfg(unix)]
+#[test]
+#[ignore = "needs uv and the network (ADBC and PySpark drivers): --run-ignored only"]
+fn adbc_flight_sql_tpch_q1_tls() {
+    adbc_q1(true);
 }

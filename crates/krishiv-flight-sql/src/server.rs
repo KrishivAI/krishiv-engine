@@ -279,6 +279,29 @@ impl FlightSqlServer {
         &self.inner.requests
     }
 
+    /// `krishiv.flight_sql.requests` as counter samples, for the server's `/metrics` scrape
+    /// (design §7).
+    #[must_use]
+    pub fn metrics(&self) -> krishiv_session::MetricsSnapshot {
+        let mut out = krishiv_session::MetricsSnapshot::default();
+        for c in self.inner.requests.counts() {
+            out.counters.push(krishiv_session::CounterSample {
+                name: "krishiv.flight_sql.requests",
+                unit: "{request}",
+                labels: vec![
+                    ("command".to_owned(), c.command.as_str().to_owned()),
+                    ("outcome".to_owned(), c.outcome.as_str().to_owned()),
+                ],
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a counter past 2^53 loses only its low bits"
+                )]
+                value: c.count as f64,
+            });
+        }
+        out
+    }
+
     /// How many statement and prepared-statement handles are stored.
     #[must_use]
     pub fn handle_count(&self) -> usize {
