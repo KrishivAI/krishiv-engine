@@ -408,3 +408,45 @@ fn a_frame_run_again_after_the_spill_directory_became_usable_succeeds() {
         .sum();
     assert_eq!(rows, usize::try_from(KEYS).unwrap());
 }
+
+/// PY-078 (review): the spill directory opened for an earlier query, then made unwritable: the
+/// next spilling query still names the directory (the per-query directory cannot be created).
+#[cfg(unix)]
+#[test]
+fn a_spill_directory_that_became_unwritable_after_it_opened_is_named() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let r = root(&tmp);
+    let s = session(&r, Some("6m"));
+    let rows = |s: &Session| -> usize {
+        let df = block_on(s.sql(QUERY)).unwrap();
+        block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum()
+    };
+    assert_eq!(rows(&s), usize::try_from(KEYS).unwrap());
+    wait_until_clean(&r);
+    let dirs: Vec<_> = std::fs::read_dir(&r)
+        .unwrap()
+        .flatten()
+        .map(|d| d.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert!(!dirs.is_empty());
+    for d in &dirs {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
+    for d in &dirs {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let err = err.unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+}

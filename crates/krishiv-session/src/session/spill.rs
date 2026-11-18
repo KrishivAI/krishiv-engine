@@ -21,6 +21,34 @@ impl fmt::Debug for QuerySpill {
     }
 }
 
+impl QuerySpill {
+    /// Keeps the I/O failure of the spill directory, named for the user, as this query's recorded
+    /// error (the memory error that follows is replaced by it).
+    fn record(&self, e: &krishiv_memory::SpillError) {
+        let failure: KrishivError = match e {
+            krishiv_memory::SpillError::Io {
+                operation,
+                path,
+                source,
+            } => krishiv_common::error::KrishivSpillIoError {
+                operation: (*operation).to_owned(),
+                path: path.display().to_string(),
+                reason: format!(
+                    "{}; set `krishiv.spill.dir` to a writable local directory",
+                    if source.kind() == std::io::ErrorKind::StorageFull {
+                        format!("the spill disk is full ({source})")
+                    } else {
+                        source.to_string()
+                    }
+                ),
+            }
+            .into(),
+            other => KrishivError::from(other),
+        };
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+    }
+}
+
 impl SpillScopes for QuerySpill {
     fn scope(&self) -> krishiv_exec::Result<SpillScope> {
         let mut slot = self
@@ -32,27 +60,7 @@ impl SpillScopes for QuerySpill {
         if slot.is_none() {
             let config = SpillConfig::from_config(&self.state.runtime.config);
             let manager = SpillManager::open(&config).map_err(|e| {
-                let failure: KrishivError = match &e {
-                    krishiv_memory::SpillError::Io {
-                        operation,
-                        path,
-                        source,
-                    } => krishiv_common::error::KrishivSpillIoError {
-                        operation: (*operation).to_owned(),
-                        path: path.display().to_string(),
-                        reason: format!(
-                            "{}; set `krishiv.spill.dir` to a writable local directory",
-                            if source.kind() == std::io::ErrorKind::StorageFull {
-                                format!("the spill disk is full ({source})")
-                            } else {
-                                source.to_string()
-                            }
-                        ),
-                    }
-                    .into(),
-                    other => KrishivError::from(other),
-                };
-                *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+                self.record(&e);
                 internal(format!(
                     "cannot set up the spill directory (set `krishiv.spill.dir` to a writable local directory): {e}"
                 ))
@@ -65,6 +73,7 @@ impl SpillScopes for QuerySpill {
             || Err(internal("the spill directory is not open".to_owned())),
             |m| {
                 m.scope().map_err(|e| {
+                    self.record(&e);
                     internal(format!("cannot create the query's spill directory: {e}"))
                 })
             },
