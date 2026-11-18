@@ -22,7 +22,7 @@ with krishiv.start_local() as server:
 
 The host name is `localhost` on purpose: `pyspark-client` sends a token over a plain connection only to that name, and wants TLS for any other. The server listens on `127.0.0.1` and `[::1]` (the two addresses `localhost` can mean, so that no other process can hold one of them and receive the token) and on no other address.
 
-`spark.sql(...)` through the client is not available yet: it needs Spark Connect commands (P3-T012). The DataFrame API (`range`, `select`, `join`, `groupBy`, `agg`) works.
+`spark.sql(...)` through the client works, and so does the DataFrame API (`range`, `select`, `join`, `groupBy`, `agg`).
 
 ## Stop it
 
