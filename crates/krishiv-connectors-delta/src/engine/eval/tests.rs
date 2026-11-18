@@ -716,21 +716,6 @@ fn a_bad_partition_value_is_a_parse_error() {
 }
 
 #[test]
-fn a_named_reader_zone_is_unsupported() {
-    let e = evaluate_expression(
-        &ctx(),
-        &Expr::map_to_struct(
-            col("pv"),
-            MapToStructOptions::default().with_timestamp_timezone("America/Los_Angeles"),
-        ),
-        &batch(),
-        Some(&DataType::Struct(Box::new(partition_schema()))),
-    )
-    .unwrap_err();
-    assert!(matches!(e, KernelError::Unsupported(_)), "{e:?}");
-}
-
-#[test]
 fn parse_json_applies_the_parse_limits() {
     let limits = DeltaLimits {
         max_depth: 2,
@@ -1117,8 +1102,73 @@ fn partition_timestamp_grammar() {
             Some("+05:30"),
             "2024-01-15T12:30:45.123456Z",
         ),
-        // A trailing UTC needs no zone database.
+        // A name of UTC needs no zone database, spaced or glued to the time, also over a
+        // fixed reader zone (the value's zone wins), as Arrow's grammar reads it in the kernel.
         ("2024-01-15 12:30:45 UTC", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15 12:30:45UTC", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15T12:30:45.5GMT", None, "2024-01-15T12:30:45.5Z"),
+        (
+            "2024-01-15 12:30:45 Etc/UTC",
+            Some("+05:30"),
+            "2024-01-15T12:30:45Z",
+        ),
+        ("2024-01-15 12:30:45 Zulu", None, "2024-01-15T12:30:45Z"),
+        // Spaced `GMT`, and `UTC` over a fixed and a named reader zone: still UTC.
+        ("2024-01-15 12:30:45 GMT", None, "2024-01-15T12:30:45Z"),
+        (
+            "2024-01-15 12:30:45 UTC",
+            Some("+05:30"),
+            "2024-01-15T12:30:45Z",
+        ),
+        (
+            "2024-01-15 12:30:45 UTC",
+            Some("America/New_York"),
+            "2024-01-15T12:30:45Z",
+        ),
+        // A zone name from the zone database (`jiff`'s bundled tzdata), as the kernel resolves
+        // it with chrono-tz (`embedded_iana_timezone_with_default_options`): the value's zone
+        // wins over the reader zone; CET in winter (+01:00) and summer (+02:00).
+        (
+            "2024-01-15 12:30:45 America/New_York",
+            None,
+            "2024-01-15T17:30:45Z",
+        ),
+        (
+            "2024-01-15 12:30:45 CET",
+            Some("+05:30"),
+            "2024-01-15T11:30:45Z",
+        ),
+        ("2024-01-15 12:30:45CET", None, "2024-01-15T11:30:45Z"),
+        ("2024-07-15 12:30:45 CET", None, "2024-07-15T10:30:45Z"),
+        (
+            "2024-07-15 12:30:45 Europe/Paris",
+            Some("America/Los_Angeles"),
+            "2024-07-15T10:30:45Z",
+        ),
+        // A named reader zone (the kernel's `TimestampTimezone::Named`): an offset-less value is
+        // read in it; a later backward clock change's repeated hour is its earlier instant, a
+        // skipped hour takes the offset from before the change; a value's own offset wins.
+        (
+            "2024-01-15 12:30:45",
+            Some("America/Los_Angeles"),
+            "2024-01-15T20:30:45Z",
+        ),
+        (
+            "2024-11-03 01:30:00",
+            Some("America/Los_Angeles"),
+            "2024-11-03T08:30:00Z",
+        ),
+        (
+            "2024-03-10 02:30:00",
+            Some("America/Los_Angeles"),
+            "2024-03-10T10:30:00Z",
+        ),
+        (
+            "2024-01-15 12:30:45+02:00",
+            Some("America/Los_Angeles"),
+            "2024-01-15T10:30:45Z",
+        ),
+        ("2024-01-15", Some("CET"), "2024-01-14T23:00:00Z"),
     ];
     for (raw, zone, want) in accepted {
         assert_eq!(
@@ -1128,6 +1178,9 @@ fn partition_timestamp_grammar() {
         );
     }
     let rejected = [
+        // An offset and a name: the kernel's Arrow grammar parses `+02:00 UTC` as one zone.
+        "2024-01-15 12:30:45+02:00 UTC",
+        "2024-01-15 12:30:45Z UTC",
         "2024-01-15 12:30:45+02:00 America/New_York",
         "日時 America/New_York",
         "2024-01-15T12:30:45+05:30:15:00",
@@ -1140,18 +1193,17 @@ fn partition_timestamp_grammar() {
         let e = partition_ts(raw, None).unwrap_err();
         assert!(matches!(e, KernelError::ParseError(..)), "{raw}: {e:?}");
     }
-    // The kernel resolves an embedded zone name with chrono-tz
-    // (`embedded_iana_timezone_with_default_options`: 2024-01-15T17:30:45Z); Krishiv refuses it
-    // by name, never with a wrong value. So is an unknown name the kernel rejects.
+    // Names the kernel's chrono-tz does not resolve: an unknown one, the wrong case (chrono-tz
+    // matches names exactly), and an embedded zone's repeated or skipped local time (Arrow's
+    // `single()` refuses both, and the kernel's fallback only covers a reader zone).
     for raw in [
-        "2024-01-15 12:30:45 America/New_York",
         "2024-01-15 12:30:45 Foo/Bar",
+        "2024-01-15 12:30:45 cet",
+        "2024-11-03 01:30:00 America/New_York",
+        "2024-03-10 02:30:00 America/New_York",
     ] {
         let e = partition_ts(raw, Some("+05:30")).unwrap_err();
-        assert!(
-            matches!(&e, KernelError::Unsupported(m) if m.contains(raw.rsplit(' ').next().unwrap())),
-            "{raw}: {e:?}"
-        );
+        assert!(matches!(e, KernelError::ParseError(..)), "{raw}: {e:?}");
     }
 }
 
@@ -1170,6 +1222,7 @@ fn invalid_reader_zones_are_refused() {
         "+19:00",
         "+05:00:00:00",
         "Not/AZone",
+        "america/los_angeles",
     ] {
         assert!(
             partition_ts("2024-01-15 12:30:45", Some(zone)).is_err(),
