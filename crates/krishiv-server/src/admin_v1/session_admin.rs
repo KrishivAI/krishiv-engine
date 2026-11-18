@@ -36,7 +36,7 @@ use super::{
     DrainRequest, DrainResponse, DrainStatus, GetDrainStatusResponse, GetReadinessResponse,
     ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
 };
-use crate::drain::{DrainController, DrainState};
+use crate::drain::{DrainController, DrainState, Exiting, MAX_GRACE, MIN_GRACE};
 use crate::readiness::{CheckState, Readiness};
 
 /// What the drain and readiness RPCs act on (design P3-T066 §5.1, §5.2). The closures belong to the
@@ -50,8 +50,8 @@ pub struct DrainOps {
     pub readiness: Arc<Readiness>,
     /// Starts or shortens a drain: the grace period and `exit_when_drained`.
     pub start: Box<dyn Fn(std::time::Duration, bool) + Send + Sync>,
-    /// Called after the controller resumed.
-    pub resume: Box<dyn Fn() + Send + Sync>,
+    /// Resumes serving: the controller and the engine, together; refused once exiting.
+    pub resume: Box<dyn Fn() -> Result<(), Exiting> + Send + Sync>,
     /// `(queries held, sessions open)`.
     pub load: Box<dyn Fn() -> (i64, i64) + Send + Sync>,
     /// The grace period a `Drain` without one gets (`krishiv.server.shutdownTimeout`).
@@ -619,8 +619,11 @@ impl AdminApi for SessionAdmin {
                     .ok()
                     .filter(|_| d.nanos >= 0)
                     .map(|s| std::time::Duration::new(s, d.nanos.unsigned_abs()))
+                    .filter(|g| (MIN_GRACE..=MAX_GRACE).contains(g))
                     .ok_or_else(|| {
-                        let e = AdminError::invalid_argument("grace_period must not be negative");
+                        let e = AdminError::invalid_argument(
+                            "grace_period must be between 1 second and 24 hours",
+                        );
                         self.log(&call, "Drain", "", false, "failed", &e.error_class);
                         e
                     })?,
@@ -650,7 +653,7 @@ impl AdminApi for SessionAdmin {
                 "ResumeServing",
                 "cluster",
             )?;
-            if ops.drain.resume().is_err() {
+            if (ops.resume)().is_err() {
                 let e = AdminError::new(
                     ErrorKind::FailedPrecondition,
                     "KRISHIV_ADMIN_PRECONDITION_FAILED",
@@ -662,7 +665,6 @@ impl AdminApi for SessionAdmin {
                 self.log(&call, "ResumeServing", "", false, "failed", &e.error_class);
                 return Err(e);
             }
-            (ops.resume)();
             self.log(&call, "ResumeServing", "", false, "ok", "");
             Ok(ResumeServingResponse {
                 status: Some(drain_status(ops)),
@@ -709,9 +711,7 @@ impl SessionAdmin {
 fn drain_status(ops: &DrainOps) -> DrainStatus {
     let s = ops.drain.status();
     let (queries, sessions) = (ops.load)();
-    let deadline = s.deadline.map(|d| {
-        let left = d.saturating_duration_since(std::time::Instant::now());
-        let at = std::time::SystemTime::now() + left;
+    let deadline = s.deadline_at.map(|at| {
         let since = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         Timestamp {
             seconds: i64::try_from(since.as_secs()).unwrap_or(i64::MAX),

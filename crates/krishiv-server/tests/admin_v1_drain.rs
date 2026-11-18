@@ -82,7 +82,7 @@ fn fixture(with_ops: bool) -> Fixture {
         Duration::from_secs(2),
     );
     let (start_rt, resume_rt) = (Arc::clone(&rt), Arc::clone(&rt));
-    let start_drain = Arc::clone(&drain);
+    let (start_drain, resume_drain) = (Arc::clone(&drain), Arc::clone(&drain));
     let ops = DrainOps {
         drain,
         readiness,
@@ -90,7 +90,11 @@ fn fixture(with_ops: bool) -> Fixture {
             start_rt.set_draining(true);
             start_drain.start(std::time::Instant::now(), grace, exit);
         }),
-        resume: Box::new(move || resume_rt.set_draining(false)),
+        resume: Box::new(move || {
+            resume_drain.resume()?;
+            resume_rt.set_draining(false);
+            Ok(())
+        }),
         load: Box::new(|| (0, 0)),
         default_grace: Duration::from_secs(30),
     };
@@ -237,4 +241,15 @@ async fn a_server_without_drain_support_says_so() {
     let (status, body) = f.call("a:admin", "GET", "/drain", None).await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
     assert_eq!(body["error"]["errorClass"], "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[tokio::test]
+async fn a_grace_period_outside_one_second_to_a_day_is_refused() {
+    let f = fixture(true);
+    for grace in ["0s", "86401s", "315576000000s"] {
+        let body = format!(r#"{{"gracePeriod":"{grace}"}}"#);
+        let (status, response) = f.call("a:admin", "POST", "/drain", Some(&body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{grace}: {response}");
+    }
+    assert!(!f.rt.is_draining(), "a refused drain starts nothing");
 }

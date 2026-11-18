@@ -332,6 +332,7 @@ async fn run_listeners(
         manager: Arc::clone(&manager),
         stop: stop_tx,
         driving: AtomicBool::new(false),
+        change: std::sync::Mutex::new(()),
     });
     let ops = Arc::new(drainer.ops(Arc::clone(&readiness), grace));
     let app = admin_router(
@@ -634,6 +635,8 @@ pub(crate) struct Drainer {
     manager: Arc<SessionManager>,
     stop: watch::Sender<bool>,
     driving: AtomicBool,
+    /// Serialises `start` and `resume`: the controller and the engine flag change together.
+    change: std::sync::Mutex<()>,
 }
 
 impl Drainer {
@@ -641,8 +644,14 @@ impl Drainer {
     /// refused at once, held work gets `grace`, what is left is cancelled with
     /// `CancelReason::Drain`, and the listeners stop (with `exit`) when the controller says so.
     pub(crate) fn start(self: &Arc<Self>, grace: Duration, exit: bool) {
-        self.runtime.set_draining(true);
-        self.drain.start(std::time::Instant::now(), grace, exit);
+        {
+            let _changing = self
+                .change
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.runtime.set_draining(true);
+            self.drain.start(std::time::Instant::now(), grace, exit);
+        }
         self.ensure_driver();
     }
 
@@ -652,13 +661,19 @@ impl Drainer {
         }
     }
 
-    /// Back to serving after the controller allowed it.
-    fn resumed(&self) {
+    /// Back to serving; refused once the process is exiting.
+    fn resume(&self) -> Result<(), krishiv_server::drain::Exiting> {
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.drain.resume()?;
         self.runtime.set_draining(false);
+        Ok(())
     }
 
     fn load(&self) -> (i64, i64) {
-        let queries = i64::try_from(self.manager.busy()).unwrap_or(i64::MAX);
+        let queries = i64::try_from(self.manager.running_queries()).unwrap_or(i64::MAX);
         let sessions = i64::try_from(self.manager.counts().live).unwrap_or(i64::MAX);
         (queries, sessions)
     }
@@ -674,7 +689,7 @@ impl Drainer {
             drain: Arc::clone(&self.drain),
             readiness,
             start: Box::new(move |grace, exit| start.start(grace, exit)),
-            resume: Box::new(move || resume.resumed()),
+            resume: Box::new(move || resume.resume()),
             load: Box::new(move || load.load()),
             default_grace,
         }
@@ -832,6 +847,7 @@ mod tests {
             manager: Arc::clone(&manager),
             stop: stop_tx,
             driving: AtomicBool::new(false),
+            change: std::sync::Mutex::new(()),
         });
         drainer.start(Duration::from_millis(300), true);
         tokio::time::sleep(Duration::from_millis(50)).await;

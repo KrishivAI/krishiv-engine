@@ -88,6 +88,8 @@ struct Round {
     outcomes: Vec<CheckOutcome>,
     /// Consecutive failures per check, parallel to `outcomes`.
     streaks: Vec<u32>,
+    /// Whether each check has passed in some round so far.
+    ever_ok: Vec<bool>,
 }
 
 /// The cached readiness of the server.
@@ -168,9 +170,14 @@ impl Readiness {
         let fresh = self.interval.saturating_mul(STALE_AFTER_INTERVALS);
         last.as_ref().is_some_and(|r| {
             r.at.elapsed() <= fresh
-                && r.outcomes.iter().zip(&r.streaks).all(|(o, streak)| {
-                    !self.is_required(o.name) || *streak < self.failure_threshold
-                })
+                && r.outcomes.iter().zip(&r.streaks).zip(&r.ever_ok).all(
+                    |((o, streak), ever_ok)| {
+                        // The threshold forgives a dependency that broke after it worked; one that
+                        // never worked (keys never fetched) is not ready at once.
+                        !self.is_required(o.name)
+                            || (*streak < self.failure_threshold && (*ever_ok || *streak == 0))
+                    },
+                )
         })
     }
 
@@ -247,10 +254,21 @@ impl Readiness {
                 (Some(_), None) => 1,
             })
             .collect();
+        let ever_ok = outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                o.failure.is_none()
+                    || last
+                        .as_ref()
+                        .is_some_and(|p| p.ever_ok.get(i) == Some(&true))
+            })
+            .collect();
         *last = Some(Round {
             at: Instant::now(),
             outcomes,
             streaks,
+            ever_ok,
         });
     }
 
@@ -405,6 +423,24 @@ mod tests {
         assert_eq!(after[1].state, CheckState::Failed);
         assert_eq!(after[1].consecutive_failures, 2);
         assert!(!after[1].required);
+    }
+
+    #[tokio::test]
+    async fn a_required_check_that_never_passed_is_not_ready_at_once() {
+        let up = Arc::new(AtomicBool::new(false));
+        let r = Readiness::with_policy(
+            Arc::new(AtomicBool::new(true)),
+            vec![Arc::new(Fixed("auth", up))],
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            3,
+            vec!["auth".to_owned()],
+        );
+        r.run_round().await;
+        assert!(
+            !r.is_ready(),
+            "the first failed round is below the threshold but never worked"
+        );
     }
 
     #[tokio::test]

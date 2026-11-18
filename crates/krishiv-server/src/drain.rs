@@ -9,10 +9,17 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How long cancelled queries get to stop before the state becomes `DRAINED` anyway.
 pub const STOP_BOUND: Duration = Duration::from_secs(10);
+
+/// The longest grace period a drain takes (design P3-T066 §6.5); longer ones are clamped here and
+/// the admin API refuses them.
+pub const MAX_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The shortest grace period the admin API accepts.
+pub const MIN_GRACE: Duration = Duration::from_secs(1);
 
 /// Where the server is in a drain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +53,9 @@ pub struct DrainStatus {
     pub state: DrainState,
     /// When held work is cancelled, while draining.
     pub deadline: Option<Instant>,
+    /// The same deadline as a wall-clock time, fixed when it was set (it does not drift between
+    /// two status calls).
+    pub deadline_at: Option<SystemTime>,
     /// Whether the process exits once drained.
     pub exit_when_drained: bool,
 }
@@ -58,6 +68,7 @@ pub struct Exiting;
 struct Inner {
     state: DrainState,
     deadline: Option<Instant>,
+    deadline_at: Option<SystemTime>,
     exit_when_drained: bool,
     /// When `CancelRemaining` was answered; the stop bound counts from here.
     cancelled_at: Option<Instant>,
@@ -82,6 +93,7 @@ impl DrainController {
             inner: Mutex::new(Inner {
                 state: DrainState::Serving,
                 deadline: None,
+                deadline_at: None,
                 exit_when_drained: false,
                 cancelled_at: None,
             }),
@@ -97,16 +109,22 @@ impl DrainController {
     /// a retry is safe.
     pub fn start(&self, now: Instant, grace: Duration, exit_when_drained: bool) -> DrainStatus {
         let mut s = self.lock();
-        let deadline = now + grace;
+        let grace = grace.min(MAX_GRACE);
+        let deadline = now.checked_add(grace).unwrap_or(now);
+        let deadline_at = SystemTime::now()
+            .checked_add(grace)
+            .unwrap_or_else(SystemTime::now);
         if s.state == DrainState::Serving {
             // Readiness flips before anything is refused.
             self.serving.store(false, Ordering::Release);
             self.refusing.store(true, Ordering::Release);
             s.state = DrainState::Draining;
             s.deadline = Some(deadline);
+            s.deadline_at = Some(deadline_at);
             s.cancelled_at = None;
-        } else if s.state == DrainState::Draining {
-            s.deadline = Some(s.deadline.map_or(deadline, |d| d.min(deadline)));
+        } else if s.state == DrainState::Draining && s.deadline.is_none_or(|d| deadline < d) {
+            s.deadline = Some(deadline);
+            s.deadline_at = Some(deadline_at);
         }
         s.exit_when_drained |= exit_when_drained;
         Self::status_of(&s)
@@ -125,6 +143,7 @@ impl DrainController {
             }
             s.state = DrainState::Serving;
             s.deadline = None;
+            s.deadline_at = None;
             s.cancelled_at = None;
             self.serving.store(true, Ordering::Release);
             self.refusing.store(false, Ordering::Release);
@@ -155,6 +174,7 @@ impl DrainController {
         DrainStatus {
             state: s.state,
             deadline: s.deadline,
+            deadline_at: s.deadline_at,
             exit_when_drained: s.exit_when_drained,
         }
     }
@@ -163,8 +183,16 @@ impl DrainController {
     /// a client has not fetched.
     pub fn step(&self, now: Instant, held: usize) -> DrainStep {
         let mut s = self.lock();
-        if s.state != DrainState::Draining {
-            return DrainStep::Wait;
+        match s.state {
+            DrainState::Serving => return DrainStep::Wait,
+            // Asked again once drained (a SIGTERM after an admin `Drain`): the answer still says
+            // whether to exit, so a late `exit_when_drained` is never missed.
+            DrainState::Drained => {
+                return DrainStep::Drained {
+                    exit: s.exit_when_drained,
+                };
+            }
+            DrainState::Draining => {}
         }
         let done = held == 0
             || s.cancelled_at
@@ -267,6 +295,31 @@ mod tests {
     fn resume_while_serving_is_a_no_op() {
         let (c, _, _) = controller();
         assert_eq!(c.resume().unwrap().state, DrainState::Serving);
+    }
+
+    #[test]
+    fn a_drained_server_still_answers_exit_to_a_later_drain() {
+        let (c, _, t) = controller();
+        c.start(t, S(30), false);
+        assert_eq!(c.step(t, 0), DrainStep::Drained { exit: false });
+        c.start(t, S(30), true);
+        assert_eq!(c.step(t, 0), DrainStep::Drained { exit: true });
+    }
+
+    #[test]
+    fn a_huge_grace_period_is_clamped_not_a_panic() {
+        let (c, _, t) = controller();
+        let st = c.start(t, Duration::MAX, false);
+        assert_eq!(st.deadline, Some(t + MAX_GRACE));
+    }
+
+    #[test]
+    fn the_wall_clock_deadline_is_fixed_when_set() {
+        let (c, _, t) = controller();
+        let first = c.start(t, S(60), false).deadline_at;
+        let second = c.start(t, S(600), false).deadline_at;
+        assert_eq!(first, second);
+        assert!(first.is_some());
     }
 
     #[test]

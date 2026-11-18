@@ -327,8 +327,11 @@ pub static SERVER_SHUTDOWN_TIMEOUT: ConfigEntry = startup(
     "krishiv.server.shutdownTimeout",
     ValueType::Duration,
     ConfigValue::Duration(Duration::from_secs(30)),
-    "On SIGTERM or SIGINT, how long running queries may finish before every session is closed \
-     and its queries cancelled. New requests are refused at once.",
+    "On SIGTERM or SIGINT, how long running queries may finish before the rest are cancelled \
+     (`KRISHIV_QUERY_KILLED`; the drain waits up to 10 more seconds for them to stop). `/readyz` \
+     answers 503 and new queries and sessions are refused at once with \
+     `KRISHIV_SERVER_DRAINING`; the admin API's `Drain` uses it as its default grace period. Set \
+     a Kubernetes `terminationGracePeriodSeconds` of at least this plus 15 seconds.",
     None,
 );
 
