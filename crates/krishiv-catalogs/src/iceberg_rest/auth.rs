@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Where a request's bearer token comes from (T067 §3.2, §3.4): one source per catalog, asked once per request, so
-//! there is no per-caller client and no token outlives what its source allows. P3 has the two server-identity
-//! forms, a static token and the OAuth2 client-credentials grant; the delegated forms (exchange, forward) join here
-//! with T067 (PR-58b).
+//! there is no per-caller client and no token outlives what its source allows. The server-identity forms are a
+//! static token and the OAuth2 client-credentials grant; the delegated forms (exchange, forward) are the
+//! `delegated` module's, the one source that reads the caller.
 //!
 //! A client-credentials token is fetched from the declared token endpoint only (never one a server's `/v1/config`
 //! names), reused until a tenth of its lifetime (at most a minute) is left, and dropped when the catalog answers
@@ -15,6 +15,7 @@ use krishiv_common::secret::SecretString;
 use url::Url;
 
 use super::config::{DEFAULT_SCOPE, RestAuth};
+use super::delegated::{Delegated, RestCaller};
 use super::encode::form_body;
 use super::error::RestError;
 use super::transport::{Request, Transport};
@@ -45,6 +46,8 @@ pub(crate) enum Tokens {
         max_depth: usize,
         cached: Mutex<Option<Cached>>,
     },
+    /// The end user's identity (T067 §3.3).
+    Delegated(Box<Delegated>),
 }
 
 /// The longest a client-credentials token is reused, whatever lifetime the endpoint claims: an `expires_in` is
@@ -53,7 +56,7 @@ const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 3600);
 
 /// When to stop using a token fetched at `fetched` that lives `expires_in` seconds: a tenth of its lifetime (at
 /// most a minute) before it ends, the lifetime capped at [`MAX_TOKEN_LIFETIME`].
-fn refresh_at(fetched: Instant, expires_in: u64) -> Instant {
+pub(crate) fn refresh_at(fetched: Instant, expires_in: u64) -> Instant {
     let lifetime = Duration::from_secs(expires_in).min(MAX_TOKEN_LIFETIME);
     // Past the clock's range: use the token for this request only.
     fetched
@@ -68,7 +71,12 @@ fn refresh_margin(lifetime: Duration) -> Duration {
 impl Tokens {
     /// The source for `auth`; `base` is the catalog URI, for the default token endpoint `v1/oauth/tokens`;
     /// `max_depth` bounds the nesting of a token response.
-    pub(crate) fn new(auth: &RestAuth, base: &Url, max_depth: usize) -> Result<Self, RestError> {
+    pub(crate) fn new(
+        catalog: &str,
+        auth: &RestAuth,
+        base: &Url,
+        max_depth: usize,
+    ) -> Result<Self, RestError> {
         Ok(match auth {
             RestAuth::None => Self::None,
             RestAuth::Token(t) => Self::Static(t.clone()),
@@ -90,17 +98,53 @@ impl Tokens {
                 max_depth,
                 cached: Mutex::new(None),
             },
+            RestAuth::Delegated {
+                forward,
+                audience,
+                token_endpoint,
+                scope,
+                actor,
+                limits,
+            } => {
+                let actor = match (actor, token_endpoint) {
+                    (Some((client_id, client_secret)), Some(endpoint)) => Some(Self::new(
+                        catalog,
+                        &RestAuth::ClientCredentials {
+                            client_id: Some(client_id.clone()),
+                            client_secret: client_secret.clone(),
+                            token_endpoint: Some(endpoint.clone()),
+                            scope: scope.clone(),
+                            extra: Vec::new(),
+                        },
+                        base,
+                        max_depth,
+                    )?),
+                    _ => None,
+                };
+                Self::Delegated(Box::new(Delegated::new(
+                    catalog,
+                    *forward,
+                    audience.clone(),
+                    token_endpoint.clone(),
+                    scope.clone(),
+                    actor,
+                    max_depth,
+                    *limits,
+                )))
+            }
         })
     }
 
-    /// The token for the next request.
+    /// The token for `caller`'s next request (only the delegated source reads the caller).
     pub(crate) fn token(
         &self,
+        caller: &RestCaller,
         http: &Transport,
         deadline: Instant,
     ) -> Result<Option<SecretString>, RestError> {
         match self {
             Self::None => Ok(None),
+            Self::Delegated(d) => d.token(caller, http, deadline).map(Some),
             Self::Static(t) => Ok(Some(t.clone())),
             Self::ClientCredentials {
                 client_id,
@@ -161,12 +205,19 @@ impl Tokens {
 
     /// Whether a 401 is worth one retry with a new token.
     pub(crate) fn refreshable(&self) -> bool {
-        matches!(self, Self::ClientCredentials { .. })
+        match self {
+            Self::ClientCredentials { .. } => true,
+            Self::Delegated(d) => d.refreshable(),
+            Self::None | Self::Static(_) => false,
+        }
     }
 
     /// Drops the cached token if it is `refused`, the one the catalog just answered 401 to; a newer token another
     /// caller stored meanwhile stays.
     pub(crate) fn invalidate(&self, refused: &SecretString) {
+        if let Self::Delegated(d) = self {
+            d.invalidate(refused);
+        }
         if let Self::ClientCredentials { cached, .. } = self {
             let mut slot = lock(cached);
             if slot.as_ref().is_some_and(|c| c.token == *refused) {
@@ -210,6 +261,7 @@ mod tests {
     fn invalidate_drops_only_the_refused_token() {
         let base = Url::parse("https://h/").unwrap();
         let t = Tokens::new(
+            "rest",
             &RestAuth::ClientCredentials {
                 client_id: None,
                 client_secret: SecretString::new("s"),
@@ -238,6 +290,7 @@ mod tests {
     fn the_default_token_endpoint_is_under_the_catalog_uri() {
         let base = Url::parse("https://h/iceberg").unwrap();
         let t = Tokens::new(
+            "rest",
             &RestAuth::ClientCredentials {
                 client_id: Some("id".into()),
                 client_secret: SecretString::new("s"),

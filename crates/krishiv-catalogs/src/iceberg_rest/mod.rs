@@ -11,6 +11,9 @@
 mod auth;
 pub mod client;
 pub mod config;
+pub mod delegated;
+#[cfg(test)]
+mod delegated_tests;
 mod encode;
 pub mod error;
 #[cfg(test)]
@@ -24,5 +27,6 @@ pub mod types;
 
 pub use client::RestClient;
 pub use config::{ONELAKE_URI, RestAuth, RestConfig, RestLimits};
+pub use delegated::{DelegationLimits, RestCaller, SubjectToken};
 pub use error::{RestError, RestLimit};
 pub use types::{CatalogConfig, LoadedTable, StorageCredential, TableIdent};

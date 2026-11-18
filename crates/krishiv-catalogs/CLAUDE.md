@@ -33,7 +33,15 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   thread of its own with a current-thread runtime (the caller blocks on a `std` channel with the exact deadline, so dropping or
   calling inside a runtime never panics; no redirects, no ambient proxy, `Accept-Encoding: identity` and any other encoding
   refused, body capped while read), `auth.rs` the token source per request (client-credentials token reused until a tenth of its
-  lifetime is left, the lifetime capped at a day; a 401 drops only the token it refused), `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
+  lifetime is left, the lifetime capped at a day; a 401 drops only the token it refused), `delegated.rs` (P3-T067 §3.3,
+  PR-58b) `auth = delegated`: `RestCaller` (identity key, principal, `delegated_by`, `SubjectToken`) taken by the
+  `*_as` client calls; `forward` sends the caller's token only when its validated `aud` names the catalog's audience
+  and never a signed assertion; `exchange` is RFC 8693 (subject, actor = the catalog's client-credentials token or
+  none, audience, scope), cached per (identity key, claims fingerprint) inside the catalog's own source, a refused
+  subject token remembered 30 s by its whole-token fingerprint, `maxExchangesPerMinute` per (principal, claims) and
+  `maxDistinctExchangesPerMinute` per principal (`KRISHIV_CATALOG_LIMIT_EXCEEDED`), one `krishiv::audit` record per
+  exchange; no user token, an expired one or an IdP 400/401/403 is `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth
+  `error` code only), never a fallback to the server identity; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
   `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
   `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error), `client.rs` `RestClient`
@@ -53,7 +61,8 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   contract suite (`krishiv_plan::analyzer::contract`, in memory and on a file) plus a restart, two connections, threads, two processes and a `kill -9`
   mid-DDL (the test binary re-run as the child). One folding rule, stored in the file (`settings` table; opening it with the other `case_sensitive` is refused; the query's `NameForm` is ignored); `table_details(id, policy)` checks the stored location; `single_part_namespace()` is true; `epoch()` never goes backwards or repeats, also after a read fault. ADR 0028 numbers of `--features sqlite`: 4 new runtime crates (rusqlite 0.43, libsqlite3-sys 0.40 with the bundled SQLite C amalgamation, fallible-iterator, fallible-streaming-iterator; vcpkg is a build-script dependency of libsqlite3-sys), none in the default build; clean build of rusqlite + libsqlite3-sys alone (dev profile, 4 jobs) 29.5 s wall, 24.6 s user, which is the added clean-build time (measured in a scratch crate, not the whole workspace; the release-profile number is not measured). It never touches a table's files: `drop_table` removes the row, `purge` has nothing to purge.
 - `src/declared.rs` (feature `session`, P3-T067 §2.3) `IcebergRestFactory`, the session registry's `iceberg-rest` factory: a
-  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`; `option.prefix` refused at startup), its
+  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`, or delegated; the built
+  `CallerCatalog` maps each call's `CatalogCaller` to a `RestCaller`; `option.prefix` refused at startup), its
   requests on a `PolicyConnector` scoped to the catalog's declared hosts with no redirects; the `Catalog` resolves names only (a
   missing table is absent, an existing one `KRISHIV_UNSUPPORTED_FEATURE` until the provider exists). `transport.rs` builds no
   `reqwest::Client` of its own: `PolicyConnector::catalog_client` (krishiv-store) and a host check before every request.

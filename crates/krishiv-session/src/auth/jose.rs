@@ -340,6 +340,10 @@ pub(crate) struct Identity {
     /// The RFC 8693 `act` claim, when present: who acts for the principal. Read only for
     /// signed act-as assertions (P3-T061 I3).
     pub(crate) act: Option<Actor>,
+    /// The claims a delegated catalog's token exchange depends on (P3-T067 §3.3).
+    pub(crate) claims: super::ExchangeClaims,
+    /// `exp`, whole seconds since the Unix epoch.
+    pub(crate) exp: u64,
 }
 
 /// An RFC 8693 §4.1 `act` claim.
@@ -415,6 +419,7 @@ pub(crate) fn check_claims(
         .filter(|p| is_name(p))
         .ok_or(JoseError::Invalid("principal claim"))?
         .to_owned();
+    let groups_present = claims.0.contains_key(rules.role_claim);
     let groups = match claims.0.get(rules.role_claim) {
         None => Vec::new(),
         Some(Value::String(g)) => vec![g.clone()],
@@ -443,11 +448,36 @@ pub(crate) fn check_claims(
         }),
         Some(_) => return Err(JoseError::Invalid("act")),
     };
+    let strings = |v: &Value| -> Option<Vec<String>> {
+        match v {
+            Value::String(s) => Some(vec![s.clone()]),
+            Value::Array(list) => list.iter().map(|a| a.as_str().map(str::to_owned)).collect(),
+            _ => None,
+        }
+    };
+    let exchange = super::ExchangeClaims {
+        audiences: claims.0.get("aud").and_then(strings).unwrap_or_default(),
+        scope: claims
+            .0
+            .get("scope")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        scp: claims.0.get("scp").and_then(strings),
+        groups: groups_present.then(|| groups.clone()),
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`exp` is finite and after `now` here; a fraction is dropped"
+    )]
+    let exp = exp.max(0.0) as u64;
     Ok(Identity {
         principal,
         groups,
         token_id,
         act,
+        claims: exchange,
+        exp,
     })
 }
 

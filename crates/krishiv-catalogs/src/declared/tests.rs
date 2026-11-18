@@ -5,9 +5,11 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_plan::analyzer::{Catalog, NameForm, TableIdent, TableMeta};
+use krishiv_plan::analyzer::{NameForm, TableIdent, TableMeta};
 use krishiv_session::catalog_decl::{CatalogDecl, CatalogDeclarations, CatalogType, DeclMode};
-use krishiv_session::catalog_registry::{CatalogDeps, CatalogFactory};
+use krishiv_session::catalog_registry::{
+    CallerCatalog, CatalogCaller, CatalogDeps, CatalogFactory,
+};
 use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
 
 use super::IcebergRestFactory;
@@ -71,16 +73,27 @@ const FORM: NameForm = NameForm {
     temporary_only: false,
 };
 
+fn load(
+    catalog: &Arc<dyn CallerCatalog>,
+    id: &TableIdent,
+) -> Result<Option<TableMeta>, KrishivError> {
+    load_as(catalog, &CatalogCaller::server("lake"), id)
+}
+
 #[expect(
     clippy::unwrap_in_result,
     reason = "a test helper: the runtime always builds"
 )]
-fn load(catalog: &Arc<dyn Catalog>, id: &TableIdent) -> Result<Option<TableMeta>, KrishivError> {
+fn load_as(
+    catalog: &Arc<dyn CallerCatalog>,
+    caller: &CatalogCaller,
+    id: &TableIdent,
+) -> Result<Option<TableMeta>, KrishivError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
-    rt.block_on(catalog.load_table(id, None, FORM))
+    rt.block_on(catalog.load_table(caller, id, None, FORM))
 }
 
 #[test]
@@ -102,7 +115,6 @@ fn declared_rest_catalog_resolves_names_with_a_static_token() {
     let deps = deps(DeclMode::Embedded, PrivateAddresses::Allow);
     IcebergRestFactory.validate(&d, &deps).unwrap();
     let catalog = IcebergRestFactory.build(&d, &deps).unwrap();
-    assert_eq!(catalog.name(), "lake");
     assert!(
         load(&catalog, &ident(&["db"], "missing"))
             .unwrap()
@@ -186,7 +198,7 @@ fn an_undeclared_private_address_is_refused_before_sending() {
         Arc::new(crate::location::RemoteLocationPolicy::default()),
     )
     .unwrap();
-    let catalog: Arc<dyn Catalog> = Arc::new(super::RestCatalog {
+    let catalog: Arc<dyn CallerCatalog> = Arc::new(super::RestCatalog {
         client: Arc::new(client),
     });
     let e = load(&catalog, &ident(&["db"], "t")).unwrap_err();
@@ -255,8 +267,119 @@ fn load_table_outside_a_tokio_runtime() {
         .build(&d, &deps(DeclMode::Embedded, PrivateAddresses::Allow))
         .unwrap();
     assert!(tokio::runtime::Handle::try_current().is_err());
-    let found = poll_without_runtime(catalog.load_table(&ident(&["db"], "missing"), None, FORM));
+    let server_caller = CatalogCaller::server("lake");
+    let found = poll_without_runtime(catalog.load_table(
+        &server_caller,
+        &ident(&["db"], "missing"),
+        None,
+        FORM,
+    ));
     assert!(found.unwrap().is_none());
-    let e = poll_without_runtime(catalog.load_table(&ident(&["db"], "t"), None, FORM)).unwrap_err();
+    let e =
+        poll_without_runtime(catalog.load_table(&server_caller, &ident(&["db"], "t"), None, FORM))
+            .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// A delegated catalog whose IdP exchanges `<subject>` for `x-<subject>` and whose catalog has
+/// `db.t` only for `x-alice-jwt` (catalog-side grants of the end user).
+fn delegated_server() -> Server {
+    serve(|r| match path(r) {
+        "/token" => {
+            let subject = url::form_urlencoded::parse(r.body.as_bytes())
+                .find(|(k, _)| k == "subject_token")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            Reply::Json(
+                200,
+                format!(r#"{{"access_token": "x-{subject}", "token_type": "bearer"}}"#),
+            )
+        }
+        "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
+        "/v1/namespaces/db/tables/t" if r.header("authorization") == Some("Bearer x-alice-jwt") => {
+            Reply::Json(
+                200,
+                r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
+                    "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
+                    "config": {}}"#
+                    .into(),
+            )
+        }
+        _ => Reply::Json(404, NO_TABLE.into()),
+    })
+}
+
+fn delegated_catalog(server: &Server) -> Arc<dyn CallerCatalog> {
+    let token_endpoint = format!("{}/token", server.base);
+    let pairs = [
+        ("krishiv.catalog.lake.type", "iceberg-rest"),
+        ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ("krishiv.catalog.lake.allowInsecure", "true"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.audience", "lake"),
+        ("krishiv.catalog.lake.actorToken", "none"),
+        (
+            "krishiv.catalog.lake.tokenEndpoint",
+            token_endpoint.as_str(),
+        ),
+    ];
+    let d = decl(&pairs, DeclMode::Server);
+    let deps = deps(DeclMode::Server, PrivateAddresses::Deny);
+    IcebergRestFactory.validate(&d, &deps).unwrap();
+    IcebergRestFactory.build(&d, &deps).unwrap()
+}
+
+fn oidc_caller(name: &str, token: &str) -> CatalogCaller {
+    use krishiv_common::principal::{Principal, PrincipalKind};
+    use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};
+    use krishiv_session::catalog_registry::IdentityKey;
+    let principal = Principal::new(name, PrincipalKind::User);
+    CatalogCaller::new(
+        IdentityKey::of("lake", &principal),
+        Some(Method::Oidc),
+        Some(InboundCredential::new(
+            CredentialKind::Oidc,
+            krishiv_common::secret::SecretString::new(token),
+            // The same claims for both users: only the identity key tells them apart.
+            ExchangeClaims::with_audiences(vec!["krishiv".to_owned()]),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+        )),
+    )
+}
+
+/// P3-T067 §3.5: what a delegated catalog answers user A is never served to user B; each
+/// user's call reaches the catalog with that user's exchanged token.
+#[test]
+fn delegated_metadata_cache_keyed_by_identity() {
+    let server = delegated_server();
+    let catalog = delegated_catalog(&server);
+    let alice = oidc_caller("alice", "alice-jwt");
+    let bob = oidc_caller("bob", "bob-jwt");
+    let t = ident(&["db"], "t");
+    // Alice is granted `db.t` in the catalog: found (refused until the provider exists).
+    let e = load_as(&catalog, &alice, &t).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // Bob is not: absent for him, whatever Alice loaded.
+    assert!(load_as(&catalog, &bob, &t).unwrap().is_none());
+    assert!(load_as(&catalog, &alice, &t).is_err());
+    let loads: Vec<_> = server
+        .seen()
+        .iter()
+        .filter(|s| path(s) == "/v1/namespaces/db/tables/t")
+        .map(|s| s.header("authorization").unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(
+        loads,
+        [
+            "Bearer x-alice-jwt",
+            "Bearer x-bob-jwt",
+            "Bearer x-alice-jwt"
+        ]
+    );
+    // A session without a user token gets the delegation class, never the server's identity.
+    let e = load_as(&catalog, &CatalogCaller::server("lake"), &t).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable
+    );
 }

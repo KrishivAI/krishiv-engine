@@ -3,8 +3,9 @@
 //! `CatalogRegistry` calls them, the binary registers the ones it compiles in.
 //!
 //! [`IcebergRestFactory`] builds a [`RestClient`] per declared `iceberg-rest` catalog: `auth`
-//! `none`, `token` (a reference resolved when the catalog is built) or `client-credentials` at the
-//! declared token endpoint, every request on the egress policy client scoped to the catalog's
+//! `none`, `token` (a reference resolved when the catalog is built), `client-credentials` at the
+//! declared token endpoint or `delegated` (the caller's own token or an RFC 8693 exchange of it,
+//! design P3-T067 §3.3; each call carries the session's caller), every request on the egress policy client scoped to the catalog's
 //! declared hosts with no redirect followed (§5.2). The catalog resolves names: a table the
 //! catalog does not have is absent; a table it has is refused for now with
 //! `KRISHIV_UNSUPPORTED_FEATURE`, since the metadata mapping and the table provider over the
@@ -15,13 +16,20 @@ use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature};
 use krishiv_plan::TableVersion;
-use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, TableIdent, TableMeta};
-use krishiv_session::catalog_decl::{CatalogAuth, CatalogDecl, CatalogStorage, CatalogType};
-use krishiv_session::catalog_registry::{CatalogDeps, CatalogFactory};
+use krishiv_plan::analyzer::{BoxFuture, NameForm, TableIdent, TableMeta};
+use krishiv_session::auth::CredentialKind;
+use krishiv_session::catalog_decl::{
+    CatalogAuth, CatalogDecl, CatalogStorage, CatalogType, Delegation,
+};
+use krishiv_session::catalog_registry::{
+    CallerCatalog, CatalogCaller, CatalogDeps, CatalogFactory, IdentityKey,
+};
 use krishiv_store::{PolicyConnector, Redirects};
 use url::Url;
 
-use crate::iceberg_rest::{RestAuth, RestClient, RestConfig};
+use crate::iceberg_rest::{
+    DelegationLimits, RestAuth, RestCaller, RestClient, RestConfig, SubjectToken,
+};
 use crate::location::RemoteLocationPolicy;
 
 /// Builds `iceberg-rest` catalogs over Krishiv's own REST client.
@@ -61,6 +69,16 @@ impl IcebergRestFactory {
         })?;
         let mut config = RestConfig::new(uri)?;
         config.warehouse.clone_from(&decl.warehouse);
+        let endpoint = |e: &str| -> Result<Url, KrishivError> {
+            Url::parse(e).map_err(|_| -> KrishivError {
+                KrishivInvalidConfigValue {
+                    value: "(not shown)".to_owned(),
+                    key: format!("\"{}\"", key_of(decl, "tokenEndpoint")),
+                    reason: "it is not a URL".to_owned(),
+                }
+                .into()
+            })
+        };
         let secret = |r: &krishiv_session::auth::SecretRef, field: &str| {
             if resolve {
                 r.resolve(&key_of(decl, field))
@@ -80,19 +98,35 @@ impl IcebergRestFactory {
             } => RestAuth::ClientCredentials {
                 client_id: Some(client_id.clone()),
                 client_secret: secret(client_secret, "clientSecret")?,
-                token_endpoint: Some(Url::parse(token_endpoint).map_err(|_| -> KrishivError {
-                    KrishivInvalidConfigValue {
-                        value: "(not shown)".to_owned(),
-                        key: format!("\"{}\"", key_of(decl, "tokenEndpoint")),
-                        reason: "it is not a URL".to_owned(),
-                    }
-                    .into()
-                })?),
+                token_endpoint: Some(endpoint(token_endpoint)?),
                 scope: scope.clone(),
                 extra: audience
                     .iter()
                     .map(|a| ("audience".to_owned(), a.clone()))
                     .collect(),
+            },
+            CatalogAuth::Delegated {
+                delegation,
+                audience,
+                token_endpoint,
+                scope,
+                actor,
+            } => RestAuth::Delegated {
+                forward: *delegation == Delegation::Forward,
+                audience: audience.clone(),
+                token_endpoint: token_endpoint.as_deref().map(endpoint).transpose()?,
+                scope: scope.clone(),
+                actor: match actor {
+                    Some(a) => Some((
+                        a.client_id.clone(),
+                        secret(&a.client_secret, "clientSecret")?,
+                    )),
+                    None => None,
+                },
+                limits: DelegationLimits {
+                    max_exchanges_per_minute: deps.max_exchanges_per_minute,
+                    max_distinct_exchanges_per_minute: deps.max_distinct_exchanges_per_minute,
+                },
             },
         };
         config.vended_credentials = decl.storage == CatalogStorage::Vended;
@@ -126,7 +160,7 @@ impl CatalogFactory for IcebergRestFactory {
         &self,
         decl: &CatalogDecl,
         deps: &CatalogDeps,
-    ) -> Result<Arc<dyn Catalog>, KrishivError> {
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
         let config = Self::config(decl, deps, true)?;
         let client = RestClient::new(
             decl.name.clone(),
@@ -150,17 +184,51 @@ fn quoted(part: &str) -> String {
     format!("`{}`", part.replace('`', "``"))
 }
 
-impl Catalog for RestCatalog {
-    fn name(&self) -> &str {
-        self.client.name()
+/// The identity key as the REST token source keys on it: every part length-prefixed, so no two
+/// keys encode alike.
+fn encode_identity(key: &IdentityKey) -> String {
+    let mut out = String::new();
+    for part in [
+        Some(key.catalog.as_str()),
+        key.principal_id.as_deref(),
+        key.tenant.as_deref(),
+        key.delegated_by.as_deref(),
+    ] {
+        match part {
+            None => out.push('-'),
+            Some(p) => out.push_str(&format!("{}:{p}", p.len())),
+        }
     }
+    out
+}
 
-    fn epoch(&self) -> u64 {
-        0
-    }
+/// The REST client's view of `caller` (T067 §3.2): the server for a caller without a principal.
+pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
+    let Some(principal) = &caller.identity.principal_id else {
+        return RestCaller::server();
+    };
+    let subject = caller.credential.as_ref().map(|c| {
+        SubjectToken::new(
+            c.token().clone(),
+            c.kind() == CredentialKind::SignedAssertion,
+            c.claims().audiences.clone(),
+            c.claims_fingerprint(),
+            c.expires_at(),
+        )
+    });
+    RestCaller::user(
+        encode_identity(&caller.identity),
+        principal.clone(),
+        caller.identity.delegated_by.clone(),
+        caller.authenticated_with(),
+        subject,
+    )
+}
 
+impl CallerCatalog for RestCatalog {
     fn load_table<'a>(
         &'a self,
+        caller: &'a CatalogCaller,
         id: &'a TableIdent,
         version: Option<TableVersion>,
         form: NameForm,
@@ -172,12 +240,13 @@ impl Catalog for RestCatalog {
             }
             let client = Arc::clone(&self.client);
             let (namespace, name) = (id.namespace.clone(), id.name.clone());
+            let who = rest_caller(caller);
             // The client blocks until its deadline: never on a compute worker. Outside a tokio
             // runtime (an embedded host on another executor) there is no blocking pool, and the
             // call runs on the caller's thread, which is blocking already.
             let loaded = match tokio::runtime::Handle::try_current() {
                 Ok(handle) => handle
-                    .spawn_blocking(move || client.load_table(&namespace, &name))
+                    .spawn_blocking(move || client.load_table_as(&who, &namespace, &name))
                     .await
                     .map_err(|_| {
                         crate::iceberg_rest::RestError::Transport(
@@ -189,7 +258,7 @@ impl Catalog for RestCatalog {
                             &crate::iceberg_rest::RestLimits::default(),
                         )
                     })??,
-                Err(_) => client.load_table(&namespace, &name)?,
+                Err(_) => client.load_table_as(&who, &namespace, &name)?,
             };
             let Some(_table) = loaded else {
                 return Ok(None);

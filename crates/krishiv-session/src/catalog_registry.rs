@@ -16,6 +16,11 @@
 //!   fails that query and is tried again by the next one.
 //! - **Per tenant (§2.4).** A catalog that lists tenants does not exist for a principal of any
 //!   other tenant, or of none: listings omit it and a name lookup fails as for an undeclared name.
+//! - **Callers (§3.2).** A built catalog answers one [`CatalogCaller`] at a time: the caller's
+//!   [`IdentityKey`] and, for a `delegated` catalog, the session's latest user token
+//!   ([`crate::Session::set_inbound_credential`]). Each query's view of the declared catalogs
+//!   carries its session's caller, so the analyzer's `Catalog` trait is unchanged. A catalog of
+//!   another mode ignores the caller: every principal reaches it as the server.
 //! - **Server mode** (decisions 1 and 7): the declaration keys are startup only. A session's
 //!   `SET`/`RESET` of one, or a session builder's, is `CANNOT_MODIFY_STATIC_CONFIG` for every
 //!   role (`conf.rs`, `runtime.rs`). Embedded sessions are unchanged.
@@ -26,16 +31,165 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, Config, ConfigValue,
+    CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_METADATA_BYTES,
+    CATALOG_REQUEST_TIMEOUT, Config, ConfigValue,
 };
 use krishiv_common::error::KrishivError;
+use krishiv_common::principal::Principal;
 use krishiv_io::egress::EgressPolicy;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, TableIdent, TableMeta};
 
+use crate::auth::{InboundCredential, Method};
 use crate::catalog_decl::{
     CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogType, DeclMode,
+    Delegation,
 };
+
+/// Who a declared catalog answers (design P3-T067 §3.2): for a `delegated` catalog the catalog,
+/// the principal id ([`Principal::id`]: kind, tenant, name, groups), its tenant and the service
+/// acting for it; for every other mode the catalog alone (every caller is the server). No token,
+/// token hash or scope is part of it: a refreshed token of the same identity keeps its caches.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub struct IdentityKey {
+    /// The catalog name.
+    pub catalog: String,
+    /// [`Principal::id`]; `None` for the server identity.
+    pub principal_id: Option<String>,
+    /// The principal's tenant.
+    pub tenant: Option<String>,
+    /// `Principal::delegated_by`: the service acting for the principal.
+    pub delegated_by: Option<String>,
+}
+
+impl IdentityKey {
+    /// The server's own identity at `catalog`.
+    #[must_use]
+    pub fn server(catalog: impl Into<String>) -> Self {
+        Self {
+            catalog: catalog.into(),
+            principal_id: None,
+            tenant: None,
+            delegated_by: None,
+        }
+    }
+
+    /// `principal` at `catalog`.
+    #[must_use]
+    pub fn of(catalog: impl Into<String>, principal: &Principal) -> Self {
+        Self {
+            catalog: catalog.into(),
+            principal_id: Some(principal.id()),
+            tenant: principal.tenant.clone(),
+            delegated_by: principal.delegated_by.clone(),
+        }
+    }
+}
+
+/// One call's caller of a declared catalog (§3.2): its identity key and, for a `delegated`
+/// catalog, the session's latest user token and how the session authenticated. `Debug` never
+/// shows the token.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct CatalogCaller {
+    /// The identity key.
+    pub identity: IdentityKey,
+    /// The user token (OIDC or a signed assertion), when the session has one.
+    pub credential: Option<InboundCredential>,
+    /// How the session's latest RPC authenticated; `None` for an embedded session.
+    pub method: Option<Method>,
+}
+
+impl CatalogCaller {
+    /// The server itself at `catalog` (no user token).
+    #[must_use]
+    pub fn server(catalog: impl Into<String>) -> Self {
+        Self {
+            identity: IdentityKey::server(catalog),
+            credential: None,
+            method: None,
+        }
+    }
+
+    /// A user caller.
+    #[must_use]
+    pub fn new(
+        identity: IdentityKey,
+        method: Option<Method>,
+        credential: Option<InboundCredential>,
+    ) -> Self {
+        Self {
+            identity,
+            credential,
+            method,
+        }
+    }
+
+    /// How error messages name the session's authentication: the credential's kind when it has
+    /// one, else the method (`token`, `mtls`, `none`).
+    #[must_use]
+    pub fn authenticated_with(&self) -> &'static str {
+        match (&self.credential, self.method) {
+            (Some(c), _) => c.kind().as_str(),
+            (None, Some(m)) => m.as_str(),
+            (None, None) => "no user token (an embedded session)",
+        }
+    }
+}
+
+/// A built declared catalog: the analyzer's `Catalog` with the caller of each call (§3.2).
+pub trait CallerCatalog: fmt::Debug + Send + Sync {
+    /// As `Catalog::epoch`.
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    /// As `Catalog::load_table`, for `caller`.
+    fn load_table<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        form: NameForm,
+    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>>;
+}
+
+/// A catalog that answers every caller as the server: any analyzer `Catalog` as a
+/// [`CallerCatalog`] (a factory of a mode without delegation, a test).
+pub struct ServerIdentity(pub Arc<dyn Catalog>);
+
+impl fmt::Debug for ServerIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ServerIdentity")
+            .field(&self.0.name())
+            .finish()
+    }
+}
+
+impl CallerCatalog for ServerIdentity {
+    fn epoch(&self) -> u64 {
+        self.0.epoch()
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _caller: &'a CatalogCaller,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        form: NameForm,
+    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
+        self.0.load_table(id, version, form)
+    }
+}
+
+/// How a session's latest RPC authenticated, and the user token it carried.
+#[derive(Debug, Clone)]
+pub(crate) struct Inbound {
+    method: Method,
+    credential: Option<InboundCredential>,
+}
 
 /// Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
 /// crates (`krishiv-catalogs`: `iceberg-rest`), registered by the binary that compiles them in.
@@ -63,7 +217,7 @@ pub trait CatalogFactory: fmt::Debug + Send + Sync {
         &self,
         decl: &CatalogDecl,
         deps: &CatalogDeps,
-    ) -> Result<Arc<dyn Catalog>, KrishivError>;
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError>;
 }
 
 /// What a factory builds a catalog with: the mode, the runtime's egress policy (a catalog's
@@ -83,6 +237,10 @@ pub struct CatalogDeps {
     pub request_timeout: Duration,
     /// The largest response a catalog call may read.
     pub max_response_bytes: u64,
+    /// `krishiv.catalog.delegation.maxExchangesPerMinute`.
+    pub max_exchanges_per_minute: usize,
+    /// `krishiv.catalog.delegation.maxDistinctExchangesPerMinute`.
+    pub max_distinct_exchanges_per_minute: usize,
 }
 
 impl fmt::Debug for CatalogDeps {
@@ -93,12 +251,18 @@ impl fmt::Debug for CatalogDeps {
             .field("proxy", &self.proxy.is_some())
             .field("request_timeout", &self.request_timeout)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_exchanges_per_minute", &self.max_exchanges_per_minute)
+            .field(
+                "max_distinct_exchanges_per_minute",
+                &self.max_distinct_exchanges_per_minute,
+            )
             .finish()
     }
 }
 
 impl CatalogDeps {
-    /// Dependencies with the default limits (30 s, 256 MiB) and no proxy.
+    /// Dependencies with the default limits (30 s, 256 MiB, 60 and 20 exchanges a minute) and no
+    /// proxy.
     #[must_use]
     pub fn new(mode: DeclMode, egress: Arc<EgressPolicy>) -> Self {
         Self {
@@ -107,6 +271,8 @@ impl CatalogDeps {
             proxy: None,
             request_timeout: Duration::from_secs(30),
             max_response_bytes: 256 << 20,
+            max_exchanges_per_minute: 60,
+            max_distinct_exchanges_per_minute: 20,
         }
     }
 
@@ -132,6 +298,18 @@ impl CatalogDeps {
             .and_then(ConfigValue::as_size)
         {
             deps.max_response_bytes = n;
+        }
+        let count = |entry| {
+            config
+                .get(entry)
+                .and_then(ConfigValue::as_int)
+                .and_then(|n| usize::try_from(n).ok())
+        };
+        if let Some(n) = count(&CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE) {
+            deps.max_exchanges_per_minute = n;
+        }
+        if let Some(n) = count(&CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE) {
+            deps.max_distinct_exchanges_per_minute = n;
         }
         deps
     }
@@ -190,7 +368,7 @@ struct Declared {
     decl: CatalogDecl,
     factory: Arc<dyn CatalogFactory>,
     deps: Arc<CatalogDeps>,
-    built: Mutex<Option<Arc<dyn Catalog>>>,
+    built: Mutex<Option<Arc<dyn CallerCatalog>>>,
 }
 
 impl fmt::Debug for Declared {
@@ -212,7 +390,7 @@ impl Declared {
 
     /// The built catalog, building it now when this is its first use. A failure is not kept:
     /// the next use builds again. Two first uses at once may both build; the first stored wins.
-    fn catalog(&self) -> Result<Arc<dyn Catalog>, KrishivError> {
+    fn catalog(&self) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
         if let Some(c) = self
             .built
             .lock()
@@ -228,10 +406,10 @@ impl Declared {
     }
 }
 
-/// A declared catalog as the analyzer sees it: its name at once, the real catalog on its first
-/// table load.
+/// A declared catalog as the analyzer sees it for one caller: its name at once, the real catalog
+/// on its first table load.
 #[derive(Debug)]
-struct DeclaredCatalog(Arc<Declared>);
+struct DeclaredCatalog(Arc<Declared>, CatalogCaller);
 
 impl Catalog for DeclaredCatalog {
     fn name(&self) -> &str {
@@ -255,7 +433,7 @@ impl Catalog for DeclaredCatalog {
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
             let catalog = self.0.catalog()?;
-            catalog.load_table(id, version, form).await
+            catalog.load_table(&self.1, id, version, form).await
         })
     }
 }
@@ -343,6 +521,16 @@ impl CatalogRegistry {
         for w in &declarations.warnings {
             tracing::warn!(target: "krishiv::catalog", "{w}");
         }
+        for d in catalogs.values() {
+            if d.decl.auth.delegation() == Some(Delegation::Forward) {
+                // §3.3: an operator sees every catalog that receives users' own tokens.
+                tracing::info!(
+                    target: "krishiv::catalog",
+                    catalog = d.decl.name.as_str(),
+                    "catalog forwards users' own tokens (auth = delegated, delegation = forward)"
+                );
+            }
+        }
         Ok(Self {
             mode: setup.mode,
             default: declarations
@@ -383,13 +571,36 @@ impl CatalogRegistry {
 
     /// The catalog `name` (any letter case) as a principal of `tenant` sees it: `None` when it is
     /// not declared or not visible, the same answer either way (hidden means absent).
+    /// It answers as the server: a `delegated` catalog fails every call for want of a user token.
     #[must_use]
     pub fn catalog(&self, name: &str, tenant: Option<&str>) -> Option<Arc<dyn Catalog>> {
+        self.catalog_for(name, tenant, None, None)
+    }
+
+    /// [`Self::catalog`] for `principal` with its session's latest authentication `inbound`.
+    fn catalog_for(
+        &self,
+        name: &str,
+        tenant: Option<&str>,
+        principal: Option<&Principal>,
+        inbound: Option<&Inbound>,
+    ) -> Option<Arc<dyn Catalog>> {
         let declared = self.catalogs.get(&name.to_ascii_lowercase())?;
-        declared
-            .decl
-            .visible_to(tenant)
-            .then(|| Arc::new(DeclaredCatalog(Arc::clone(declared))) as Arc<dyn Catalog>)
+        if !declared.decl.visible_to(tenant) {
+            return None;
+        }
+        let decl = &declared.decl;
+        // §3.2: only a delegated catalog tells callers apart; for the others the key is the
+        // catalog and no user token goes anywhere.
+        let caller = match (&decl.auth, principal) {
+            (CatalogAuth::Delegated { .. }, Some(p)) => CatalogCaller::new(
+                IdentityKey::of(decl.name.clone(), p),
+                inbound.map(|i| i.method),
+                inbound.and_then(|i| i.credential.clone()),
+            ),
+            _ => CatalogCaller::server(decl.name.clone()),
+        };
+        Some(Arc::new(DeclaredCatalog(Arc::clone(declared), caller)) as Arc<dyn Catalog>)
     }
 }
 
@@ -402,6 +613,14 @@ fn check_secrets(decl: &CatalogDecl) -> Result<(), KrishivError> {
         CatalogAuth::ClientCredentials { client_secret, .. } => {
             drop(client_secret.resolve(&key_of(&decl.name, "clientSecret"))?);
         }
+        CatalogAuth::Delegated { actor, .. } => {
+            if let Some(a) = actor {
+                drop(
+                    a.client_secret
+                        .resolve(&key_of(&decl.name, "clientSecret"))?,
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -412,6 +631,10 @@ fn check_secrets(decl: &CatalogDecl) -> Result<(), KrishivError> {
 pub(crate) struct DeclaredView {
     registry: Arc<CatalogRegistry>,
     tenant: Option<String>,
+    /// The session's principal, for delegated catalogs' identity keys.
+    principal: Option<Arc<Principal>>,
+    /// The session's latest authentication, snapshotted for this view's query.
+    inbound: Option<Inbound>,
 }
 
 impl Default for DeclaredView {
@@ -419,6 +642,8 @@ impl Default for DeclaredView {
         Self {
             registry: Arc::new(CatalogRegistry::empty(DeclMode::Embedded)),
             tenant: None,
+            principal: None,
+            inbound: None,
         }
     }
 }
@@ -435,13 +660,27 @@ pub(crate) struct CatalogRow {
 }
 
 impl DeclaredView {
-    pub(crate) fn new(registry: Arc<CatalogRegistry>, tenant: Option<String>) -> Self {
-        Self { registry, tenant }
+    pub(crate) fn new(
+        registry: Arc<CatalogRegistry>,
+        principal: Arc<Principal>,
+        inbound: Option<Inbound>,
+    ) -> Self {
+        Self {
+            registry,
+            tenant: principal.tenant.clone(),
+            principal: Some(principal),
+            inbound,
+        }
     }
 
-    /// The visible catalog `name`.
+    /// The visible catalog `name`, answering this view's caller.
     pub(crate) fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
-        self.registry.catalog(name, self.tenant.as_deref())
+        self.registry.catalog_for(
+            name,
+            self.tenant.as_deref(),
+            self.principal.as_deref(),
+            self.inbound.as_ref(),
+        )
     }
 
     /// The canonical name of the visible catalog `name` (any letter case).
@@ -470,7 +709,7 @@ impl DeclaredView {
                 kind: d.kind.name(),
                 auth: d.auth.name(),
                 storage: d.storage.name(),
-                delegation: None,
+                delegation: d.auth.delegation().map(Delegation::name),
                 default: default == Some(d.name.as_str()),
             })
             .collect()
@@ -480,10 +719,31 @@ impl DeclaredView {
 impl crate::Session {
     /// The declared catalogs as this session's principal sees them.
     pub(crate) fn declared_catalogs(&self) -> DeclaredView {
+        let inbound = self
+            .state
+            .inbound
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         DeclaredView::new(
             Arc::clone(&self.state.runtime.catalogs),
-            self.state.principal.tenant.clone(),
+            Arc::clone(&self.state.principal),
+            inbound,
         )
+    }
+
+    /// Records how the session's latest RPC authenticated and the user token it carried (an
+    /// OIDC token or a signed assertion; `None` for a static token, a certificate or plain act-as
+    /// metadata), for its `delegated` catalogs (design P3-T067 §3.3). The most recent call wins,
+    /// as the per-RPC baggage does: a fresher token replaces the stored one (a token of another
+    /// principal never reaches this session, whose owner is fixed). Queries take it when they
+    /// start.
+    pub fn set_inbound_credential(&self, method: Method, credential: Option<InboundCredential>) {
+        *self
+            .state
+            .inbound
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Inbound { method, credential });
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible

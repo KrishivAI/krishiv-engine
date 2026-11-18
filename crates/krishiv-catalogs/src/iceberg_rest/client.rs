@@ -6,8 +6,9 @@
 //!   `namespace-separator` are taken from it, after a check that neither can leave `/v1/` (they go into the path as
 //!   the server wrote them, as in Java's `ResourcePaths`). A `uri` it returns is ignored and logged: the client
 //!   only ever talks to the declared host, so the caller's token never goes anywhere else.
-//! - **Tokens.** One source per catalog, asked per request (`auth`); a 401 with a client-credentials token drops it
-//!   and retries once.
+//! - **Tokens.** One source per catalog, asked per request (`auth`) for the call's [`RestCaller`] (only a delegated
+//!   source reads it; the `*_as` methods take it, the others call as the server); a 401 with a client-credentials or
+//!   exchanged token drops it and retries once.
 //! - **Locations.** `metadata-location`, the metadata's `location` and every storage credential's `prefix` pass
 //!   [`check_location`] before the table is returned.
 //! - **Refusals.** A table whose `read-restrictions` impose anything is refused (`KRISHIV_UNSUPPORTED_FEATURE`, T067
@@ -38,6 +39,7 @@ use url::Url;
 
 use super::auth::Tokens;
 use super::config::RestConfig;
+use super::delegated::RestCaller;
 use super::encode::{
     DEFAULT_NAMESPACE_SEPARATOR, namespace_path, namespace_query, path_segment, prefix_is_safe,
     separator_is_safe,
@@ -192,7 +194,7 @@ impl RestClient {
             )?;
             Ok((
                 http,
-                Tokens::new(&config.auth, &config.uri, config.limits.max_depth)?,
+                Tokens::new(&name, &config.auth, &config.uri, config.limits.max_depth)?,
             ))
         };
         let (http, tokens) =
@@ -232,6 +234,7 @@ impl RestClient {
     /// every 404 of a table call as "no such table".
     fn get(
         &self,
+        caller: &RestCaller,
         url: &Url,
         headers: &[(&'static str, String)],
         deadline: Instant,
@@ -241,7 +244,7 @@ impl RestClient {
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            let bearer = self.tokens.token(&self.http, deadline)?;
+            let bearer = self.tokens.token(caller, &self.http, deadline)?;
             request.bearer.clone_from(&bearer);
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
@@ -274,7 +277,7 @@ impl RestClient {
     }
 
     /// The server's configuration, fetched on first use.
-    fn server(&self, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
+    fn server(&self, caller: &RestCaller, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
         let slot = || {
             self.server
                 .lock()
@@ -292,7 +295,7 @@ impl RestClient {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
             let value = self
-                .get(&url, &[], deadline, &[])?
+                .get(caller, &url, &[], deadline, &[])?
                 .ok_or(RestError::Status {
                     status: 404,
                     kind: Some("NoSuchWarehouseException".to_owned()),
@@ -339,7 +342,10 @@ impl RestClient {
     /// # Errors
     /// The `/v1/config` call failed.
     pub fn catalog_config(&self) -> Result<CatalogConfig, KrishivError> {
-        Ok(self.server(self.deadline())?.config.clone())
+        Ok(self
+            .server(&RestCaller::server(), self.deadline())?
+            .config
+            .clone())
     }
 
     fn url(&self, server: &Server, tail: &[&str]) -> Result<Url, RestError> {
@@ -354,6 +360,7 @@ impl RestClient {
     /// Every page of a listing, within the page and entry limits. `Ok(None)` is a 404 on the first page.
     fn pages<T>(
         &self,
+        caller: &RestCaller,
         base: &Url,
         parse: impl Fn(Value) -> Result<Page<T>, RestError>,
         deadline: Instant,
@@ -367,7 +374,7 @@ impl RestClient {
             if let Some(t) = &token {
                 url.query_pairs_mut().append_pair("pageToken", t);
             }
-            let Some(value) = self.get(&url, &[], deadline, NO_SUCH_NAMESPACE)? else {
+            let Some(value) = self.get(caller, &url, &[], deadline, NO_SUCH_NAMESPACE)? else {
                 return if token.is_none() {
                     Ok(None)
                 } else {
@@ -410,9 +417,22 @@ impl RestClient {
         &self,
         parent: &[String],
     ) -> Result<Option<Vec<Vec<String>>>, KrishivError> {
+        self.list_namespaces_as(&RestCaller::server(), parent)
+    }
+
+    /// [`list_namespaces`](Self::list_namespaces) for `caller`.
+    ///
+    /// # Errors
+    /// As [`list_namespaces`](Self::list_namespaces); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated
+    /// catalog has no usable token for `caller`.
+    pub fn list_namespaces_as(
+        &self,
+        caller: &RestCaller,
+        parent: &[String],
+    ) -> Result<Option<Vec<Vec<String>>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(parent, None);
         let run = || -> Result<Option<Vec<Vec<String>>>, RestError> {
             check_names(parent, None)?;
@@ -422,7 +442,7 @@ impl RestClient {
                     namespace_query(parent, &server.separator).map_err(RestError::Protocol)?;
                 url.query_pairs_mut().append_pair("parent", &value);
             }
-            self.pages(&url, types::namespaces_page, deadline)
+            self.pages(caller, &url, types::namespaces_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -435,15 +455,28 @@ impl RestClient {
         &self,
         namespace: &[String],
     ) -> Result<Option<Vec<TableIdent>>, KrishivError> {
+        self.list_tables_as(&RestCaller::server(), namespace)
+    }
+
+    /// [`list_tables`](Self::list_tables) for `caller`.
+    ///
+    /// # Errors
+    /// As [`list_tables`](Self::list_tables); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated catalog has
+    /// no usable token for `caller`.
+    pub fn list_tables_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+    ) -> Result<Option<Vec<TableIdent>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, None);
         let run = || -> Result<Option<Vec<TableIdent>>, RestError> {
             check_namespace(namespace, None)?;
             let ns = namespace_path(namespace, &server.separator);
             let url = self.url(&server, &["namespaces", &ns, "tables"])?;
-            self.pages(&url, types::tables_page, deadline)
+            self.pages(caller, &url, types::tables_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -459,9 +492,23 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
+        self.load_table_as(&RestCaller::server(), namespace, table)
+    }
+
+    /// [`load_table`](Self::load_table) for `caller`.
+    ///
+    /// # Errors
+    /// As [`load_table`](Self::load_table); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated catalog has no
+    /// usable token for `caller`.
+    pub fn load_table_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<LoadedTable>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, Some(table));
         let run = || -> Result<Option<LoadedTable>, RestError> {
             check_namespace(namespace, Some(table))?;
@@ -476,7 +523,7 @@ impl RestClient {
             } else {
                 Vec::new()
             };
-            self.get(&url, &headers, deadline, NO_SUCH_TABLE)?
+            self.get(caller, &url, &headers, deadline, NO_SUCH_TABLE)?
                 .map(LoadedTable::from_json)
                 .transpose()
         };
@@ -526,9 +573,23 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
+        self.load_credentials_as(&RestCaller::server(), namespace, table)
+    }
+
+    /// [`load_credentials`](Self::load_credentials) for `caller`.
+    ///
+    /// # Errors
+    /// As [`load_credentials`](Self::load_credentials); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated
+    /// catalog has no usable token for `caller`.
+    pub fn load_credentials_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, Some(table));
         if !server.config.supports(LOAD_CREDENTIALS) {
             return Err(KrishivUnsupportedFeature {
@@ -547,7 +608,7 @@ impl RestClient {
                 &server,
                 &["namespaces", &ns, "tables", &name, "credentials"],
             )?;
-            self.get(&url, &[], deadline, NO_SUCH_TABLE)?
+            self.get(caller, &url, &[], deadline, NO_SUCH_TABLE)?
                 .map(types::credentials)
                 .transpose()
         };

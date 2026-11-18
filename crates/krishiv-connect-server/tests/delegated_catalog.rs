@@ -1,0 +1,324 @@
+// SPDX-License-Identifier: Apache-2.0
+//! A delegated catalog end to end through Connect (design P3-T067 §3.3, §8): an OIDC session's
+//! bearer token reaches the declared Iceberg REST catalog only as the token the IdP exchanged it
+//! for, each user with their own; a static-token session gets
+//! `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` and the catalog sees nothing.
+#![cfg(unix)]
+#![expect(
+    clippy::expect_used,
+    reason = "integration-test helpers are outside #[test] fns"
+)]
+
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener as StdListener;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
+use krishiv_catalogs::declared::IcebergRestFactory;
+use krishiv_common::config::Config;
+use krishiv_common::principal::{Principal, PrincipalKind};
+use krishiv_common::secret::SecretString;
+use krishiv_connect::proto::v4_3 as pb;
+use krishiv_connect::proto::v4_3::plan::OpType;
+use krishiv_connect::proto::v4_3::relation::RelType;
+use krishiv_connect_server::{
+    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, role_sessions,
+};
+use krishiv_session::auth::{
+    AuthFailure, Authenticated, Authenticator, CredentialKind, Credentials, ExchangeClaims,
+    InboundCredential, Method, Role,
+};
+use krishiv_session::catalog_decl::DeclMode;
+use krishiv_session::catalog_registry::CatalogSetup;
+use krishiv_session::{BoxFuture, EngineRuntime, Session};
+use prost::Message;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tonic::transport::Channel;
+
+/// One session id per caller (a session id belongs to one owner).
+fn session_of(token: &str) -> &'static str {
+    match token {
+        "alice-jwt" => "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10",
+        "bob-jwt" => "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d11",
+        _ => "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d12",
+    }
+}
+
+/// One request the fake saw: path, `authorization`, body.
+type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
+
+/// A fake IdP and Iceberg REST catalog on one loopback port: `/token` exchanges `<subject>` for
+/// `x-<subject>`; `db.t` exists only for `x-alice-jwt`.
+fn fake_catalog() -> (String, Seen) {
+    let listener = StdListener::bind("127.0.0.1:0").expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    let seen: Seen = Arc::default();
+    let log = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let target = line.split_whitespace().nth(1).unwrap_or("").to_owned();
+            let path = target.split('?').next().unwrap_or("").to_owned();
+            let (mut auth, mut len) = (String::new(), 0_usize);
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).is_err() || h.trim_end().is_empty() {
+                    break;
+                }
+                let (k, v) = h.trim_end().split_once(':').unwrap_or(("", ""));
+                match k.to_ascii_lowercase().as_str() {
+                    "authorization" => auth = v.trim().to_owned(),
+                    "content-length" => len = v.trim().parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+            let mut body = vec![0; len];
+            let _ = reader.read_exact(&mut body);
+            let body = String::from_utf8_lossy(&body).into_owned();
+            log.lock()
+                .expect("log")
+                .push((path.clone(), auth.clone(), body.clone()));
+            let (status, json) = match path.as_str() {
+                "/token" => {
+                    let subject = body
+                        .split('&')
+                        .find_map(|p| p.strip_prefix("subject_token="))
+                        .unwrap_or("");
+                    (
+                        200,
+                        format!(r#"{{"access_token": "x-{subject}", "token_type": "bearer"}}"#),
+                    )
+                }
+                "/v1/config" => (200, r#"{"defaults": {}, "overrides": {}}"#.to_owned()),
+                "/v1/namespaces/db/tables/t" if auth == "Bearer x-alice-jwt" => (
+                    200,
+                    r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
+                        "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
+                        "config": {}}"#
+                        .to_owned(),
+                ),
+                _ => (
+                    404,
+                    r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#
+                        .to_owned(),
+                ),
+            };
+            let head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                json.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(json.as_bytes());
+        }
+    });
+    (base, seen)
+}
+
+/// Bearer tokens ending in `-jwt` are OIDC tokens of the user before the dash (the validated
+/// result the T061 validator would give, credential kept); any other is a static token of the
+/// service `svc`, which keeps none.
+struct TestAuth;
+
+impl Authenticator for TestAuth {
+    fn authenticate<'a>(
+        &'a self,
+        credentials: &'a Credentials<'a>,
+    ) -> BoxFuture<'a, Result<Authenticated, AuthFailure>> {
+        Box::pin(async move {
+            let token = credentials.bearer.ok_or(AuthFailure::Missing)?;
+            Ok(match token.strip_suffix("-jwt") {
+                Some(user) => Authenticated::new(
+                    Principal::new(user, PrincipalKind::User),
+                    Some(Role::Operator),
+                    Method::Oidc,
+                )
+                .with_credential(Some(InboundCredential::new(
+                    CredentialKind::Oidc,
+                    SecretString::new(token),
+                    ExchangeClaims::with_audiences(vec!["krishiv".to_owned()]),
+                    SystemTime::now() + Duration::from_secs(3600),
+                ))),
+                None => Authenticated::new(
+                    Principal::new("svc", PrincipalKind::Service),
+                    Some(Role::Operator),
+                    Method::Token,
+                ),
+            })
+        })
+    }
+}
+
+async fn start(base: &str) -> (Channel, oneshot::Sender<()>) {
+    let token_endpoint = format!("{base}/token");
+    let setup = [
+        ("krishiv.catalog.lake.type", "iceberg-rest"),
+        ("krishiv.catalog.lake.uri", base),
+        ("krishiv.catalog.lake.allowInsecure", "true"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.audience", "lake"),
+        ("krishiv.catalog.lake.actorToken", "none"),
+        (
+            "krishiv.catalog.lake.tokenEndpoint",
+            token_endpoint.as_str(),
+        ),
+    ]
+    .into_iter()
+    .fold(
+        CatalogSetup::new(DeclMode::Server).factory(Arc::new(IcebergRestFactory)),
+        |s, (k, v)| s.setting(k, v),
+    );
+    let runtime = EngineRuntime::builder()
+        .catalogs(setup)
+        .build()
+        .expect("runtime");
+    let base_session = Session::builder()
+        .runtime(runtime)
+        .build()
+        .expect("session");
+    let denials = Arc::new(krishiv_session::auth::DeniedCounts::new());
+    let factory =
+        role_sessions(base_session, &Config::new(), Arc::clone(&denials)).expect("factory");
+    let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = ConnectServer::new(manager, ConnectServerConfig::default())
+        .with_auth(ConnectAuth::new(Arc::new(TestAuth)).with_denials(denials));
+    let (stop, stopped) = oneshot::channel::<()>();
+    tokio::spawn(server.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    let channel = Channel::from_shared(format!("http://{addr}"))
+        .expect("uri")
+        .connect()
+        .await
+        .expect("connect");
+    (channel, stop)
+}
+
+fn sql(query: &str) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::Sql(pb::Sql {
+                query: query.to_owned(),
+                ..Default::default()
+            })),
+        }))),
+    }
+}
+
+async fn execute(channel: &Channel, query: &str, token: &str) -> Result<(), tonic::Status> {
+    let request = pb::ExecutePlanRequest {
+        session_id: session_of(token).to_owned(),
+        user_context: Some(pb::UserContext {
+            user_id: "anyone".to_owned(),
+            ..Default::default()
+        }),
+        plan: Some(sql(query)),
+        ..Default::default()
+    };
+    let mut r = tonic::Request::new(request);
+    r.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {token}").parse().expect("ascii"),
+    );
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    let mut s = grpc
+        .server_streaming(
+            r,
+            "/spark.connect.SparkConnectService/ExecutePlan"
+                .parse()
+                .expect("path"),
+            tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(),
+        )
+        .await?
+        .into_inner();
+    while s.message().await?.is_some() {}
+    Ok(())
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct RpcStatus {
+    #[prost(int32, tag = "1")]
+    code: i32,
+    #[prost(string, tag = "2")]
+    message: String,
+    #[prost(message, repeated, tag = "3")]
+    details: Vec<prost_types::Any>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ErrorInfo {
+    #[prost(string, tag = "1")]
+    reason: String,
+    #[prost(string, tag = "2")]
+    domain: String,
+    #[prost(btree_map = "string, string", tag = "3")]
+    metadata: BTreeMap<String, String>,
+}
+
+fn error_class(status: &tonic::Status) -> String {
+    let rpc = RpcStatus::decode(status.details()).expect("google.rpc.Status");
+    ErrorInfo::decode(rpc.details[0].value.as_slice())
+        .expect("ErrorInfo")
+        .metadata
+        .get("errorClass")
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oidc_session_reaches_delegated_catalog_with_the_exchanged_token() {
+    let (base, seen) = fake_catalog();
+    let (channel, _stop) = start(&base).await;
+    // Alice is granted `db.t` in the catalog: it is found (and not readable until the table
+    // provider over declared catalogs exists; the analyzer reports a catalog's refusal as
+    // `KRISHIV_CATALOG_FAILURE`, hiding its text).
+    let s = execute(&channel, "SELECT * FROM lake.db.t", "alice-jwt")
+        .await
+        .expect_err("found, not readable yet");
+    assert_eq!(error_class(&s), "KRISHIV_CATALOG_FAILURE", "{s:?}");
+    // Bob is not: the same name does not exist for him.
+    let s = execute(&channel, "SELECT * FROM lake.db.t", "bob-jwt")
+        .await
+        .expect_err("absent for bob");
+    assert_eq!(error_class(&s), "TABLE_OR_VIEW_NOT_FOUND", "{s:?}");
+    // A static-token session has no user token: refused, the catalog asked nothing.
+    let before = seen.lock().expect("seen").len();
+    let s = execute(&channel, "SELECT * FROM lake.db.t", "static-service-token")
+        .await
+        .expect_err("no user token");
+    assert_eq!(
+        error_class(&s),
+        "KRISHIV_CATALOG_DELEGATION_UNAVAILABLE",
+        "{s:?}"
+    );
+    assert!(!s.message().contains("static-service-token"), "{s:?}");
+    assert_eq!(seen.lock().expect("seen").len(), before);
+
+    let seen = seen.lock().expect("seen").clone();
+    let loads: Vec<&str> = seen
+        .iter()
+        .filter(|(p, _, _)| p == "/v1/namespaces/db/tables/t")
+        .map(|(_, a, _)| a.as_str())
+        .collect();
+    assert_eq!(loads, ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]);
+    // The user's own token went only to the token endpoint, as the subject token.
+    for (path, auth, body) in &seen {
+        assert!(
+            !auth.contains("alice-jwt") || auth == "Bearer x-alice-jwt",
+            "{path}"
+        );
+        if path == "/token" {
+            assert!(body.contains("subject_token="), "{body}");
+        }
+    }
+}

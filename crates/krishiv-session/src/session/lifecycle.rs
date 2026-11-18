@@ -178,6 +178,7 @@ impl Session {
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
                 denials: std::sync::OnceLock::new(),
+                inbound: Mutex::new(None),
             }),
         };
         if let Some(grants) = &session.state.grants {

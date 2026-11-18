@@ -209,9 +209,15 @@ impl ConnectService {
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
-        self.manager
+        let entry = self
+            .manager
             .get_or_create(caller, session_id, observed, user)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| status_of(&e))?;
+        // The latest RPC's user token, for the session's delegated catalogs (P3-T067 §3.3).
+        entry
+            .session()
+            .set_inbound_credential(caller.method, caller.credential.clone());
+        Ok(entry)
     }
 }
 

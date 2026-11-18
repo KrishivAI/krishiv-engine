@@ -201,6 +201,8 @@ pub(crate) struct SessionState {
     sql_sources: AtomicU32,
     /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
     pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
+    /// How the latest RPC authenticated and its user token, for delegated catalogs (P3-T067).
+    pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
 }
 
 impl Drop for SessionState {
