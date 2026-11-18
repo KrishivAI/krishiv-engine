@@ -238,8 +238,13 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   skipped. Rewritten manifests are cleaned up as merged ones are.
 - An overwrite's row filter removes a file only when every row is proven to match (strict projection or strict
   metrics, `plan::strict`); every unknown keeps the file, which fails the commit for a data file ("some, but not
-  all, rows match"), never removes rows the filter keeps. An overwrite filter that does not translate exactly is
-  refused.
+  all, rows match"), never removes rows the filter keeps. An overwrite filter that does not translate exactly, or
+  holds a part the strict side cannot evaluate (`Pred::unsupported`: `LIKE '%a%'`, `x < NaN`, a struct under
+  `IS NULL`), is refused; an unknown leaf or a column a rebase's schema lacks may match, never "no row matches".
+  **Deliberate divergence from Java** (review 36b2b B2): a missing null count means "may hold nulls" and a missing
+  NaN count of a `float`/`double` column "may hold NaN" for `<`, `<=`, `=` and `IN` (Java's `canContainNulls` /
+  `canContainNaNs` say no, so Java may delete NaN rows of a file written without NaN counts; Krishiv keeps the file,
+  which then fails with the partial-match error).
 - A row-level rewrite of a v3 table writes `_row_id` and `_last_updated_sequence_number` for every row it moves; a
   rewrite that does not carry them is refused, never new row ids for untouched rows (design note §8 item 3).
 - Manifest merging (`merge.rs`) runs on a write's first attempt only; a merged manifest is derived from that
