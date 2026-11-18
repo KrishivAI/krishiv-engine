@@ -511,6 +511,33 @@ pub(crate) fn fold_plan(p: Arc<LogicalPlan>, ctx: &UdfFoldCtx<'_>) -> Arc<Logica
     }
 }
 
+/// `array(l1, l2, ...)` over literals becomes one array literal. Left as a call, the constructor broadcasts every
+/// element to the batch's rows, which copies a written-out query vector once per row before a vector kernel reads it
+/// (P3-T077 section 8.4). Elements that are not plain literals of the array's element type leave the call as written.
+fn fold_array_constructor(e: &Arc<Expr>, f: &ResolvedFunction) -> Arc<Expr> {
+    let DataType::Array(array_type) = &f.data_type else {
+        return Arc::clone(e);
+    };
+    if f.kind != FunctionKind::Scalar || f.distinct || f.filter.is_some() || f.args.is_empty() {
+        return Arc::clone(e);
+    }
+    let elements = f
+        .args
+        .iter()
+        .map(|a| match &a.node {
+            ExprNode::Literal(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(elements) = elements else {
+        return Arc::clone(e);
+    };
+    match Literal::array((**array_type).clone(), elements) {
+        Ok(l) => lit(l),
+        Err(_) => Arc::clone(e),
+    }
+}
+
 /// Whether `e` holds an `EvalMode` pinned to an ANSI mode other than `ansi`.
 fn pins_other_mode(e: &Expr, ansi: bool) -> bool {
     if let ExprNode::Resolved(ResolvedExpr::EvalMode { ansi: pinned, .. }) = &e.node
@@ -534,6 +561,9 @@ fn fold_udf(e: &Arc<Expr>, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
         && f.id.name().eq_ignore_ascii_case("aes_encrypt")
     {
         return fold_aes_encrypt(e, f, ctx);
+    }
+    if matches!(f.id, FunctionId::Registry { .. }) && f.id.name().eq_ignore_ascii_case("array") {
+        return fold_array_constructor(e, f);
     }
     let FunctionId::Udf { name, version } = &f.id else {
         return Arc::clone(e);
