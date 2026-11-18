@@ -7,18 +7,18 @@ registration that names one is refused. This guide shows what to use instead.
 ## What happens today
 
 A statement that registers a function implemented by a JVM class fails at parse time with
-`KRISHIV_JVM_FUNCTION_UNSUPPORTED` (SQLSTATE `0A000`), which names the function and the class it could not
-load, and points at the replacement:
+`KRISHIV_JVM_FUNCTION_UNSUPPORTED` (SQLSTATE `0A000`), which names the function and points at a replacement:
 
 ```sql
 CREATE TEMPORARY FUNCTION my_upper AS 'com.example.MyUpper' USING JAR 'my-udfs.jar';
--- KRISHIV_JVM_FUNCTION_UNSUPPORTED: The function my_upper is implemented by the JVM class com.example.MyUpper,
--- which Krishiv cannot load: it runs no JVM. Rewrite it as a built-in function, a SQL function (CREATE FUNCTION ... RETURN),
--- a Rust UDF or a Python UDF; the guide "Migrating JVM UDFs" lists the replacements.
+-- KRISHIV_JVM_FUNCTION_UNSUPPORTED: The function my_upper is implemented by a JVM class, which Krishiv cannot load:
+-- it runs no JVM. Rewrite it as a built-in function, a SQL function (CREATE FUNCTION ... RETURN), a Rust UDF or a Python UDF.
 ```
 
-When the function or the class name matches a built-in the migration table knows, the message names that built-in
-instead (for example, "Use the built-in function `<name>` instead.").
+When the class is a Hive UDF whose built-in the migration table knows, the message says "Use the built-in function
+`<name>` instead."; when only the function or class name matches a built-in, it says "Krishiv has a built-in function
+`<name>`: call it directly instead of registering a class." (or, for a bare simple class name, that the built-in applies
+only if the class does the same).
 
 The statement is refused before anything runs, so nothing is registered and no JAR is read.
 
@@ -39,8 +39,8 @@ Work down this list. The first option that fits your function is usually the sim
 
 3. **A Rust UDF.** A function that needs real code is written in Rust, compiled into the application, and
    registered on the session. See [Native Rust UDFs](../reference/rust-udfs.md).
-4. **A Python UDF.** Python UDFs in the single-node server are not part of 0.2. Until they ship, rewrite
-   the logic as one of the options above.
+4. **A Python UDF.** Register it with `@udf` (or `pandas_udf` / `arrow_udf`) in the Python package; it runs in your own
+   process. Python UDFs sent to a single-node server are not part of 0.2.0.
 
 ## Common Hive and Spark-community UDFs
 
@@ -76,7 +76,7 @@ argument types and null handling before you switch a query over.
 | `map_keys`, `map_values` | [`map_keys`](../reference/sql/functions/map_keys.md), [`map_values`](../reference/sql/functions/map_values.md) | |
 | `explode(x)` | [`explode`](../reference/sql/functions/explode.md) | A generator. |
 | `pmod(a, b)` | [`pmod`](../reference/sql/functions/pmod.md) | |
-| `hash(x)`, `xxhash64(x)` | [`hash`](../reference/sql/functions/hash.md), [`xxhash64`](../reference/sql/functions/xxhash64.md) | Spark's hash functions. |
+| `xxhash64(x)` | [`xxhash64`](../reference/sql/functions/xxhash64.md) | Spark's xxhash64. Hive's `hash` returns different values; Krishiv's `hash` is Spark's Murmur3 (seed 42), so it is not listed as a replacement. |
 | `md5(x)`, `sha2(x, bits)` | [`md5`](../reference/sql/functions/md5.md), [`sha2`](../reference/sql/functions/sha2.md) | |
 | `percentile(x, p)`, `approx_count_distinct(x)` | [`percentile`](../reference/sql/functions/percentile.md), [`approx_count_distinct`](../reference/sql/functions/approx_count_distinct.md) | Aggregates. |
 
