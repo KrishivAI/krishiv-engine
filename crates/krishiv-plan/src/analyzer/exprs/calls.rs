@@ -22,9 +22,11 @@ pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZ
     }
 }
 
-/// The position of the options argument of the CSV and JSON functions.
-pub(super) fn options_index(name: &str) -> Option<usize> {
+/// The position of the options argument of the CSV and JSON functions (`n` arguments in the call: `from_protobuf` and `to_protobuf`
+/// take the options third in a three-argument call and fourth otherwise).
+pub(super) fn options_index(name: &str, n: usize) -> Option<usize> {
     match name {
+        "from_protobuf" | "to_protobuf" => Some(if n == 3 { 2 } else { 3 }),
         "from_csv" | "from_json" | "from_xml" | "from_avro" => Some(2),
         "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
             Some(1)
@@ -83,10 +85,28 @@ impl Resolver<'_> {
             .then(|| self.pad_char_comparison(kids))
             .flatten();
         let kids = padded.as_deref().unwrap_or(kids);
-        let constants: Vec<Option<Constant>> = kids
+        let mut constants: Vec<Option<Constant>> = kids
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
+        if matches!(entry.id.name(), "from_protobuf" | "to_protobuf") {
+            // A binary literal is the descriptor set and the rewritten options `map(..)` of string literals the options: values the
+            // result type reads (Spark folds both). Other functions keep seeing neither as a constant.
+            for (c, k) in constants.iter_mut().zip(kids) {
+                match &k.expr.node {
+                    ExprNode::Literal(Literal::Binary(b)) => *c = Some(Constant::Binary(b.clone())),
+                    ExprNode::Literal(Literal::Map(pairs)) => {
+                        *c = Some(Constant::StringMap(
+                            pairs
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                .collect(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()

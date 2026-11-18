@@ -24,6 +24,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "to_avro",
         "PySpark has it in `pyspark.sql.avro.functions`, not `pyspark.sql.functions`",
     ),
+    (
+        "from_protobuf",
+        "PySpark has it in `pyspark.sql.protobuf.functions`, not `pyspark.sql.functions`",
+    ),
+    (
+        "to_protobuf",
+        "PySpark has it in `pyspark.sql.protobuf.functions`, not `pyspark.sql.functions`",
+    ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
     ("current_time", "TIME has no Python mapping yet (P2-T181)"),

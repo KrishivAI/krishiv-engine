@@ -1121,7 +1121,7 @@ impl Resolver<'_> {
                     }
                     (&owned[..], 3)
                 } else if is_builtin_entry(&entry)
-                    && let Some(at) = options_index(entry.id.name())
+                    && let Some(at) = options_index(entry.id.name(), n)
                     && n > at
                     && let Some(pairs) = literal_map_pairs(&kids[at].expr)
                 {
