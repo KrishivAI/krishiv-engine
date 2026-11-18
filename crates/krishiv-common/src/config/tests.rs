@@ -922,6 +922,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
 }
 
 mod derived_keys;
+mod iceberg;
 
 #[test]
 fn group_key_code_defaults_off_and_parses() {
@@ -1832,23 +1833,6 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     }
 }
 
-/// PR-36a: the open-file cap of an Iceberg write task.
-#[test]
-fn iceberg_write_max_open_files_parses_and_defaults() {
-    let mut c = Config::new();
-    let get = |c: &Config| {
-        c.get(&ICEBERG_WRITE_MAX_OPEN_FILES)
-            .and_then(ConfigValue::as_int)
-    };
-    assert_eq!(get(&c), Some(100));
-    c.set("krishiv.iceberg.write.maxOpenFiles", "7").unwrap();
-    assert_eq!(get(&c), Some(7));
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "0").is_err());
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "-3").is_err());
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "many").is_err());
-    assert_eq!(ICEBERG_WRITE_MAX_OPEN_FILES.scope, Scope::Session);
-}
-
 #[test]
 fn connect_artifact_quotas_parse_and_default() {
     let d = Config::new();
@@ -1881,29 +1865,6 @@ fn connect_artifact_quotas_parse_and_default() {
         assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
         assert!(e.spark_alias.is_none(), "{}", e.key);
     }
-}
-
-/// PR-36b: the bound on the history an Iceberg commit validates.
-#[test]
-fn iceberg_commit_max_intervening_parses_and_defaults() {
-    let mut c = Config::new();
-    let get = |c: &Config| {
-        c.get(&ICEBERG_COMMIT_MAX_INTERVENING)
-            .and_then(ConfigValue::as_int)
-    };
-    assert_eq!(get(&c), Some(1000));
-    c.set("krishiv.iceberg.commit.maxIntervening", "5").unwrap();
-    assert_eq!(get(&c), Some(5));
-    assert!(c.set("krishiv.iceberg.commit.maxIntervening", "0").is_err());
-    assert!(
-        c.set("krishiv.iceberg.commit.maxIntervening", "-1")
-            .is_err()
-    );
-    assert!(
-        c.set("krishiv.iceberg.commit.maxIntervening", "many")
-            .is_err()
-    );
-    assert_eq!(ICEBERG_COMMIT_MAX_INTERVENING.scope, Scope::Session);
 }
 
 /// P3-T021: the Delta log pool and the catalog parse limits.
