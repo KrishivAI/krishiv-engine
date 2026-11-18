@@ -653,3 +653,49 @@ async fn command_result_not_stored_says_it_ran() {
     assert!(e.message().contains("The statement ran"), "{}", e.message());
     assert_eq!(h.flight.handle_count(), 0, "the slot was given back");
 }
+
+/// `CancelFlightInfo` for one ticket cancels that ticket's fetches only (§4.5, review M1): another
+/// ticket's fetch in the same session keeps running.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_flight_info_cancels_only_its_handle() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (a, cookie) = info(&mut h, OPS, None, LONG).await.expect("info a");
+    let cookie = cookie.expect("cookie");
+    let (b, _) = info(&mut h, OPS, Some(&cookie), LONG)
+        .await
+        .expect("info b");
+    let mut sa = open_fetch(&mut h, Some(&cookie), ticket(&a)).await;
+    let mut sb = open_fetch(&mut h, Some(&cookie), ticket(&b)).await;
+    wait_busy(&h, 4).await;
+    let body = CancelFlightInfoRequest::new(a.clone()).encode_to_vec();
+    let mut results = h
+        .client
+        .do_action(authed(
+            Action::new("CancelFlightInfo", body),
+            OPS,
+            Some(&cookie),
+        ))
+        .await
+        .expect("cancel")
+        .into_inner();
+    let result = results.next().await.expect("one result").expect("ok");
+    assert_eq!(
+        CancelFlightInfoResult::decode(result.body)
+            .expect("decode")
+            .status,
+        CancelStatus::Cancelled as i32
+    );
+    // A's fetch ends; B's still runs and still delivers.
+    let end = loop {
+        match sa.message().await {
+            Ok(Some(_)) => {}
+            Ok(None) => break None,
+            Err(status) => break Some(status),
+        }
+    };
+    assert!(end.is_some(), "the cancelled fetch ends with an error");
+    assert_eq!(h.manager.running_queries(), 1, "B's query still runs");
+    sb.message().await.expect("B reads on").expect("a piece");
+    drop(sb);
+    wait_busy(&h, 0).await;
+}

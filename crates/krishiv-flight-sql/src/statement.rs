@@ -38,7 +38,9 @@ use crate::call::{CallSession, shutting_down};
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::encode::{RESPONSE_CONSUMER, encode_results};
 use crate::handles::HandleId;
-use crate::server::{FlightSqlServer, HANDLES_CONSUMER, Kind, Payload, SMALL_RESULT_BYTES, Stored};
+use crate::server::{
+    FlightSqlServer, HANDLES_CONSUMER, Kind, LiveOps, Payload, SMALL_RESULT_BYTES, Stored,
+};
 use crate::status::flight_status;
 
 /// The `DoGet` response stream.
@@ -49,11 +51,18 @@ pub(crate) type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Statu
 struct OpGuard {
     entry: Arc<SessionEntry>,
     op: Arc<Operation>,
+    /// The handle's live set, which holds `op` until the guard drops.
+    live: Arc<LiveOps>,
 }
 
 impl OpGuard {
-    /// Registers a fresh operation for `sql` in `entry`'s session.
-    fn register(entry: &Arc<SessionEntry>, sql: &str, max: usize) -> Result<Self, KrishivError> {
+    /// Registers a fresh operation for `sql` in `entry`'s session, live on the handle `live`.
+    fn register(
+        entry: &Arc<SessionEntry>,
+        live: &Arc<LiveOps>,
+        sql: &str,
+        max: usize,
+    ) -> Result<Self, KrishivError> {
         let op = Arc::new(Operation::new(
             new_operation_id()?,
             plan_digest(sql.as_bytes()),
@@ -61,9 +70,11 @@ impl OpGuard {
             false,
         ));
         entry.operations().register(&op, max)?;
+        live.add(&op);
         Ok(Self {
             entry: Arc::clone(entry),
             op,
+            live: Arc::clone(live),
         })
     }
 
@@ -89,6 +100,7 @@ impl Drop for OpGuard {
             let _ = self.entry.session().cancel(self.op.id());
         }
         self.op.mark_ended();
+        self.live.remove(&self.op);
         self.entry.operations().close_and_remove(&self.op);
     }
 }
@@ -345,6 +357,7 @@ impl FlightSqlServer {
             sql: Arc::clone(&sql),
             query_start_micros: query_start,
             kind: Kind::Pending,
+            live: Arc::default(),
         };
         // 1. The slot (count and text bytes, with eviction); a refusal here runs nothing.
         let inserted = inner
@@ -367,8 +380,13 @@ impl FlightSqlServer {
         self.after_evictions(&inserted.evicted);
         // 2. The operation, before the statement's kind is known (a command runs in step 3).
         let entry = Arc::clone(&call.entry);
-        let op = OpGuard::register(&entry, &sql, inner.config.max_operations_per_session)
-            .map_err(|e| flight_status(&e))?;
+        let op = OpGuard::register(
+            &entry,
+            &pending.live,
+            &sql,
+            inner.config.max_operations_per_session,
+        )
+        .map_err(|e| flight_status(&e))?;
         // 3. Under the statement gate until the analysis ended or the command ran (§16 m3).
         // Classified first: a query is analyzed and nothing runs; anything else is not run by
         // the classification and runs once below, under the operation.
@@ -545,6 +563,7 @@ impl FlightSqlServer {
         let entry = Arc::clone(&call.entry);
         let op = OpGuard::register(
             &entry,
+            &payload.live,
             &payload.sql,
             inner.config.max_operations_per_session,
         )
@@ -630,15 +649,16 @@ impl FlightSqlServer {
         let Some((sid, payload)) = inner.handles.remove(&cap, &id) else {
             return false;
         };
-        let _ = payload;
-        // A fetch of this handle ends its own operation when its stream is dropped by the
-        // client; the operations of the handle's session that run its SQL are cancelled here.
-        if let Ok(entry) =
-            inner
-                .manager
-                .get_with(caller, &sid, krishiv_session::auth::Surface::FlightSql)
+        // Only the operations live on this handle are cancelled (§4.5): another ticket's fetch or
+        // a command running in the same session is left alone.
+        let live = payload.live.snapshot();
+        if !live.is_empty()
+            && let Ok(entry) =
+                inner
+                    .manager
+                    .get_with(caller, &sid, krishiv_session::auth::Surface::FlightSql)
         {
-            for op in entry.operations().all() {
+            for op in live {
                 if op.cancel() {
                     let _ = entry.session().cancel(op.id());
                 }

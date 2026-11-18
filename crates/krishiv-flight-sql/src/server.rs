@@ -21,7 +21,7 @@ use krishiv_common::config::{
 };
 use krishiv_common::error::KrishivError;
 use krishiv_connect_server::execute::ResponseBudget;
-use krishiv_connect_server::{ConnectAuth, ExecuteLimits, SessionManager, SessionOwner};
+use krishiv_connect_server::{ConnectAuth, ExecuteLimits, Operation, SessionManager, SessionOwner};
 use krishiv_memory::Reservation;
 
 use crate::encode::EncodeLimits;
@@ -138,6 +138,36 @@ pub(crate) struct Payload {
     pub(crate) sql: Arc<str>,
     pub(crate) query_start_micros: i64,
     pub(crate) kind: Kind,
+    /// The operations running for this handle (its `GetFlightInfo` run and its fetches), so
+    /// `CancelFlightInfo` cancels these and nothing else of the session (§4.5).
+    pub(crate) live: Arc<LiveOps>,
+}
+
+/// The operations live on one handle (design §4.1, §4.5), shared by every copy of its payload.
+#[derive(Default)]
+pub(crate) struct LiveOps(Mutex<Vec<Arc<Operation>>>);
+
+impl LiveOps {
+    fn ops(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Operation>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Records `op` as running for the handle.
+    pub(crate) fn add(&self, op: &Arc<Operation>) {
+        self.ops().push(Arc::clone(op));
+    }
+
+    /// Forgets `op` (its run or fetch ended).
+    pub(crate) fn remove(&self, op: &Arc<Operation>) {
+        self.ops().retain(|o| !Arc::ptr_eq(o, op));
+    }
+
+    /// The operations running now, taken out of the lock.
+    pub(crate) fn snapshot(&self) -> Vec<Arc<Operation>> {
+        self.ops().clone()
+    }
 }
 
 /// The kind of a handle (design §4.1).
