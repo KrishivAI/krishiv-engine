@@ -619,14 +619,25 @@ fn new_deletes_for_replaced(
         snapshot_id: Some(id),
         message: format!("Cannot commit, found new delete for replaced data file: {path}"),
     };
+    // One index per snapshot, built once for every replaced file (an index
+    // that cannot be built matches every file).
+    let indexes: Vec<(i64, Option<DeleteIndex>)> = by_snapshot
+        .iter()
+        .map(|(id, files)| {
+            let index = DeleteIndex::new(files, &judge.specs)
+                .map(|i| i.with_fields(&judge.fields, &judge.metrics))
+                .ok();
+            (*id, index)
+        })
+        .collect();
     for data in &v.replaced {
         let mut at_start = data.clone();
         at_start.data_sequence_number = Some(history.start_sequence);
-        for (id, files) in &by_snapshot {
-            let applies = DeleteIndex::new(files, &judge.specs)
-                .map(|i| i.with_fields(&judge.fields, &judge.metrics))
-                .and_then(|i| i.for_data_file(&at_start))
-                .map_or(true, |d| !d.is_empty());
+        for (id, index) in &indexes {
+            let applies = index
+                .as_ref()
+                .and_then(|i| i.for_data_file(&at_start).ok())
+                .is_none_or(|d| !d.is_empty());
             if applies {
                 return Some(fire(*id, &data.file.path));
             }
