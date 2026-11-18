@@ -1376,6 +1376,7 @@ impl Session {
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
+        let udtfs = self.table_functions();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -1383,7 +1384,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: self.table_functions(),
+            table_functions: Arc::clone(&udtfs) as _,
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
             variables: Arc::clone(&variables),
@@ -1421,6 +1422,7 @@ impl Session {
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
             quiet: QuietDenials::default(),
+            udtfs,
         }
     }
 

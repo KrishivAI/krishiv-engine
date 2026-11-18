@@ -346,12 +346,30 @@ pub(crate) fn decode_anonymous(name: &str) -> Option<(PythonUdfDef, u32)> {
 /// The table functions a session's queries resolve: the built-ins, then
 /// its Python UDTFs, whose `analyze` runs through the session's Python
 /// runtime (the one analysis path of SQL and Spark Connect).
+#[derive(Clone)]
 pub(crate) struct SessionTableFunctions {
     pub(crate) builtins: krishiv_plan::analyzer::BuiltinTableFunctions,
     pub(crate) library: Arc<PythonUdfLibrary>,
     pub(crate) runtime: Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>,
-    /// The session: its policy decides whether this principal may run Python (`Usage` on `System("udf")`).
-    pub(crate) session: crate::Session,
+    /// The policy the analysis asks (`AnalysisContext::policy`: the session's, or a trial's
+    /// `QuietPolicy`), which decides whether `principal` may run Python (`Usage` on `System("udf")`). A
+    /// refusal is an analysis error, audited and counted once as the analysis's read denials are
+    /// (`access::audit_read`: not in a trial).
+    pub(crate) policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    pub(crate) principal: Arc<krishiv_plan::analyzer::Principal>,
+}
+
+impl SessionTableFunctions {
+    /// This registry asking `policy` (the analysis's, after `QueryEnv::set_quiet_denials`).
+    pub(crate) fn with_policy(
+        &self,
+        policy: &Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> Self {
+        Self {
+            policy: Arc::clone(policy),
+            ..self.clone()
+        }
+    }
 }
 
 impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
@@ -403,17 +421,17 @@ impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
         };
         // ADR 0046 §3b: an analysis that runs Python asks `Usage` on `System("udf")` every time, before any
         // worker starts (a registration was checked when it was made, a call is checked when it runs).
-        let session = self.session.clone();
+        let (policy, principal) = (Arc::clone(&self.policy), Arc::clone(&self.principal));
         let runtime = Arc::clone(runtime);
         let spec = spec.clone();
         let checked = async move {
-            session
-                .authorize_privilege(
-                    &krishiv_plan::analyzer::Securable::System("udf".to_owned()),
-                    krishiv_plan::analyzer::Privilege::Usage,
-                    crate::StatementClass::Session,
-                )
-                .await?;
+            krishiv_plan::analyzer::authorize(
+                &*policy,
+                &principal,
+                &krishiv_plan::analyzer::Securable::System("udf".to_owned()),
+                krishiv_plan::analyzer::Privilege::Usage,
+            )
+            .await?;
             runtime.analyze_udtf(&spec).await
         };
         wait_for_analysis(Box::pin(checked))
@@ -586,7 +604,7 @@ impl crate::Session {
     }
 
     /// The table functions a query of this session resolves.
-    pub(crate) fn table_functions(&self) -> Arc<dyn krishiv_plan::analyzer::TableFunctionRegistry> {
+    pub(crate) fn table_functions(&self) -> Arc<SessionTableFunctions> {
         Arc::new(SessionTableFunctions {
             builtins: krishiv_plan::analyzer::BuiltinTableFunctions::new(),
             library: Arc::clone(&self.state.python_udfs),
@@ -596,7 +614,8 @@ impl crate::Session {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
-            session: self.clone(),
+            policy: Arc::clone(&self.state.policy),
+            principal: Arc::clone(&self.state.principal),
         })
     }
 

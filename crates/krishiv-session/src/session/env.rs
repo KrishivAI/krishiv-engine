@@ -142,6 +142,10 @@ pub(crate) struct QueryEnv {
     /// with the quiet `analysis.policy`, and only a caller that falls back to an analysis of its own,
     /// which is audited, calls it (T063 review R2-1 Q1).
     pub(crate) quiet: QuietDenials,
+    /// The session's table functions, as `analysis.table_functions` holds them: asking the analysis's
+    /// policy ([`Self::set_quiet_denials`]), so a trial's `Usage` check before a Python UDTF's `analyze`
+    /// tells the policy nothing either.
+    pub(crate) udtfs: Arc<crate::python_udfs::SessionTableFunctions>,
 }
 
 /// Whether a [`QueryEnv`] is a trial analysis; its flag is private to this module, so it is set only
@@ -180,6 +184,9 @@ impl QueryEnv {
         } else {
             Arc::clone(policy)
         };
+        let udtfs = Arc::new(self.udtfs.with_policy(&self.analysis.policy));
+        self.analysis.table_functions = Arc::clone(&udtfs) as _;
+        self.udtfs = udtfs;
     }
 }
 

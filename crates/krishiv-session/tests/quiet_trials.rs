@@ -4,7 +4,8 @@
 //! `krishiv::audit` record, no session denial count, no provider denial count
 //! (`Grants::denied_counts`, the `krishiv_access_denied_total` counters) and no
 //! `AccessPolicy::denied` call; nor does plain `EXPLAIN`'s trial analysis of a read (P3 PR-14d). A run
-//! of the same statement still counts and audits its refusal.
+//! of the same statement still counts and audits its refusal. The `Usage` check on `System("udf")` an
+//! analysis makes before a Python UDTF's `analyze` (PR-26c-4 S-2) is quiet in a trial too.
 //! One test per binary: the subscriber is process-wide.
 #![cfg(test)]
 
@@ -326,4 +327,145 @@ fn quiet_trials_leave_no_trace() {
         )
         .map(|_| ())
     });
+
+    // PR-26c-4 S-2: a principal without `USAGE` on `System("udf")` calls a UDTF with `analyze`. The
+    // `EXPLAIN` trial's check is quiet and no `analyze` runs.
+    let policy = Arc::new(NoPythonRecording::default());
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+        .build()
+        .unwrap();
+    let s_counts = Arc::new(DeniedCounts::new());
+    assert!(s.count_denials(Arc::clone(&s_counts), Surface::Connect));
+    let analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    s.set_python_udf_runtime(Arc::new(Analyzing(Arc::clone(&analyzed))));
+    s.register_python_udtf(krishiv_session::PythonUdtfDef {
+        name: "describe".to_owned(),
+        eval_type: krishiv_plan::PythonEvalType::TableUdf,
+        return_type: None,
+        deterministic: true,
+    })
+    .unwrap();
+    let told = || policy.0.lock().unwrap().len() as u64;
+    // The `EXPLAIN` trial's check is quiet: the statement reports its refusal once, the withheld plan's
+    // (which cannot be made without `analyze`), as for any refusal the fallback meets.
+    take();
+    let (before, before_session) = (told(), total_session(&s_counts));
+    let shown = run(&s, "EXPLAIN SELECT * FROM describe(1)");
+    let audits = take().len();
+    assert_eq!(
+        (
+            told() - before,
+            total_session(&s_counts) - before_session,
+            audits
+        ),
+        (1, 1, 1),
+        "EXPLAIN ({shown:?}): {:?}",
+        policy.0.lock().unwrap()
+    );
+    // A run is refused, told, counted and audited once.
+    let (before, before_session) = (told(), total_session(&s_counts));
+    let e = run(&s, "SELECT * FROM describe(1)").unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "KRISHIV_INSUFFICIENT_PERMISSIONS",
+        "{e}"
+    );
+    let audits = take().len();
+    assert_eq!(
+        (
+            told() - before,
+            total_session(&s_counts) - before_session,
+            audits
+        ),
+        (1, 1, 1),
+        "run: {:?}",
+        policy.0.lock().unwrap()
+    );
+    assert_eq!(
+        analyzed.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "an analyze ran"
+    );
+}
+
+/// Denies `USAGE` on `System("udf")` (running client Python) and records every refusal it is told of.
+#[derive(Default)]
+struct NoPythonRecording(Mutex<Vec<String>>);
+
+impl AccessPolicy for NoPythonRecording {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let d =
+            if *securable == Securable::System("udf".to_owned()) && privilege == Privilege::Usage {
+                AccessDecision::Deny {
+                    reason: "no Python".to_owned(),
+                }
+            } else {
+                AccessDecision::Allow
+            };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+
+    fn denied(&self, _: &Principal, securable: &Securable, privilege: Privilege) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("{privilege} {securable}"));
+    }
+}
+
+/// A Python UDF runtime whose `analyze` counts its calls (and answers one `INT` column).
+struct Analyzing(Arc<std::sync::atomic::AtomicUsize>);
+
+impl std::fmt::Debug for Analyzing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Analyzing")
+    }
+}
+
+impl krishiv_exec::python_eval::UdfRuntime for Analyzing {
+    fn prepare(
+        &self,
+        spec: &krishiv_exec::python_eval::UdfCallSpec,
+    ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::python_eval::PreparedUdf>> {
+        Err(KrishivError::from(
+            krishiv_common::error::KrishivUdfNotAvailable {
+                name: spec.name.clone(),
+                version: spec.version.to_string(),
+            },
+        ))
+    }
+
+    fn analyze_udtf(
+        &self,
+        _: &krishiv_exec::python_udtf::UdtfAnalyzeSpec,
+    ) -> futures::future::BoxFuture<
+        'static,
+        krishiv_exec::Result<krishiv_exec::python_udtf::UdtfAnalysis>,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let schema = krishiv_types::DataType::Struct(krishiv_types::StructType::new([
+            krishiv_types::StructField::new("c".to_owned(), krishiv_types::DataType::Integer, true),
+        ]));
+        Box::pin(std::future::ready(Ok(
+            krishiv_exec::python_udtf::UdtfAnalysis {
+                schema,
+                pickled: Arc::from(b"p".to_vec()),
+                with_single_partition: false,
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                select: Vec::new(),
+            },
+        )))
+    }
 }
