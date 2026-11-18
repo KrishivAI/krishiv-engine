@@ -4,7 +4,7 @@
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
 //! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
-//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`).
+//! `WithColumns`, `Range`, `LateralJoin` and the Python UDF relations (`relation_udf`).
 //! The `plan_id` of a relation's `RelationCommon` becomes the `Origin` of
 //! the node it translates to, as Spark tags the plan it builds for the
 //! relation; `df["a"]` references name that id.
@@ -56,6 +56,7 @@ impl Translator<'_> {
                 predicate: self.required_expression(f.condition.as_ref())?,
             },
             RelType::Join(j) => self.join(j)?,
+            RelType::LateralJoin(j) => self.lateral_join(j)?,
             RelType::Sort(s) => {
                 if s.order.is_empty() {
                     return Err(assertion("'order' must be present and contain elements."));
@@ -362,6 +363,59 @@ impl Translator<'_> {
             Some(c) => JoinCondition::On(self.expression(c)?),
             None if !j.using_columns.is_empty() => JoinCondition::Using(j.using_columns.clone()),
             None => JoinCondition::None,
+        };
+        Ok(PlanNode::Join {
+            left: self.relation(left)?,
+            right: self.relation(right)?,
+            kind,
+            condition,
+        })
+    }
+
+    /// `LateralJoin` (`DataFrame.lateralJoin`), after Spark v4.3.0's `transformLateralJoin`: both sides
+    /// required, the condition translated first, then the join type. It is the join SQL's
+    /// `[CROSS|INNER|LEFT] JOIN LATERAL` lowers to: the right side reads the left side's columns by
+    /// name (PySpark's `Column.outer()` sends the plain attribute, the analyzer resolves it with the left
+    /// side in scope), inner and cross are [`JoinKind::LateralInner`], left outer
+    /// [`JoinKind::LateralLeft`] (whose condition the analyzer refuses, a recorded difference). Any other
+    /// type is `INVALID_LATERAL_JOIN_TYPE`, as SQL refuses it (Spark's `LateralJoin` fails a `require`
+    /// with no error class); an unspecified or unknown one `CONNECT_INVALID_PLAN.INVALID_ENUM`
+    /// (`transformJoinType`).
+    fn lateral_join(&mut self, j: &pb::LateralJoin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&j.left, &j.right) else {
+            return Err(assertion("Both join sides must be present"));
+        };
+        let condition = match &j.join_condition {
+            Some(c) => JoinCondition::On(self.expression(c)?),
+            None => JoinCondition::None,
+        };
+        let refused = |join_type: &str| -> krishiv_common::error::KrishivError {
+            krishiv_common::error::InvalidLateralJoinType {
+                join_type: join_type.to_owned(),
+            }
+            .into()
+        };
+        let kind = match JoinType::try_from(j.join_type) {
+            Ok(JoinType::Inner | JoinType::Cross) => JoinKind::LateralInner,
+            Ok(JoinType::LeftOuter) => JoinKind::LateralLeft,
+            Ok(JoinType::RightOuter) => return Err(refused("RIGHT OUTER")),
+            Ok(JoinType::FullOuter) => return Err(refused("FULL OUTER")),
+            Ok(JoinType::LeftSemi) => return Err(refused("LEFT SEMI")),
+            Ok(JoinType::LeftAnti) => return Err(refused("LEFT ANTI")),
+            Ok(JoinType::Unspecified) => {
+                return Err(invalid_enum(
+                    "spark.connect.Join.JoinType",
+                    "JOIN_TYPE_UNSPECIFIED",
+                    0,
+                ));
+            }
+            Err(_) => {
+                return Err(invalid_enum(
+                    "spark.connect.Join.JoinType",
+                    "UNRECOGNIZED",
+                    j.join_type,
+                ));
+            }
         };
         Ok(PlanNode::Join {
             left: self.relation(left)?,

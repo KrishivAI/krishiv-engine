@@ -1030,3 +1030,80 @@ fn collect_metrics_without_an_input_is_refused() {
         )]
     );
 }
+
+// ---- lateral joins (relation 44) ---------------------------------------------------------------
+
+fn lateral_of(kind: i32, condition: Option<Expression>) -> Relation {
+    relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
+        left: boxed(read_table("l")),
+        right: boxed(read_table("r")),
+        join_condition: condition,
+        join_type: kind,
+    })))
+}
+
+/// `DataFrame.lateralJoin` (Spark v4.3.0 `transformLateralJoin`): inner and cross are an inner lateral join,
+/// left outer a left one, the condition kept; the IR SQL's `JOIN LATERAL` lowers to.
+#[test]
+fn a_lateral_join_is_the_join_sql_lateral_lowers_to() {
+    let on = || Some(func("==", vec![attr("a"), attr("b")]));
+    for (kind, want, condition) in [
+        (join::JoinType::Inner, JoinKind::LateralInner, on()),
+        (join::JoinType::Cross, JoinKind::LateralInner, None),
+        (join::JoinType::LeftOuter, JoinKind::LateralLeft, None),
+    ] {
+        let has_condition = condition.is_some();
+        let PlanNode::Join {
+            left,
+            right,
+            kind: got,
+            condition,
+        } = node(&lateral_of(kind as i32, condition))
+        else {
+            panic!("{kind:?}: not a join");
+        };
+        assert_eq!(got, want, "{kind:?}");
+        assert!(matches!(left.node, PlanNode::Read(_)), "{kind:?}");
+        assert!(matches!(right.node, PlanNode::Read(_)), "{kind:?}");
+        assert_eq!(
+            matches!(condition, JoinCondition::On(_)),
+            has_condition,
+            "{kind:?}"
+        );
+        if !has_condition {
+            assert_eq!(condition, JoinCondition::None);
+        }
+    }
+}
+
+#[test]
+fn other_lateral_join_types_and_missing_sides_are_refused() {
+    for (kind, name) in [
+        (join::JoinType::RightOuter, "RIGHT OUTER"),
+        (join::JoinType::FullOuter, "FULL OUTER"),
+        (join::JoinType::LeftSemi, "LEFT SEMI"),
+        (join::JoinType::LeftAnti, "LEFT ANTI"),
+    ] {
+        let r = lateral_of(kind as i32, None);
+        assert_eq!(code(&r), ErrorClass::InvalidLateralJoinType, "{kind:?}");
+        assert!(message(&r).contains(name), "{kind:?}: {}", message(&r));
+    }
+    assert_eq!(
+        code(&lateral_of(0, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    assert_eq!(
+        code(&lateral_of(42, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    let one_sided = relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
+        left: boxed(read_table("l")),
+        right: None,
+        join_condition: None,
+        join_type: join::JoinType::Inner as i32,
+    })));
+    assert_eq!(
+        code(&one_sided),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
