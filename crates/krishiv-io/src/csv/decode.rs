@@ -21,7 +21,7 @@ use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::io::ByteRange;
 use crate::request::{FieldMapping, ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::reader::{LineReader, ReadChunk, WholeReader};
-use crate::text::{BATCH_ROWS, Datetimes, TextMetadata};
+use crate::text::{BATCH_ROWS, Charset, Datetimes, TextMetadata};
 
 /// What one output column is.
 enum Out {
@@ -46,6 +46,8 @@ enum Source {
 enum Next {
     /// Its raw text and its tokens (or why it has none).
     Record(String, Result<Vec<Token>, TokenizeError>),
+    /// A record of a read with no columns, not tokenized.
+    Bare,
     NeedData(Range<u64>),
     End,
 }
@@ -65,6 +67,10 @@ pub(crate) struct CsvDecoder {
     case_sensitive: bool,
     /// More than the requested columns can be dropped from tokens.
     pruned: bool,
+    /// Pruned with no output column (`count()`): as Spark's
+    /// `UnivocityParser.parse`, a record is an empty row and is not
+    /// tokenized, so no record is malformed.
+    bare: bool,
     header_pending: bool,
     /// Reads the lines before a split that starts after byte 0, to count
     /// the rows `_metadata.row_index` continues from (only then).
@@ -154,6 +160,11 @@ impl CsvDecoder {
             .filter(|c| matches!(c, Out::Data { .. }))
             .count();
         let pruned = opts.column_pruning && required < data.len();
+        // Lines are counted without tokenizing only when nothing is output:
+        // a read of `_metadata.row_index` alone still tokenizes each line, so
+        // it can fail under FAILFAST or `maxCharsPerColumn` where `count()`
+        // does not (Spark has no CSV row index to compare with).
+        let bare = pruned && outs.is_empty() && !opts.multi_line;
         let split = units.units.first().map_or(ByteRange::new(0, 0), |u| {
             ByteRange::new(u.bytes.start, u.bytes.end)
         });
@@ -202,6 +213,7 @@ impl CsvDecoder {
             columns,
             schema,
             pruned,
+            bare,
             rows: 0,
             held_text: 0,
             metrics,
@@ -226,16 +238,17 @@ impl CsvDecoder {
                     }
                     ReadChunk::End => return Ok(Next::End),
                     ReadChunk::Line(bytes, offset) => {
-                        let bytes = if offset == 0 {
-                            bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)
-                        } else {
-                            &bytes[..]
-                        };
-                        let line = self.o.charset.decode(bytes).into_owned();
+                        if self.bare && !self.header_pending {
+                            if skip_bare(&self.o, &bytes, offset == 0) {
+                                continue;
+                            }
+                            return Ok(Next::Bare);
+                        }
+                        let line = line_text(self.o.charset, bytes, offset == 0);
                         if self.skip_line(&line) {
                             continue;
                         }
-                        let mut tokens = Vec::new();
+                        let mut tokens = Vec::with_capacity(self.data_names.len());
                         let res = self.tok.record(&line, 0, &mut tokens).map(|_| tokens);
                         return Ok(Next::Record(line, res));
                     }
@@ -410,6 +423,42 @@ impl CsvDecoder {
     }
 }
 
+/// [`skip_line`] on a line's bytes when the comment character is ASCII (in
+/// UTF-8, ISO-8859-1 and US-ASCII the characters up to a space and an ASCII
+/// comment character are those bytes, and no other byte decodes to them);
+/// otherwise on its text.
+fn skip_bare(o: &CsvOptions, bytes: &[u8], first: bool) -> bool {
+    let bytes = if first {
+        bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
+    } else {
+        bytes
+    };
+    match o.syntax.comment {
+        Some(c) if !c.is_ascii() => skip_line(o, &o.charset.decode(bytes)),
+        comment => {
+            bytes.iter().all(|b| *b <= b' ')
+                || comment.is_some_and(|c| bytes.first() == Some(&(c as u8)))
+        }
+    }
+}
+
+/// A line's text: the bytes themselves when they are UTF-8 in a UTF-8 file
+/// (no copy), else decoded by `charset`; the first line of a file drops a
+/// UTF-8 byte order mark.
+fn line_text(charset: Charset, bytes: Vec<u8>, first: bool) -> String {
+    const BOM: &[u8] = b"\xEF\xBB\xBF";
+    if first && bytes.starts_with(BOM) {
+        return charset.decode(&bytes[BOM.len()..]).into_owned();
+    }
+    if charset == Charset::Utf8 {
+        return match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
+    }
+    charset.decode(&bytes).into_owned()
+}
+
 impl Decoder for CsvDecoder {
     fn step(&mut self) -> FormatResult<Step> {
         if let Some(e) = self.failed.take() {
@@ -437,6 +486,15 @@ impl Decoder for CsvDecoder {
                     self.add(&raw, &tokens)?;
                     if self.rows >= BATCH_ROWS {
                         return Ok(Step::Batch(self.batch()?));
+                    }
+                }
+                Next::Bare => {
+                    self.row_no += 1;
+                    if self.prefix.is_none() {
+                        self.rows += 1;
+                        if self.rows >= BATCH_ROWS {
+                            return Ok(Step::Batch(self.batch()?));
+                        }
                     }
                 }
                 Next::End => {

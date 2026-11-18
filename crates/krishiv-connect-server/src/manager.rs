@@ -51,7 +51,7 @@ use krishiv_common::error::{
     KrishivError, KrishivSessionLimit,
 };
 use krishiv_session::auth::{Authenticated, Role, Surface};
-use krishiv_session::{DataFrame, QueryId, Session};
+use krishiv_session::{DataFrame, QueryId, Session, Transport};
 
 use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
@@ -60,8 +60,12 @@ use crate::operation::{Operation, Operations};
 use crate::udf::{SessionPython, UdfHost};
 
 /// Builds the session an authenticated caller gets for a new session id:
-/// its principal, and the policy of its role.
-pub type SessionFactory = dyn Fn(&Authenticated) -> Result<Session, KrishivError> + Send + Sync;
+/// its principal, and the policy of its role. The transport is the service the
+/// session is for (`Connect`, or `FlightSql` through
+/// [`SessionManager::get_or_create_with`], P3-T101 §2 H3), so the session can
+/// label what it records (its denials count under `Surface::of(transport)`).
+pub type SessionFactory =
+    dyn Fn(&Authenticated, Transport) -> Result<Session, KrishivError> + Send + Sync;
 
 /// The manager's limits and timers.
 #[derive(Debug, Clone)]
@@ -404,7 +408,7 @@ impl SessionManager {
     /// that builds each caller's session (`Session::new_session_as`).
     #[must_use]
     pub fn from_base(base: Session, limits: SessionLimits) -> Self {
-        Self::new(Box::new(move |_| Ok(base.new_session())), limits)
+        Self::new(Box::new(move |_, _| Ok(base.new_session())), limits)
     }
 
     /// Runs the Python UDFs of every session this manager builds on `host`'s workers (the server's one
@@ -432,21 +436,17 @@ impl SessionManager {
     }
 
     /// A new entry for `session`, built for `caller`, not yet in the map.
-    /// `system.sessions` shows the client's `user_id` as reported (ADR 0046
-    /// §5: recorded, unverified, never the identity).
+    /// `system.sessions` shows `transport` and the client's `user_id` as
+    /// reported (ADR 0046 §5: recorded, unverified, never the identity).
     fn new_entry(
         &self,
         caller: &Authenticated,
         session: Session,
         (client_user_id, client_session_id): (&str, &str),
         python: SessionPython,
+        transport: Transport,
     ) -> Arc<SessionEntry> {
-        session.set_client_info(
-            krishiv_session::Transport::Connect,
-            None,
-            Some(client_user_id),
-            Some(session.id()),
-        );
+        session.set_client_info(transport, None, Some(client_user_id), Some(session.id()));
         Arc::new(SessionEntry {
             errors: Arc::new(SessionErrors::new(session.conf())),
             artifacts: Arc::default(),
@@ -519,21 +519,53 @@ impl SessionManager {
         observed: Option<&str>,
         client_user_id: &str,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
+        self.get_or_create_with(
+            caller,
+            session_id,
+            observed,
+            client_user_id,
+            Transport::Connect,
+        )
+    }
+
+    /// [`Self::get_or_create`] for a session of `transport` (P3-T101 §2 H3):
+    /// a new session records `transport` in `system.sessions` and is built by
+    /// the factory for it; the ADR 0046 §3b record of an id another owner holds
+    /// names `Surface::of(transport)`. An existing session is returned
+    /// whatever transport created it.
+    ///
+    /// # Errors
+    /// As [`Self::get_or_create`].
+    pub fn get_or_create_with(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        observed: Option<&str>,
+        client_user_id: &str,
+        transport: Transport,
+    ) -> Result<Arc<SessionEntry>, KrishivError> {
+        let surface = Surface::of(transport).unwrap_or(Surface::Connect);
         let key = Self::key(caller, session_id);
-        if let Some(entry) = self.lookup(&key, caller, observed)? {
+        if let Some(entry) = self.lookup(&key, caller, observed, surface)? {
             return Ok(entry);
         }
         // Validate before building: Spark's `validateSessionCreate`.
         QueryId::parse(session_id)?;
-        if let Some(existing) = self.check_create(&key, caller)? {
+        if let Some(existing) = self.check_create(&key, caller, surface)? {
             Self::check_observed(&key, &existing, observed)?;
             return Ok(existing);
         }
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
-        let session = (self.factory)(caller)?;
+        let session = (self.factory)(caller, transport)?;
         let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
-        let entry = self.new_entry(caller, session, (client_user_id, session_id), python);
+        let entry = self.new_entry(
+            caller,
+            session,
+            (client_user_id, session_id),
+            python,
+            transport,
+        );
         let mut retired = None;
         let raced = {
             let mut inner = self.lock();
@@ -558,7 +590,7 @@ impl SessionManager {
             Err(e) => {
                 // Built, then refused by a check that changed meanwhile.
                 entry.close();
-                Err(audit_foreign(caller, "session", e))
+                Err(audit_foreign(caller, "session", surface, e))
             }
             Ok(Some(existing)) => {
                 entry.close();
@@ -587,8 +619,33 @@ impl SessionManager {
         session_id: &str,
         observed: Option<&str>,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
+        self.get_observed(caller, session_id, observed, Surface::Connect)
+    }
+
+    /// [`Self::get`] for a request of `surface`, without a server-side id to
+    /// compare (P3-T101 §2 H3): the ADR 0046 §3b record of an id another owner
+    /// holds names `surface`.
+    ///
+    /// # Errors
+    /// As [`Self::get`].
+    pub fn get_with(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        surface: Surface,
+    ) -> Result<Arc<SessionEntry>, KrishivError> {
+        self.get_observed(caller, session_id, None, surface)
+    }
+
+    fn get_observed(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        observed: Option<&str>,
+        surface: Surface,
+    ) -> Result<Arc<SessionEntry>, KrishivError> {
         let key = Self::key(caller, session_id);
-        if let Some(entry) = self.lookup(&key, caller, observed)? {
+        if let Some(entry) = self.lookup(&key, caller, observed, surface)? {
             return Ok(entry);
         }
         let closed = self.lock().closed.contains(&key);
@@ -639,7 +696,7 @@ impl SessionManager {
                 let foreign = Self::foreign_locked(&inner, &key);
                 drop(inner);
                 if foreign {
-                    write_foreign_record(caller, "session");
+                    write_foreign_record(caller, "session", Surface::Connect);
                 }
                 return None;
             };
@@ -648,9 +705,60 @@ impl SessionManager {
             }
             entry
         };
+        Some(self.close_released(&key, &entry, false))
+    }
+
+    /// Whether `owner` has the live session `session_id` (P3-T101 §2 H5). Not an
+    /// access: unlike [`Self::get_if_present`] it does not stamp the session, so a
+    /// caller that polls (Flight SQL's sweep) keeps no session from the idle
+    /// timeout. Whatever role the session was built with.
+    #[must_use]
+    pub fn is_live(&self, owner: &SessionOwner, session_id: &str) -> bool {
+        let key = Key {
+            owner: owner.clone(),
+            session_id: session_id.to_owned(),
+        };
+        self.lock().live.contains_key(&key)
+    }
+
+    /// Releases `owner`'s session `session_id` as [`Self::release`] does, for a
+    /// caller outside any request (Flight SQL's sweep and provisional sessions,
+    /// P3-T101 §2 H5, §3.2): keyed by the owner, it needs no `Authenticated`,
+    /// writes no foreign-id record for an id it does not find, and tombstones as
+    /// abandoned only the reattachable operations it cancels (one that is not
+    /// can never be reattached). Returns the released session's server-side id.
+    pub fn release_owned(
+        &self,
+        owner: &SessionOwner,
+        session_id: &str,
+        allow_reconnect: bool,
+    ) -> Option<String> {
+        let key = Key {
+            owner: owner.clone(),
+            session_id: session_id.to_owned(),
+        };
+        let entry = {
+            let mut inner = self.lock();
+            let entry = Self::remove_locked(&mut inner, &key)?;
+            if !allow_reconnect {
+                inner.closed.insert(key.clone(), self.limits.tombstones);
+            }
+            entry
+        };
+        Some(self.close_released(&key, &entry, true))
+    }
+
+    /// Closes `entry`, which left the map as `key`, and tombstones the operations
+    /// it cancelled as abandoned (Spark's `removeAllExecutionsForSession`): all of
+    /// them, or with `reattachable_only` those a client could reattach to.
+    /// Returns its server-side id.
+    fn close_released(&self, key: &Key, entry: &SessionEntry, reattachable_only: bool) -> String {
         let id = entry.server_side_id().to_owned();
-        // Spark's `removeAllExecutionsForSession` removes them as abandoned.
-        let ops = entry.close();
+        let ops: Vec<_> = entry
+            .close()
+            .into_iter()
+            .filter(|op| !reattachable_only || op.reattachable())
+            .collect();
         if !ops.is_empty() {
             let mut inner = self.lock();
             for op in ops {
@@ -663,7 +771,7 @@ impl SessionManager {
                 );
             }
         }
-        Some(id)
+        id
     }
 
     /// Whether operation `operation_id` of session `session_id` was
@@ -877,6 +985,7 @@ impl SessionManager {
         key: &Key,
         caller: &Authenticated,
         observed: Option<&str>,
+        surface: Surface,
     ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
         let mut retired = None;
         let found = {
@@ -893,7 +1002,7 @@ impl SessionManager {
             }
         };
         Self::close_retired(retired);
-        let Some(entry) = found.map_err(|e| audit_foreign(caller, "session", e))? else {
+        let Some(entry) = found.map_err(|e| audit_foreign(caller, "session", surface, e))? else {
             return Ok(None);
         };
         Self::check_observed(key, &entry, observed)?;
@@ -928,7 +1037,7 @@ impl SessionManager {
             .iter()
             .any(|e| e.operations().get(operation_id).is_some())
         {
-            write_foreign_record(caller, "operation");
+            write_foreign_record(caller, "operation", Surface::Connect);
         }
     }
 
@@ -953,6 +1062,7 @@ impl SessionManager {
         &self,
         key: &Key,
         caller: &Authenticated,
+        surface: Surface,
     ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
         let mut retired = None;
         let checked = {
@@ -963,7 +1073,7 @@ impl SessionManager {
             }
         };
         Self::close_retired(retired);
-        checked.map_err(|e| audit_foreign(caller, "session", e))
+        checked.map_err(|e| audit_foreign(caller, "session", surface, e))
     }
 
     fn check_create_locked(
@@ -1026,30 +1136,32 @@ mod clone;
 
 /// `error` unchanged, after the ADR 0046 §3b denial record when it is the
 /// `INVALID_HANDLE.SESSION_NOT_FOUND` of an id another owner holds (the only
-/// `SESSION_NOT_FOUND` [`SessionManager::lookup`] and the create checks give).
+/// `SESSION_NOT_FOUND` [`SessionManager::lookup`] and the create checks give),
+/// on a request of `surface`.
 fn audit_foreign(
     caller: &Authenticated,
     handle: &'static str,
+    surface: Surface,
     error: KrishivError,
 ) -> KrishivError {
     if error.error_class().name() == "INVALID_HANDLE.SESSION_NOT_FOUND" {
-        write_foreign_record(caller, handle);
+        write_foreign_record(caller, handle, surface);
     }
     error
 }
 
 /// The `krishiv::audit` record of a refused id another principal holds: who
-/// asked and what kind of id, never the id's owner.
-fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
+/// asked, on which surface, and what kind of id, never the id's owner.
+fn write_foreign_record(caller: &Authenticated, handle: &'static str, surface: Surface) {
     tracing::warn!(
         target: "krishiv::audit",
         principal = %caller.principal.name,
         method = caller.method.as_str(),
         role = caller.role.map_or("none", Role::as_str),
         delegated_by = caller.principal.delegated_by.as_deref(),
-        surface = Surface::Connect.as_str(),
+        surface = surface.as_str(),
         handle,
-        "refused a Connect id another principal holds, answered as unknown"
+        "refused an id another principal holds, answered as unknown"
     );
 }
 
