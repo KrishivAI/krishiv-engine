@@ -26,7 +26,8 @@ use krishiv_types::{DataType, StructField, StructType};
 use super::append_tests::MAX;
 use super::commit::{CommitOutcome, CommitTable};
 use super::cow_tests::{
-    Over, add_deletes, append, create, dvs_in_one_puffin, get, live, position_delete, summary,
+    Over, add_deletes, append, create, dvs_in_one_puffin, get, live, position_delete,
+    remove_all_deletes, summary,
 };
 use super::lineage::{LAST_UPDATED, ROW_ID, lineage_fields};
 use super::provider::IcebergTableProvider;
@@ -1142,4 +1143,56 @@ fn bad_row_ids_are_refused() {
         .unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
     assert_eq!(catalog.metadata().snapshots().count(), 1);
+}
+
+/// Review 36c1 M4: a file-scoped position delete file P1 (Krishiv's, v2)
+/// the statement absorbs is removed by a foreign `delete` snapshot that adds
+/// no delete file. A `DELETE` skips the missing-absorbed check and commits
+/// (Java's `RowDelta` without `validateDeletedFiles`), its new file still
+/// deleting P1's row; an `UPDATE` fails with "Missing required files to
+/// delete" (`Removals::ignore_missing_deletes`, both directions).
+#[test]
+fn a_concurrently_removed_absorbed_delete_fails_update_not_delete() {
+    for op in [RowLevelOperation::Delete, RowLevelOperation::Update] {
+        let env = env();
+        let t = create(&env, 2, false, &[]);
+        let catalog = Catalog::new(&t);
+        append(&env, &catalog, range(0, 10));
+        Mor::open(&env, &catalog, RowLevelOperation::Delete)
+            .delete("id = 1")
+            .unwrap();
+        assert_eq!(delete_entries(&env, &catalog.metadata()).len(), 1);
+        let mor = Mor::open(&env, &catalog, op);
+        let task = Task {
+            deletes: mor.ids("id = 3"),
+            inserts: if op == RowLevelOperation::Update {
+                mor.updated("id = 3", "'u'")
+            } else {
+                Vec::new()
+            },
+        };
+        remove_all_deletes(&env, &catalog);
+        assert!(delete_entries(&env, &catalog.metadata()).is_empty());
+        assert_eq!(read_back(&env, &catalog), expected(0..10));
+        let out = mor.run(vec![task]);
+        if op == RowLevelOperation::Delete {
+            let m = out.unwrap();
+            assert_eq!(summary(&m).0, Operation::Delete);
+            // P1's row 1 is in the new file, absorbed.
+            assert_eq!(read_back(&env, &catalog), without(0..10, &[1, 3]));
+            live(&env, &m);
+        } else {
+            let err = out.unwrap_err();
+            assert_eq!(
+                err.error_class(),
+                ErrorClass::KrishivIcebergCommitConflict,
+                "{err}"
+            );
+            assert!(
+                err.to_string().contains("Missing required files to delete"),
+                "{err}"
+            );
+            assert_eq!(read_back(&env, &catalog), expected(0..10));
+        }
+    }
 }
