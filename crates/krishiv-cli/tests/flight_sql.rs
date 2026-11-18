@@ -110,3 +110,29 @@ async fn flight_sql_disabled_answers_unimplemented() {
     // tonic renders `Code::Unimplemented` as its description.
     assert!(msg.contains("not implemented"), "{msg}");
 }
+
+/// `adbc_flight_sql_tpch_q1` (design §11): TPC-H q1 through the ADBC Flight SQL driver equals
+/// the Spark Connect run, types included. Needs `uv` and the network for the driver: runs only
+/// with `KRISHIV_TEST_ADBC=1` (`tests/scripts/flight_sql_adbc.py`).
+#[test]
+fn adbc_flight_sql_tpch_q1() {
+    if std::env::var_os("KRISHIV_TEST_ADBC").is_none() {
+        eprintln!("skipped: set KRISHIV_TEST_ADBC=1 (needs uv) to run the ADBC end-to-end test");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (server, flight) = start(dir.path(), &[]);
+    assert!(flight);
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/scripts/flight_sql_adbc.py");
+    let out = Command::new("uv")
+        .args(["run", "--quiet", "--script"])
+        .arg(&script)
+        .args(["--addr", &server.connect])
+        .output()
+        .expect("uv runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    eprintln!("{stdout}");
+}
