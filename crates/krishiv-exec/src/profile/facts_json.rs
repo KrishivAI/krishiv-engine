@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::hints::{Hint, HintCode};
 use crate::context::OperatorId;
-use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts, TableFacts};
+use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts};
 
 pub(super) fn facts_json(f: &NodeFacts) -> Value {
     json!({
@@ -22,16 +22,10 @@ pub(super) fn facts_json(f: &NodeFacts) -> Value {
             "reason": match g.reason {
                 FilterGapReason::Disabled => "disabled",
                 FilterGapReason::NoScanColumn => "no_scan_column",
-                _ => "blocked",
+                FilterGapReason::Blocked => "blocked",
             },
         })).collect::<Vec<_>>(),
         "tables_without_stats": f.tables_without_stats,
-        "table": f.table.as_ref().map(|t| json!({
-            "name": t.name,
-            "rows": t.rows,
-            "distinct": t.distinct.iter().map(|(c, d)| json!([c, d])).collect::<Vec<_>>(),
-            "filter_columns": t.filter_columns,
-        })),
     })
 }
 
@@ -81,25 +75,11 @@ pub(super) fn facts_of(v: &Value) -> Option<NodeFacts> {
                 .collect()
         })
         .unwrap_or_default();
-    let table = o.get("table").and_then(|t| {
-        Some(TableFacts {
-            name: t.get("name")?.as_str()?.to_owned(),
-            rows: t.get("rows")?.as_u64()?,
-            distinct: t
-                .get("distinct")?
-                .as_array()?
-                .iter()
-                .filter_map(|p| Some((p.get(0)?.as_str()?.to_owned(), p.get(1)?.as_u64()?)))
-                .collect(),
-            filter_columns: strings(t.get("filter_columns")),
-        })
-    });
     Some(NodeFacts {
         estimated_rows: o.get("estimated_rows").and_then(Value::as_f64),
         inputs,
         filter_gaps,
         tables_without_stats: strings(o.get("tables_without_stats")),
-        table,
     })
 }
 

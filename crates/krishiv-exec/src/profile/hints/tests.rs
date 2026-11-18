@@ -127,9 +127,16 @@ fn hint_skew_raised_at_the_boundary() {
         );
         hints(&agg_plan(), &m, &s)
     };
-    // 4 drivers, the slowest 400 of 1,000 ms: 1.6x the even share, under 4x.
+    // 4 drivers, the slowest 400 of 1,000 ms: 1.6x the even share, under 4x the mean of the others.
     assert!(skewed("Window", 400, 1000, 4).is_empty());
-    // The slowest 1,000 of 1,000 ms over 4 drivers: exactly 4x.
+    // At factor 4 the slowest driver must do 4/7 of the work at 4 drivers, 2/3 at 3 and 4/5 at 2.
+    assert!(skewed("Window", 570, 1000, 4).is_empty());
+    assert_eq!(skewed("Window", 580, 1000, 4).len(), 1);
+    assert!(skewed("Window", 660, 1000, 3).is_empty());
+    assert_eq!(skewed("Window", 670, 1000, 3).len(), 1);
+    assert!(skewed("Window", 790, 1000, 2).is_empty());
+    assert_eq!(skewed("Window", 800, 1000, 2).len(), 1);
+    // The slowest 1,000 of 1,000 ms over 4 drivers.
     let h = skewed("Window", 1000, 1000, 4);
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].code, HintCode::Skew);
@@ -323,7 +330,8 @@ fn hint_runtime_filter_raised_at_the_boundary() {
     let h = none(1_000_000, 500_000);
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].code, HintCode::RuntimeFilterOpportunity);
-    assert!(h[0].message.contains("(l_partkey + 0)"));
+    assert!(h[0].message.contains("join key #1"), "{}", h[0].message);
+    assert!(!h[0].message.contains("l_partkey"), "{}", h[0].message);
     let h = hints(
         &gaps(FilterGapReason::Disabled),
         &join_metrics(1_000_000, 0, 10),

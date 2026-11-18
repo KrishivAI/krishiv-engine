@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The `krishiv.advisor.*` entries (P3-T073): the thresholds of the advisor hints.
+//!
+//! Design note, the defaults and why. Every rule is a threshold on a measured ratio plus a floor, so a
+//! trivial query raises nothing: SPILL, spilled bytes over 10% of the query's peak memory and at least 64 MiB
+//! (a smaller spill costs less than the advice); MEMORY_WAIT, blocked time over 1x compute time and at least
+//! 100 ms; SKEW, the slowest driver at least 4x the mean of the others, over 200 ms (or 100,000 rows); MISSING_STATISTICS, a
+//! q-error of at least 4 over at least 10,000 rows on a table without statistics; RUNTIME_FILTER_OPPORTUNITY,
+//! at least 50% of at least 1,000,000 probe rows dropped by a join with no filter. The floors were tuned against
+//! the hints the 22 TPC-H SF1 queries raise (`tpch_sf1_hint_review`
+//! in `krishiv-session/tests/advisor_hints.rs` prints the list). `maxHints` (32) bounds the stored row.
 
 use std::time::Duration;
 
@@ -70,7 +79,7 @@ pub static ADVISOR_SKEW_FACTOR: ConfigEntry = ConfigEntry {
     key: "krishiv.advisor.skew.factor",
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4)),
-    doc: "A key-partitioned operator raises a SKEW hint when its slowest driver, scaled by the driver count, is at least this multiple of the operator's total work (time, or rows when the row floor holds).",
+    doc: "A key-partitioned operator raises a SKEW hint when its slowest driver did at least this multiple of the mean work of the other drivers (time, or rows when the row floor holds); at factor 4 that is 80% of the work at 2 drivers, 67% at 3 and 57% at 4.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",

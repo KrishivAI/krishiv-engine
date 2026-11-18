@@ -407,11 +407,8 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         // alias marker. No scan finds every such name, so the arguments of every node are dropped: the operator
         // tree and the metrics remain.
         blank_details(&mut profile.plan);
-        // A join key's text and a hint's message can carry a literal (`l_partkey + 7`): the facts keep the key's
-        // position, not its text, and a message is masked like a statement.
-        for h in &mut profile.hints {
-            h.message = krishiv_sql::mask_literals(&h.message);
-        }
+        // A join key's text can carry a literal (`l_partkey + 7`): the facts keep the key's position, not its
+        // text, and a hint names a key by its position, so the hints are stored as `EXPLAIN ANALYZE` shows them.
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));

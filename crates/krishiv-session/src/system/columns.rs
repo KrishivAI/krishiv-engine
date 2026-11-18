@@ -8,6 +8,18 @@ use arrow_array::{ArrayRef, Int32Array, Int64Array};
 use arrow_schema::DataType as ArrowType;
 use krishiv_types::DataType;
 
+/// The element field and the struct fields of an Arrow list of structs; `None` for any other type (which an
+/// array of structs never maps to).
+fn list_of_struct(t: ArrowType) -> Option<(arrow_schema::FieldRef, arrow_schema::Fields)> {
+    let ArrowType::List(element) = t else {
+        return None;
+    };
+    let ArrowType::Struct(fields) = element.data_type().clone() else {
+        return None;
+    };
+    Some((element, fields))
+}
+
 /// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
 pub(super) fn buckets_type() -> DataType {
     use krishiv_types::{ArrayType, StructField, StructType};
@@ -27,11 +39,8 @@ pub(super) fn buckets_type() -> DataType {
 pub(super) fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
     use arrow_array::{Float64Array, ListArray, StructArray};
     use arrow_buffer::{NullBuffer, OffsetBuffer};
-    let ArrowType::List(element) = buckets_type().to_arrow() else {
-        unreachable!("an array type maps to a list")
-    };
-    let ArrowType::Struct(fields) = element.data_type().clone() else {
-        unreachable!("the element is a struct")
+    let Some((element, fields)) = list_of_struct(buckets_type().to_arrow()) else {
+        return arrow_array::new_null_array(&buckets_type().to_arrow(), rows.len());
     };
     let les =
         Float64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.0)));
@@ -90,11 +99,8 @@ impl HintRow {
 pub(super) fn hints_column(rows: &[Option<&[HintRow]>]) -> ArrayRef {
     use arrow_array::{ListArray, StringViewArray, StructArray};
     use arrow_buffer::{NullBuffer, OffsetBuffer};
-    let ArrowType::List(element) = hints_type().to_arrow() else {
-        unreachable!("an array type maps to a list")
-    };
-    let ArrowType::Struct(fields) = element.data_type().clone() else {
-        unreachable!("the element is a struct")
+    let Some((element, fields)) = list_of_struct(hints_type().to_arrow()) else {
+        return arrow_array::new_null_array(&hints_type().to_arrow(), rows.len());
     };
     let all = || rows.iter().flatten().flat_map(|r| r.iter());
     let values = StructArray::new(

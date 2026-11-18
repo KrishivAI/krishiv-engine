@@ -725,3 +725,49 @@ fn the_stored_profile_holds_the_tags_of_the_queries_own_row() {
         "a request tag was not stored"
     );
 }
+
+/// The stored profile's hints are the ones `EXPLAIN ANALYZE` shows, under the default `mask`: the numbers in
+/// a message are engine metrics, not data, so masking must not touch them.
+#[test]
+fn stored_hints_equal_the_explain_analyze_hints_under_masking() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 4,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let rt = EngineRuntime::builder()
+        .executor(executor)
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .config("krishiv.advisor.skew.minTime", "1ms")
+        .config("krishiv.advisor.skew.minRows", "1")
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql(
+        "SELECT id, sum(id) OVER (PARTITION BY CASE WHEN id % 10 = 0 THEN id ELSE 0 END ORDER BY id) \
+         FROM range(0, 3000000)",
+    ))
+    .unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert!(!profile.hints.is_empty(), "the planted skew raised no hint");
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = nonempty_history(dir.path());
+    let back = QueryProfile::from_json(&stored[0].profile).unwrap();
+    // The JSON object keeps its evidence sorted by name; the code, node, operator and message are the contract.
+    let key = |hints: &[krishiv_exec::profile::Hint]| {
+        hints
+            .iter()
+            .map(|h| (h.code, h.node, h.operator, h.message.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(key(&back.hints), key(&profile.hints));
+    assert!(
+        back.hints
+            .iter()
+            .any(|h| h.message.chars().any(|c| c.is_ascii_digit())),
+        "a hint with numbers is what masking could have broken"
+    );
+}

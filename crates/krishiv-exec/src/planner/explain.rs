@@ -16,8 +16,6 @@ pub struct NodeFacts {
     pub filter_gaps: Vec<FilterGap>,
     /// A scan: the table it reads when the provider reports no statistics.
     pub tables_without_stats: Vec<String>,
-    /// A scan of a named table: what the provider reported of it.
-    pub table: Option<TableFacts>,
 }
 
 /// One join input's planner facts.
@@ -52,19 +50,6 @@ pub enum FilterGapReason {
     NoScanColumn,
     /// The key is a scan column, but an operator between the join and the scan stops the filter.
     Blocked,
-}
-
-/// A named table's statistics at planning time.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TableFacts {
-    /// The table name as the scan prints it.
-    pub name: String,
-    /// Its rows.
-    pub rows: u64,
-    /// `(column, distinct values)` where the provider knows them.
-    pub distinct: Vec<(String, u64)>,
-    /// The columns the scan's pushed filter compares with a constant by `=` or `IN`, sorted.
-    pub filter_columns: Vec<String>,
 }
 
 /// One node of a physical plan as `EXPLAIN` prints it: a name, its

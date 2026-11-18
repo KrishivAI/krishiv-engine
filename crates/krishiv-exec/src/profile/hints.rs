@@ -88,7 +88,7 @@ impl Hint {
             .node
             .and_then(|id| find(plan, id))
             .map_or_else(String::new, |n| {
-                format!("node {} {}: ", self.node.unwrap_or(0), n.name)
+                format!("node {} {}: ", n.id.unwrap_or(0), n.name)
             });
         format!("[{}] {at}{}", self.code.as_str(), self.message)
     }
@@ -135,39 +135,41 @@ impl HintSettings {
     /// The settings in `config` (the registry defaults for what is unset).
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
-        let int = |e: &ConfigEntry, d: u64| {
+        // `Config::get` falls back to the entry's registry default, so no default is repeated here; the
+        // `unwrap_or_default` is for an entry the registry validated, which always holds a value.
+        let int = |e: &ConfigEntry| {
             config
                 .get(e)
                 .and_then(krishiv_common::config::ConfigValue::as_int)
                 .and_then(|v| u64::try_from(v).ok())
-                .unwrap_or(d)
+                .unwrap_or_default()
         };
-        let time = |e: &ConfigEntry, d: Duration| {
+        let time = |e: &ConfigEntry| {
             config
                 .get(e)
                 .and_then(krishiv_common::config::ConfigValue::as_duration)
-                .unwrap_or(d)
+                .unwrap_or_default()
         };
         Self {
             enabled: config
                 .get(&ADVISOR_ENABLED)
                 .and_then(krishiv_common::config::ConfigValue::as_bool)
-                .unwrap_or(true),
-            spill_min_percent: int(&ADVISOR_SPILL_MIN_PERCENT, 10),
+                .unwrap_or_default(),
+            spill_min_percent: int(&ADVISOR_SPILL_MIN_PERCENT),
             spill_min_bytes: config
                 .get(&ADVISOR_SPILL_MIN_BYTES)
                 .and_then(krishiv_common::config::ConfigValue::as_size)
-                .unwrap_or(64 << 20),
-            memory_wait_factor: int(&ADVISOR_MEMORY_WAIT_FACTOR, 1),
-            memory_wait_min_time: time(&ADVISOR_MEMORY_WAIT_MIN_TIME, Duration::from_millis(100)),
-            skew_factor: int(&ADVISOR_SKEW_FACTOR, 4),
-            skew_min_time: time(&ADVISOR_SKEW_MIN_TIME, Duration::from_millis(200)),
-            skew_min_rows: int(&ADVISOR_SKEW_MIN_ROWS, 100_000),
-            missing_stats_min_q_error: int(&ADVISOR_MISSING_STATS_MIN_Q_ERROR, 4),
-            missing_stats_min_rows: int(&ADVISOR_MISSING_STATS_MIN_ROWS, 10_000),
-            runtime_filter_min_probe_rows: int(&ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS, 1_000_000),
-            runtime_filter_min_drop_percent: int(&ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT, 50),
-            max_hints: usize::try_from(int(&ADVISOR_MAX_HINTS, 32)).unwrap_or(32),
+                .unwrap_or_default(),
+            memory_wait_factor: int(&ADVISOR_MEMORY_WAIT_FACTOR),
+            memory_wait_min_time: time(&ADVISOR_MEMORY_WAIT_MIN_TIME),
+            skew_factor: int(&ADVISOR_SKEW_FACTOR),
+            skew_min_time: time(&ADVISOR_SKEW_MIN_TIME),
+            skew_min_rows: int(&ADVISOR_SKEW_MIN_ROWS),
+            missing_stats_min_q_error: int(&ADVISOR_MISSING_STATS_MIN_Q_ERROR),
+            missing_stats_min_rows: int(&ADVISOR_MISSING_STATS_MIN_ROWS),
+            runtime_filter_min_probe_rows: int(&ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS),
+            runtime_filter_min_drop_percent: int(&ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT),
+            max_hints: usize::try_from(int(&ADVISOR_MAX_HINTS)).unwrap_or(usize::MAX),
         }
     }
 }
@@ -315,11 +317,14 @@ fn skew(
         return;
     }
     let drivers = m.drivers;
-    let by_time = u128::from(nanos(m.max_driver_compute_time)) * u128::from(drivers)
-        >= u128::from(s.skew_factor) * u128::from(nanos(m.compute_time));
-    let by_rows = m.rows_out >= s.skew_min_rows
-        && u128::from(m.max_driver_rows_out) * u128::from(drivers)
-            >= u128::from(s.skew_factor) * u128::from(m.rows_out);
+    // The slowest driver against the mean of the others: `max >= factor * (total - max) / (drivers - 1)`.
+    // Unlike a share of the even split, it can fire at 2 and 3 drivers (80% and 67% of the work at factor 4).
+    let outlier = |max: u64, total: u64| {
+        u128::from(max) * u128::from(drivers - 1)
+            >= u128::from(s.skew_factor) * u128::from(total.saturating_sub(max))
+    };
+    let by_time = outlier(nanos(m.max_driver_compute_time), nanos(m.compute_time));
+    let by_rows = m.rows_out >= s.skew_min_rows && outlier(m.max_driver_rows_out, m.rows_out);
     if !(by_time || by_rows) {
         return;
     }
@@ -487,12 +492,12 @@ fn runtime_filters(
                 "krishiv.runtimeFilter.enabled is false; a filter on the probe key could have skipped them at the scan.".to_owned()
             }
             FilterGapReason::NoScanColumn => format!(
-                "the probe key ({}) is computed, so no filter reaches the scan; compare the column itself.",
-                gap.probe_key
+                "join key #{} is computed, so no filter reaches the scan; compare the column itself.",
+                gap.key + 1
             ),
-            _ => format!(
-                "an operator between the join and the scan (a LIMIT, an outer join or a subquery) stops a filter on {}.",
-                gap.probe_key
+            FilterGapReason::Blocked => format!(
+                "an operator between the join and the scan (a LIMIT, an outer join or a subquery) stops a filter on join key #{}.",
+                gap.key + 1
             ),
         };
         out.push(Hint {

@@ -1150,7 +1150,7 @@ fn a_scanned_table_keeps_the_boundaries_of_its_name() {
 }
 
 fn with_facts() -> ExplainNode {
-    use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts, TableFacts};
+    use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts};
     let mut e = matching();
     e.facts = Some(Arc::new(NodeFacts {
         estimated_rows: Some(12.5),
@@ -1165,12 +1165,6 @@ fn with_facts() -> ExplainNode {
             reason: FilterGapReason::NoScanColumn,
         }],
         tables_without_stats: vec!["t".to_owned()],
-        table: Some(TableFacts {
-            name: "t".to_owned(),
-            rows: 100,
-            distinct: vec![("d".to_owned(), 7)],
-            filter_columns: vec!["d".to_owned()],
-        }),
     }));
     e
 }

@@ -240,7 +240,15 @@ fn hint_spill_raised() {
 
 #[test]
 fn hint_skew_raised() {
-    let (s, _d) = base(Session::builder());
+    // Four compute threads whatever the host has: the hot key (90% of the rows) is then 4 drivers' skew.
+    let executor = krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 4,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let (s, _d) = base(Session::builder().executor(executor));
     let n = 4_000_000_i64;
     register(
         &s,

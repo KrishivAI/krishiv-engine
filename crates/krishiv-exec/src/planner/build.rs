@@ -1298,9 +1298,8 @@ impl<'a> Planner<'a> {
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
                 scan,
-                provider.statistics(),
+                provider.statistics().is_some(),
                 self.estimated_rows(plan),
-                filter.map_or_else(Vec::new, super::scan_facts::equality_columns),
             )),
             sites,
             placement: Placement::Unknown,
