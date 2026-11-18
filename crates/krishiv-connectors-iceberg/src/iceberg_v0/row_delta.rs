@@ -402,7 +402,13 @@ impl MergeOnReadWrite {
             .collect();
         let (bytes, blobs) = dv_puffin(&list, &self.created_by)?;
         written.data.push(location.clone());
-        let size = put(&t.file_io, &location, bytes).await?;
+        let size = put(
+            &t.file_io,
+            t.registered.io.scheduler().runtime(),
+            &location,
+            bytes,
+        )
+        .await?;
         for ((path, (spec_id, partition, positions)), blob) in merged.into_iter().zip(blobs) {
             let file = dv_file(&location, size, blob, &path, spec_id, partition)?;
             kept.push(WrittenDelete {
@@ -674,7 +680,13 @@ impl MorTask {
             let (bytes, blobs) = dv_puffin(&list, &w.created_by)?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
-            let size = put(&t.file_io, &location, bytes).await?;
+            let size = put(
+                &t.file_io,
+                t.registered.io.scheduler().runtime(),
+                &location,
+                bytes,
+            )
+            .await?;
             for (d, blob) in touched.iter().zip(blobs) {
                 let f = &d.entry.file;
                 let partition = partition_struct(base, f.spec_id, &f.partition)?;

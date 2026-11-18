@@ -28,7 +28,9 @@
 //!   the record count, and lower and upper bounds of both columns kept
 //!   (`file_path`'s equal: the file is file-scoped, `ContentFileUtil
 //!   .referencedDataFile`) and every count dropped
-//!   (`PositionDeleteWriter.metrics`, `copyWithoutFieldCounts`). Java's
+//!   (`PositionDeleteWriter.metrics`, `copyWithoutFieldCounts`; Java keeps
+//!   the column sizes there, Krishiv writes none: a divergence, review 36c1
+//!   nit 9). Java's
 //!   `MetricsConfig.forPositionDelete` keeps both bounds in full (recalled;
 //!   with one path per file the bound is the path either way). Parquet
 //!   settings are the data files' (`write.parquet.*`) with each
@@ -341,7 +343,7 @@ pub(crate) async fn write_position_deletes(
     }
     let done = encoder.finish().map_err(|e| e.into_error(location))?;
     bytes.extend_from_slice(&done.tail);
-    let size = put(t.file_io, location, bytes).await?;
+    let size = put(t.file_io, t.io.scheduler().runtime(), location, bytes).await?;
     let bounds = |p: i64| {
         HashMap::from([
             (DELETE_FILE_PATH_ID, Datum::string(data)),
@@ -362,11 +364,20 @@ pub(crate) async fn write_position_deletes(
         .map_err(|e| internal(format!("position delete file {location}: {e}")))
 }
 
-/// Writes `bytes` at `location` through the table's file access.
+/// Writes `bytes` at `location` through the table's file access, on `io_rt`
+/// (the table's I/O runtime: it outlives a query's compute runtime, which may
+/// be shutting down when a cancelled driver drops the write; the current
+/// runtime when there is none, as `sink.rs`'s `Written` and `write.rs`'s
+/// guard choose).
 ///
 /// # Errors
 /// The store's errors.
-pub(crate) async fn put(io: &FileIO, location: &str, bytes: Vec<u8>) -> Result<u64, KrishivError> {
+pub(crate) async fn put(
+    io: &FileIO,
+    io_rt: Option<&tokio::runtime::Handle>,
+    location: &str,
+    bytes: Vec<u8>,
+) -> Result<u64, KrishivError> {
     let size = bytes.len() as u64;
     let write = {
         let (io, location) = (io.clone(), location.to_owned());
@@ -378,7 +389,10 @@ pub(crate) async fn put(io: &FileIO, location: &str, bytes: Vec<u8>) -> Result<u
                 .map_err(from_iceberg)
         }
     };
-    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+    let Some(rt) = io_rt
+        .cloned()
+        .or_else(|| tokio::runtime::Handle::try_current().ok())
+    else {
         write.await?;
         return Ok(size);
     };
