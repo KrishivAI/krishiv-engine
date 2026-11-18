@@ -62,6 +62,8 @@ fn server_auth(dir: &Path) -> Arc<ServerAuth> {
 
 struct Harness {
     flight: FlightSqlServer,
+    manager: Arc<SessionManager>,
+    draining: Arc<std::sync::atomic::AtomicBool>,
     client: FlightServiceClient<Channel>,
     _stop: oneshot::Sender<()>,
     _dir: tempfile::TempDir,
@@ -93,6 +95,7 @@ async fn start(config: FlightSqlConfig) -> Harness {
         config,
     )
     .expect("flight server");
+    let draining = server.draining();
     let server = server.with_routes(Routes::new(flight.service()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -107,6 +110,8 @@ async fn start(config: FlightSqlConfig) -> Harness {
         .expect("connect");
     Harness {
         flight,
+        manager,
+        draining,
         client: FlightServiceClient::new(channel),
         _stop: stop,
         _dir: dir,
@@ -488,4 +493,163 @@ async fn stalled_reader_cancelled_after_idle_timeout() {
             .and_then(|v| v.to_str().ok()),
         Some("KRISHIV_FLIGHT_SQL_FETCH_IDLE")
     );
+}
+
+/// Waits until the manager reports `n` busy units: running queries plus live operations (a
+/// running `DoGet` is one of each).
+async fn wait_busy(h: &Harness, n: usize) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.manager.busy() != n {
+        assert!(
+            Instant::now() < deadline,
+            "{} busy, want {n}",
+            h.manager.busy()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A `DoGet` that has delivered its first message (the schema) and is then left unread.
+async fn open_fetch(
+    h: &mut Harness,
+    cookie: Option<&str>,
+    t: Ticket,
+) -> tonic::Streaming<arrow_flight::FlightData> {
+    let mut s = h
+        .client
+        .do_get(authed(t, OPS, cookie))
+        .await
+        .expect("do_get")
+        .into_inner();
+    s.message().await.expect("first message").expect("schema");
+    s
+}
+
+const LONG: &str = "SELECT id, id * 2 AS d FROM range(0, 50000000)";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn flight_sql_refused_while_draining() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    h.draining.store(true, std::sync::atomic::Ordering::Release);
+    let e = info(&mut h, OPS, None, "SELECT 1")
+        .await
+        .expect_err("draining");
+    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
+    assert_eq!(e.message(), "server shutting down");
+    assert_eq!(h.flight.session_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropped_doget_stream_cancels_query() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let stream = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    wait_busy(&h, 2).await;
+    drop(stream);
+    // The dropped stream ends its operation and cancels its query; the cookie session stays.
+    wait_busy(&h, 0).await;
+    assert_eq!(h.flight.session_count(), 1);
+    assert_eq!(h.flight.handle_count(), 1, "the ticket stays fetchable");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_doget_are_two_operations() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let a = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    let b = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    // Two operations, each with its running query.
+    wait_busy(&h, 4).await;
+    drop(a);
+    wait_busy(&h, 2).await;
+    assert_eq!(h.manager.running_queries(), 1, "the other fetch still runs");
+    drop(b);
+    wait_busy(&h, 0).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cookie_session_runs_more_statements_than_handle_cap() {
+    let mut h = start(FlightSqlConfig {
+        handles: krishiv_flight_sql::HandleLimits {
+            per_session: 2,
+            ..krishiv_flight_sql::HandleLimits::default()
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (first, cookie) = info(&mut h, OPS, None, "SELECT 1").await.expect("first");
+    let cookie = cookie.expect("cookie");
+    let (second, _) = info(&mut h, OPS, Some(&cookie), "SELECT 2")
+        .await
+        .expect("second");
+    let (third, _) = info(&mut h, OPS, Some(&cookie), "SELECT 3")
+        .await
+        .expect("third: evicts");
+    assert_eq!(h.flight.handle_count(), 2);
+    let e = fetch(&mut h, OPS, Some(&cookie), ticket(&first))
+        .await
+        .expect_err("the oldest idle ticket was evicted");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+    for t in [ticket(&second), ticket(&third)] {
+        fetch(&mut h, OPS, Some(&cookie), t).await.expect("kept");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refetch_schema_changed_fails_precondition() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (v, cookie) = info(
+        &mut h,
+        OPS,
+        None,
+        "CREATE TEMPORARY VIEW v AS SELECT 1 AS a",
+    )
+    .await
+    .expect("view");
+    let cookie = cookie.expect("cookie");
+    drop(v);
+    let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT a FROM v")
+        .await
+        .expect("query");
+    info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "CREATE OR REPLACE TEMPORARY VIEW v AS SELECT 'x' AS a",
+    )
+    .await
+    .expect("replace");
+    let e = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect_err("schema changed");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_result_not_stored_says_it_ran() {
+    let mut h = start(FlightSqlConfig {
+        max_command_result_bytes: 1,
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let e = info(&mut h, OPS, None, "SET spark.sql.shuffle.partitions = 7")
+        .await
+        .expect_err("its one-row result is over 1 byte");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED")
+    );
+    assert!(e.message().contains("The statement ran"), "{}", e.message());
+    assert_eq!(h.flight.handle_count(), 0, "the slot was given back");
 }
