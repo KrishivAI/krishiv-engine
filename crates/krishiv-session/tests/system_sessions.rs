@@ -385,3 +385,23 @@ fn a_draining_runtime_refuses_new_queries_but_runs_system_tables_and_cancels_the
     rt.set_draining(false);
     assert_eq!(texts(&s, "SELECT CAST(1 AS STRING)"), ["1"]);
 }
+
+/// A stored result is not replayed while the server drains: the drain refuses new work, and a
+/// cache hit would be new work served (design P3-T066 §5.1). Serving resumes after `ResumeServing`.
+#[test]
+fn a_draining_runtime_does_not_replay_a_cached_result() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "alice");
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    let sql = "SELECT 41 + 1 AS drain_cache_probe";
+    for _ in 0..2 {
+        block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() });
+    }
+    rt.set_draining(true);
+    let df = block_on(s.sql(sql)).unwrap();
+    let err = block_on(df.collect()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING");
+    rt.set_draining(false);
+    assert_eq!(texts(&s, "SELECT CAST(41 + 1 AS STRING)"), ["42"]);
+    block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() });
+}
