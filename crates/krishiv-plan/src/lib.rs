@@ -143,6 +143,7 @@ mod raises;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
+pub mod udtf;
 mod walk;
 
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};

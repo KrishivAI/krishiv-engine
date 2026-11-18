@@ -87,6 +87,9 @@ class UdtfCall:
     table_arg_offsets: list[int]
     #: ``analyze``'s pickled ``AnalyzeResult``, hex, when the UDTF has an ``analyze`` method.
     analyze_result: str | None
+    #: A ``LATERAL`` call's input columns: the trailing frame columns, read by no argument; each result row
+    #: leads with the values of the input row whose ``eval`` gave it (``EvalPythonUDTFExec``'s join).
+    passthrough: list[int] = dataclasses.field(default_factory=list)
 
     @staticmethod
     def of(msg: dict[str, Any]) -> UdtfCall:
@@ -97,7 +100,17 @@ class UdtfCall:
             partition_child_indexes=[int(i) for i in msg.get("partition_child_indexes") or []],
             table_arg_offsets=[int(i) for i in msg.get("table_arg_offsets") or []],
             analyze_result=msg.get("analyze_result"),
+            passthrough=[int(i) for i in msg.get("passthrough") or []],
         )
+
+
+class _Cursor:
+    """The input row a ``LATERAL`` call's results join with: the current input batch, and the batch and row of
+    the last ``eval`` call (``None`` before any)."""
+
+    def __init__(self) -> None:
+        self.raw: Any = None
+        self.ref: tuple[Any, int] | None = None
 
 
 def _wrap_kwargs_support(f: Callable[..., Any], args_offsets: list[int], kwargs_offsets: dict[str, int]) -> Any:
@@ -503,12 +516,49 @@ def make_udtf_runner(handler: Any, eval_type: int, call: UdtfCall) -> Callable[[
                 messageParameters={"name": call.name, "reason": str(e)},
             ) from None
         schema = _engine_schema(return_type, conf)
-        batches = (_spark_batch(b, conf) for b in _map_batches(source))
+        carried = len(call.passthrough)
+        cursor = _Cursor()
+
+        def spark_batches() -> Iterator[Any]:
+            for raw in _map_batches(source):
+                cursor.raw = raw
+                args = raw if carried == 0 else raw.select(list(range(raw.num_columns - carried)))
+                yield _spark_batch(args, conf)
+
+        if carried:
+            if eval_type == SQL_ARROW_UDTF:
+                raise PySparkRuntimeError("an Arrow UDTF (302) cannot be a LATERAL call")
+            for batch in _row_udtf_mapper(
+                udtf, eval_type, return_type, call, args_offsets, kwargs_offsets, conf, spark_batches(), cursor
+            ):
+                yield _carry(_to_engine(batch, schema), cursor, carried)
+            return
         mapper = _arrow_udtf_mapper if eval_type == SQL_ARROW_UDTF else _row_udtf_mapper
-        for batch in mapper(udtf, eval_type, return_type, call, args_offsets, kwargs_offsets, conf, batches):
+        for batch in mapper(udtf, eval_type, return_type, call, args_offsets, kwargs_offsets, conf, spark_batches()):
             yield _to_engine(batch, schema)
 
     return run
+
+
+def _carry(batch: Any, cursor: _Cursor, carried: int) -> Any:
+    """``batch`` led by the ``carried`` trailing input columns of the row ``cursor`` names (all null before any
+    row: Krishiv's answer where Spark 4.2.0 fails with a ``NullPointerException``)."""
+    import pyarrow as pa
+
+    raw = cursor.ref[0] if cursor.ref is not None else cursor.raw
+    if raw is None:
+        # No input batch came (the engine opens no task for an empty input): nothing to lead with.
+        raise PySparkRuntimeError("a LATERAL Python UDTF produced rows before any input batch")
+    fields = list(raw.schema)[raw.num_columns - carried :]
+    n = batch.num_rows
+    if cursor.ref is None:
+        cols = [pa.nulls(n, type=f.type) for f in fields]
+    else:
+        row = cursor.ref[1]
+        take = pa.array([row] * n, type=pa.int64())
+        cols = [raw.column(raw.num_columns - carried + j).take(take) for j in range(carried)]
+    out = pa.schema([pa.field(f.name, f.type) for f in fields] + list(batch.schema))
+    return pa.RecordBatch.from_arrays(cols + list(batch.columns), schema=out)
 
 
 def _spark_batch(batch: Any, conf: RunnerConf) -> Any:
@@ -531,6 +581,7 @@ def _row_udtf_mapper(
     kwargs_offsets: dict[str, int],
     conf: RunnerConf,
     batches: Iterable[Any],
+    cursor: _Cursor | None = None,
 ) -> Iterator[Any]:
     """300 and 301 (the non-legacy path, ``worker.py:1946-2135``; 300's ``wrap_udtf`` checks,
     ``worker.py:2228-2349``): ``eval`` per row, the result rows converted to Arrow."""
@@ -627,10 +678,14 @@ def _row_udtf_mapper(
                 for column, conv in zip(batch.columns, converters, strict=True)
             ]
             if args_kwargs_offsets:
-                for row in zip(*[pylist[o] for o in args_kwargs_offsets], strict=True):
+                for i, row in enumerate(zip(*[pylist[o] for o in args_kwargs_offsets], strict=True)):
+                    if cursor is not None:
+                        cursor.ref = (cursor.raw, i)
                     yield from evaluate(*row)
             else:
-                for _ in range(batch.num_rows):
+                for i in range(batch.num_rows):
+                    if cursor is not None:
+                        cursor.ref = (cursor.raw, i)
                     yield from evaluate()
         if terminate is not None:
             yield from terminate()
