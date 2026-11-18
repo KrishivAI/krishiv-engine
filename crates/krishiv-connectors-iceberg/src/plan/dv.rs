@@ -10,9 +10,16 @@
 //! bitmap is the portable 64-bit layout: a little-endian `u64` count of 32-bit
 //! bitmaps, then each as a little-endian `u32` key (the high 32 bits, keys
 //! ascending) and a portable 32-bit roaring bitmap. [`encode_dv`] writes
-//! Java's exact bytes (PR-36c): every key from 0 to the highest, empty
-//! bitmaps for the gaps, run containers where smaller; the decoder also takes
-//! sparse keys, as Java's does.
+//! Java's layout (PR-36c): every key from 0 to the highest, empty bitmaps
+//! for the gaps, run containers where smaller; the decoder also takes sparse
+//! keys, as Java's does. Byte equality with Java is checked for array
+//! containers only (the fixtures hold no runs). At the run/array size
+//! boundary the two may choose differently: `roaring`'s `optimize` keeps a
+//! run container while `4r + 2 <= 2c` (`r` runs, `c` values), Java's
+//! `RunContainer.toEfficientContainer` compares against an array of
+//! `2c + 2` bytes (recalled, not cited; review 36c1 m7), so at `c = 2r` the
+//! container kinds can differ. Both are valid portable roaring, and every
+//! reader (Java's, Krishiv's) takes either: rows never differ.
 //!
 //! Decoding checks what Java's `BitmapPositionDeleteIndex.deserialize` checks,
 //! in its order and with its texts: the length against the entry's
@@ -211,7 +218,8 @@ fn write_bitmap(positions: &RoaringTreemap, out: &mut Vec<u8>) -> std::io::Resul
 }
 
 /// The blob of `positions` (the writer side; T027's DV writer and the
-/// tests), byte for byte as Java's `BitmapPositionDeleteIndex.serialize`.
+/// tests), as Java's `BitmapPositionDeleteIndex.serialize` (byte for byte
+/// but for the run/array boundary in the module docs).
 ///
 /// # Errors
 /// `KRISHIV_ICEBERG_INVALID_DELETES` for a position Java cannot hold (a key

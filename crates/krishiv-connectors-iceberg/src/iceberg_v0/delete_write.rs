@@ -15,7 +15,7 @@
 //!   "sequence-number":-1,"offset":o,"length":n,"properties":
 //!   {"referenced-data-file":p,"cardinality":"k"}}` with no
 //!   `compression-codec` (`FileMetadataParser`, `BaseDVFileWriter.java:199-212`).
-//!   Each blob is [`encode_dv`]'s, Java's bytes. A DV's manifest entry
+//!   Each blob is [`encode_dv`]'s, Java's layout. A DV's manifest entry
 //!   ([`dv_file`], `BaseDVFileWriter.java:165-181`): content position
 //!   deletes, format `puffin`, the data file's spec and partition, the whole
 //!   Puffin file's size, `referenced_data_file`, `content_offset` and
