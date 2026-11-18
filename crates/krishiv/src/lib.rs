@@ -26,6 +26,34 @@
 //!
 //! Actions are `async` and run on the session's own executor, so any
 //! runtime (or none, with `futures::executor::block_on`) can await them.
+//!
+//! # Errors
+//!
+//! [`Error`] is Spark's error model: `Display` prints `[CLASS] message SQLSTATE: xxxxx`, and
+//! `error_class().name()` is the class as a string (for example `"DIVIDE_BY_ZERO"`), the stable
+//! way to branch on a failure from this crate alone:
+//!
+//! ```
+//! # use krishiv::Session;
+//! let session = Session::new()?;
+//! let err = futures::executor::block_on(async { session.sql("SELECT nope FROM t").await }).unwrap_err();
+//! assert!(err.error_class().name().starts_with("TABLE_OR_VIEW_NOT_FOUND"));
+//! assert!(!err.sql_state().unwrap_or_default().is_empty());
+//! # Ok::<(), krishiv::Error>(())
+//! ```
+//!
+//! `message()`, `message_parameters()`, `causes()` and `query_contexts()` (the `fragment`, `start`
+//! and `stop` of the SQL text at fault) are public too. The `ErrorClass` enum itself lives in
+//! `krishiv-common`, which is not part of this crate's stable surface: compare names, not variants.
+//!
+//! # Cargo features
+//!
+//! Working features: `cloud` (S3, GCS and Azure object stores), `delta`, `ui`, `unstable-ir`,
+//! `wasm-udf`, `telemetry-logs`, `telemetry-otlp`, `tokio-console` and `collations-icu` (on by
+//! default). `cdc`, `celeborn`, `connect`, `flight-sql`, `iceberg`, `kafka`, `mcp`, `mimalloc` and
+//! `python` are **reserved**: they are accepted and enable nothing yet (features are additive, so
+//! they will start to do something without a breaking change). Those integrations ship as their own
+//! `krishiv-*` crates and the `krishiv` binary today.
 
 #![forbid(unsafe_code)]
 
