@@ -223,7 +223,6 @@ fn spark_rows(rows: &Value) -> Vec<String> {
 #[test]
 #[ignore = "step 3 of tests/scripts/iceberg_write_conformance.sh (needs READBACK.json from Spark)"]
 fn krishiv_agrees_with_spark_readback() {
-    let out = out_dir();
     let krishiv = read_json("KRISHIV.json");
     let spark = read_json("READBACK.json");
     assert_eq!(spark["_oracle"]["iceberg"], "1.12.0");
@@ -311,10 +310,10 @@ fn krishiv_agrees_with_spark_readback() {
             assert_eq!(parts, 3, "{name}: partitions Spark sees (x = 0, 1, 2)");
         }
         // v3 row lineage: Spark's row ids are distinct and below Krishiv's next-row-id.
-        if let Some(ids) = s["before"].get("row_ids").filter(|v| v.is_array()) {
-            let ids: Vec<i64> = ids
+        if name.starts_with("v3") {
+            let ids: Vec<i64> = s["before"]["row_ids"]
                 .as_array()
-                .unwrap()
+                .unwrap_or_else(|| panic!("{name}: Spark returned no _row_id for a v3 table"))
                 .iter()
                 .map(|v| v.as_i64().unwrap())
                 .collect();
@@ -338,13 +337,13 @@ fn krishiv_agrees_with_spark_readback() {
             );
         }
 
-        if name.starts_with("v3")
-            && let Some(seqs) = s["before"].get("last_updated").filter(|v| v.is_array())
-        {
+        if name.starts_with("v3") {
             // Each row carries the sequence number of the snapshot that added it: 1 and 2, 30 rows each.
-            let seqs: Vec<i64> = seqs
+            let seqs: Vec<i64> = s["before"]["last_updated"]
                 .as_array()
-                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!("{name}: Spark returned no sequence numbers for a v3 table")
+                })
                 .iter()
                 .map(|v| v.as_i64().unwrap())
                 .collect();
@@ -367,11 +366,37 @@ fn krishiv_agrees_with_spark_readback() {
             text(&last["snapshot_id"]),
             "{name}: Spark's snapshot is a child of Krishiv's"
         );
+        if name.starts_with("v3") {
+            // Spark trusts Krishiv's next-row-id: its two new rows get the next ids, with no overlap.
+            let next = k["next_row_id"].as_i64().unwrap();
+            let ids: Vec<i64> = after["row_ids"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no _row_id after Spark's append"))
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect();
+            assert_eq!(
+                ids,
+                (0..next + 2).collect::<Vec<_>>(),
+                "{name}: ids are 0..next-row-id plus Spark's two rows, all distinct"
+            );
+            let seqs: Vec<i64> = after["last_updated"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no sequence numbers after Spark's append"))
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect();
+            assert_eq!(
+                seqs.iter().filter(|s| **s == 3).count(),
+                2,
+                "{name}: Spark's two rows carry sequence 3"
+            );
+        }
         // Krishiv reads Spark's metadata (its file is the one Spark committed).
         let location = after["metadata"].as_str().unwrap().to_owned();
         assert!(
-            location.starts_with(&format!("file:{}", out.display())),
-            "{location}"
+            location.ends_with(".metadata.json"),
+            "{name}: Spark names the metadata it committed: {location}"
         );
         let want = {
             let mut w = spark_rows(&after["rows"]);

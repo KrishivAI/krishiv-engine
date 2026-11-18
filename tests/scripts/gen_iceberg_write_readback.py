@@ -55,14 +55,12 @@ def state(spark, name, v3):
         "properties": rows_of(spark.sql(f"SHOW TBLPROPERTIES {t}")),
     }
     if v3:
-        try:
-            out["row_ids"] = [r["_row_id"] for r in spark.sql(f"SELECT _row_id FROM {t} ORDER BY _row_id").collect()]
-            out["last_updated"] = [
-                r["_last_updated_sequence_number"]
-                for r in spark.sql(f"SELECT _last_updated_sequence_number FROM {t} ORDER BY id, name").collect()
-            ]
-        except Exception as e:  # recorded, not hidden: the Rust side then skips the lineage check and says so
-            out["row_ids_error"] = str(e).splitlines()[0]
+        # No try/except: if Spark cannot project the lineage columns on a Krishiv-written v3 table, the job must fail.
+        out["row_ids"] = [r["_row_id"] for r in spark.sql(f"SELECT _row_id FROM {t} ORDER BY _row_id").collect()]
+        out["last_updated"] = [
+            r["_last_updated_sequence_number"]
+            for r in spark.sql(f"SELECT _last_updated_sequence_number FROM {t} ORDER BY id, name").collect()
+        ]
     return out
 
 

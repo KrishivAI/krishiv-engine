@@ -472,7 +472,18 @@ jobs:
         with:
           tool: cargo-nextest@0.9.148
       - name: Krishiv writes, Spark reads and appends, Krishiv reads back
-        run: tests/scripts/iceberg_write_conformance.sh
+        env:
+          OUT: ${{ runner.temp }}/iceberg-write-conformance
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/iceberg_write_conformance.sh
+      - name: Keep the tables and both JSON files of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iceberg-write-conformance
+          path: ${{ runner.temp }}/iceberg-write-conformance
+          retention-days: 7
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
