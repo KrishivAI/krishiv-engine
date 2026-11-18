@@ -106,6 +106,10 @@ pub struct RelationCallSpec {
     /// The runner configuration (Spark's `PythonRunner` conf): the session's
     /// explicit settings the Python side reads.
     pub conf: RunnerConf,
+    /// A Python table function's call (eval types 300, 301, 302): its
+    /// arguments, partitioning and `analyze` result. `None` for every other
+    /// kind.
+    pub udtf: Option<crate::python_udtf::UdtfCall>,
 }
 
 /// The settings a Python runner reads (Spark's runner conf).

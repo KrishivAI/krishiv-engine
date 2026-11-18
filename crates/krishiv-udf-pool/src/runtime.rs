@@ -22,7 +22,7 @@ use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
 use krishiv_plan::function::PythonEvalType;
 use std::os::fd::OwnedFd;
 
-use crate::artifacts::ArtifactSet;
+use crate::artifacts::{ArtifactSet, PythonArchive};
 use crate::pool::{CallWatch, Owner, Pool};
 use crate::relation::PoolSlots;
 use crate::worker::{PythonPayload, Worker, kill_via};
@@ -78,12 +78,17 @@ impl SessionUdfs {
     }
 
     /// Sets the session's Python artifacts that calls prepared from now on see: `pyfiles` (`.py` files, and
-    /// zips or eggs) on the workers' `sys.path`, and `archives` (zip, jar, tar, tar.gz, tgz) unpacked and on
-    /// it too (`artifacts.rs`). The server names the paths: each must be an absolute path of a regular file
-    /// with no symbolic link at or above it, or the calls fail with `INVALID_ARTIFACT_PATH`; an archive the
-    /// pool cannot unpack within its limit fails them with `KRISHIV_PYTHON_ARTIFACT_REFUSED`. Workers started
-    /// for the previous set are not reused for the new one.
-    pub fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+    /// zips or eggs) in the workers' files directory, which is on their `sys.path` with each zip or egg, and
+    /// `archives` (zip, jar, tar, tar.gz, tgz) unpacked into that directory under their alias or file name,
+    /// each entry reachable from the workers' working directory as in Spark (`artifacts.rs`). The server names
+    /// the paths: each must be an absolute path of a regular file with no symbolic link at or above it, and an
+    /// alias one plain name (not empty, no `/`, not hidden), or the calls fail with `INVALID_ARTIFACT_PATH`;
+    /// two artifacts of one name fail them with `ARTIFACT_ALREADY_EXISTS`; an archive the pool cannot unpack
+    /// within its limit fails them with `KRISHIV_PYTHON_ARTIFACT_REFUSED`. Workers started for the previous set
+    /// are not reused for the new one. The Spark Connect server does not call this yet (its
+    /// `SessionUdfRuntime` forward comes with a later change), so a Connect client's artifacts do not reach
+    /// the workers until then.
+    pub fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
         *self
             .artifacts
             .write()
@@ -258,6 +263,18 @@ impl UdfRuntime for SessionUdfs {
             spec,
             &session,
             self.artifacts(),
+        )
+    }
+    fn analyze_udtf(
+        &self,
+        spec: &krishiv_exec::python_udtf::UdtfAnalyzeSpec,
+    ) -> BoxFuture<'static, krishiv_exec::Result<krishiv_exec::python_udtf::UdtfAnalysis>> {
+        crate::udtf::analyze(
+            &self.pool,
+            &self.owner,
+            self.registered(&spec.name, spec.version),
+            self.artifacts(),
+            spec,
         )
     }
 }
@@ -511,6 +528,7 @@ mod tests {
             output_types: vec![SparkType::Long],
             output_arrow: Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
             conf: RunnerConf::default(),
+            udtf: None,
         }
     }
 

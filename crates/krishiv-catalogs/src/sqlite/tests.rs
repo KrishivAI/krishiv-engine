@@ -374,6 +374,30 @@ fn writers_in_threads_take_turns_and_a_name_is_made_once() {
     assert_eq!(c.epoch(), 9);
 }
 
+/// Many connections opening one new file at the same moment: the first open makes the schema and switches the file to
+/// WAL, and SQLite answers "database is locked" to the others without running the busy handler, so `open` has to
+/// wait for it itself (the nightly coverage job failed on this once).
+#[test]
+fn many_connections_opening_one_new_file_at_once_all_succeed() {
+    for _ in 0..40 {
+        let (_dir, path) = file();
+        let barrier = std::sync::Barrier::new(16);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    s.spawn(|| {
+                        barrier.wait();
+                        SqliteCatalog::open("lite", &path, false).map(|_| ())
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap().unwrap();
+            }
+        });
+    }
+}
+
 /// The body of the child processes of the tests below (a test binary run again with the environment set): creates
 /// `KRISHIV_SQLITE_CHILD_COUNT` tables named `<prefix><i>` in the catalog file, or until it is killed.
 #[test]
