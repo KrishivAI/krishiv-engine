@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A query that needs no column of a Parquet file reads no column: `COUNT(*)`
 //! counts the rows the footers declare instead of decoding a column (plan B,
-//! ClickBench q01). Other formats still read one column.
+//! ClickBench q01). CSV and JSON have no footer: their scans read every record
+//! but decode no column.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
 use arrow_array::{Array, Int64Array, RecordBatch};
@@ -25,11 +26,10 @@ fn one_long(batches: &[RecordBatch]) -> i64 {
     rows[0]
 }
 
-/// Whether the plan's (one) scan reads no column: its line ends `[]`.
+/// Whether the plan has a scan and every scan reads no column: its line ends `[]`.
 fn scans_no_column(plan: &str) -> bool {
-    plan.lines()
-        .filter(|l| l.contains("Scan "))
-        .all(|l| l.trim_end().ends_with("[]"))
+    let mut scans = plan.lines().filter(|l| l.contains("Scan ")).peekable();
+    scans.peek().is_some() && scans.all(|l| l.trim_end().ends_with("[]"))
 }
 
 fn count(s: &Session, sql: &str) -> (i64, String) {
