@@ -822,27 +822,27 @@ mod tests {
         )
     }
 
-    fn conv(desc: &[u8], message: &str, s: &StructType) -> Result<EncStruct, KrishivError> {
+    fn conv(desc: &[u8], message: &str, s: &StructType) -> KrishivError {
         let set = DescriptorSet::parse(desc).unwrap();
         let msg = set.message(message).unwrap();
-        struct_conv(s, &msg, &mut Vec::new())
+        struct_conv(s, &msg, &mut Vec::new()).err().unwrap()
     }
 
     #[test]
     fn a_struct_field_the_message_lacks_is_no_sql_type_in_protobuf_schema() {
-        let e = conv(GOLDEN, "Scalars", &st(&[("nope", DataType::Integer)])).unwrap_err();
+        let e = conv(GOLDEN, "Scalars", &st(&[("nope", DataType::Integer)]));
         assert_eq!(e.error_class(), ErrorClass::NoSqlTypeInProtobufSchema);
     }
 
     #[test]
     fn a_missing_required_field_is_protobuf_field_missing_in_sql_schema() {
-        let e = conv(P2, "P2Required", &st(&[("c", DataType::Integer)])).unwrap_err();
+        let e = conv(P2, "P2Required", &st(&[("c", DataType::Integer)]));
         assert_eq!(e.error_class(), ErrorClass::ProtobufFieldMissingInSqlSchema);
     }
 
     #[test]
     fn two_fields_matching_a_name_ignoring_case_is_protobuf_field_missing() {
-        let e = conv(P2, "CaseClash", &st(&[("abc", DataType::String)])).unwrap_err();
+        let e = conv(P2, "CaseClash", &st(&[("abc", DataType::String)]));
         assert_eq!(e.error_class(), ErrorClass::ProtobufFieldMissing);
     }
 
