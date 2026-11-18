@@ -65,11 +65,24 @@ struct Harness {
     manager: Arc<SessionManager>,
     draining: Arc<std::sync::atomic::AtomicBool>,
     client: FlightServiceClient<Channel>,
-    _stop: oneshot::Sender<()>,
+    /// Sending (or dropping) it starts `serve`'s shutdown.
+    stop: Option<oneshot::Sender<()>>,
+    /// `serve`'s task: it ends once shutdown has waited for the running operations.
+    served: tokio::task::JoinHandle<Result<(), krishiv_common::error::KrishivError>>,
     _dir: tempfile::TempDir,
 }
 
 async fn start(config: FlightSqlConfig) -> Harness {
+    start_with(config, ConnectServerConfig::default(), None).await
+}
+
+/// `stream_window`: the client's HTTP/2 stream window, so a test can keep a fetch's last pieces
+/// from fitting in the transport's buffers.
+async fn start_with(
+    config: FlightSqlConfig,
+    server_config: ConnectServerConfig,
+    stream_window: Option<u32>,
+) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
@@ -84,8 +97,7 @@ async fn start(config: FlightSqlConfig) -> Harness {
         ConnectAuth::new(Arc::clone(&auth) as Arc<dyn Authenticator>)
             .with_denials(Arc::clone(&denials))
     };
-    let server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default())
-        .with_auth(connect_auth());
+    let server = ConnectServer::new(Arc::clone(&manager), server_config).with_auth(connect_auth());
     let flight = FlightSqlServer::new(
         Arc::clone(&manager),
         Arc::new(connect_auth()),
@@ -100,11 +112,12 @@ async fn start(config: FlightSqlConfig) -> Harness {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let (stop, stopped) = oneshot::channel::<()>();
-    tokio::spawn(server.serve(listener, async {
+    let served = tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
     }));
     let channel = Channel::from_shared(format!("http://{addr}"))
         .expect("uri")
+        .initial_stream_window_size(stream_window)
         .connect()
         .await
         .expect("connect");
@@ -113,7 +126,8 @@ async fn start(config: FlightSqlConfig) -> Harness {
         manager,
         draining,
         client: FlightServiceClient::new(channel),
-        _stop: stop,
+        stop: Some(stop),
+        served,
         _dir: dir,
     }
 }
@@ -975,4 +989,130 @@ async fn reset_during_shutdown_is_unavailable() {
     assert_eq!(e.code(), Code::Unavailable, "{e:?}");
     assert_eq!(h.flight.session_count(), 0);
     assert_eq!(h.manager.counts().live, 0);
+}
+
+/// A listener whose shutdown grace is long enough that only the running fetch decides when
+/// `serve` returns, a client with a 16 KiB stream window and pieces of 4 KiB: an unread fetch
+/// stays open however small its result.
+async fn start_graceful() -> Harness {
+    start_with(
+        FlightSqlConfig {
+            encode: krishiv_flight_sql::EncodeLimits {
+                batch_bytes: 16 << 10,
+                data_bytes: 4 << 10,
+            },
+            ..FlightSqlConfig::default()
+        },
+        ConnectServerConfig {
+            shutdown_timeout: Duration::from_secs(30),
+            ..ConnectServerConfig::default()
+        },
+        Some(16 << 10),
+    )
+    .await
+}
+
+/// Starts `serve`'s shutdown and checks it is still waiting after a while: a live operation holds it.
+async fn shut_down_and_see_it_wait(h: &mut Harness) {
+    let _ = h.stop.take().expect("not stopped yet").send(());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !h.draining.load(std::sync::atomic::Ordering::Acquire) {
+        assert!(Instant::now() < deadline, "shutdown never started");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !h.served.is_finished(),
+        "serve returned with a fetch running"
+    );
+}
+
+/// A `DoGet` that has delivered its first message (the schema), kept for [`read_to_end`].
+async fn open_fetch_keeping_schema(
+    h: &mut Harness,
+    cookie: &str,
+    t: Ticket,
+) -> (
+    arrow_flight::FlightData,
+    tonic::Streaming<arrow_flight::FlightData>,
+) {
+    let mut s = h
+        .client
+        .do_get(authed(t, OPS, Some(cookie)))
+        .await
+        .expect("do_get")
+        .into_inner();
+    let schema = s.message().await.expect("first message").expect("schema");
+    (schema, s)
+}
+
+/// Reads a stream to its end after its first message: the rows, or the status it ended with.
+async fn read_to_end(
+    (schema, stream): (
+        arrow_flight::FlightData,
+        tonic::Streaming<arrow_flight::FlightData>,
+    ),
+) -> Result<Vec<RecordBatch>, Status> {
+    let data = futures::stream::once(async { Ok(schema) })
+        .chain(stream)
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .map_err(|e| match e {
+            FlightError::Tonic(s) => *s,
+            other => Status::internal(other.to_string()),
+        })
+}
+
+/// `serve` returns, and `close_all` (what `krishiv-cli` calls next) leaves no Flight session or
+/// handle (§16 m7).
+async fn served_then_closed(h: Harness) {
+    tokio::time::timeout(Duration::from_secs(20), h.served)
+        .await
+        .expect("serve returned after the fetch")
+        .expect("serve task")
+        .expect("serve");
+    assert_eq!(
+        h.manager.counts().live,
+        0,
+        "the manager closed its sessions"
+    );
+    h.flight.close_all();
+    assert_eq!(h.flight.session_count(), 0);
+    assert_eq!(h.flight.handle_count(), 0);
+}
+
+/// A running query `DoGet` is a live operation: shutdown waits for it within
+/// `krishiv.server.shutdownTimeout`, the reader gets every row, then the sessions are closed
+/// (design §7 "Drain", §11).
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_waits_for_running_doget_then_closes_sessions() {
+    let mut h = start_graceful().await;
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT id FROM range(0, 200000)")
+        .await
+        .expect("info");
+    let cookie = cookie.expect("cookie");
+    let stream = open_fetch_keeping_schema(&mut h, &cookie, ticket(&i)).await;
+    wait_busy(&h, 2).await;
+    shut_down_and_see_it_wait(&mut h).await;
+    let batches = read_to_end(stream).await.expect("the fetch finishes");
+    assert_eq!(rows(&batches), 200_000);
+    served_then_closed(h).await;
+}
+
+/// The `DoGet` of a command's stored rows is a live operation too (§4.1): shutdown waits for it
+/// and its reader gets the stored rows, not `UNAVAILABLE`.
+#[tokio::test(flavor = "multi_thread")]
+async fn command_doget_waited_for_at_shutdown() {
+    let mut h = start_graceful().await;
+    // `SET -v` lists every key with its documentation: many 4 KiB pieces.
+    let (i, cookie) = info(&mut h, OPS, None, "SET -v").await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let stream = open_fetch_keeping_schema(&mut h, &cookie, ticket(&i)).await;
+    wait_busy(&h, 1).await;
+    shut_down_and_see_it_wait(&mut h).await;
+    let batches = read_to_end(stream).await.expect("the stored rows");
+    assert!(rows(&batches) > 100, "{} rows", rows(&batches));
+    served_then_closed(h).await;
 }
