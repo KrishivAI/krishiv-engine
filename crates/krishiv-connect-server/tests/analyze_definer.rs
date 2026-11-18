@@ -93,8 +93,9 @@ async fn start() -> Running {
         run(&ana, sql).await;
     }
     let shared = Arc::clone(&world);
-    let factory =
-        move |_: &krishiv_session::auth::Authenticated| Ok(session(&shared, "bob", false));
+    let factory = move |_: &krishiv_session::auth::Authenticated, _: krishiv_session::Transport| {
+        Ok(session(&shared, "bob", false))
+    };
     let manager = Arc::new(SessionManager::new(
         Box::new(factory),
         SessionLimits::default(),
