@@ -279,7 +279,7 @@ fn the_rule_can_be_switched_off() {
 /// TPC-DS SF1 row counts (no column statistics): enough for the rule's
 /// `from_statistics` gate.
 #[derive(Debug)]
-struct TpcdsRows;
+pub(crate) struct TpcdsRows;
 
 const TPCDS_SF1_ROWS: [(&str, u64); 24] = [
     ("call_center", 6),
