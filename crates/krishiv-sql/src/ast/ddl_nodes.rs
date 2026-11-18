@@ -1264,6 +1264,8 @@ pub enum ShowKind {
     Namespaces {
         /// Which keyword.
         kind: NamespaceKind,
+        /// The catalog or namespace named by `FROM`/`IN`, if written.
+        namespace: Option<DdlName>,
         /// The pattern, if written.
         pattern: Option<ShowPattern>,
         /// Source text.

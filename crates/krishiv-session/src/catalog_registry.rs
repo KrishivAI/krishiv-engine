@@ -37,6 +37,9 @@ use krishiv_common::config::{
 };
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
+use krishiv_exec::files::PathLocator;
+use krishiv_exec::planner::TableProvider;
+use krishiv_io::IoContext;
 use krishiv_io::egress::EgressPolicy;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, TableIdent, TableMeta};
@@ -154,6 +157,83 @@ impl CatalogCaller {
     }
 }
 
+/// What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+/// placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
+/// and `krishiv.io.objectStore.allowedPrefixes`, ADR 0046 §3a), its configuration and the
+/// worker slots splits are cut for.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct ScanInputs {
+    /// The query's I/O.
+    pub io: IoContext,
+    /// Where the table's files live.
+    pub paths: Arc<dyn PathLocator>,
+    /// The query's configuration.
+    pub config: Arc<Config>,
+    /// The drivers splits are planned for.
+    pub worker_slots: u64,
+}
+
+impl fmt::Debug for ScanInputs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScanInputs")
+            .field("paths", &self.paths)
+            .field("worker_slots", &self.worker_slots)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScanInputs {
+    /// The inputs of one query.
+    #[must_use]
+    pub fn new(
+        io: IoContext,
+        paths: Arc<dyn PathLocator>,
+        config: Arc<Config>,
+        worker_slots: u64,
+    ) -> Self {
+        Self {
+            io,
+            paths,
+            config,
+            worker_slots,
+        }
+    }
+}
+
+/// A table a declared catalog loaded for one caller at one version: what a scan of it opens
+/// (PR-58b). Opened before planning, on the executor's I/O runtime.
+pub trait DeclaredTable: fmt::Debug + Send + Sync {
+    /// The table's provider, read with `inputs`.
+    ///
+    /// # Errors
+    /// A refusal of the read (`KRISHIV_UNSUPPORTED_FEATURE`, a location outside the confinement)
+    /// or the failure to open it.
+    fn open(
+        self: Arc<Self>,
+        inputs: ScanInputs,
+    ) -> BoxFuture<'static, Result<Arc<dyn TableProvider>, KrishivError>>;
+}
+
+/// What [`CallerCatalog::load_declared`] found: the analyzer's metadata and, when the catalog
+/// can read the table, the [`DeclaredTable`] its scans open.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct LoadedDeclared {
+    /// The table's metadata.
+    pub meta: TableMeta,
+    /// What a scan opens; `None` for a catalog that resolves names only.
+    pub table: Option<Arc<dyn DeclaredTable>>,
+}
+
+impl LoadedDeclared {
+    /// `meta`, read through `table`.
+    #[must_use]
+    pub fn new(meta: TableMeta, table: Option<Arc<dyn DeclaredTable>>) -> Self {
+        Self { meta, table }
+    }
+}
+
 /// A built declared catalog: the analyzer's `Catalog` with the caller of each call (§3.2).
 pub trait CallerCatalog: fmt::Debug + Send + Sync {
     /// As `Catalog::epoch`.
@@ -169,6 +249,78 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
         version: Option<TableVersion>,
         form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>>;
+
+    /// [`Self::load_table`] with what a scan of the table opens. The default resolves the name
+    /// only: a scan of the table is refused.
+    fn load_declared<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        form: NameForm,
+    ) -> BoxFuture<'a, Result<Option<LoadedDeclared>, KrishivError>> {
+        Box::pin(async move {
+            Ok(self
+                .load_table(caller, id, version, form)
+                .await?
+                .map(|meta| LoadedDeclared::new(meta, None)))
+        })
+    }
+
+    /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
+    /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
+    /// that read it are analyzed again. Whether the table exists. The default keeps nothing and
+    /// only looks the table up.
+    ///
+    /// # Errors
+    /// The catalog's failure to load the table.
+    fn refresh<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        id: &'a TableIdent,
+    ) -> BoxFuture<'a, Result<bool, KrishivError>> {
+        let form = NameForm {
+            case_sensitive: false,
+            qualified: true,
+            temporary_only: false,
+        };
+        Box::pin(async move { Ok(self.load_table(caller, id, None, form).await?.is_some()) })
+    }
+
+    /// The namespaces directly under `parent` (top level when empty), for `caller`; `None` when
+    /// `parent` does not exist. The default lists nothing: `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn list_namespaces<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        parent: &'a [String],
+    ) -> BoxFuture<'a, Result<Option<Vec<Vec<String>>>, KrishivError>> {
+        let _ = (caller, parent);
+        Box::pin(async move { Err(unlisted()) })
+    }
+
+    /// The table names in `namespace`, for `caller`; `None` when the namespace does not exist.
+    /// The default lists nothing: `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn list_tables<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        namespace: &'a [String],
+    ) -> BoxFuture<'a, Result<Option<Vec<String>>, KrishivError>> {
+        let _ = (caller, namespace);
+        Box::pin(async move { Err(unlisted()) })
+    }
+}
+
+fn unlisted() -> KrishivError {
+    krishiv_common::error::KrishivUnsupportedFeature {
+        feature: "listing the namespaces and tables of this catalog".to_owned(),
+    }
+    .into()
 }
 
 /// A catalog that answers every caller as the server: any analyzer `Catalog` as a
@@ -428,9 +580,94 @@ impl Declared {
 }
 
 /// A declared catalog as the analyzer sees it for one caller: its name at once, the real catalog
-/// on its first table load.
+/// on its first table load; the tables it loads are kept in the query's [`DeclaredLoads`].
 #[derive(Debug)]
-struct DeclaredCatalog(Arc<Declared>, CatalogCaller);
+struct DeclaredCatalog(Arc<Declared>, CatalogCaller, Arc<DeclaredLoads>);
+
+/// The key of a declared table in one query: the parts a scan of it names (catalog, namespace,
+/// table, as the catalog spells them) and the version it was loaded at.
+pub(crate) type DeclaredKey = (Vec<String>, Option<TableVersion>);
+
+/// The declared tables one query loaded and opened (PR-58b): the analysis records each table a
+/// declared catalog loaded; before planning each scanned one is opened once, so every scan of it
+/// in the query reads one provider.
+#[derive(Default)]
+pub(crate) struct DeclaredLoads {
+    /// What the query's scans read with: `None` outside a query (a listing), where nothing opens.
+    inputs: Option<QueryInputs>,
+    loaded: Mutex<BTreeMap<DeclaredKey, Arc<dyn DeclaredTable>>>,
+    opened: Mutex<BTreeMap<DeclaredKey, Arc<dyn TableProvider>>>,
+}
+
+/// A query's scan inputs, before the server-mode confinement is applied (it is built on the
+/// first open, so a query that reads no declared table never reads the roots).
+#[derive(Clone)]
+pub(crate) struct QueryInputs {
+    pub(crate) inputs: ScanInputs,
+    /// Server mode: catalog-supplied locations are confined (ADR 0046 §3a).
+    pub(crate) confine: bool,
+}
+
+impl fmt::Debug for DeclaredLoads {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeclaredLoads")
+            .field(
+                "loaded",
+                &self
+                    .loaded
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .keys()
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl DeclaredLoads {
+    pub(crate) fn new(inputs: QueryInputs) -> Self {
+        Self {
+            inputs: Some(inputs),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn inputs(&self) -> Option<&QueryInputs> {
+        self.inputs.as_ref()
+    }
+
+    fn record(&self, key: DeclaredKey, table: Arc<dyn DeclaredTable>) {
+        self.loaded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, table);
+    }
+
+    /// The table a scan of `key` reads, when a declared catalog loaded it in this query.
+    pub(crate) fn loaded(&self, key: &DeclaredKey) -> Option<Arc<dyn DeclaredTable>> {
+        self.loaded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .cloned()
+    }
+
+    /// The provider opened for `key`.
+    pub(crate) fn opened(&self, key: &DeclaredKey) -> Option<Arc<dyn TableProvider>> {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .cloned()
+    }
+
+    pub(crate) fn put_opened(&self, key: DeclaredKey, provider: Arc<dyn TableProvider>) {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, provider);
+    }
+}
 
 impl Catalog for DeclaredCatalog {
     fn name(&self) -> &str {
@@ -454,7 +691,14 @@ impl Catalog for DeclaredCatalog {
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
             let catalog = self.0.catalog()?;
-            catalog.load_table(&self.1, id, version, form).await
+            let Some(loaded) = catalog.load_declared(&self.1, id, version, form).await? else {
+                return Ok(None);
+            };
+            if let Some(table) = loaded.table {
+                self.2
+                    .record((loaded.meta.ident.parts(), loaded.meta.version), table);
+            }
+            Ok(Some(loaded.meta))
         })
     }
 }
@@ -482,6 +726,9 @@ impl fmt::Debug for CatalogRegistry {
 fn key_of(name: &str, field: &str) -> String {
     format!("{CATALOG_PREFIX}{name}.{field}")
 }
+
+/// A built declared catalog with the caller its calls carry.
+pub(crate) type BuiltCatalog = (Arc<dyn CallerCatalog>, CatalogCaller);
 
 impl CatalogRegistry {
     /// No declared catalogs (an embedded runtime built without a [`CatalogSetup`]).
@@ -595,7 +842,7 @@ impl CatalogRegistry {
     /// It answers as the server: a `delegated` catalog fails every call for want of a user token.
     #[must_use]
     pub fn catalog(&self, name: &str, tenant: Option<&str>) -> Option<Arc<dyn Catalog>> {
-        self.catalog_for(name, tenant, None, None)
+        self.catalog_for(name, tenant, None, None, &Arc::default())
     }
 
     /// [`Self::catalog`] for `principal` with its session's latest authentication `inbound`.
@@ -605,23 +852,54 @@ impl CatalogRegistry {
         tenant: Option<&str>,
         principal: Option<&Principal>,
         inbound: Option<&Inbound>,
+        loads: &Arc<DeclaredLoads>,
     ) -> Option<Arc<dyn Catalog>> {
         let declared = self.catalogs.get(&name.to_ascii_lowercase())?;
         if !declared.decl.visible_to(tenant) {
             return None;
         }
-        let decl = &declared.decl;
-        // §3.2: only a delegated catalog tells callers apart; for the others the key is the
-        // catalog and no user token goes anywhere.
-        let caller = match (&decl.auth, principal) {
-            (CatalogAuth::Delegated { .. }, Some(p)) => CatalogCaller::new(
-                IdentityKey::of(decl.name.clone(), p),
-                inbound.map(|i| i.method),
-                inbound.and_then(|i| i.credential.clone()),
-            ),
-            _ => CatalogCaller::server(decl.name.clone()),
-        };
-        Some(Arc::new(DeclaredCatalog(Arc::clone(declared), caller)) as Arc<dyn Catalog>)
+        let caller = caller_of(&declared.decl, principal, inbound);
+        Some(Arc::new(DeclaredCatalog(
+            Arc::clone(declared),
+            caller,
+            Arc::clone(loads),
+        )) as Arc<dyn Catalog>)
+    }
+
+    /// The built catalog `name` (any letter case) a principal of `tenant` sees, with its caller.
+    ///
+    /// # Errors
+    /// The catalog's build failure.
+    fn built_for(
+        &self,
+        name: &str,
+        tenant: Option<&str>,
+        principal: Option<&Principal>,
+        inbound: Option<&Inbound>,
+    ) -> Option<Result<BuiltCatalog, KrishivError>> {
+        let declared = self.catalogs.get(&name.to_ascii_lowercase())?;
+        if !declared.decl.visible_to(tenant) {
+            return None;
+        }
+        let caller = caller_of(&declared.decl, principal, inbound);
+        Some(declared.catalog().map(|c| (c, caller)))
+    }
+}
+
+/// Who calls `decl`'s catalog (§3.2): only a delegated catalog tells callers apart; for the others
+/// the key is the catalog and no user token goes anywhere.
+fn caller_of(
+    decl: &CatalogDecl,
+    principal: Option<&Principal>,
+    inbound: Option<&Inbound>,
+) -> CatalogCaller {
+    match (&decl.auth, principal) {
+        (CatalogAuth::Delegated { .. }, Some(p)) => CatalogCaller::new(
+            IdentityKey::of(decl.name.clone(), p),
+            inbound.map(|i| i.method),
+            inbound.and_then(|i| i.credential.clone()),
+        ),
+        _ => CatalogCaller::server(decl.name.clone()),
     }
 }
 
@@ -656,6 +934,8 @@ pub(crate) struct DeclaredView {
     principal: Option<Arc<Principal>>,
     /// The session's latest authentication, snapshotted for this view's query.
     inbound: Option<Inbound>,
+    /// The declared tables this view's query loaded.
+    loads: Arc<DeclaredLoads>,
 }
 
 impl Default for DeclaredView {
@@ -665,6 +945,7 @@ impl Default for DeclaredView {
             tenant: None,
             principal: None,
             inbound: None,
+            loads: Arc::default(),
         }
     }
 }
@@ -691,12 +972,36 @@ impl DeclaredView {
             tenant: principal.tenant.clone(),
             principal: Some(principal),
             inbound,
+            loads: Arc::default(),
         }
+    }
+
+    /// This view for one query reading with `inputs`.
+    pub(crate) fn for_query(mut self, inputs: ScanInputs) -> Self {
+        let confine = self.registry.mode() == DeclMode::Server;
+        self.loads = Arc::new(DeclaredLoads::new(QueryInputs { inputs, confine }));
+        self
+    }
+
+    /// The declared tables this view's query loaded.
+    pub(crate) fn loads(&self) -> &Arc<DeclaredLoads> {
+        &self.loads
     }
 
     /// The visible catalog `name`, answering this view's caller.
     pub(crate) fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         self.registry.catalog_for(
+            name,
+            self.tenant.as_deref(),
+            self.principal.as_deref(),
+            self.inbound.as_ref(),
+            &self.loads,
+        )
+    }
+
+    /// The visible catalog `name`, built, with this view's caller (refresh, listings).
+    pub(crate) fn built(&self, name: &str) -> Option<Result<BuiltCatalog, KrishivError>> {
+        self.registry.built_for(
             name,
             self.tenant.as_deref(),
             self.principal.as_deref(),
@@ -772,6 +1077,57 @@ impl crate::Session {
             .unwrap_or_else(PoisonError::into_inner) = Some(Inbound { method, credential });
     }
 
+    /// The namespaces directly under `parent` of the declared catalog `catalog` (any letter case)
+    /// as the current caller sees them (design P3-T067 §3.5, PR-58b); `None` when `catalog` is no
+    /// declared catalog this principal sees.
+    ///
+    /// # Errors
+    /// The catalog's failure; `SCHEMA_NOT_FOUND` for a `parent` it does not have.
+    pub(crate) async fn declared_namespaces(
+        &self,
+        catalog: &str,
+        parent: &[String],
+    ) -> Option<Result<Vec<Vec<String>>, KrishivError>> {
+        let built = self.declared_catalogs().built(catalog)?;
+        Some(
+            async {
+                let (built, caller) = built?;
+                match built
+                    .list_namespaces(&caller, parent)
+                    .await
+                    .map_err(|e| names_catalog(e, catalog))?
+                {
+                    Some(found) => Ok(found),
+                    None => Err(schema_not_found(catalog, parent)),
+                }
+            }
+            .await,
+        )
+    }
+
+    /// The tables of `namespace` of the declared catalog `catalog`, as [`Self::declared_namespaces`].
+    pub(crate) async fn declared_tables(
+        &self,
+        catalog: &str,
+        namespace: &[String],
+    ) -> Option<Result<Vec<String>, KrishivError>> {
+        let built = self.declared_catalogs().built(catalog)?;
+        Some(
+            async {
+                let (built, caller) = built?;
+                match built
+                    .list_tables(&caller, namespace)
+                    .await
+                    .map_err(|e| names_catalog(e, catalog))?
+                {
+                    Some(found) => Ok(found),
+                    None => Err(schema_not_found(catalog, namespace)),
+                }
+            }
+            .await,
+        )
+    }
+
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible
     /// declared ones (`SHOW CATALOGS`, `spark.catalog.listCatalogs`).
     pub(crate) fn catalog_names(&self) -> Vec<String> {
@@ -794,4 +1150,31 @@ impl crate::Session {
             vec![Some(catalog), Some(String::new())]
         }
     }
+}
+
+/// `SCHEMA_NOT_FOUND` for `namespace` of the declared catalog `catalog`.
+fn schema_not_found(catalog: &str, namespace: &[String]) -> KrishivError {
+    let quote = |p: &str| format!("`{}`", p.replace('`', "``"));
+    krishiv_common::error::SchemaNotFound {
+        schema_name: std::iter::once(catalog)
+            .chain(namespace.iter().map(String::as_str))
+            .map(quote)
+            .collect::<Vec<_>>()
+            .join("."),
+    }
+    .into()
+}
+
+/// `e` naming `catalog` when it is the refusal of a catalog that lists nothing.
+fn names_catalog(e: KrishivError, catalog: &str) -> KrishivError {
+    if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" {
+        return krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "listing the namespaces and tables of the declared catalog `{}`",
+                catalog.replace('`', "``")
+            ),
+        }
+        .into();
+    }
+    e
 }

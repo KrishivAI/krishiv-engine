@@ -443,6 +443,12 @@ impl Session {
                     .table(&fold(namespace), &fold(name))
                     .map(|_| format!("{}.{}", fold(namespace), fold(name))))
             }
+            // `spark_catalog.ns.t`: the embedded table, whatever catalog is current.
+            [catalog, namespace, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                Ok(store
+                    .table(&fold(namespace), &fold(name))
+                    .map(|_| format!("{}.{}", fold(namespace), fold(name))))
+            }
             _ => Ok(None),
         }
     }
@@ -560,6 +566,22 @@ impl Session {
                     }
                     .into());
                 };
+                // A declared catalog's table (design P3-T067 §3.5): its metadata cache entry goes
+                // and the catalog's epoch moves, so frames and plans reading it analyze again.
+                if let [catalog, _, _, ..] = parts.as_slice()
+                    && let Some(built) = self.declared_catalogs().built(catalog)
+                {
+                    let (built, caller) = built?;
+                    let id = krishiv_plan::analyzer::TableIdent {
+                        catalog: catalog.clone(),
+                        namespace: parts[1..parts.len() - 1].to_vec(),
+                        name: parts[parts.len() - 1].clone(),
+                    };
+                    if !built.refresh(&caller, &id).await? {
+                        return Err(table_not_found(&parts));
+                    }
+                    return self.empty_frame().await;
+                }
                 let Some(key) = self.cache_key(&parts)? else {
                     return Err(table_not_found(&parts));
                 };

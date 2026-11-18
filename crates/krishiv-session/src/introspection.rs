@@ -455,6 +455,24 @@ impl Session {
                         .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
                 }
+                // `SHOW TABLES IN cat.ns` of a declared catalog: the catalog's own listing.
+                if let Some(n) = namespace {
+                    let parts = crate::access::ddl_parts(n, &self.query_env())?;
+                    if let [catalog, ns @ ..] = parts.as_slice()
+                        && !ns.is_empty()
+                        && let Some(found) = self.declared_tables(catalog, ns).await
+                    {
+                        let label = ns.join(".");
+                        let rows: Vec<Vec<Cell>> = found?
+                            .iter()
+                            .filter(|t| keep(pattern.as_ref(), t))
+                            .map(|t| vec![s(&label), s(t), s("false")])
+                            .collect();
+                        return self
+                            .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
+                            .await;
+                    }
+                }
                 let ns = self.show_namespace(namespace.as_ref())?;
                 if is_global_namespace(&ns) {
                     return self
@@ -563,7 +581,25 @@ impl Session {
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
             }
-            ShowKind::Namespaces { pattern, .. } => {
+            ShowKind::Namespaces {
+                pattern, namespace, ..
+            } => {
+                // A declared catalog (named, or current without a name): its own namespaces.
+                let parts = match namespace {
+                    Some(n) => crate::access::ddl_parts(n, &self.query_env())?,
+                    None => vec![self.state.catalog.current_catalog()],
+                };
+                if let [catalog, parent @ ..] = parts.as_slice()
+                    && let Some(found) = self.declared_namespaces(catalog, parent).await
+                {
+                    let rows: Vec<Vec<Cell>> = found?
+                        .iter()
+                        .map(|n| n.join("."))
+                        .filter(|n| keep(pattern.as_ref(), n))
+                        .map(|n| vec![s(n)])
+                        .collect();
+                    return self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await;
+                }
                 // `system` has no namespaces; never list the session catalog's under it.
                 let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
                 self.refuse_declared_current()?;

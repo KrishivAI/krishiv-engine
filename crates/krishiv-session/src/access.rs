@@ -903,6 +903,15 @@ impl Session {
                     .collect(),
             ),
             TargetObject::CurrentCatalog => namespaces(vec![current_catalog()]),
+            // `SHOW NAMESPACES IN name`: a catalog when `name` is one, else a namespace of the
+            // current catalog.
+            TargetObject::NamedCatalog(name) => {
+                let written = parts(name)?;
+                match written.as_slice() {
+                    [only] if catalogs.catalog(only).is_some() => namespaces(vec![only.clone()]),
+                    _ => namespaces(namespace_parts(catalogs, &written)),
+                }
+            }
             TargetObject::Path(path) => vec![Securable::Path(OptionValue::from_user(
                 "path",
                 self.qualify_path(path)?,
@@ -1274,7 +1283,7 @@ impl PathPrefixPolicy {
     }
 
     /// Whether the qualified path `path` lies under a root or an object-store prefix.
-    fn allows(&self, path: &OptionValue) -> bool {
+    pub(crate) fn allows(&self, path: &OptionValue) -> bool {
         let text = match path {
             OptionValue::Plain(text) => text.as_str(),
             // `container@account.host` reads as user info, so an Azure path arrives typed as a

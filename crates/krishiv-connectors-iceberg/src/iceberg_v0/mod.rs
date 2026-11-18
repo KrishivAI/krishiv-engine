@@ -19,6 +19,8 @@ pub(crate) mod sink;
 pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
+#[cfg(feature = "testing")]
+pub(crate) mod testing;
 pub(crate) mod types;
 pub(crate) mod validate;
 pub(crate) mod write;
