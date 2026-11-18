@@ -18,7 +18,7 @@ use krishiv_memory::{ConsumerHandle, MemoryConfig, MemoryPool, TreePool};
 
 use super::commit::{CommitOutcome, CommitTable};
 use super::cow_tests::{add_deletes, append, create, dvs_in_one_puffin, summary};
-use super::mor_tests::{Mor, Task, files_ending};
+use super::mor_tests::{Mor, Task, files_ending, only_data_file};
 use super::provider_tests::{Env, env};
 use super::sink_tests::{Catalog, expected, parquet_files, range, read_back};
 use super::table::IcebergTable;
@@ -141,7 +141,13 @@ fn a_known_failure_deletes_the_dvs_and_data_files() {
 #[test]
 fn an_unknown_answer_then_a_concurrent_dv_keeps_the_files() {
     let env = env();
-    let catalog = table(&env);
+    let t = create(&env, 3, false, FAST);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 10));
+    // The data file holding `id = 3`, by identity: paths carry a random
+    // attempt id, so their order is random.
+    let target = only_data_file(&env, &catalog);
+    append(&env, &catalog, range(10, 20));
     let (mor, f) = faulty(
         &env,
         &catalog,
@@ -152,7 +158,8 @@ fn an_unknown_answer_then_a_concurrent_dv_keeps_the_files() {
     // The other writer's DV, staged now and made visible before the probe.
     let before = catalog.state();
     add_deletes(&env, &catalog, |files| {
-        dvs_in_one_puffin(&env, "foreign.puffin", &files[..1], &[0])
+        assert!(files.contains(&target), "{files:?}");
+        dvs_in_one_puffin(&env, "foreign.puffin", std::slice::from_ref(&target), &[0])
     });
     let after = catalog.state();
     catalog.restore(before);
