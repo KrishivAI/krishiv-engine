@@ -19,13 +19,13 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
+use arrow_array::{Array, RecordBatch};
 use arrow_flight::FlightData;
 use arrow_flight::encode::{FlightDataEncoderBuilder, GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES};
 use arrow_flight::error::FlightError;
 use arrow_schema::SchemaRef;
 use futures::stream::{self, BoxStream, StreamExt};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivFlightSqlRowTooLarge};
 use krishiv_memory::{ConsumerHandle, Reservation};
 use tonic::Status;
 
@@ -115,6 +115,21 @@ impl Feed {
         }
         self.held = Some(reservation);
         self.pending = cut(&batch, bytes, self.batch_bytes);
+        // A row is never split: one over the cut size would be a message the client refuses with
+        // a transport error, so it fails the fetch with a typed error first (design §4.2, m4).
+        if let Some(row) = self
+            .pending
+            .iter()
+            .find(|c| c.num_rows() == 1 && slice_bytes(c) > self.batch_bytes)
+        {
+            let e: KrishivError = KrishivFlightSqlRowTooLarge {
+                columns: row.num_columns().to_string(),
+                limit: self.batch_bytes.to_string(),
+            }
+            .into();
+            self.pending.clear();
+            return Some((Err(external(e)), self));
+        }
         let first = self.pending.pop_front()?;
         Some((Ok(first), self))
     }
@@ -132,6 +147,16 @@ fn cut(batch: &RecordBatch, bytes: usize, limit: usize) -> VecDeque<RecordBatch>
         .step_by(per_cut)
         .map(|start| batch.slice(start, per_cut.min(rows - start)))
         .collect()
+}
+
+/// The bytes `batch`'s rows hold, counted over its slice only (`get_array_memory_size` counts
+/// the whole buffers a slice shares).
+fn slice_bytes(batch: &RecordBatch) -> usize {
+    batch
+        .columns()
+        .iter()
+        .map(|c| c.to_data().get_slice_memory_size().unwrap_or(usize::MAX))
+        .fold(0, usize::saturating_add)
 }
 
 fn external(error: KrishivError) -> FlightError {
@@ -268,6 +293,37 @@ mod tests {
             .await
             .expect("decoded");
         assert_eq!(rows(&got), 4_000);
+    }
+
+    #[tokio::test]
+    async fn row_over_cut_limit_typed_error() {
+        let p = pool(None);
+        // Small rows around one row of 100 KB: the row is over the 64 KiB cut, its neighbours are not.
+        let ids = Int64Array::from_iter_values(0..3);
+        let s =
+            StringArray::from_iter_values(["a".to_owned(), "x".repeat(100_000), "b".to_owned()]);
+        let b = RecordBatch::try_new(schema(), vec![Arc::new(ids), Arc::new(s)]).expect("batch");
+        let limits = EncodeLimits {
+            batch_bytes: 64 << 10,
+            data_bytes: 16 << 10,
+        };
+        let out = encode_results(schema(), source(vec![Ok(b)]), consumer(&p), limits);
+        let last = out.collect::<Vec<_>>().await.pop().expect("a piece");
+        let status = last.expect_err("the stream ends with the typed error");
+        assert_eq!(status.code(), tonic::Code::InvalidArgument, "{status:?}");
+        assert_eq!(
+            status
+                .metadata()
+                .get("x-krishiv-error-class")
+                .and_then(|v| v.to_str().ok()),
+            Some("KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE")
+        );
+        assert!(
+            status.message().contains("2 columns"),
+            "{}",
+            status.message()
+        );
+        assert_eq!(p.reserved(), 0, "the batch's grant released");
     }
 
     #[tokio::test]
