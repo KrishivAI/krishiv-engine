@@ -383,3 +383,96 @@ fn delegated_metadata_cache_keyed_by_identity() {
         ErrorClass::KrishivCatalogDelegationUnavailable
     );
 }
+
+fn caller_with(groups: &[&str], scope: &str, expires_in: i64) -> CatalogCaller {
+    use krishiv_common::principal::{Principal, PrincipalKind};
+    use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};
+    use krishiv_session::catalog_registry::IdentityKey;
+    let mut principal = Principal::new("alice", PrincipalKind::User);
+    principal.groups = groups.iter().map(|g| (*g).to_owned()).collect();
+    let mut claims = ExchangeClaims::with_audiences(vec!["krishiv".to_owned()]);
+    claims.scope = Some(scope.to_owned());
+    let now = std::time::SystemTime::now();
+    let delta = std::time::Duration::from_secs(expires_in.unsigned_abs());
+    let exp = if expires_in < 0 {
+        now - delta
+    } else {
+        now + delta
+    };
+    CatalogCaller::new(
+        IdentityKey::of("lake", &principal),
+        Some(Method::Oidc),
+        Some(InboundCredential::new(
+            CredentialKind::Oidc,
+            krishiv_common::secret::SecretString::new("alice-jwt"),
+            claims,
+            exp,
+        )),
+    )
+}
+
+fn limited_catalog(server: &Server, distinct: usize) -> Arc<dyn CallerCatalog> {
+    let token_endpoint = format!("{}/token", server.base);
+    let pairs = [
+        ("krishiv.catalog.lake.type", "iceberg-rest"),
+        ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ("krishiv.catalog.lake.allowInsecure", "true"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.audience", "lake"),
+        ("krishiv.catalog.lake.actorToken", "none"),
+        (
+            "krishiv.catalog.lake.tokenEndpoint",
+            token_endpoint.as_str(),
+        ),
+    ];
+    let d = decl(&pairs, DeclMode::Server);
+    let mut deps = deps(DeclMode::Server, PrivateAddresses::Deny);
+    deps.max_distinct_exchanges_per_minute = distinct;
+    IcebergRestFactory.build(&d, &deps).unwrap()
+}
+
+/// Review 58b1-r1 M1: the exchange limits count a principal by kind, tenant, name and
+/// `delegated_by`, never by its groups, so ten group sets under `maxDistinct = 1` are all refused.
+#[test]
+fn exchange_limits_ignore_groups() {
+    let server = delegated_server();
+    let catalog = limited_catalog(&server, 1);
+    let t = ident(&["db"], "t");
+    let _ = load_as(&catalog, &caller_with(&["g1"], "s1", 3600), &t);
+    let e = load_as(&catalog, &caller_with(&["g1"], "s2", 3600), &t).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogLimitExceeded,
+        "{e}"
+    );
+    for i in 2..12 {
+        let g = format!("g{i}");
+        let e = load_as(&catalog, &caller_with(&[g.as_str()], "s2", 3600), &t).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivCatalogLimitExceeded,
+            "{g}: {e}"
+        );
+    }
+    let exchanges = server.seen().iter().filter(|s| path(s) == "/token").count();
+    assert_eq!(exchanges, 1);
+}
+
+/// Review 58b1-r1 M2: a token the IdP issued without `expires_in` lives no longer than its
+/// subject token and never serves a caller whose subject token has expired.
+#[test]
+fn exchanged_token_without_expires_in_ends_with_its_subject() {
+    let server = delegated_server(); // its `/token` answers without `expires_in`
+    let catalog = limited_catalog(&server, 20);
+    let t = ident(&["db"], "t");
+    let _ = load_as(&catalog, &caller_with(&[], "s", 3600), &t);
+    let e = load_as(&catalog, &caller_with(&[], "s", -7 * 86_400), &t).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable,
+        "{e}"
+    );
+    assert!(e.to_string().contains("reconnect"), "{e}");
+    let exchanges = server.seen().iter().filter(|s| path(s) == "/token").count();
+    assert_eq!(exchanges, 1, "no exchange for an expired subject token");
+}

@@ -977,6 +977,7 @@ pub fn krishiv_session::catalog_registry::CatalogSetup::fmt(&self, &mut core::fm
 #[non_exhaustive] pub struct krishiv_session::catalog_registry::IdentityKey
 pub krishiv_session::catalog_registry::IdentityKey::catalog: alloc::string::String
 pub krishiv_session::catalog_registry::IdentityKey::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_registry::IdentityKey::limit_key: core::option::Option<alloc::string::String>
 pub krishiv_session::catalog_registry::IdentityKey::principal_id: core::option::Option<alloc::string::String>
 pub krishiv_session::catalog_registry::IdentityKey::tenant: core::option::Option<alloc::string::String>
 impl krishiv_session::catalog_registry::IdentityKey
@@ -1820,6 +1821,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::QueryInfo
 #[non_exhaustive] pub struct krishiv_session::QueryOptions
 impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
+pub fn krishiv_session::QueryOptions::inbound_credential(self, krishiv_session::auth::Method, core::option::Option<krishiv_session::auth::InboundCredential>) -> Self
 pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self

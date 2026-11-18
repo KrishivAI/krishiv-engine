@@ -28,7 +28,7 @@
 //!
 //! Calls block the caller (the `Catalog` trait is synchronous); see the `transport` module.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -147,7 +147,10 @@ pub struct RestClient {
     http: Transport,
     tokens: Tokens,
     policy: Arc<dyn LocationPolicy + Send + Sync>,
-    server: Mutex<Option<Arc<Server>>>,
+    /// `/v1/config` by who fetched it: `None` for the catalog's own identity (every mode but a
+    /// delegated catalog without an actor client), else the caller's identity key, so one user's
+    /// answer never shapes another user's calls (T067 §3.5).
+    server: Mutex<HashMap<Option<String>, Arc<Server>>>,
 }
 
 impl std::fmt::Debug for RestClient {
@@ -205,7 +208,7 @@ impl RestClient {
             http,
             tokens,
             policy,
-            server: Mutex::new(None),
+            server: Mutex::new(HashMap::new()),
         })
     }
 
@@ -240,18 +243,31 @@ impl RestClient {
         deadline: Instant,
         absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
+        self.get_with(&self.tokens, caller, url, headers, deadline, absent)
+    }
+
+    /// [`Self::get`] with the token of `tokens`.
+    fn get_with(
+        &self,
+        tokens: &Tokens,
+        caller: &RestCaller,
+        url: &Url,
+        headers: &[(&'static str, String)],
+        deadline: Instant,
+        absent: &[&str],
+    ) -> Result<Option<Value>, RestError> {
         let mut retried = false;
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            let bearer = self.tokens.token(caller, &self.http, deadline)?;
+            let bearer = tokens.token(caller, &self.http, deadline)?;
             request.bearer.clone_from(&bearer);
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
                 200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
-                401 if !retried && self.tokens.refreshable() => {
+                401 if !retried && tokens.refreshable() => {
                     if let Some(refused) = &bearer {
-                        self.tokens.invalidate(refused);
+                        tokens.invalidate(refused);
                     }
                     retried = true;
                     continue;
@@ -276,14 +292,23 @@ impl RestClient {
         }
     }
 
-    /// The server's configuration, fetched on first use.
+    /// The server's configuration, fetched on first use. It is the catalog's own (fetched with the
+    /// catalog's identity: its token or client credentials, a delegated catalog's actor client),
+    /// except on a delegated catalog with no actor client, where it is fetched and kept per caller
+    /// identity: the Iceberg REST spec authenticates `/v1/config` like any call, and the user's
+    /// token is the only one such a catalog has.
     fn server(&self, caller: &RestCaller, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
+        let catalog_caller = RestCaller::server();
+        let (key, tokens, caller) = match self.tokens.catalog_identity() {
+            Some(t) => (None, t, &catalog_caller),
+            None => (caller.identity.clone(), &self.tokens, caller),
+        };
         let slot = || {
             self.server
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         };
-        if let Some(s) = slot().as_ref() {
+        if let Some(s) = slot().get(&key) {
             return Ok(Arc::clone(s));
         }
         // Fetched without the lock, so a stalled `/v1/config` holds no other caller; when two callers race, the
@@ -295,7 +320,7 @@ impl RestClient {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
             let value = self
-                .get(caller, &url, &[], deadline, &[])?
+                .get_with(tokens, caller, &url, &[], deadline, &[])?
                 .ok_or(RestError::Status {
                     status: 404,
                     kind: Some("NoSuchWarehouseException".to_owned()),
@@ -334,7 +359,12 @@ impl RestClient {
             })
         };
         let fetched = Arc::new(fetch().map_err(fail)?);
-        Ok(Arc::clone(slot().get_or_insert(fetched)))
+        let mut slot = slot();
+        // Per-identity entries are bounded: past the cap they are fetched again.
+        if slot.len() >= 4096 {
+            slot.clear();
+        }
+        Ok(Arc::clone(slot.entry(key).or_insert(fetched)))
     }
 
     /// The server's merged configuration (after the first call).

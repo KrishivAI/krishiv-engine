@@ -62,6 +62,9 @@ pub struct IdentityKey {
     pub tenant: Option<String>,
     /// `Principal::delegated_by`: the service acting for the principal.
     pub delegated_by: Option<String>,
+    /// The principal without its groups (kind, tenant, name, `delegated_by`): what per-principal
+    /// limits count by, so a caller cannot get a fresh budget by varying its groups.
+    pub limit_key: Option<String>,
 }
 
 impl IdentityKey {
@@ -73,17 +76,25 @@ impl IdentityKey {
             principal_id: None,
             tenant: None,
             delegated_by: None,
+            limit_key: None,
         }
     }
 
     /// `principal` at `catalog`.
     #[must_use]
     pub fn of(catalog: impl Into<String>, principal: &Principal) -> Self {
+        let mut bare = principal.clone();
+        bare.groups.clear();
+        let by = principal
+            .delegated_by
+            .as_deref()
+            .map_or_else(|| "-".to_owned(), |d| format!("{}:{d}", d.len()));
         Self {
             catalog: catalog.into(),
             principal_id: Some(principal.id()),
             tenant: principal.tenant.clone(),
             delegated_by: principal.delegated_by.clone(),
+            limit_key: Some(format!("{} by {by}", bare.id())),
         }
     }
 }
@@ -133,6 +144,10 @@ impl CatalogCaller {
     pub fn authenticated_with(&self) -> &'static str {
         match (&self.credential, self.method) {
             (Some(c), _) => c.kind().as_str(),
+            // Plain act-as metadata carries the service's method, not the end user's.
+            (None, Some(_)) if self.identity.delegated_by.is_some() => {
+                "act-as metadata (no signed assertion)"
+            }
             (None, Some(m)) => m.as_str(),
             (None, None) => "no user token (an embedded session)",
         }
@@ -189,6 +204,12 @@ impl CallerCatalog for ServerIdentity {
 pub(crate) struct Inbound {
     method: Method,
     credential: Option<InboundCredential>,
+}
+
+impl Inbound {
+    pub(crate) fn new(method: Method, credential: Option<InboundCredential>) -> Self {
+        Self { method, credential }
+    }
 }
 
 /// Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
@@ -719,12 +740,14 @@ impl DeclaredView {
 impl crate::Session {
     /// The declared catalogs as this session's principal sees them.
     pub(crate) fn declared_catalogs(&self) -> DeclaredView {
-        let inbound = self
-            .state
-            .inbound
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        // The statement's own request first, else the session's latest RPC.
+        let inbound = self.request_inbound.clone().or_else(|| {
+            self.state
+                .inbound
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        });
         DeclaredView::new(
             Arc::clone(&self.state.runtime.catalogs),
             Arc::clone(&self.state.principal),

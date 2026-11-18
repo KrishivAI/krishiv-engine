@@ -67,6 +67,7 @@ fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace 
     execute::InboundTrace {
         traceparent: text("traceparent"),
         baggage: text("baggage"),
+        credential: None,
     }
 }
 
@@ -233,7 +234,8 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let caller = self.caller(&request, Rpc::ExecutePlan)?;
-        let inbound = inbound_of(request.metadata());
+        let mut inbound = inbound_of(request.metadata());
+        inbound.credential = Some((caller.method, caller.credential.clone()));
         let request = request.into_inner();
         let entry = self.session(
             &caller,

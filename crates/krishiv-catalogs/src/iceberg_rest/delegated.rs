@@ -10,16 +10,23 @@
 //!   token with the same claims reuses it until it expires, a token with other claims (narrower
 //!   scope, other groups) gets its own exchange. The cache lives in this catalog's source, so an
 //!   exchanged token never reaches another catalog. A cached token is used until its own expiry
-//!   even after the subject token expired; a new exchange needs a subject token that has not.
+//!   even after the subject token expired; a new exchange needs a subject token that has not. A
+//!   token issued without `expires_in` lives no longer than the subject token it was exchanged
+//!   for (at most a day), and serves a caller only while that caller's own subject token is valid.
 //! - **Refusals.** No user token, the wrong kind, an expired subject token or a token endpoint
-//!   that answers 400/401/403 is `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth `error` code
-//!   at most, never a token or `error_description`). A refused subject token is remembered for
-//!   30 s by a fingerprint of the whole token, so repeats fail at once without reaching the IdP.
+//!   that refuses the subject token (400/401/403 with any code but the client ones) is
+//!   `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth `error` code at most, never a token or
+//!   `error_description`). A refused subject token is remembered for 30 s by a fingerprint of the
+//!   whole token, so repeats fail at once without reaching the IdP. A refusal of the server's own
+//!   client (`invalid_client`, `unauthorized_client`, or an actor token that cannot be fetched) is
+//!   the catalog's failure (`KRISHIV_CATALOG_FAILURE`): nothing the user can fix, never
+//!   remembered against the user's token.
 //! - **Limits.** `krishiv.catalog.delegation.maxExchangesPerMinute` per (principal, claims) and
-//!   `maxDistinctExchangesPerMinute` per principal, over a sliding minute; past either a call is
-//!   `KRISHIV_CATALOG_LIMIT_EXCEEDED`.
-//! - **Audit.** Every exchange that reaches the IdP writes one `krishiv::audit` record: catalog,
-//!   principal, `delegated_by`, outcome; never a token.
+//!   `maxDistinctExchangesPerMinute` per principal, over a sliding minute; the principal key has
+//!   no groups (kind, tenant, name, `delegated_by`), so varying groups is no way around them. Past
+//!   either a call is `KRISHIV_CATALOG_LIMIT_EXCEEDED`. Only a request sent to the IdP counts.
+//! - **Audit.** Every exchange attempt writes one `krishiv::audit` record (an actor token that
+//!   cannot be fetched included): catalog, principal, `delegated_by`, outcome; never a token.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -29,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use krishiv_common::secret::{SecretString, wipe_bytes};
 use url::Url;
 
-use super::auth::{Tokens, refresh_at};
+use super::auth::{MAX_TOKEN_LIFETIME, Tokens, refresh_at};
 use super::encode::form_body;
 use super::error::RestError;
 use super::transport::{Request, Transport};
@@ -88,7 +95,8 @@ impl fmt::Debug for SubjectToken {
 pub struct RestCaller {
     /// The identity key, encoded; `None` is the server's own identity.
     pub identity: Option<String>,
-    /// The principal id (rate limits and the audit record).
+    /// The principal without its groups (kind, tenant, name, `delegated_by`): the key of the
+    /// exchange limits and the audit record's principal.
     pub principal: Option<String>,
     /// The service acting for the principal.
     pub delegated_by: Option<String>,
@@ -105,7 +113,7 @@ impl RestCaller {
         Self::default()
     }
 
-    /// A user: `identity` the encoded identity key, `principal` the principal id.
+    /// A user: `identity` the encoded identity key, `principal` the principal key without groups.
     #[must_use]
     pub fn user(
         identity: String,
@@ -153,7 +161,10 @@ const ACCESS_TOKEN: &str = "urn:ietf:params:oauth:token-type:access_token";
 
 struct Exchanged {
     token: SecretString,
-    refresh_at: Option<Instant>,
+    refresh_at: Instant,
+    /// Issued without `expires_in`: its life is the subject token's, so it serves only a caller
+    /// whose own subject token is still valid.
+    bounded_by_subject: bool,
 }
 
 #[derive(Default)]
@@ -186,8 +197,7 @@ impl State {
                 .retain(|_, at| now.saturating_duration_since(*at) < REFUSED_FOR);
         }
         if self.exchanged.len() > PRUNE_AT {
-            self.exchanged
-                .retain(|_, e| e.refresh_at.is_some_and(|at| now < at));
+            self.exchanged.retain(|_, e| now < e.refresh_at);
         }
     }
 }
@@ -254,6 +264,11 @@ impl Delegated {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The actor's client-credentials source, if the catalog has one.
+    pub(crate) fn actor(&self) -> Option<&Tokens> {
+        self.actor.as_ref()
+    }
+
     pub(crate) fn refreshable(&self) -> bool {
         !self.forward
     }
@@ -300,43 +315,68 @@ impl Delegated {
         }
         let key = (identity.clone(), subject.claims);
         let now = Instant::now();
+        let subject_valid = SystemTime::now() < subject.expires_at;
         if let Some(e) = self.state().exchanged.get(&key)
-            && e.refresh_at.is_none_or(|at| now < at)
+            && now < e.refresh_at
+            && (subject_valid || !e.bounded_by_subject)
         {
             return Ok(e.token.clone());
         }
-        if SystemTime::now() >= subject.expires_at {
+        if !subject_valid {
             return Err(expired(subject));
         }
         let whole = subject.token.fingerprint();
-        self.admit(principal, subject.claims, whole, now)?;
+        self.check_refused(whole, now)?;
+        let audit = |outcome: &str| {
+            tracing::info!(
+                target: "krishiv::audit",
+                catalog = self.catalog.as_str(),
+                principal = principal.as_str(),
+                delegated_by = caller.delegated_by.as_deref(),
+                outcome,
+                "catalog token exchange"
+            );
+        };
+        // The actor first: a server whose own client is refused spends no user's budget.
         let actor = match &self.actor {
-            Some(a) => a.token(&RestCaller::server(), http, deadline)?,
+            Some(a) => match a.token(&RestCaller::server(), http, deadline) {
+                Ok(t) => t,
+                Err(e) => {
+                    audit("failed");
+                    return Err(e);
+                }
+            },
             None => None,
         };
+        self.admit(principal, subject.claims, now)?;
         let outcome = self.exchange(subject, actor.as_ref(), http, deadline);
-        let label = match &outcome {
+        audit(match &outcome {
             Ok(_) => "exchanged",
             Err(RestError::Delegation(_)) => "refused",
             Err(_) => "failed",
-        };
-        tracing::info!(
-            target: "krishiv::audit",
-            catalog = self.catalog.as_str(),
-            principal = principal.as_str(),
-            delegated_by = caller.delegated_by.as_deref(),
-            outcome = label,
-            "catalog token exchange"
-        );
+        });
         let mut state = self.state();
         match outcome {
             Ok(token) => {
-                let refresh = token.expires_in.map(|s| refresh_at(Instant::now(), s));
+                let fetched = Instant::now();
+                let (refresh, bounded_by_subject) = match token.expires_in {
+                    Some(s) => (refresh_at(fetched, s), false),
+                    // No lifetime given: no longer than the subject token, at most a day.
+                    None => {
+                        let left = subject
+                            .expires_at
+                            .duration_since(SystemTime::now())
+                            .unwrap_or(Duration::ZERO)
+                            .min(MAX_TOKEN_LIFETIME);
+                        (fetched.checked_add(left).unwrap_or(fetched), true)
+                    }
+                };
                 state.exchanged.insert(
                     key,
                     Exchanged {
                         token: token.access_token.clone(),
                         refresh_at: refresh,
+                        bounded_by_subject,
                     },
                 );
                 Ok(token.access_token)
@@ -350,15 +390,8 @@ impl Delegated {
         }
     }
 
-    /// Counts one exchange for `principal` with `claims`, or refuses it: a recently refused
-    /// subject token, or a limit reached.
-    fn admit(
-        &self,
-        principal: &str,
-        claims: [u8; 16],
-        whole: [u8; 16],
-        now: Instant,
-    ) -> Result<(), RestError> {
+    /// Refuses a subject token the IdP refused in the last 30 seconds.
+    fn check_refused(&self, whole: [u8; 16], now: Instant) -> Result<(), RestError> {
         let mut state = self.state();
         state.prune(now);
         if state
@@ -372,6 +405,12 @@ impl Delegated {
                     .to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    /// Counts one exchange request for `principal` with `claims`, or refuses it at a limit.
+    fn admit(&self, principal: &str, claims: [u8; 16], now: Instant) -> Result<(), RestError> {
+        let mut state = self.state();
         let fresh = |at: &Instant| now.saturating_duration_since(*at) < WINDOW;
         let sets = state.distinct.entry(principal.to_owned()).or_default();
         sets.retain(|_, at| fresh(at));
@@ -445,12 +484,22 @@ impl Delegated {
             200 => {
                 types::parse_limited(&response.body, self.max_depth).and_then(types::token_response)
             }
-            400 | 401 | 403 => Err(RestError::Delegation(format!(
-                "the identity provider refused the token exchange ({})",
-                types::oauth_error(&response.body)
-                    .as_deref()
-                    .unwrap_or("no error code")
-            ))),
+            400 | 401 | 403 => {
+                let code = types::oauth_error(&response.body);
+                match code.as_deref() {
+                    // The server's own client was refused: the catalog's fault, not the user's.
+                    Some("invalid_client" | "unauthorized_client") => {
+                        Err(RestError::TokenRefused {
+                            status: response.status,
+                            error: code,
+                        })
+                    }
+                    _ => Err(RestError::Delegation(format!(
+                        "the identity provider refused the token exchange ({})",
+                        code.as_deref().unwrap_or("no error code")
+                    ))),
+                }
+            }
             status => Err(RestError::Status {
                 status,
                 kind: None,

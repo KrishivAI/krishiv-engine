@@ -204,7 +204,8 @@ fn encode_identity(key: &IdentityKey) -> String {
 
 /// The REST client's view of `caller` (T067 §3.2): the server for a caller without a principal.
 pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
-    let Some(principal) = &caller.identity.principal_id else {
+    let (Some(_), Some(limit_key)) = (&caller.identity.principal_id, &caller.identity.limit_key)
+    else {
         return RestCaller::server();
     };
     let subject = caller.credential.as_ref().map(|c| {
@@ -218,7 +219,7 @@ pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
     });
     RestCaller::user(
         encode_identity(&caller.identity),
-        principal.clone(),
+        limit_key.clone(),
         caller.identity.delegated_by.clone(),
         caller.authenticated_with(),
         subject,

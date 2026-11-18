@@ -52,7 +52,7 @@ pub(crate) enum Tokens {
 
 /// The longest a client-credentials token is reused, whatever lifetime the endpoint claims: an `expires_in` is
 /// untrusted input, and a huge one must neither overflow an `Instant` nor keep a token past a day.
-const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 3600);
+pub(crate) const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 3600);
 
 /// When to stop using a token fetched at `fetched` that lives `expires_in` seconds: a tenth of its lifetime (at
 /// most a minute) before it ends, the lifetime capped at [`MAX_TOKEN_LIFETIME`].
@@ -200,6 +200,15 @@ impl Tokens {
                 });
                 Ok(Some(token.access_token))
             }
+        }
+    }
+
+    /// The source of the catalog's own identity: itself for every server-identity mode, a
+    /// delegated catalog's actor client, or `None` (a delegated catalog without one).
+    pub(crate) fn catalog_identity(&self) -> Option<&Tokens> {
+        match self {
+            Self::Delegated(d) => d.actor(),
+            _ => Some(self),
         }
     }
 

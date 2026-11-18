@@ -134,6 +134,8 @@ pub struct QueryOptions {
     pub(crate) deadline: Option<std::time::Duration>,
     pub(crate) request_tags: Vec<Arc<str>>,
     pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
+    pub(crate) inbound_credential:
+        Option<(crate::auth::Method, Option<crate::auth::InboundCredential>)>,
 }
 
 impl QueryOptions {
@@ -161,6 +163,19 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Gives the statement's delegated catalogs the authentication of the request that started
+    /// it (P3-T067 §3.3): its method and user token, if any. Per request, unlike
+    /// [`crate::Session::set_inbound_credential`], which records the session's latest: of two
+    /// concurrent requests of one session, each query uses its own request's token.
+    pub fn inbound_credential(
+        mut self,
+        method: crate::auth::Method,
+        credential: Option<crate::auth::InboundCredential>,
+    ) -> Self {
+        self.inbound_credential = Some((method, credential));
         self
     }
 

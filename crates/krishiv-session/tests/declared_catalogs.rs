@@ -811,3 +811,60 @@ fn delegated_catalog_calls_carry_the_sessions_caller() {
     );
     assert!(!all.contains("fresher-jwt"), "{all}");
 }
+
+/// Review 58b1-r1 m6: a statement uses the token of the request that started it
+/// (`QueryOptions::inbound_credential`), not the session's latest; nit 10: a plain act-as session
+/// is named as such in the refusal, not by the service's method.
+#[test]
+fn a_statement_uses_its_own_requests_token() {
+    use krishiv_session::QueryOptions;
+    use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};
+    use krishiv_session::catalog_registry::{CatalogCaller, IdentityKey};
+    let factory = Arc::new(RecordingFactory::default());
+    let calls = Arc::clone(&factory.0);
+    let mut setup = CatalogSetup::new(DeclMode::Server).factory(factory);
+    for (k, v) in [
+        ("krishiv.catalog.lake.type", "memory"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.delegation", "forward"),
+        ("krishiv.catalog.lake.audience", "lake"),
+    ] {
+        setup = setup.setting(k, v);
+    }
+    let rt = EngineRuntime::builder().catalogs(setup).build().unwrap();
+    let s = session_as(&rt, None, Role::Operator);
+    let credential = |token: &str| {
+        InboundCredential::new(
+            CredentialKind::Oidc,
+            krishiv_common::secret::SecretString::new(token),
+            ExchangeClaims::with_audiences(vec!["lake".to_owned()]),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+        )
+    };
+    // Another request of the session stored a wider token meanwhile.
+    s.set_inbound_credential(Method::Oidc, Some(credential("wide-jwt")));
+    let options =
+        QueryOptions::new().inbound_credential(Method::Oidc, Some(credential("narrow-jwt")));
+    block_on(async {
+        s.sql_with("SELECT * FROM lake.db.t", options)
+            .await?
+            .schema()
+            .await
+    })
+    .unwrap();
+    schema_of(&s, "SELECT * FROM lake.db.t").unwrap();
+    let tokens: Vec<_> = calls.lock().unwrap().iter().map(|c| c.2.clone()).collect();
+    assert_eq!(
+        tokens,
+        [Some("narrow-jwt".to_owned()), Some("wide-jwt".to_owned())]
+    );
+
+    let mut end_user = Principal::new("alice", PrincipalKind::User);
+    end_user.delegated_by = Some("portal".to_owned());
+    let caller = CatalogCaller::new(IdentityKey::of("lake", &end_user), Some(Method::Oidc), None);
+    assert!(
+        caller.authenticated_with().contains("act-as"),
+        "{}",
+        caller.authenticated_with()
+    );
+}

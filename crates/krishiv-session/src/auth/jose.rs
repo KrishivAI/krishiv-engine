@@ -456,7 +456,15 @@ pub(crate) fn check_claims(
         }
     };
     let exchange = super::ExchangeClaims {
-        audiences: claims.0.get("aud").and_then(strings).unwrap_or_default(),
+        // The string values of `aud`: `audience_ok` above needs only one of them.
+        audiences: match claims.0.get("aud") {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(list)) => list
+                .iter()
+                .filter_map(|a| a.as_str().map(str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        },
         scope: claims
             .0
             .get("scope")

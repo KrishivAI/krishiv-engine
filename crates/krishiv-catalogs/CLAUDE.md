@@ -37,11 +37,17 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   PR-58b) `auth = delegated`: `RestCaller` (identity key, principal, `delegated_by`, `SubjectToken`) taken by the
   `*_as` client calls; `forward` sends the caller's token only when its validated `aud` names the catalog's audience
   and never a signed assertion; `exchange` is RFC 8693 (subject, actor = the catalog's client-credentials token or
-  none, audience, scope), cached per (identity key, claims fingerprint) inside the catalog's own source, a refused
-  subject token remembered 30 s by its whole-token fingerprint, `maxExchangesPerMinute` per (principal, claims) and
-  `maxDistinctExchangesPerMinute` per principal (`KRISHIV_CATALOG_LIMIT_EXCEEDED`), one `krishiv::audit` record per
-  exchange; no user token, an expired one or an IdP 400/401/403 is `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth
-  `error` code only), never a fallback to the server identity; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
+  none, audience, scope), cached per (identity key, claims fingerprint) inside the catalog's own source (a token
+  without `expires_in` lives no longer than its subject token, at most a day, and serves only a caller whose subject
+  token is valid), a refused subject token remembered 30 s by its whole-token fingerprint, `maxExchangesPerMinute`
+  per (principal, claims) and `maxDistinctExchangesPerMinute` per principal, the principal keyed without groups
+  (`IdentityKey::limit_key`) and charged only for a request sent to the IdP (`KRISHIV_CATALOG_LIMIT_EXCEEDED`), one
+  `krishiv::audit` record per attempt (a failed actor fetch included); no user token, an expired one or an IdP
+  400/401/403 for the subject is `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth `error` code only), never a
+  fallback to the server identity; `invalid_client`/`unauthorized_client` or an actor that cannot be fetched is the
+  catalog's failure, never remembered against the user; `/v1/config` is read with the catalog's identity (its
+  token, client credentials, a delegated catalog's actor) and kept per catalog, or, on a delegated catalog without an
+  actor client, read and kept per caller identity; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
   `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
   `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error), `client.rs` `RestClient`

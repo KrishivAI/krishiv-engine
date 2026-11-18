@@ -933,11 +933,14 @@ async fn load(
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
             let failed = |e: krishiv_common::error::KrishivError| {
-                // A delegated catalog's refusal (P3-T067 §3.3) is Krishiv's own text, never the
-                // provider's, and tells the user what to do: it stays as it is.
-                if e.error_class()
-                    == krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
-                {
+                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as
+                // they are.
+                if matches!(
+                    e.error_class(),
+                    krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
+                        | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                ) {
                     return AnalysisError::new(e, origin);
                 }
                 AnalysisError::new(
