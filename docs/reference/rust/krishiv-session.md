@@ -114,7 +114,7 @@ Everything, including durable writes, DDL and cluster changes.
 ###### Methods
 
 - ```rust
-  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  pub fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
   The configuration spelling: `viewer`, `operator` or `admin`.
 
@@ -155,12 +155,12 @@ Everything, including durable writes, DDL and cluster changes.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Display**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -278,7 +278,7 @@ The web UI and its `/api/internal` routes.
 ###### Methods
 
 - ```rust
-  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  pub fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
   The label value: `connect`, `admin`, `metrics` or `ui`.
 
@@ -314,7 +314,7 @@ The web UI and its `/api/internal` routes.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -422,7 +422,7 @@ No credential was presented.
 ###### Methods
 
 - ```rust
-  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  pub fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
   The label value: `token`, `oidc`, `mtls` or `none`.
 
@@ -458,7 +458,7 @@ No credential was presented.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -530,9 +530,9 @@ No credential was presented.
 What a transport received, borrowed for one authentication. Never logged.
 
 ```rust
-pub struct Credentials<''a> {
-    pub bearer: Option<&''a str>,
-    pub peer_leaf: Option<&''a [u8]>,
+pub struct Credentials<'a> {
+    pub bearer: Option<&'a str>,
+    pub peer_leaf: Option<&'a [u8]>,
     pub peer: std::net::SocketAddr,
     pub surface: Surface,
     pub malformed: bool,
@@ -543,8 +543,8 @@ pub struct Credentials<''a> {
 
 | Name | Type | Documentation |
 |------|------|---------------|
-| `bearer` | `Option<&''a str>` | The token of an `authorization: Bearer <token>` header or gRPC metadata entry. |
-| `peer_leaf` | `Option<&''a [u8]>` | The client's leaf certificate (DER), which the TLS layer verified against the client<br>CA at the handshake. Only the verified leaf may be passed here. |
+| `bearer` | `Option<&'a str>` | The token of an `authorization: Bearer <token>` header or gRPC metadata entry. |
+| `peer_leaf` | `Option<&'a [u8]>` | The client's leaf certificate (DER), which the TLS layer verified against the client<br>CA at the handshake. Only the verified leaf may be passed here. |
 | `peer` | `std::net::SocketAddr` | The peer's address (the throttle's key). |
 | `surface` | `Surface` | The listener. |
 | `malformed` | `bool` | An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,<br>`Bearer` with no token): Spark answers "Invalid authentication token", not "missing". |
@@ -559,12 +559,12 @@ pub struct Credentials<''a> {
   Credentials with no bearer token.
 
 - ```rust
-  pub fn with_bearer(self: Self, token: &''a str) -> Self { /* ... */ }
+  pub fn with_bearer(self: Self, token: &'a str) -> Self { /* ... */ }
   ```
   The same credentials carrying `token`.
 
 - ```rust
-  pub fn with_authorization_header(self: Self, value: &''a str) -> Self { /* ... */ }
+  pub fn with_authorization_header(self: Self, value: &'a str) -> Self { /* ... */ }
   ```
   The same credentials with the token of an `Authorization` header value, if it is a
 
@@ -589,7 +589,7 @@ pub struct Credentials<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> Credentials<''a> { /* ... */ }
+    fn clone(self: &Self) -> Credentials<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -600,7 +600,7 @@ pub struct Credentials<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -717,7 +717,7 @@ pub struct Authenticated {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -821,12 +821,12 @@ The peer failed too often and is refused for a while.
 ###### Methods
 
 - ```rust
-  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  pub fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
   The label value and log field.
 
 - ```rust
-  pub fn message(self: Self) -> &''static str { /* ... */ }
+  pub fn message(self: Self) -> &'static str { /* ... */ }
   ```
   The status message: Spark's own two for a missing and a wrong token
 
@@ -867,12 +867,12 @@ The peer failed too often and is refused for a while.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Display**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1257,7 +1257,7 @@ An embedded session (no principal boundary).
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1361,7 +1361,7 @@ An in-memory catalog.
 ###### Methods
 
 - ```rust
-  pub fn name(self: Self) -> &''static str { /* ... */ }
+  pub fn name(self: Self) -> &'static str { /* ... */ }
   ```
   The name in `type`.
 
@@ -1397,7 +1397,7 @@ An in-memory catalog.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1519,7 +1519,7 @@ Fields:
 ###### Methods
 
 - ```rust
-  pub fn name(self: &Self) -> &''static str { /* ... */ }
+  pub fn name(self: &Self) -> &'static str { /* ... */ }
   ```
   The mode name (`system.catalogs.auth`).
 
@@ -1554,7 +1554,7 @@ Fields:
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1638,7 +1638,7 @@ The server's credentials under `krishiv.io.objectStore.allowedPrefixes`.
 ###### Methods
 
 - ```rust
-  pub fn name(self: Self) -> &''static str { /* ... */ }
+  pub fn name(self: Self) -> &'static str { /* ... */ }
   ```
   The mode name (`system.catalogs.storage`).
 
@@ -1674,7 +1674,7 @@ The server's credentials under `krishiv.io.objectStore.allowedPrefixes`.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1815,7 +1815,7 @@ pub struct CatalogDecl {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1902,7 +1902,7 @@ pub struct CatalogDeclarations {
 ###### Methods
 
 - ```rust
-  pub fn parse<''a, /* synthetic */ impl IntoIterator<Item = (&'a str, &'a str)>: IntoIterator<Item = (&''a str, &''a str)>>(settings: impl IntoIterator<Item = (&''a str, &''a str)>, mode: DeclMode, compiled: &[CatalogType], egress: Option<&Arc<EgressPolicy>>) -> Result<Self, KrishivError> { /* ... */ }
+  pub fn parse<'a>(&'a str, &'a str)>: IntoIterator<Item = (&'a str, &'a str)>>(settings: impl IntoIterator<Item = (&'a str, &'a str)>, mode: DeclMode, compiled: &[CatalogType], egress: Option<&Arc<EgressPolicy>>) -> Result<Self, KrishivError> { /* ... */ }
   ```
   Parses every catalog declaration key of `settings` (other keys, registered
 
@@ -1937,7 +1937,7 @@ pub struct CatalogDeclarations {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -2162,7 +2162,7 @@ pub struct CatalogDeps {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -2239,7 +2239,7 @@ pub struct CatalogSetup {
   No declarations yet, for `mode`.
 
 - ```rust
-  pub fn setting</* synthetic */ impl Into<String>: Into<String>, /* synthetic */ impl Into<String>: Into<String>>(self: Self, key: impl Into<String>, value: impl Into<String>) -> Self { /* ... */ }
+  pub fn setting(self: Self, key: impl Into<String>, value: impl Into<String>) -> Self { /* ... */ }
   ```
   One setting; keys that are not catalog declarations are ignored.
 
@@ -2268,7 +2268,7 @@ pub struct CatalogSetup {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -2351,7 +2351,7 @@ pub struct CatalogRegistry {
   Every declaration, sorted by name, whoever sees it (readiness checks, T066).
 
 - ```rust
-  pub fn visible<''a>(self: &''a Self, tenant: Option<&''a str>) -> impl Iterator<Item = &''a CatalogDecl> { /* ... */ }
+  pub fn visible<'a>(self: &'a Self, tenant: Option<&'a str>) -> impl Iterator<Item = &'a CatalogDecl> { /* ... */ }
   ```
   The declarations a principal of `tenant` sees, sorted by name (§2.4).
 
@@ -2380,7 +2380,7 @@ pub struct CatalogRegistry {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -2468,7 +2468,7 @@ The egress policy of `config`, reading the provider endpoints through `env`.
 `KRISHIV_INVALID_CONFIG_VALUE` for a network in `allowedCidrs` that does not parse.
 
 ```rust
-pub fn egress_policy</* synthetic */ impl Fn(&str) -> Option<String>: Fn(&str) -> Option<String>>(config: &krishiv_common::config::Config, env: impl Fn(&str) -> Option<String>) -> Result<std::sync::Arc<krishiv_io::egress::EgressPolicy>, krishiv_common::error::KrishivError> { /* ... */ }
+pub fn egress_policy(&str) -> Option<String>: Fn(&str) -> Option<String>>(config: &krishiv_common::config::Config, env: impl Fn(&str) -> Option<String>) -> Result<std::sync::Arc<krishiv_io::egress::EgressPolicy>, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 #### Function `egress_proxy`
@@ -2594,7 +2594,7 @@ let (one, pi, yes, text) = (lit(1), lit(3.14), lit(true), lit("x"));
 ```
 
 ```rust
-pub fn lit</* synthetic */ impl IntoLiteral: IntoLiteral>(value: impl IntoLiteral) -> crate::Column { /* ... */ }
+pub fn lit(value: impl IntoLiteral) -> crate::Column { /* ... */ }
 ```
 
 #### Function `map_literal`
@@ -2636,7 +2636,7 @@ let call = call_function("transform", [col("xs"), plus_one]);
 ```
 
 ```rust
-pub fn lambda<S: Into<String>, /* synthetic */ impl IntoIterator<Item = S>: IntoIterator<Item = S>>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }
+pub fn lambda<S: Into<String>>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }
 ```
 
 #### Function `lit_null`
@@ -2670,7 +2670,7 @@ let c = call_function("upper", [col("name")]);
 ```
 
 ```rust
-pub fn call_function</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(name: &str, args: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+pub fn call_function(name: &str, args: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
 #### Function `call_udf`
@@ -2691,7 +2691,7 @@ let c = call_udf("add_one", [col("id")]);
 ```
 
 ```rust
-pub fn call_udf</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(name: &str, args: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+pub fn call_udf(name: &str, args: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
 #### Function `python_udf_call`
@@ -2721,7 +2721,7 @@ let c = python_udf_call(&def, 0x8000_0001, [col("id")])?;
 holds a NUL.
 
 ```rust
-pub fn python_udf_call</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(def: &crate::PythonUdfDef, version: u32, args: impl IntoIterator<Item = crate::Column>) -> Result<crate::Column, krishiv_common::error::KrishivError> { /* ... */ }
+pub fn python_udf_call(def: &crate::PythonUdfDef, version: u32, args: impl IntoIterator<Item = crate::Column>) -> Result<crate::Column, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 #### Function `sum`
@@ -2840,7 +2840,7 @@ let c = count_distinct([col("a"), col("b")]);
 ```
 
 ```rust
-pub fn count_distinct</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+pub fn count_distinct(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
 #### Function `coalesce`
@@ -2857,7 +2857,7 @@ let c = coalesce([col("a"), lit(0)]);
 ```
 
 ```rust
-pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+pub fn coalesce(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
 ## Module `grants`
@@ -2924,7 +2924,7 @@ The `system` policy (the role matrix).
 ###### Methods
 
 - ```rust
-  pub const fn as_str(self: Self) -> &''static str { /* ... */ }
+  pub const fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
   `grants` or `roles`.
 
@@ -2960,7 +2960,7 @@ The `system` policy (the role matrix).
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -3081,7 +3081,7 @@ pub struct DeniedCount {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -3195,7 +3195,7 @@ pub struct Grants {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -3281,7 +3281,7 @@ pub struct GrantsPolicy {
     ```
 
   - ```rust
-    fn check<''a>(self: &''a Self, principal: &''a Principal, securable: &''a Securable, privilege: Privilege) -> BoxFuture<''a, Result<AccessDecision, KrishivError>> { /* ... */ }
+    fn check<'a>(self: &'a Self, principal: &'a Principal, securable: &'a Securable, privilege: Privilege) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> { /* ... */ }
     ```
 
   - ```rust
@@ -3310,7 +3310,7 @@ pub struct GrantsPolicy {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -3406,7 +3406,7 @@ The `grants` provider.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -3610,7 +3610,7 @@ pub struct ResourceGroups {
 
 - **AdmissionController**
   - ```rust
-    fn admit<''a>(self: &''a Self, request: &''a QueryRequest) -> BoxFuture<''a, Result<Permit, KrishivError>> { /* ... */ }
+    fn admit<'a>(self: &'a Self, request: &'a QueryRequest) -> BoxFuture<'a, Result<Permit, KrishivError>> { /* ... */ }
     ```
 
   - ```rust
@@ -3635,7 +3635,7 @@ pub struct ResourceGroups {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -3766,7 +3766,7 @@ pub struct Database {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -3887,7 +3887,7 @@ pub struct Table {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -4010,7 +4010,7 @@ pub struct Column {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -4131,7 +4131,7 @@ pub struct Function {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -4194,7 +4194,7 @@ pub struct Function {
 The catalog API of one session ([`Session::catalog`]).
 
 ```rust
-pub struct Catalog<''a> {
+pub struct Catalog<'a> {
     // Some fields omitted
 }
 ```
@@ -4354,7 +4354,7 @@ pub struct Catalog<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> Catalog<''a> { /* ... */ }
+    fn clone(self: &Self) -> Catalog<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -4365,7 +4365,7 @@ pub struct Catalog<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -4534,7 +4534,7 @@ pub struct AgentLimits {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -4673,7 +4673,7 @@ The stream was cancelled.
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -4790,7 +4790,7 @@ pub struct AgentResult {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -4853,12 +4853,12 @@ pub struct AgentResult {
 Inputs to [`render_batches`] besides the schema and batches.
 
 ```rust
-pub struct AgentRender<''a> {
-    pub tables: &''a [String],
-    pub limits: &''a AgentLimits,
+pub struct AgentRender<'a> {
+    pub tables: &'a [String],
+    pub limits: &'a AgentLimits,
     pub elapsed_ms: u64,
-    pub query_id: Option<&''a str>,
-    pub zone: &''a ZoneRef,
+    pub query_id: Option<&'a str>,
+    pub zone: &'a ZoneRef,
     pub stop: Option<AgentStop>,
 }
 ```
@@ -4867,11 +4867,11 @@ pub struct AgentRender<''a> {
 
 | Name | Type | Documentation |
 |------|------|---------------|
-| `tables` | `&''a [String]` | Tables the query read, in first-use order (empty renders `<none>`). |
-| `limits` | `&''a AgentLimits` | The caps. |
+| `tables` | `&'a [String]` | Tables the query read, in first-use order (empty renders `<none>`). |
+| `limits` | `&'a AgentLimits` | The caps. |
 | `elapsed_ms` | `u64` | Elapsed milliseconds, printed in the footer. |
-| `query_id` | `Option<&''a str>` | Query id, printed as `query <id>` when given. |
-| `zone` | `&''a ZoneRef` | The session time zone timestamps print in (see [`session_zone`]). |
+| `query_id` | `Option<&'a str>` | Query id, printed as `query <id>` when given. |
+| `zone` | `&'a ZoneRef` | The session time zone timestamps print in (see [`session_zone`]). |
 | `stop` | `Option<AgentStop>` | Why the caller stopped reading before the end, if it did (a row<br>cap is detected from the rows given). |
 
 ##### Implementations
@@ -4897,7 +4897,7 @@ pub struct AgentRender<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> AgentRender<''a> { /* ... */ }
+    fn clone(self: &Self) -> AgentRender<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -4908,7 +4908,7 @@ pub struct AgentRender<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -5009,7 +5009,7 @@ The query was cancelled ([`AgentStatus::StoppedCancelled`]).
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -5074,8 +5074,8 @@ counted, never printed, so pass the statement as written (the error's
 offsets are in it, not in a redacted copy).
 
 ```rust
-pub struct ErrorSource<''a> {
-    pub text: &''a str,
+pub struct ErrorSource<'a> {
+    pub text: &'a str,
     pub first_line: usize,
 }
 ```
@@ -5084,7 +5084,7 @@ pub struct ErrorSource<''a> {
 
 | Name | Type | Documentation |
 |------|------|---------------|
-| `text` | `&''a str` | The statement text as the engine parsed it. |
+| `text` | `&'a str` | The statement text as the engine parsed it. |
 | `first_line` | `usize` | The 1-based line of the statement's first character in its file<br>(1 for a statement on its own). |
 
 ##### Implementations
@@ -5110,7 +5110,7 @@ pub struct ErrorSource<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> ErrorSource<''a> { /* ... */ }
+    fn clone(self: &Self) -> ErrorSource<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -5121,7 +5121,7 @@ pub struct ErrorSource<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **ErasedDestructor**
@@ -5179,7 +5179,7 @@ The caller reads the stream itself and stops when it has `max_rows + 1`
 rows or its time is up; one call renders whatever it read.
 
 ```rust
-pub fn render_batches(schema: &arrow_schema::Schema, batches: &[arrow_array::RecordBatch], opts: &AgentRender<''_>) -> AgentResult { /* ... */ }
+pub fn render_batches(schema: &arrow_schema::Schema, batches: &[arrow_array::RecordBatch], opts: &AgentRender<'_>) -> AgentResult { /* ... */ }
 ```
 
 #### Function `render_error`
@@ -5189,7 +5189,7 @@ single-line message, and the SQL span as `position` plus `query_id`
 when known. Never echoes secrets: pass the redacted SQL text.
 
 ```rust
-pub fn render_error(error: &krishiv_common::error::KrishivError, source: Option<&ErrorSource<''_>>, query_id: Option<&str>) -> String { /* ... */ }
+pub fn render_error(error: &krishiv_common::error::KrishivError, source: Option<&ErrorSource<'_>>, query_id: Option<&str>) -> String { /* ... */ }
 ```
 
 #### Function `render_estimate`

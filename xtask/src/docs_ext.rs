@@ -98,9 +98,34 @@ fn tidy(text: &str) -> String {
             }
             continue;
         }
-        out.push(drop_item_links(l));
+        out.push(fix_signature(&drop_item_links(l)));
     }
     format!("{}\n", out.join("\n").trim())
+}
+
+/// Repairs what the converter renders in signatures: a lifetime comes out doubled (`''a`, one
+/// apostrophe is the valid form), and a function's argument-position `impl Trait` appears as a
+/// synthetic generic parameter (`</* synthetic */ impl IntoIterator<..>: IntoIterator<..>>`), which is
+/// not valid Rust in the signature. The synthetic parameter is removed; the `impl` argument stays.
+fn fix_signature(line: &str) -> String {
+    let line = line.replace("''", "'");
+    let marker = "/* synthetic */ impl ";
+    let Some(at) = line.find(marker) else {
+        return line;
+    };
+    // The synthetic parameter runs up to the signature's argument list, which never occurs inside it.
+    let Some(paren) = line[at..].find('(').map(|i| at + i) else {
+        return line;
+    };
+    if line[..at].ends_with(", ") {
+        // `<S: Into, /* synthetic */ ...>(`: the list's own `>` closes the parameters that remain.
+        format!("{}>{}", &line[..at - 2], &line[paren..])
+    } else if line[..at].ends_with('<') {
+        // `lambda</* synthetic */ ...>(` has no other parameter: drop the whole list.
+        format!("{}{}", &line[..at - 1], &line[paren..])
+    } else {
+        line
+    }
 }
 
 /// The `description:` front matter of a generated page: one double-quoted line, then a blank line.
@@ -217,6 +242,30 @@ mod tests {
         let nowhere = Path::new("/no/such/root");
         assert!(run_python(nowhere, true).unwrap_err().contains("python3"));
         assert!(run_rust(nowhere, true).is_err());
+    }
+
+    #[test]
+    fn fix_signature_drops_synthetic_generics_and_doubled_lifetimes() {
+        assert_eq!(
+            fix_signature(
+                "pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }"
+            ),
+            "pub fn coalesce(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }"
+        );
+        assert_eq!(
+            fix_signature("pub struct Credentials<''a> {"),
+            "pub struct Credentials<'a> {"
+        );
+        assert_eq!(
+            fix_signature(
+                "pub fn lambda<S: Into, /* synthetic */ impl IntoIterator<Item = S>: IntoIterator<Item = S>>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }"
+            ),
+            "pub fn lambda<S: Into>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }"
+        );
+        assert_eq!(
+            fix_signature("pub fn plain<T>(x: T)"),
+            "pub fn plain<T>(x: T)"
+        );
     }
 
     #[test]

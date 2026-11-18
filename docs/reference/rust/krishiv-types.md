@@ -446,7 +446,7 @@ Fields:
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -631,7 +631,7 @@ pub struct Batch {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -765,7 +765,7 @@ pub struct CalendarValue {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -836,7 +836,7 @@ pub struct CalendarValue {
 A read view of a calendar interval column.
 
 ```rust
-pub struct Calendars<''a> {
+pub struct Calendars<'a> {
     // Some fields omitted
 }
 ```
@@ -852,7 +852,7 @@ pub struct Calendars<''a> {
 ###### Methods
 
 - ```rust
-  pub fn of(a: &''a dyn Array) -> Option<Self> { /* ... */ }
+  pub fn of(a: &'a dyn Array) -> Option<Self> { /* ... */ }
   ```
   The view of `a`, when it is a calendar interval column.
 
@@ -882,7 +882,7 @@ pub struct Calendars<''a> {
   Row `i`'s stored value, NULL or not.
 
 - ```rust
-  pub fn iter(self: &Self) -> impl Iterator<Item = Option<CalendarValue>> + ''_ { /* ... */ }
+  pub fn iter(self: &Self) -> impl Iterator<Item = Option<CalendarValue>> + '_ { /* ... */ }
   ```
   Every row, in order.
 
@@ -906,7 +906,7 @@ pub struct Calendars<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> Calendars<''a> { /* ... */ }
+    fn clone(self: &Self) -> Calendars<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -917,7 +917,7 @@ pub struct Calendars<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -1042,7 +1042,7 @@ pub struct CalendarBuilder {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -1093,7 +1093,7 @@ pub struct CalendarBuilder {
 A calendar interval column of `values`.
 
 ```rust
-pub fn calendar_array</* synthetic */ impl IntoIterator<Item = Option<CalendarValue>>: IntoIterator<Item = Option<CalendarValue>>>(values: impl IntoIterator<Item = Option<CalendarValue>>) -> arrow_array::ArrayRef { /* ... */ }
+pub fn calendar_array(values: impl IntoIterator<Item = Option<CalendarValue>>) -> arrow_array::ArrayRef { /* ... */ }
 ```
 
 #### Function `null_calendar_array`
@@ -1116,7 +1116,7 @@ pub fn null_calendar_array(len: usize) -> arrow_array::ArrayRef { /* ... */ }
 The first row whose microseconds overflow `i64` nanoseconds.
 
 ```rust
-pub fn to_month_day_nano(a: &Calendars<''_>) -> Result<arrow_array::IntervalMonthDayNanoArray, usize> { /* ... */ }
+pub fn to_month_day_nano(a: &Calendars<'_>) -> Result<arrow_array::IntervalMonthDayNanoArray, usize> { /* ... */ }
 ```
 
 #### Function `from_month_day_nano`
@@ -1277,7 +1277,7 @@ Big-endian (`XDR`).
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1393,7 +1393,7 @@ pub enum SpatialKind {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1669,7 +1669,7 @@ pub struct Calendar {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -1795,7 +1795,7 @@ pub struct Named {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
