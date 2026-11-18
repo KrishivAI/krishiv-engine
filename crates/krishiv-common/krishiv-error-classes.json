@@ -347,6 +347,12 @@
     ],
     "sqlState" : "42704"
   },
+  "KRISHIV_SERVER_DRAINING" : {
+    "message" : [
+      "The server is shutting down and takes no new work. Reconnect once it is back, or to another server."
+    ],
+    "sqlState" : "08004"
+  },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
       "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
