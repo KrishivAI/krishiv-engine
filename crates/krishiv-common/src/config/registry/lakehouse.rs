@@ -104,7 +104,7 @@ pub static ICEBERG_WRITE_MAX_OPEN_FILES: ConfigEntry = ConfigEntry {
 pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.iceberg.write.statistics.enabled",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
+    default: Some(ConfigValue::Bool(false)),
     doc: "Whether an append into an Iceberg table (`INSERT`, CTAS) also writes a distinct-count \
           sketch (`apache-datasketches-theta-v1`) of each of its first 100 top-level primitive columns \
           (not `uuid`) into a Puffin statistics file, committed with the snapshot in the same request, \
@@ -113,7 +113,8 @@ pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
           the previous snapshot has statistics of the column; otherwise the column, or the whole \
           file, is left out. Statistics never fail a write: on any failure, or a catalog refusing \
           the update, the write commits without them. A table opts out with the table property \
-          `krishiv.write.statistics.enabled=false`. Read when the write is planned.",
+          `krishiv.write.statistics.enabled=false`. Off by default until the write cost of the sketches \
+          is measured (P3-T024 U3). Read when the write is planned.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",
@@ -125,7 +126,7 @@ mod tests {
     use super::ICEBERG_WRITE_STATISTICS_ENABLED;
     use crate::config::{Config, ConfigValue, Scope};
 
-    /// PR-54b: statistics on Iceberg writes, on by default.
+    /// PR-54b: statistics on Iceberg writes, off by default until U3 measures the write cost.
     #[test]
     fn iceberg_write_statistics_enabled_parses_and_defaults() {
         let mut c = Config::new();
@@ -133,10 +134,10 @@ mod tests {
             c.get(&ICEBERG_WRITE_STATISTICS_ENABLED)
                 .and_then(ConfigValue::as_bool)
         };
-        assert_eq!(get(&c), Some(true));
-        c.set("krishiv.iceberg.write.statistics.enabled", "false")
-            .unwrap();
         assert_eq!(get(&c), Some(false));
+        c.set("krishiv.iceberg.write.statistics.enabled", "true")
+            .unwrap();
+        assert_eq!(get(&c), Some(true));
         assert!(
             c.set("krishiv.iceberg.write.statistics.enabled", "sometimes")
                 .is_err()

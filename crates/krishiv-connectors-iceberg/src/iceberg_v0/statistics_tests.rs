@@ -160,12 +160,7 @@ fn a_ctas_has_statistics_and_an_append_unions_them() {
     let env = env();
     let t = create(&env, ixn_schema(), true, &[]);
     let catalog = Catalog::new(&t);
-    append(
-        &env,
-        &catalog,
-        &Config::new(),
-        &[(0, 10_000), (10_000, 20_000)],
-    );
+    append(&env, &catalog, &on(), &[(0, 10_000), (10_000, 20_000)]);
     let m = catalog.metadata();
     let file = current_file(&m).unwrap().clone();
     assert_eq!(file.blob_metadata.len(), 3);
@@ -182,12 +177,12 @@ fn a_ctas_has_statistics_and_an_append_unions_them() {
         file.statistics_path
     );
     // The provider reads them as distinct counts (never above the rows).
-    let p = provider_with(&env, &catalog.location(), &catalog, &Config::new());
+    let p = provider_with(&env, &catalog.location(), &catalog, &on());
     let stats = p.statistics().unwrap();
     let distinct = stats.columns["id"].distinct.unwrap();
     assert!(within_3_rse(distinct, 20_000), "{distinct}");
 
-    append(&env, &catalog, &Config::new(), &[(10_000, 30_000)]);
+    append(&env, &catalog, &on(), &[(10_000, 30_000)]);
     let m = catalog.metadata();
     let ndv = current_ndv(&m);
     assert!(within_3_rse(ndv[&1], 30_000), "{ndv:?}");
@@ -198,6 +193,14 @@ fn a_ctas_has_statistics_and_an_append_unions_them() {
     assert!(m.statistics_for_snapshot(first).is_some());
 }
 
+/// A config with statistics on (the default is off until U3's write-cost number, review of 2026-11-17).
+fn on() -> Config {
+    let mut c = Config::new();
+    c.set("krishiv.iceberg.write.statistics.enabled", "true")
+        .unwrap();
+    c
+}
+
 /// The switch off, then on: the second snapshot's parent has no statistics, so it gets none (rule 2), and
 /// neither does a table that opts out by property.
 #[test]
@@ -205,12 +208,12 @@ fn no_statistics_on_an_unsketched_parent_or_when_switched_off() {
     let env = env();
     let t = create(&env, ixn_schema(), false, &[]);
     let catalog = Catalog::new(&t);
-    let mut off = Config::new();
+    let mut off = on();
     off.set("krishiv.iceberg.write.statistics.enabled", "false")
         .unwrap();
     append(&env, &catalog, &off, &[(0, 100)]);
     assert!(current_file(&catalog.metadata()).is_none());
-    append(&env, &catalog, &Config::new(), &[(100, 200)]);
+    append(&env, &catalog, &on(), &[(100, 200)]);
     let m = catalog.metadata();
     assert_eq!(m.snapshots().count(), 2);
     assert_eq!(m.statistics_iter().count(), 0);
@@ -218,7 +221,7 @@ fn no_statistics_on_an_unsketched_parent_or_when_switched_off() {
     let env = super::provider_tests::env();
     let t = create(&env, ixn_schema(), false, &[(STATISTICS_PROPERTY, "false")]);
     let catalog = Catalog::new(&t);
-    append(&env, &catalog, &Config::new(), &[(0, 100)]);
+    append(&env, &catalog, &on(), &[(0, 100)]);
     assert_eq!(catalog.metadata().statistics_iter().count(), 0);
     let stats_files = std::fs::read_dir(env.dir.path().join("db/t/metadata"))
         .unwrap()
