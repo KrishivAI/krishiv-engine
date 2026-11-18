@@ -20,6 +20,18 @@ if TYPE_CHECKING:
     from krishiv.sql.session import SparkSession
 
 
+def _schema_type_error(schema: object) -> PySparkTypeError:
+    """`NOT_EXPECTED_TYPE` for a reader schema that is neither a :class:`StructType` nor a DDL string."""
+    return PySparkTypeError(
+        errorClass="NOT_EXPECTED_TYPE",
+        messageParameters={
+            "arg_name": "schema",
+            "expected_type": "str or struct type",
+            "arg_type": type(schema).__name__,
+        },
+    )
+
+
 class DataFrameReader:
     def __init__(self, session: SparkSession) -> None:
         self._session = session
@@ -42,14 +54,7 @@ class DataFrameReader:
         elif isinstance(schema, str):
             self._schema = (None, schema)
         else:
-            raise PySparkTypeError(
-                errorClass="NOT_EXPECTED_TYPE",
-                messageParameters={
-                    "arg_name": "schema",
-                    "expected_type": "str or struct type",
-                    "arg_type": type(schema).__name__,
-                },
-            )
+            raise _schema_type_error(schema)
         return self
 
     def option(self, key: str, value: object) -> DataFrameReader:
@@ -68,14 +73,7 @@ class DataFrameReader:
         if isinstance(schema, (StructType, str)):
             self.schema(schema)
         elif schema is not None:
-            raise PySparkTypeError(
-                errorClass="NOT_EXPECTED_TYPE",
-                messageParameters={
-                    "arg_name": "schema",
-                    "expected_type": "str or struct type",
-                    "arg_type": type(schema).__name__,
-                },
-            )
+            raise _schema_type_error(schema)
         self.options(**options)
         if path is None:
             raise not_expected_type("path", "str or list of str", path)

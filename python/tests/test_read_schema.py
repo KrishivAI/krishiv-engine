@@ -88,9 +88,14 @@ def test_a_partition_value_that_does_not_cast_fails(spark: SparkSession, tmp_pat
     assert e.value.getCondition() == "INVALID_PARTITION_VALUE"
 
 
-def test_a_schema_of_another_type_is_refused(spark: SparkSession) -> None:
+@pytest.mark.parametrize("via", ["schema", "load"])
+def test_a_schema_of_another_type_is_refused(spark: SparkSession, path: str, via: str) -> None:
+    calls = {
+        "schema": lambda: spark.read.schema(42),  # ty: ignore[invalid-argument-type]
+        "load": lambda: spark.read.load(path, format="csv", schema=42),
+    }
     with pytest.raises(errors.PySparkTypeError) as e:
-        spark.read.schema(42)  # ty: ignore[invalid-argument-type]
+        calls[via]()
     assert e.value.getCondition() == "NOT_EXPECTED_TYPE"
     assert e.value.getMessageParameters() == {
         "arg_name": "schema",
