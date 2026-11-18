@@ -532,13 +532,28 @@ pub fn python_udtf_call_name(def: &PythonUdtfDef, version: u32) -> Result<String
 /// Waits for `analysis` (analysis is synchronous, `analyze` runs on the runtime's own threads), ending with
 /// the statement's cancel: a cancelled action's error comes back at once and `analysis` is dropped, which
 /// abandons the runtime's call (the pool kills its worker). On a multi-thread runtime the wait leaves the
-/// executor thread to the runtime's other tasks (`block_in_place`).
+/// executor thread to the runtime's other tasks (`block_in_place`). On a current-thread runtime (a caller's
+/// own, or the deterministic simulation's) the wait would block the runtime's only thread: no cancel from a task
+/// of that runtime could run, and a policy check needing the runtime (a timer, I/O) would never finish. Analysis
+/// is synchronous, so that wait cannot yield; the analysis is refused with `KRISHIV_UNSUPPORTED_FEATURE`
+/// instead of risking a hang (review R2-1). Production analysis runs on the multi-thread executor.
 fn wait_for_analysis(
     analysis: futures::future::BoxFuture<
         'static,
         krishiv_exec::Result<krishiv_plan::udtf::UdtfAnalysis>,
     >,
 ) -> Result<krishiv_plan::udtf::UdtfAnalysis, KrishivError> {
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread)
+    {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature:
+                "analyzing a Python UDTF without a declared result on a current-thread runtime; \
+                      run the statement on a multi-thread runtime or declare the UDTF's return type"
+                    .to_owned(),
+        }
+        .into());
+    }
     let cancelled = Box::pin(crate::action::cancelled());
     let both = async move {
         match futures::future::select(analysis, cancelled).await {
