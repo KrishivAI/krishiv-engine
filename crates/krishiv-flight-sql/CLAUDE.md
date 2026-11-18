@@ -22,7 +22,16 @@ Paths are relative to this crate.
   at a cap expired handles go, then the scope's oldest idle statement handles (prepared never; `reserve` keeps a
   slot in flight until `end`, `set_payload` after the run); refused with
   `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` only when every handle of the scope is fetching); `get` (no operation), `begin`/`end` (a fetch),
-  `remove_session`, `sweep(now, alive)` (`alive` must not stamp session access)
+  `remove_session`, `sweep(now, alive)` (`alive` must not stamp session access); `insert`/`reserve` return
+  `Inserted { id, evicted }` (the sessions of the handles removed to make room, v4 review m4)
+- `src/sessions.rs` `Sessions<O>` (design §3.2, v4 review m1/m2): Flight's session table, minted id (`mint_session_id`,
+  a v4 UUID) -> owner, `Provisional{changed}`/`Cookie`, calls in flight, end of the last call. One mutex; it decides
+  releases and returns `Release`s, the caller runs `release_owned` and drops the handles after the lock; liveness
+  (`is_live`) is asked outside it (`snapshot` then `sweep(now, gone)`). `insert` (after the manager created it),
+  `enter` (promotes when via the cookie), `promote`, `mark_changed`, `exit(Exit::CookielessFetch)` (rule 1),
+  `release_if_handleless` (rule 3), `close`, `sweep` (rule 2: unchanged provisional past `provisionalTtl`); a rule met
+  with calls in flight waits for the last `exit`. Every row op checks the caller's owner; `holds` closures read the
+  handle map (lock order: sessions, then handles)
 - `src/metrics.rs` `Requests` (design §7): `krishiv_flight_sql_requests_total{command, outcome}`, fixed `Command` and
   `Outcome` enums equal to the registry's label values (test); lock-free cells, `counts()` for the server's scrape
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
