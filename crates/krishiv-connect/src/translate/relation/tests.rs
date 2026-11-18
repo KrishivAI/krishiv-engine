@@ -1171,6 +1171,11 @@ fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
         code(&unpivot(Some(vec![attr("a"), attr("a")]))),
         ErrorClass::KrishivUnsupportedFeature
     );
+    // A qualified spelling of the id does not slip past the check.
+    assert_eq!(
+        code(&unpivot(Some(vec![attr("t.id"), attr("b")]))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
     // An empty list is the analyzer's to refuse (UNPIVOT_REQUIRES_VALUE_COLUMNS), as in Spark.
     assert!(matches!(
         node(&unpivot(Some(vec![]))),
