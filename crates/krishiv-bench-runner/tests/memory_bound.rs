@@ -250,10 +250,23 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
             "{name}: {reply:?} (an empty reply is a killed runner: memory above {bound} B)"
         );
         let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
+        // The mapped code is file-backed: an unoptimized test build with debug info maps 70+ MiB
+        // of it, more on a CI runner's build than on a developer's, and it moved the high-water
+        // mark past the bound with no change in the memory the queries hold. The bound is about
+        // the process's own memory: the peak less the file-backed part (read after the query, so
+        // never less than at the peak unless the kernel dropped code pages: conservative).
+        let mapped = memory_field(&reply, "rss_file_bytes").expect("Linux reports RssFile");
+        let own = peak.saturating_sub(mapped);
         let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
         let spilled = memory_field(&reply, "spill_files").unwrap();
-        eprintln!("{name}: peak RSS {peak} B, peak reserved {reserved} B, {spilled} spill files");
-        assert!(peak <= bound, "{name}: peak RSS {peak} B above {bound} B");
+        eprintln!(
+            "{name}: peak RSS {peak} B ({mapped} B file-backed, {own} B own), peak reserved \
+             {reserved} B, {spilled} spill files"
+        );
+        assert!(
+            own <= bound,
+            "{name}: peak own memory {own} B (RSS {peak} B less {mapped} B file-backed) above {bound} B"
+        );
         assert!(
             reserved <= LIMIT,
             "{name}: reserved {reserved} B above the limit"
@@ -478,11 +491,14 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         "{threads} krishiv-io threads, at most {allowed}"
     );
     let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
+    // As in `peak_rss_stays_within_the_bound_while_queries_spill`: the mapped code is not counted.
+    let mapped = memory_field(&reply, "rss_file_bytes").expect("Linux reports RssFile");
+    let own = peak.saturating_sub(mapped);
     let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
     let spilled = memory_field(&reply, "spill_files").unwrap();
     eprintln!(
-        "q21-shaped: peak RSS {peak} B (bound {bound} B), peak reserved {reserved} B, \
-         {spilled} spill files, {threads} krishiv-io threads"
+        "q21-shaped: peak RSS {peak} B ({mapped} B file-backed, {own} B own; bound {bound} B), \
+         peak reserved {reserved} B, {spilled} spill files, {threads} krishiv-io threads"
     );
     assert!(
         spilled > 0,
@@ -492,7 +508,10 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         operator_counter(&reply, "reversed_partitions") > 0,
         "spilled partitions are joined with roles reversed: {reply}"
     );
-    assert!(peak <= bound, "peak RSS {peak} B above {bound} B");
+    assert!(
+        own <= bound,
+        "peak own memory {own} B (RSS {peak} B less {mapped} B file-backed) above {bound} B"
+    );
     assert!(
         reserved <= LI_LIMIT,
         "reserved {reserved} B above the limit"

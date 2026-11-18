@@ -400,6 +400,12 @@ fn profile_reports_the_phases_and_matches_run() {
         let (before, peak) = (field("rss_before_bytes"), field("peak_rss_bytes"));
         assert!(before.is_some_and(|b| b > 0), "{json}");
         assert!(peak >= before, "{json}");
+        let file = field("rss_file_bytes");
+        assert!(file.is_some_and(|f| f > 0), "{json}");
+        assert!(
+            file <= peak.max(field("rss_before_bytes")).map(|p| p * 2),
+            "{json}"
+        );
     }
     for key in [
         "\"peak_reserved_bytes\":",
