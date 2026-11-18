@@ -1,18 +1,26 @@
 # krishiv-flight-sql
 
-**Layer:** L6 (may depend only on crates in L6 or lower; `cargo xtask layering`).  
-**Real code arrives:** P5.
+**Layer:** L6 (may depend only on crates in L6 or lower; `cargo xtask layering`).
+**Real code since:** P3-T101 (design `../krishiv-internal/design/P3-T101-flight-sql.md`, v2 under review; IP PR-65).
 
 ## Purpose
-Arrow Flight SQL server (multi-endpoint).
+Arrow Flight SQL, single endpoint (P3): a second gRPC service on the Spark Connect listener, on Connect's session
+manager, auth layer, operations and drain flag (it depends on `krishiv-connect-server`; Connect never depends on it).
+Multi-endpoint tickets and stored results are P5 (P5-T030, P5-T047).
+
+## Key files
+Paths are relative to this crate.
+- `src/status.rs` `flight_status` / `code_of` (design §6): a `KrishivError` as the Flight SQL gRPC status, from its
+  client-safe form (`KrishivError::for_client`); Spark's message text, trailing metadata `x-krishiv-error-class`,
+  `x-krishiv-sqlstate`, `x-krishiv-error-id`. Connect's `status_of` is not used here.
 
 ## Invariants
-- Versioned public surface (ADR 0026).
+- Versioned public surface (ADR 0026, ADR 0005).
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)
-0005, 0026
+0005, 0026, 0046
 
 ## Test
 `cargo nextest run -p krishiv-flight-sql --no-tests=pass` · `cargo clippy -p krishiv-flight-sql --all-targets -- -D warnings`
