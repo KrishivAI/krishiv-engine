@@ -1,0 +1,507 @@
+{
+ "big_file": {
+  "max_partition_bytes": 1048576,
+  "pad_to": 80,
+  "rows": 100000,
+  "two_file_prefixes": [
+   "a",
+   "b"
+  ],
+  "two_file_rows": [
+   60000,
+   20000
+  ]
+ },
+ "format_version": 1,
+ "generator": "tests/scripts/gen_csv_json_corrupt_goldens.py",
+ "image": "apache/spark:4.2.0",
+ "inputs_hex": {
+  "bad.csv": "310a6162630a330a",
+  "bad.json": "7b2261223a317d0a7b2261223a0a6e6f74206a736f6e0a7b2261223a347d0a",
+  "utf16be.csv": "feff0061002c0062000a0031002c0078000a0032002c0079000a",
+  "utf16le.csv": "fffe61002c0062000a0031002c0078000a0032002c0079000a00"
+ },
+ "probes": {
+  "ansi_off.json.select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [{\"a\":] | [not json] | [null]"
+  },
+  "csv.cache_then_select_corrupt_no_prior_action": {
+   "status": "ok",
+   "value": "[null] | [abc] | [null]"
+  },
+  "csv.cached_select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [abc] | [null]"
+  },
+  "csv.cached_where_corrupt": {
+   "status": "ok",
+   "value": "[null,abc]"
+  },
+  "csv.count": {
+   "status": "ok",
+   "value": "3"
+  },
+  "csv.failfast.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.renamed.default_name_in_schema.select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [null] | [null]"
+  },
+  "csv.renamed.select_bad": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.renamed.select_bad_a": {
+   "status": "ok",
+   "value": "[null,1] | [abc,null] | [null,3]"
+  },
+  "csv.renamed.select_bad_dropmalformed": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.renamed.select_default_name": {
+   "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "exception": "org.apache.spark.sql.catalyst.ExtendedAnalysisException",
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `_corrupt_record` cannot be resolved. Did you mean one of the following? [`_bad`, `a`]. SQLSTATE: 42703;\\u000a'Project ['_corrupt_record]\\u000a+- Relation [a#847,_bad#848] csv\\u000a",
+   "parameters": "{objectName=`_corrupt_record`, proposal=`_bad`, `a`}",
+   "sqlstate": "42703",
+   "status": "error"
+  },
+  "csv.select_a": {
+   "status": "ok",
+   "value": "[1] | [null] | [3]"
+  },
+  "csv.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.select_corrupt_a": {
+   "status": "ok",
+   "value": "[null,1] | [abc,null] | [null,3]"
+  },
+  "csv.select_corrupt_analysis_only": {
+   "status": "ok",
+   "value": "struct<_corrupt_record:string> (no action)"
+  },
+  "csv.select_star": {
+   "status": "ok",
+   "value": "[1,null] | [null,abc] | [3,null]"
+  },
+  "csv.sql_session_conf_name": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.sql_table_function": {
+   "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "exception": "org.apache.spark.sql.catalyst.ExtendedAnalysisException",
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `_corrupt_record` cannot be resolved. Did you mean one of the following? [`_c0`]. SQLSTATE: 42703; line 1 pos 7;\\u000a'Project ['_corrupt_record]\\u000a+- Relation [_c0#892] csv\\u000a",
+   "parameters": "{objectName=`_corrupt_record`, proposal=`_c0`}",
+   "sqlstate": "42703",
+   "status": "error"
+  },
+  "csv.sql_table_function_star": {
+   "status": "ok",
+   "value": "[1] | [abc] | [3]"
+  },
+  "csv.where_corrupt_notnull": {
+   "status": "ok",
+   "value": "[null,abc]"
+  },
+  "csv.where_corrupt_notnull_count": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "csv.where_corrupt_notnull_select_a": {
+   "status": "ok",
+   "value": "[null]"
+  },
+  "json.cache_then_select_corrupt_no_prior_action": {
+   "status": "ok",
+   "value": "[null] | [{\"a\":] | [not json] | [null]"
+  },
+  "json.cached_select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [{\"a\":] | [not json] | [null]"
+  },
+  "json.cached_where_corrupt": {
+   "status": "ok",
+   "value": "[null,{\"a\":] | [null,not json]"
+  },
+  "json.count": {
+   "status": "ok",
+   "value": "4"
+  },
+  "json.failfast.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.inferred.cached_select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [{\"a\":] | [not json] | [null]"
+  },
+  "json.inferred.count": {
+   "status": "ok",
+   "value": "4"
+  },
+  "json.inferred.schema": {
+   "status": "ok",
+   "value": "struct<_corrupt_record:string,a:bigint>"
+  },
+  "json.inferred.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.inferred.select_star": {
+   "status": "ok",
+   "value": "[null,1] | [{\"a\":,null] | [not json,null] | [null,4]"
+  },
+  "json.inferred.where_corrupt": {
+   "status": "ok",
+   "value": "[{\"a\":,null] | [not json,null]"
+  },
+  "json.multiline.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.renamed.default_name_in_schema.select_corrupt": {
+   "status": "ok",
+   "value": "[null] | [null] | [null] | [null]"
+  },
+  "json.renamed.select_bad": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.renamed.select_bad_a": {
+   "status": "ok",
+   "value": "[null,1] | [{\"a\":,null] | [not json,null] | [null,4]"
+  },
+  "json.renamed.select_bad_dropmalformed": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.renamed.select_default_name": {
+   "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "exception": "org.apache.spark.sql.catalyst.ExtendedAnalysisException",
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `_corrupt_record` cannot be resolved. Did you mean one of the following? [`_bad`, `a`]. SQLSTATE: 42703;\\u000a'Project ['_corrupt_record]\\u000a+- Relation [a#441,_bad#442] json\\u000a",
+   "parameters": "{objectName=`_corrupt_record`, proposal=`_bad`, `a`}",
+   "sqlstate": "42703",
+   "status": "error"
+  },
+  "json.select_a": {
+   "status": "ok",
+   "value": "[1] | [null] | [null] | [4]"
+  },
+  "json.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.select_corrupt_a": {
+   "status": "ok",
+   "value": "[null,1] | [{\"a\":,null] | [not json,null] | [null,4]"
+  },
+  "json.select_corrupt_analysis_only": {
+   "status": "ok",
+   "value": "struct<_corrupt_record:string> (no action)"
+  },
+  "json.select_star": {
+   "status": "ok",
+   "value": "[1,null] | [null,{\"a\":] | [null,not json] | [4,null]"
+  },
+  "json.sql_session_conf_name": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.sql_table_function": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.sql_table_function_star": {
+   "status": "ok",
+   "value": "[null,1] | [{\"a\":,null] | [not json,null] | [null,4]"
+  },
+  "json.where_corrupt_notnull": {
+   "status": "ok",
+   "value": "[null,{\"a\":] | [null,not json]"
+  },
+  "json.where_corrupt_notnull_count": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "json.where_corrupt_notnull_select_a": {
+   "status": "ok",
+   "value": "[null] | [null]"
+  },
+  "pq_as_json.cached_collect": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "pq_as_json.collect_count": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "pq_as_json.count": {
+   "status": "ok",
+   "value": "2"
+  },
+  "pq_as_json.schema": {
+   "status": "ok",
+   "value": "struct<_corrupt_record:string>"
+  },
+  "pq_as_json.select_corrupt": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "pq_as_json.select_star": {
+   "condition": "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN",
+   "exception": "org.apache.spark.sql.AnalysisException",
+   "message": "[UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN] The feature is not supported: Queries from raw JSON/CSV/XML files are disallowed when the\\u000areferenced columns only include the internal corrupt record column\\u000a(named `_corrupt_record` by default). For example:\\u000a`spark.read.schema(schema).json(file).filter($\"_corrupt_record\".isNotNull).count()`\\u000aand `spark.read.schema(schema).json(file).select(\"_corrupt_record\").show()`.\\u000aInstead, you can cache or save the parsed results and then send the same query.\\u000aFor example, `val df = spark.read.schema(schema).json(file).cache()` and then\\u000a`df.filter($\"_corrupt_record\".isNotNull).count()`. SQLSTATE: 0A000",
+   "parameters": "{}",
+   "sqlstate": "0A000",
+   "status": "error"
+  },
+  "py067.first.run1": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.first.run2": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.first.run3": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.head3.run1": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.head3.run2": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.head3.run3": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.input_file_order_of_partitions": {
+   "status": "ok",
+   "value": "0:0 1:13108 2:26215 3:39322 4:52429 5:65537 6:78644 7:91751"
+  },
+  "py067.limit1000_first_last": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] .. [999,name999,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.limit3_collect.run1": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.limit3_collect.run2": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.limit3_collect.run3": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.partitions": {
+   "status": "ok",
+   "value": "8"
+  },
+  "py067.show_head": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.take3.run1": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.take3.run2": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.take3.run3": {
+   "status": "ok",
+   "value": "[0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [1,name1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] | [2,name2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.two_files_first": {
+   "status": "ok",
+   "value": "[b0,name0,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]"
+  },
+  "py067.two_files_partition_firsts": {
+   "status": "ok",
+   "value": "0:b0 1:a0 2:a13108 3:a26215 4:a39322 5:a52429 6:b13108"
+  },
+  "sql030.utf16be.header=false.enc=UTF-16.columns": {
+   "status": "ok",
+   "value": "_c0,_c1"
+  },
+  "sql030.utf16be.header=false.enc=UTF-16.count": {
+   "status": "ok",
+   "value": "3"
+  },
+  "sql030.utf16be.header=false.enc=UTF-16.rows": {
+   "status": "ok",
+   "value": "[a,b\\ufffd] | [1,x\\ufffd] | [2,y\\ufffd]"
+  },
+  "sql030.utf16be.header=false.enc=default.columns": {
+   "status": "ok",
+   "value": "_c0,_c1"
+  },
+  "sql030.utf16be.header=false.enc=default.count": {
+   "status": "ok",
+   "value": "3"
+  },
+  "sql030.utf16be.header=false.enc=default.rows": {
+   "status": "ok",
+   "value": "[\\ufffd\\ufffd\\u0000a\\u0000,\\u0000b\\u0000] | [\\u00001\\u0000,\\u0000x\\u0000] | [\\u00002\\u0000,\\u0000y\\u0000]"
+  },
+  "sql030.utf16be.header=true.enc=UTF-16.columns": {
+   "status": "ok",
+   "value": "a,b\\ufffd"
+  },
+  "sql030.utf16be.header=true.enc=UTF-16.count": {
+   "status": "ok",
+   "value": "2"
+  },
+  "sql030.utf16be.header=true.enc=UTF-16.rows": {
+   "status": "ok",
+   "value": "[1,x\\ufffd] | [2,y\\ufffd]"
+  },
+  "sql030.utf16be.header=true.enc=default.columns": {
+   "status": "ok",
+   "value": "\\ufffd\\ufffd\\u0000a\\u0000,\\u0000b\\u0000"
+  },
+  "sql030.utf16be.header=true.enc=default.count": {
+   "status": "ok",
+   "value": "2"
+  },
+  "sql030.utf16be.header=true.enc=default.rows": {
+   "status": "ok",
+   "value": "[\\u00001\\u0000,\\u0000x\\u0000] | [\\u00002\\u0000,\\u0000y\\u0000]"
+  },
+  "sql030.utf16le.header=false.enc=UTF-16.columns": {
+   "status": "ok",
+   "value": "_c0,_c1"
+  },
+  "sql030.utf16le.header=false.enc=UTF-16.count": {
+   "status": "ok",
+   "value": "4"
+  },
+  "sql030.utf16le.header=false.enc=UTF-16.rows": {
+   "status": "ok",
+   "value": "[a,b] | [1,x\\ufffd] | [2,y\\ufffd] | [\\ufffd,null]"
+  },
+  "sql030.utf16le.header=false.enc=default.columns": {
+   "status": "ok",
+   "value": "_c0,_c1"
+  },
+  "sql030.utf16le.header=false.enc=default.count": {
+   "status": "ok",
+   "value": "3"
+  },
+  "sql030.utf16le.header=false.enc=default.rows": {
+   "status": "ok",
+   "value": "[\\ufffd\\ufffda\\u0000,\\u0000b\\u0000] | [\\u00001\\u0000,\\u0000x\\u0000] | [\\u00002\\u0000,\\u0000y\\u0000]"
+  },
+  "sql030.utf16le.header=true.enc=UTF-16.columns": {
+   "status": "ok",
+   "value": "a,b"
+  },
+  "sql030.utf16le.header=true.enc=UTF-16.count": {
+   "status": "ok",
+   "value": "3"
+  },
+  "sql030.utf16le.header=true.enc=UTF-16.rows": {
+   "status": "ok",
+   "value": "[1,x\\ufffd] | [2,y\\ufffd] | [\\ufffd,null]"
+  },
+  "sql030.utf16le.header=true.enc=default.columns": {
+   "status": "ok",
+   "value": "\\ufffd\\ufffda\\u0000,\\u0000b\\u0000"
+  },
+  "sql030.utf16le.header=true.enc=default.count": {
+   "status": "ok",
+   "value": "2"
+  },
+  "sql030.utf16le.header=true.enc=default.rows": {
+   "status": "ok",
+   "value": "[\\u00001\\u0000,\\u0000x\\u0000] | [\\u00002\\u0000,\\u0000y\\u0000]"
+  }
+ },
+ "spark_version": "4.2.0"
+}
