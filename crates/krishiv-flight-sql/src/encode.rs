@@ -114,74 +114,166 @@ impl Feed {
             return Some((Err(external(e.into())), self));
         }
         self.held = Some(reservation);
-        let limit = self.batch_bytes;
-        self.pending = cut(&batch, bytes, limit)
-            .into_iter()
-            .flat_map(|c| fit(c, limit))
-            .collect();
         // A row is never split: one over the cut size would be a message the client refuses with
         // a transport error, so it fails the fetch with a typed error first (design §4.2, m4).
-        if let Some(row) = self
-            .pending
-            .iter()
-            .find(|c| c.num_rows() == 1 && slice_bytes(c) > self.batch_bytes)
-        {
-            let e: KrishivError = KrishivFlightSqlRowTooLarge {
-                columns: row.num_columns().to_string(),
-                limit: self.batch_bytes.to_string(),
+        match cuts(&batch, self.batch_bytes) {
+            Ok(cuts) => self.pending = cuts,
+            Err(TooLarge) => {
+                let e: KrishivError = KrishivFlightSqlRowTooLarge {
+                    columns: batch.num_columns().to_string(),
+                    limit: self.batch_bytes.to_string(),
+                }
+                .into();
+                return Some((Err(external(e)), self));
             }
-            .into();
-            self.pending.clear();
-            return Some((Err(external(e)), self));
         }
         let first = self.pending.pop_front()?;
         Some((Ok(first), self))
     }
 }
 
-/// `batch` in row ranges of at most about `limit` of its `bytes` (rows taken as equal in
-/// size), at least one row each; one empty batch stays one (it carries the schema's columns).
-fn cut(batch: &RecordBatch, bytes: usize, limit: usize) -> VecDeque<RecordBatch> {
-    let rows = batch.num_rows();
-    if bytes <= limit || rows <= 1 {
-        return VecDeque::from([batch.clone()]);
-    }
-    let per_cut = (rows.saturating_mul(limit) / bytes).max(1);
-    (0..rows)
-        .step_by(per_cut)
-        .map(|start| batch.slice(start, per_cut.min(rows - start)))
-        .collect()
-}
+/// A row larger than the cut size on its own.
+struct TooLarge;
 
-/// `cut` takes rows as equal in size; a cut whose rows are not and that holds more than `limit`
-/// is cut again by its rows' own sizes, so a row over `limit` ends up alone (and is refused) and
-/// no cut of several rows passes `limit` (design §4.2 m4, review m8).
-fn fit(c: RecordBatch, limit: usize) -> Vec<RecordBatch> {
-    if c.num_rows() <= 1 || slice_bytes(&c) <= limit {
-        return vec![c];
+/// `batch` in row ranges of at most `limit` bytes each, by each row's own size ([`row_sizes`]);
+/// a batch within `limit` (or empty: it carries the schema's columns) stays one. A row over
+/// `limit` on its own refuses the batch (design §4.2 m4, review m8; review of 9b66ee1fc,
+/// finding 2: a row is measured by what it covers, its list and map elements included).
+fn cuts(batch: &RecordBatch, limit: usize) -> Result<VecDeque<RecordBatch>, TooLarge> {
+    let (sizes, shared) = row_sizes(batch);
+    let total = sizes.iter().fold(shared, |a, b| a.saturating_add(*b));
+    if total <= limit {
+        return Ok(VecDeque::from([batch.clone()]));
     }
-    let mut out = Vec::new();
-    let (mut start, mut held) = (0, 0usize);
-    for row in 0..c.num_rows() {
-        let size = slice_bytes(&c.slice(row, 1));
-        if row > start && held.saturating_add(size) > limit {
-            out.push(c.slice(start, row - start));
-            (start, held) = (row, 0);
+    let mut out = VecDeque::new();
+    let (mut start, mut held) = (0, shared);
+    for (row, size) in sizes.iter().enumerate() {
+        if shared.saturating_add(*size) > limit {
+            return Err(TooLarge);
         }
-        held = held.saturating_add(size);
+        if row > start && held.saturating_add(*size) > limit {
+            out.push_back(batch.slice(start, row - start));
+            (start, held) = (row, shared);
+        }
+        held = held.saturating_add(*size);
     }
-    out.push(c.slice(start, c.num_rows() - start));
-    out
+    out.push_back(batch.slice(start, batch.num_rows() - start));
+    Ok(out)
 }
 
-/// The bytes `batch`'s rows hold, counted over its slice only (`get_array_memory_size` counts
-/// the whole buffers a slice shares).
-fn slice_bytes(batch: &RecordBatch) -> usize {
-    batch
-        .columns()
-        .iter()
-        .map(|c| c.to_data().get_slice_memory_size().unwrap_or(usize::MAX))
-        .fold(0, usize::saturating_add)
+/// The bytes each row of `batch` covers, and the bytes every cut carries whatever its rows (the
+/// dictionaries' values, counted once). One pass over offsets, no slice per row.
+fn row_sizes(batch: &RecordBatch) -> (Vec<usize>, usize) {
+    let mut sizes = vec![0usize; batch.num_rows()];
+    let mut shared = 0usize;
+    for column in batch.columns() {
+        add_sizes(column.as_ref(), &mut sizes, &mut shared);
+    }
+    (sizes, shared)
+}
+
+/// Adds to `out[i]` the bytes row `i` of `array` covers (`out.len() == array.len()`).
+fn add_sizes(array: &dyn Array, out: &mut [usize], shared: &mut usize) {
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType as D;
+    // The validity bitmap is an eighth of a byte a row: rounded into the offsets/values below.
+    match array.data_type() {
+        D::Utf8 => offsets_bytes(array.as_string::<i32>().value_offsets(), 4, out),
+        D::LargeUtf8 => offsets_bytes(array.as_string::<i64>().value_offsets(), 8, out),
+        D::Binary => offsets_bytes(array.as_binary::<i32>().value_offsets(), 4, out),
+        D::LargeBinary => offsets_bytes(array.as_binary::<i64>().value_offsets(), 8, out),
+        D::List(_) => {
+            let list = array.as_list::<i32>();
+            nested(list.value_offsets(), list.values().as_ref(), 4, out, shared);
+        }
+        D::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            nested(list.value_offsets(), list.values().as_ref(), 8, out, shared);
+        }
+        D::Map(_, _) => {
+            let map = array.as_map();
+            nested(map.value_offsets(), map.entries(), 4, out, shared);
+        }
+        D::Struct(_) => {
+            for child in array.as_struct().columns() {
+                add_sizes(child.as_ref(), out, shared);
+            }
+        }
+        D::FixedSizeList(_, n) => {
+            let list = array.as_fixed_size_list();
+            let n = usize::try_from(*n).unwrap_or(0);
+            if out.is_empty() || n == 0 {
+                return;
+            }
+            // A sliced FixedSizeList slices its values too (arrow-array 60): row 0 starts at 0.
+            let values = list.values().slice(0, out.len().saturating_mul(n));
+            let mut inner = vec![0usize; values.len()];
+            add_sizes(values.as_ref(), &mut inner, shared);
+            for (row, size) in out.iter_mut().enumerate() {
+                let elements = &inner[row * n..(row + 1) * n];
+                *size = elements.iter().fold(*size, |a, b| a.saturating_add(*b));
+            }
+        }
+        D::Dictionary(_, _) => {
+            let dict = array.as_any_dictionary();
+            add_sizes(dict.keys(), out, shared);
+            *shared = shared.saturating_add(dict.values().get_array_memory_size());
+        }
+        D::Null => {}
+        D::Boolean => out.iter_mut().for_each(|s| *s = s.saturating_add(1)),
+        other => match other.primitive_width() {
+            Some(width) => out.iter_mut().for_each(|s| *s = s.saturating_add(width)),
+            // Views, unions, run-ends: Spark's shapes do not send them; measured row by row.
+            None => {
+                for (row, size) in out.iter_mut().enumerate() {
+                    let one = array.slice(row, 1).to_data().get_slice_memory_size();
+                    *size = size.saturating_add(one.unwrap_or(usize::MAX));
+                }
+            }
+        },
+    }
+}
+
+/// Variable-length values: each row's offset entry and its value bytes.
+fn offsets_bytes<O: arrow_array::OffsetSizeTrait>(offsets: &[O], width: usize, out: &mut [usize]) {
+    for (row, size) in out.iter_mut().enumerate() {
+        let len = offsets[row + 1]
+            .as_usize()
+            .saturating_sub(offsets[row].as_usize());
+        *size = size.saturating_add(width).saturating_add(len);
+    }
+}
+
+/// A list or map: each row's offset entry and the bytes of the child rows it covers.
+fn nested<O: arrow_array::OffsetSizeTrait>(
+    offsets: &[O],
+    child: &dyn Array,
+    width: usize,
+    out: &mut [usize],
+    shared: &mut usize,
+) {
+    let (Some(first), Some(last)) = (offsets.first(), offsets.last()) else {
+        return;
+    };
+    let (first, last) = (first.as_usize(), last.as_usize());
+    let covered = child.slice(first, last.saturating_sub(first));
+    let mut inner = vec![0usize; covered.len()];
+    add_sizes(covered.as_ref(), &mut inner, shared);
+    // Prefix sums: a row's child bytes in one subtraction.
+    let mut prefix = Vec::with_capacity(inner.len() + 1);
+    prefix.push(0usize);
+    for size in &inner {
+        let next = prefix.last().copied().unwrap_or(0).saturating_add(*size);
+        prefix.push(next);
+    }
+    for (row, size) in out.iter_mut().enumerate() {
+        let (a, b) = (
+            offsets[row].as_usize() - first,
+            offsets[row + 1].as_usize() - first,
+        );
+        let elements = prefix[b].saturating_sub(prefix[a]);
+        *size = size.saturating_add(width).saturating_add(elements);
+    }
 }
 
 fn external(error: KrishivError) -> FlightError {
@@ -383,10 +475,16 @@ mod tests {
         assert_eq!(p.reserved(), 0, "the batch's grant released");
     }
 
-    /// Ten 30 KB rows ahead of 990 small ones: each cut `fit` returns holds at most the limit
-    /// (or one row), and every row is kept once, in order.
+    /// The bytes of a cut as `cuts` measures them.
+    fn measured(c: &RecordBatch) -> usize {
+        let (sizes, shared) = row_sizes(c);
+        sizes.iter().sum::<usize>() + shared
+    }
+
+    /// Ten 30 KB rows ahead of 990 small ones: each cut holds at most the limit, and every row
+    /// is kept once, in order.
     #[test]
-    fn fit_cuts_skewed_rows_by_their_sizes() {
+    fn cuts_follow_skewed_rows_by_their_sizes() {
         let n = 1_000;
         let ids = Int64Array::from_iter_values(0..n);
         let s = StringArray::from_iter_values((0..n).map(|i| {
@@ -398,21 +496,10 @@ mod tests {
         }));
         let b = RecordBatch::try_new(schema(), vec![Arc::new(ids), Arc::new(s)]).expect("batch");
         let limit = 64 << 10;
-        let bytes = b.get_array_memory_size();
-        let cuts: Vec<_> = cut(&b, bytes, limit)
-            .into_iter()
-            .flat_map(|c| fit(c, limit))
-            .collect();
+        let cuts = cuts(&b, limit).ok().expect("no row is over the limit");
         for c in &cuts {
-            assert!(
-                c.num_rows() == 1 || slice_bytes(c) <= limit,
-                "a cut of {} rows holds {} bytes",
-                c.num_rows(),
-                slice_bytes(c)
-            );
+            assert!(measured(c) <= limit, "a cut of {} rows", c.num_rows());
         }
-        let total: usize = cuts.iter().map(RecordBatch::num_rows).sum();
-        assert_eq!(total, 1_000);
         let first: Vec<i64> = cuts
             .iter()
             .flat_map(|c| {
@@ -424,6 +511,137 @@ mod tests {
             })
             .collect();
         assert_eq!(first, (0..n).collect::<Vec<_>>());
+    }
+
+    /// `array<bigint>` rows of `width` elements (row 0 `wide` elements when given).
+    fn list_batch(rows: usize, width: usize, wide: Option<usize>) -> RecordBatch {
+        use arrow_array::builder::{Int64Builder, ListBuilder};
+        let mut b = ListBuilder::new(Int64Builder::new());
+        for row in 0..rows {
+            let n = if row == 0 {
+                wide.unwrap_or(width)
+            } else {
+                width
+            };
+            for i in 0..n {
+                b.values().append_value(i as i64);
+            }
+            b.append(true);
+        }
+        let list = b.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            list.data_type().clone(),
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(list)]).expect("batch")
+    }
+
+    /// A list column whose child is several times the limit is cut by rows (each row covers its
+    /// own elements, not the whole child), and every row arrives (review of 9b66ee1fc, finding 2).
+    #[tokio::test]
+    async fn a_list_column_over_the_limit_is_cut_by_rows() {
+        let p = pool(None);
+        // 20,000 rows of 20 elements: a 3.2 MB child against a 1 MiB cut.
+        let b = list_batch(20_000, 20, None);
+        let limits = EncodeLimits {
+            batch_bytes: 1 << 20,
+            data_bytes: 256 << 10,
+        };
+        let cuts = cuts(&b, limits.batch_bytes).ok().expect("cut");
+        assert!(cuts.len() >= 3, "{} cuts", cuts.len());
+        assert!(cuts.iter().all(|c| measured(c) <= limits.batch_bytes));
+        let schema = b.schema();
+        let out = encode_results(schema, source(vec![Ok(b)]), consumer(&p), limits);
+        let got = decode(out).await.expect("every row");
+        assert_eq!(rows(&got), 20_000);
+        assert_eq!(p.reserved(), 0);
+    }
+
+    /// One list row over the limit among small ones is still refused.
+    #[test]
+    fn a_skewed_list_row_is_refused() {
+        let b = list_batch(1_000, 2, Some(200_000));
+        assert!(cuts(&b, 1 << 20).is_err());
+        assert!(cuts(&b.slice(1, 999), 1 << 20).is_ok(), "the others fit");
+    }
+
+    /// A map column is measured by its entries as a list is.
+    #[test]
+    fn a_map_column_over_the_limit_is_cut_by_rows() {
+        use arrow_array::builder::{Int64Builder, MapBuilder, StringBuilder};
+        let mut m = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        for row in 0..10_000 {
+            for k in 0..10 {
+                m.keys().append_value(format!("k{k}"));
+                m.values().append_value(row * 10 + k);
+            }
+            m.append(true).expect("row");
+        }
+        let map = m.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "m",
+            map.data_type().clone(),
+            true,
+        )]));
+        let b = RecordBatch::try_new(schema, vec![Arc::new(map)]).expect("batch");
+        let limit = 256 << 10;
+        assert!(measured(&b) > 3 * limit);
+        let cuts = cuts(&b, limit).ok().expect("cut");
+        assert!(cuts.iter().all(|c| measured(c) <= limit));
+        assert_eq!(
+            cuts.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            10_000
+        );
+    }
+
+    /// A vector column (`FixedSizeList<float, n>`, P3-T075) is measured per row, sliced or not.
+    #[test]
+    fn a_fixed_size_list_column_is_measured_per_row() {
+        use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
+        let mut b = FixedSizeListBuilder::new(Float32Builder::new(), 8);
+        for row in 0..1_000 {
+            for i in 0..8 {
+                b.values().append_value((row * 8 + i) as f32);
+            }
+            b.append(true);
+        }
+        let list = b.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            list.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(list)]).expect("batch");
+        let (sizes, _) = row_sizes(&batch);
+        assert!(sizes.iter().all(|s| *s == 32));
+        let (tail, _) = row_sizes(&batch.slice(990, 10));
+        assert_eq!(tail, vec![32; 10]);
+        let all = cuts(&batch, 3_200).ok().expect("cut");
+        assert_eq!(all.len(), 10);
+    }
+
+    /// A dictionary's values count once per cut, not once per row.
+    #[test]
+    fn dictionary_values_count_once_per_cut() {
+        use arrow_array::{DictionaryArray, types::Int32Type};
+        let values: Vec<String> = (0..100).map(|i| format!("{i:0100}")).collect();
+        let keys = arrow_array::Int32Array::from_iter_values((0..10_000).map(|i| i % 100));
+        let dict = DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(StringArray::from_iter_values(values)),
+        )
+        .expect("dict");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            dict.data_type().clone(),
+            false,
+        )]));
+        let b = RecordBatch::try_new(schema, vec![Arc::new(dict)]).expect("batch");
+        let (sizes, shared) = row_sizes(&b);
+        assert!(sizes.iter().all(|s| *s == 4), "a row is its key");
+        assert!(shared >= 100 * 100);
+        assert_eq!(cuts(&b, 1 << 20).ok().expect("fits").len(), 1);
     }
 
     #[tokio::test]
@@ -511,14 +729,14 @@ mod tests {
     }
 
     #[test]
-    fn cut_keeps_every_row_once() {
+    fn cuts_keep_every_row_once() {
         let b = batch(1_001, 8);
-        let bytes = b.get_array_memory_size();
-        let cuts = cut(&b, bytes, bytes / 7);
-        assert!(cuts.len() >= 7);
-        assert_eq!(cuts.iter().map(RecordBatch::num_rows).sum::<usize>(), 1_001);
-        assert_eq!(cut(&b, bytes, bytes).len(), 1);
-        assert_eq!(cut(&batch(1, 8), 1_000, 1).len(), 1);
-        assert_eq!(cut(&batch(0, 8), 1_000, 1).len(), 1);
+        let bytes = measured(&b);
+        let all = cuts(&b, bytes / 7).ok().expect("cut");
+        assert!(all.len() >= 7);
+        assert_eq!(all.iter().map(RecordBatch::num_rows).sum::<usize>(), 1_001);
+        assert_eq!(cuts(&b, bytes).ok().expect("one").len(), 1);
+        assert!(cuts(&batch(1, 8), 1).is_err(), "one row over the limit");
+        assert_eq!(cuts(&batch(0, 8), 1).ok().expect("empty").len(), 1);
     }
 }
