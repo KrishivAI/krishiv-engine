@@ -281,6 +281,18 @@ fn a_unique_key_is_not_advised_through_the_history() {
         run(&session, &format!("SELECT sum(c) FROM ev WHERE id = {i}"));
     }
     flush(&rt);
+    // The scans did reach the history (so the empty advice is a judgement, not a missing record).
+    let seen: usize = read_history(history.path())
+        .unwrap()
+        .iter()
+        .filter_map(|r| QueryProfile::from_json(&r.profile).ok())
+        .flat_map(|p| p.scans)
+        .filter(|s| {
+            s.table.to_lowercase().ends_with("ev")
+                && s.equality.iter().any(|c| c.name.eq_ignore_ascii_case("id"))
+        })
+        .count();
+    assert_eq!(seen, 50);
     let advice = from_history(history.path());
     let suggestions: Vec<_> = advice.iter().flat_map(|t| t.advice.iter()).collect();
     assert!(suggestions.is_empty(), "{advice:?}");
