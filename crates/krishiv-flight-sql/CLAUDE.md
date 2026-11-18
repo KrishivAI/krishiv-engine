@@ -34,6 +34,22 @@ Paths are relative to this crate.
   handle map (lock order: sessions, then handles)
 - `src/metrics.rs` `Requests` (design §7): `krishiv_flight_sql_requests_total{command, outcome}`, fixed `Command` and
   `Outcome` enums equal to the registry's label values (test); lock-free cells, `counts()` for the server's scrape
+- `src/server.rs` `FlightSqlServer` (design §2): built from the Connect listener's `SessionManager`, `ConnectAuth`,
+  drain flag and `ResponseBudget`; `FlightSqlConfig::from_config` (the `krishiv.flightSql.*` keys); `service()` is the
+  tonic service for `ConnectServer::with_routes`; `spawn_sweeper` (abort-on-drop `SweepGuard`), `sweep_at`,
+  `close_all` (after `serve` returns); a handle's `Payload` (full owner, SQL, pinned clock, `Kind`: pending, query
+  schema, or a command's stored rows held as `flight_sql_handles` past 64 KiB)
+- `src/call.rs` the session of one call (design §3.2): the cookie's, else created once (provisional without a cookie,
+  a cookie session for a refused one, "session reset" at info); `CallSession` is the drop guard that ends the call in
+  the table (and releases a provisional session a failed call created)
+- `src/statement.rs` `GetFlightInfo(CommandStatementQuery)` (slot, `Operation`, classify with `sql_query_with`, a
+  command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
+  `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo`; marks are drop guards released in reverse
+  (operation, fetch, response budget, call; §16 M3)
+- `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
+  `GetSqlInfo` without a session; actions other than `CancelFlightInfo` `UNIMPLEMENTED`
+- `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,
+  commands once, re-fetch clock, owner binding, cancel, limits, auth)
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
   name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
   backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller
