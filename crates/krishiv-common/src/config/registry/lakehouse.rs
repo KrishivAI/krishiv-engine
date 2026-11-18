@@ -110,9 +110,10 @@ pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
           overwrite, delete, update or merge) started from and the branch's current head that \
           its commit validates for conflicts. A commit that finds more fails with \
           KRISHIV_ICEBERG_COMMIT_CONFLICT rather than validating part of the history; appends \
-          validate nothing and ignore it. Read when the write is planned.",
+          validate nothing and ignore it. Read when the write is planned. Krishiv does not run \
+          Iceberg overwrites, deletes, updates or merges yet, so until it does this has no effect.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.2.0",
+    version_added: "0.3.0",
     spark_alias: None,
 };
