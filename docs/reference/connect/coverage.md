@@ -35,10 +35,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
-| 24 | hint | done |  | Hint | P3-T012 | 3 |
+| 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |
 | 25 | unpivot | partial | absent values and values that are not columns | Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis | P3-T012 | 2 |
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
-| 27 | repartition_by_expression | partial | num_partitions | Repartition (hash); a partition count needs an IR field | P3-T012 | 3 |
+| 27 | repartition_by_expression | partial | num_partitions, no expressions (round robin), repartitionByRange | Repartition (hash); a partition count, a round-robin repartition and SortOrder expressions need IR fields | P3-T012 | 3 |
 | 28 | map_partitions | partial | is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes | MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers | P3-T014 | 6 |
 | 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |

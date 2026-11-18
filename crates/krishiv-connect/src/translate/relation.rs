@@ -163,16 +163,22 @@ impl Translator<'_> {
     /// over a subset it keeps the first row per key, which needs the input's columns and so
     /// waits for an IR node. `within_watermark` is a streaming operator.
     fn deduplicate(&mut self, d: &pb::Deduplicate) -> Result<PlanNode> {
+        use krishiv_common::error::{
+            ConnectInvalidPlanDeduplicateAllColumnsAndSubset,
+            ConnectInvalidPlanDeduplicateNeedsInput,
+            ConnectInvalidPlanDeduplicateRequiresColumnsOrAll,
+        };
+        // Spark checks the input first, then the two column fields.
+        let input = match d.input.as_deref() {
+            Some(rel) => self.relation(rel)?,
+            None => return Err(ConnectInvalidPlanDeduplicateNeedsInput {}.into()),
+        };
         let all = d.all_columns_as_keys.unwrap_or(false);
         if !all && d.column_names.is_empty() {
-            return Err(assertion(
-                "Deduplicate requires to either deduplicate on all columns or a subset of columns",
-            ));
+            return Err(ConnectInvalidPlanDeduplicateRequiresColumnsOrAll {}.into());
         }
         if all && !d.column_names.is_empty() {
-            return Err(assertion(
-                "Cannot deduplicate on both all columns and a subset of columns",
-            ));
+            return Err(ConnectInvalidPlanDeduplicateAllColumnsAndSubset {}.into());
         }
         if d.within_watermark.unwrap_or(false) {
             return Err(unsupported_field(
@@ -188,9 +194,7 @@ impl Translator<'_> {
                 "deduplicating on a subset of columns",
             ));
         }
-        Ok(PlanNode::Distinct {
-            input: self.input("Deduplicate", d.input.as_deref())?,
-        })
+        Ok(PlanNode::Distinct { input })
     }
 
     /// `RepartitionByExpression` without a partition count is `DISTRIBUTE BY exprs`; a count has
@@ -204,8 +208,10 @@ impl Translator<'_> {
             ));
         }
         if r.partition_exprs.is_empty() {
-            return Err(assertion(
-                "Repartition by expression needs at least one partition expression",
+            return Err(unsupported_field(
+                "RepartitionByExpression",
+                "partition_exprs",
+                "a repartition with no expressions (round robin)",
             ));
         }
         Ok(PlanNode::Repartition {
@@ -227,9 +233,7 @@ impl Translator<'_> {
                 "unpivot without explicit value columns",
             ));
         };
-        if values.values.is_empty() {
-            return Err(assertion("Unpivot requires at least one value column"));
-        }
+        // An empty list reaches the analyzer, which raises UNPIVOT_REQUIRES_VALUE_COLUMNS as Spark does.
         let input = self.input("Unpivot", u.input.as_deref())?;
         let ids = self.expressions(&u.ids)?;
         let values = self.expressions(&values.values)?;
