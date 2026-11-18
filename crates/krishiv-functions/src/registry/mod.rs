@@ -28,6 +28,7 @@ mod defs;
 mod element;
 mod generator;
 mod geo;
+mod groups;
 mod hashing;
 mod hof;
 mod json;
@@ -52,6 +53,7 @@ use std::sync::{Arc, LazyLock};
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
+pub use groups::{FunctionGroup, spark_function_groups};
 pub(crate) use json::parse_json_schema;
 pub use variant::variant_castable;
 

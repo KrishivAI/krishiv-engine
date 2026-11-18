@@ -211,6 +211,35 @@ fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
 }
 
+/// `GetSqlInfo`'s server facts (design P3-T101 §5): the version, the parser's keywords and the
+/// functions Krishiv implements of Spark's math (numeric), string, datetime and misc (system)
+/// documentation groups.
+#[cfg(feature = "flight-sql")]
+fn flight_server_info() -> krishiv_flight_sql::ServerInfo {
+    use krishiv_functions::registry::{FunctionGroup, builtins, spark_function_groups};
+    let implemented: std::collections::HashSet<&str> =
+        builtins().functions().iter().map(|d| d.name).collect();
+    let mut info = krishiv_flight_sql::ServerInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        keywords: krishiv_sql::SQL_KEYWORDS
+            .iter()
+            .map(|(k, _)| (*k).to_owned())
+            .collect(),
+        ..krishiv_flight_sql::ServerInfo::default()
+    };
+    for (name, group) in spark_function_groups().filter(|(n, _)| implemented.contains(n)) {
+        let list = match group {
+            FunctionGroup::Math => &mut info.numeric_functions,
+            FunctionGroup::String => &mut info.string_functions,
+            FunctionGroup::Datetime => &mut info.datetime_functions,
+            FunctionGroup::Misc => &mut info.system_functions,
+            _ => continue,
+        };
+        list.push(name.to_owned());
+    }
+    info
+}
+
 /// The Flight SQL service for `connect`'s listener and its sweep task, unless
 /// `krishiv.flightSql.enabled` is off (design P3-T101 §2, owner item 6: on by default when
 /// compiled in).
@@ -230,10 +259,7 @@ fn flight_sql(
     if !flag(config, &krishiv_common::config::FLIGHT_SQL_ENABLED, true) {
         return Ok(None);
     }
-    let info = krishiv_flight_sql::ServerInfo {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        ..krishiv_flight_sql::ServerInfo::default()
-    };
+    let info = flight_server_info();
     let flight = krishiv_flight_sql::FlightSqlServer::new(
         Arc::clone(manager),
         Arc::new(auth),
@@ -694,6 +720,22 @@ mod tests {
             c.set(k, v).unwrap();
         }
         c
+    }
+
+    /// `GetSqlInfo` lists the parser's keywords and the implemented functions by group (review m9).
+    #[cfg(feature = "flight-sql")]
+    #[test]
+    fn flight_server_info_lists_keywords_and_functions() {
+        let info = flight_server_info();
+        assert!(info.keywords.iter().any(|k| k == "SELECT"));
+        for (list, name) in [
+            (&info.numeric_functions, "abs"),
+            (&info.string_functions, "upper"),
+            (&info.datetime_functions, "date_add"),
+            (&info.system_functions, "current_user"),
+        ] {
+            assert!(list.iter().any(|f| f == name), "{name} in {list:?}");
+        }
     }
 
     #[test]
