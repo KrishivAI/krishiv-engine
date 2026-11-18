@@ -137,11 +137,7 @@ fn check(g: &Value, failures: &mut Vec<String>, label: &str, got: &Outcome) {
 }
 
 /// Probe labels this engine does not match yet, with why; each must still differ, so the list only shrinks.
-const KNOWN: &[(&str, &str)] = &[(
-    "json.failfast.select_corrupt",
-    "a FAILFAST JSON read infers its schema from the files even when the view declares one \
-     (`files.rs` `list_with`), and the inference fails on the malformed record before the scan is planned",
-)];
+const KNOWN: &[(&str, &str)] = &[];
 
 fn run(fmt: &str, file: &str) {
     let g = goldens();

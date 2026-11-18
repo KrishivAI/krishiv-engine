@@ -114,6 +114,9 @@ pub struct EngineRuntime {
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
+    /// The Delta snapshot cache of every session of the runtime (ADR 0037; keyed by the
+    /// principal too, so a session never reads a snapshot read under another's credentials).
+    pub(crate) delta: Arc<crate::delta::DeltaCache>,
 }
 
 /// The running queries by worker-local index, and the sessions closed
@@ -389,6 +392,7 @@ impl EngineRuntime {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
+        let delta = Arc::new(crate::delta::DeltaCache::from_config(&config));
         let resource_groups = match config
             .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
             .and_then(krishiv_common::config::ConfigValue::as_str)
@@ -434,6 +438,7 @@ impl EngineRuntime {
             egress,
             catalogs,
             private,
+            delta,
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))
@@ -937,6 +942,24 @@ impl EngineRuntime {
                 let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
                 Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
             })?;
+        }
+        #[cfg(feature = "delta")]
+        {
+            use krishiv_connectors_delta::engine::pool::LogPool;
+            let pool = LogPool::process(&self.config);
+            metrics.add_gauge("krishiv.delta.log_pool.wait_ms", Vec::new(), move || {
+                Some(pool.waits().total_ms())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge("krishiv.delta.snapshot_cache.hits", Vec::new(), move || {
+                cache.upgrade().map(|c| c.hits())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge(
+                "krishiv.delta.snapshot_cache.misses",
+                Vec::new(),
+                move || cache.upgrade().map(|c| c.misses()),
+            )?;
         }
         metrics.add_gauge(
             "krishiv.build.info",

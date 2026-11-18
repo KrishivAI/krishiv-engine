@@ -37,6 +37,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::server::TlsStream;
+use tonic::service::Routes;
 use tonic::transport::Server;
 use tonic::transport::server::Connected;
 
@@ -185,6 +186,7 @@ pub struct ConnectServer {
     auth: Arc<ConnectAuth>,
     tls: Option<Arc<ServerConfig>>,
     budget: ResponseBudget,
+    routes: Option<Routes>,
 }
 
 impl ConnectServer {
@@ -199,6 +201,7 @@ impl ConnectServer {
             config,
             auth: Arc::new(ConnectAuth::off()),
             tls: None,
+            routes: None,
         }
     }
 
@@ -226,6 +229,21 @@ impl ConnectServer {
     #[must_use]
     pub fn with_draining(mut self, flag: Arc<AtomicBool>) -> Self {
         self.draining = flag;
+        self
+    }
+
+    /// This server also serving `routes` on its listener (P3-T101 §2 H1: `krishiv server` adds
+    /// the Flight SQL service; Connect itself never depends on Flight). They get the same HTTP/2
+    /// limits, connection cap, TLS, [`AuthLayer`] and shutdown as the Connect service; each
+    /// service keeps its own message-size limits. A later call replaces the earlier routes.
+    /// `routes` must not contain the Spark Connect service: `serve` adds it, and a second copy of
+    /// its path is an overlapping route. Shutdown waits `krishiv.server.shutdownTimeout` only for
+    /// the work the session manager tracks (running queries, live operations); a response of an
+    /// added service that registers no operation gets the listener's 5 s close wait, as Connect's
+    /// own non-operation RPCs do. Flight SQL registers an operation per fetch and per command.
+    #[must_use]
+    pub fn with_routes(mut self, routes: Routes) -> Self {
+        self.routes = Some(routes);
         self
     }
 
@@ -273,6 +291,7 @@ impl ConnectServer {
             auth,
             tls,
             budget,
+            routes,
         } = self;
         config.execute.validate()?;
         config.artifacts.validate()?;
@@ -299,7 +318,7 @@ impl ConnectServer {
             .tcp_nodelay(true)
             // Authentication runs on the headers, before the body is decoded.
             .layer(AuthLayer::new(Arc::clone(&auth)))
-            .add_service(service);
+            .add_routes(routes.unwrap_or_default().add_service(service));
 
         // Aborted on drop, so a caller that cancels `serve` leaves no task
         // holding the manager (and through it the engine runtime).

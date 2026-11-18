@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_exec::{
-    BUCKETS, CATALOGUE, MetricKind, MetricSource, MetricsRegistry, QueryOutcome, Status,
+    BUCKETS, CATALOGUE, MetricDef, MetricKind, MetricSource, MetricsRegistry, QueryOutcome, Status,
     WorkloadClass,
 };
 use krishiv_server::metrics::{SnapshotProvider, router_with_metrics, router_with_metrics_auth};
@@ -72,6 +72,17 @@ fn full_registry() -> Arc<MetricsRegistry> {
     registry
         .add_gauge("krishiv.history.write_failures", Vec::new(), || Some(2))
         .unwrap();
+    // The Delta gauges, as a runtime built with the session's `delta` feature registers them,
+    // so the exporter's text for them is checked in every build.
+    for (name, value) in [
+        ("krishiv.delta.log_pool.wait_ms", 5),
+        ("krishiv.delta.snapshot_cache.hits", 3),
+        ("krishiv.delta.snapshot_cache.misses", 1),
+    ] {
+        registry
+            .add_gauge(name, Vec::new(), move || Some(value))
+            .unwrap();
+    }
     registry
         .add_gauge("krishiv.memory.reserved", Vec::new(), || Some(8))
         .unwrap();
@@ -413,6 +424,21 @@ async fn metrics_serves_every_sourced_catalogue_metric() {
     }));
     // Counters use the OpenMetrics `_total` name.
     assert!(parsed.contains_key("krishiv_query_count_total"));
+    // The Delta gauges report the fixture's fixed values.
+    for (metric, value) in [
+        ("krishiv.delta.log_pool.wait_ms", 5.0),
+        ("krishiv.delta.snapshot_cache.hits", 3.0),
+        ("krishiv.delta.snapshot_cache.misses", 1.0),
+    ] {
+        let name = CATALOGUE
+            .iter()
+            .find(|d| d.name == metric)
+            .map(MetricDef::prometheus_name)
+            .unwrap_or_else(|| panic!("{metric} is not in the catalogue"));
+        let gauge = &parsed[&name];
+        assert_eq!(gauge.samples.len(), 1, "{name}: {:?}", gauge.samples);
+        assert_eq!(gauge.samples[0].value, value, "{name}");
+    }
     // The history write-failure gauge reports the 2 the fixture's source returns; the exporter adds the worker_id label
     // to every gauge and nothing else.
     let failures = &parsed["krishiv_history_write_failures"];

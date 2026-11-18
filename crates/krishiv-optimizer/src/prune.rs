@@ -249,9 +249,10 @@ impl Rewrite<'_> {
                     .filter(|c| req.contains(&c.id))
                     .cloned()
                     .collect();
-                // A Parquet scan read for its rows alone (`COUNT(*)`) keeps no
-                // column: the reader counts the rows its row groups declare
-                // and decodes nothing. Other sources keep their first column.
+                // A scan read for its rows alone (`COUNT(*)`, `count()`) keeps
+                // no column when its reader can count rows without decoding a
+                // value (Spark's empty `requiredSchema`). Other sources keep
+                // their first column.
                 if output.is_empty() && !reads_rows_without_columns(scan, self.stats) {
                     output.extend(scan.output.first().cloned());
                 }
@@ -603,15 +604,25 @@ fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a A
     }
 }
 
-/// Whether `scan` can be read with no column at all: a Parquet read by path,
-/// whose reader takes each batch's row count from its row groups, or a table
-/// (a temporary view over files, a catalog table) whose provider says so
-/// through `stats` ([`Statistics::reads_rows_without_columns`]). A source
-/// that has to decode a column to find its rows (CSV, JSON, text), or whose
-/// rows on disk are not its rows (deletion files), keeps one.
+/// The file formats whose readers count rows with no column. A read names its
+/// format by Spark's short name (the format registry resolves no other), so a
+/// fully qualified class name never reaches a `Files` scan.
+const COUNTED_WITHOUT_COLUMNS: &[&str] = &["parquet", "csv", "json"];
+
+/// Whether `scan` can be read with no column at all: a read by path of
+/// Parquet (each batch's row count from its row groups), CSV (lines counted
+/// without tokenizing, as Spark's `UnivocityParser` with column pruning) or
+/// JSON (records parsed, no value converted: as Spark's `JacksonParser` with
+/// an empty schema, a `DROPMALFORMED` read drops only the records that are not
+/// JSON objects), or a table (a temporary view over files, a catalog table) whose
+/// provider says so through `stats` ([`Statistics::reads_rows_without_columns`]).
+/// Any other source, or one whose rows on disk are not its rows (deletion
+/// files), keeps one.
 fn reads_rows_without_columns(scan: &Scan, stats: Option<&dyn Statistics>) -> bool {
     match &scan.source {
-        ReadSource::Files { format, .. } => format.eq_ignore_ascii_case("parquet"),
+        ReadSource::Files { format, .. } => COUNTED_WITHOUT_COLUMNS
+            .iter()
+            .any(|f| format.eq_ignore_ascii_case(f)),
         _ => stats.is_some_and(|s| s.reads_rows_without_columns(scan)),
     }
 }
