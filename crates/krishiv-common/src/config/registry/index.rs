@@ -35,6 +35,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("spark.sql.timestampType", &SQL_TIMESTAMP_TYPE),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
@@ -48,6 +49,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.sql.timestampType", &SQL_TIMESTAMP_TYPE),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
@@ -490,6 +492,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "spark.sql.session.localRelationSizeLimit",
+        &LOCAL_RELATION_SIZE_LIMIT,
+    ),
+    (
         "spark.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
     ),
@@ -518,8 +524,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
     ),
     (
+        "krishiv.sql.session.localRelationSizeLimit",
+        &LOCAL_RELATION_SIZE_LIMIT,
+    ),
+    (
         "krishiv.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
+    ),
+    (
+        "spark.sql.execution.arrow.useLargeVarTypes",
+        &ARROW_USE_LARGE_VAR_TYPES,
     ),
     (
         "krishiv.connect.execute.abandonedTombstones",
@@ -550,8 +564,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
     ),
     (
+        "krishiv.sql.execution.arrow.useLargeVarTypes",
+        &ARROW_USE_LARGE_VAR_TYPES,
+    ),
+    (
         "spark.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "spark.sql.session.localRelationChunkSizeRows",
+        &LOCAL_RELATION_CHUNK_SIZE_ROWS,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -570,12 +592,24 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
     (
+        "spark.sql.session.localRelationCacheThreshold",
+        &LOCAL_RELATION_CACHE_THRESHOLD,
+    ),
+    (
+        "spark.sql.session.localRelationChunkSizeBytes",
+        &LOCAL_RELATION_CHUNK_SIZE_BYTES,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     ),
     (
         "krishiv.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "krishiv.sql.session.localRelationChunkSizeRows",
+        &LOCAL_RELATION_CHUNK_SIZE_ROWS,
     ),
     (
         "krishiv.connect.execute.senderMaxStreamDuration",
@@ -586,8 +620,24 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
     (
+        "krishiv.sql.session.localRelationCacheThreshold",
+        &LOCAL_RELATION_CACHE_THRESHOLD,
+    ),
+    (
+        "krishiv.sql.session.localRelationChunkSizeBytes",
+        &LOCAL_RELATION_CHUNK_SIZE_BYTES,
+    ),
+    (
+        "spark.sql.execution.pandas.inferPandasDictAsMap",
+        &PANDAS_INFER_DICT_AS_MAP,
+    ),
+    (
         "spark.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "krishiv.sql.execution.pandas.inferPandasDictAsMap",
+        &PANDAS_INFER_DICT_AS_MAP,
     ),
     (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
@@ -602,8 +652,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_MAINTENANCE_INTERVAL,
     ),
     (
+        "spark.sql.pyspark.inferNestedDictAsStruct.enabled",
+        &PYSPARK_INFER_NESTED_DICT_AS_STRUCT,
+    ),
+    (
+        "krishiv.sql.pyspark.inferNestedDictAsStruct.enabled",
+        &PYSPARK_INFER_NESTED_DICT_AS_STRUCT,
+    ),
+    (
         "spark.sql.legacy.skipTypeValidationOnAlterPartition",
         &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "spark.sql.execution.pandas.convertToArrowArraySafely",
+        &PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     ),
     (
         "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
@@ -614,8 +676,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
     ),
     (
+        "spark.sql.session.localRelationBatchOfChunksSizeBytes",
+        &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
+    ),
+    (
+        "krishiv.sql.execution.pandas.convertToArrowArraySafely",
+        &PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    ),
+    (
         "spark.connect.execute.reattachable.senderMaxStreamSize",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
+        &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
@@ -636,5 +710,21 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.session.manager.closedSessionsTombstonesSize",
         &CONNECT_SESSION_TOMBSTONES,
+    ),
+    (
+        "spark.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
+        &PYSPARK_LEGACY_INFER_MAP_FROM_FIRST,
+    ),
+    (
+        "krishiv.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
+        &PYSPARK_LEGACY_INFER_MAP_FROM_FIRST,
+    ),
+    (
+        "spark.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
+        &PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
+    ),
+    (
+        "krishiv.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
+        &PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
     ),
 ];

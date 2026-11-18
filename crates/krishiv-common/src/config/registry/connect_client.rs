@@ -1,0 +1,227 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The Spark SQL settings a Spark Connect client reads from the server when it starts a session or runs
+//! `createDataFrame`, with Spark 4.3.0's defaults (`SQLConf.scala`): a client treats a missing key as an error.
+
+use std::borrow::Cow;
+
+use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+
+/// `spark.sql.timestampType`.
+pub static SQL_TIMESTAMP_TYPE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.timestampType",
+    value_type: ValueType::Enum(&["TIMESTAMP_LTZ", "TIMESTAMP_NTZ"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("TIMESTAMP_LTZ"))),
+    doc: "The type a bare `TIMESTAMP` (a literal, a cast target, a column type) stands for: `TIMESTAMP_LTZ` (with the session time zone) or `TIMESTAMP_NTZ` (without a zone).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.timestampType"),
+};
+
+/// `spark.sql.session.localRelationCacheThreshold`.
+pub static LOCAL_RELATION_CACHE_THRESHOLD: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.session.localRelationCacheThreshold",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(1024 * 1024)),
+    doc: "The size in bytes from which a client uploads a local relation (`createDataFrame`) once and refers to it by hash. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.session.localRelationCacheThreshold"),
+};
+
+/// `spark.sql.session.localRelationSizeLimit`.
+pub static LOCAL_RELATION_SIZE_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.session.localRelationSizeLimit",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(3 * 1024 * 1024 * 1024)),
+    doc: "The limit in bytes on how large a chunked cached local relation can be. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.session.localRelationSizeLimit"),
+};
+
+/// `spark.sql.session.localRelationChunkSizeRows`.
+pub static LOCAL_RELATION_CHUNK_SIZE_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.session.localRelationChunkSizeRows",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "The rows per chunk when a client splits a local relation. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.session.localRelationChunkSizeRows"),
+};
+
+/// `spark.sql.session.localRelationChunkSizeBytes`.
+pub static LOCAL_RELATION_CHUNK_SIZE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.session.localRelationChunkSizeBytes",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(16 * 1024 * 1024)),
+    doc: "The bytes per chunk when a client splits a local relation; the smaller of this and the batch size applies. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.session.localRelationChunkSizeBytes"),
+};
+
+/// `spark.sql.session.localRelationBatchOfChunksSizeBytes`.
+pub static LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(1024 * 1024 * 1024)),
+    doc: "The memory a client uses to collect chunks of a local relation before it uploads them. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.session.localRelationBatchOfChunksSizeBytes"),
+};
+
+/// `spark.sql.execution.pandas.convertToArrowArraySafely`.
+pub static PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.pandas.convertToArrowArraySafely",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a pandas to Arrow conversion checks for overflow and truncation. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.execution.pandas.convertToArrowArraySafely"),
+};
+
+/// `spark.sql.execution.pandas.inferPandasDictAsMap`.
+pub static PANDAS_INFER_DICT_AS_MAP: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.pandas.inferPandasDictAsMap",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a Python dict in a pandas column is inferred as a map (else a struct). Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.execution.pandas.inferPandasDictAsMap"),
+};
+
+/// `spark.sql.pyspark.inferNestedDictAsStruct.enabled`.
+pub static PYSPARK_INFER_NESTED_DICT_AS_STRUCT: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.pyspark.inferNestedDictAsStruct.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a nested Python dict is inferred as a struct (else a map). Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.pyspark.inferNestedDictAsStruct.enabled"),
+};
+
+/// `spark.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled`.
+pub static PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether the element type of a Python list is inferred from its first element only. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled"),
+};
+
+/// `spark.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled`.
+pub static PYSPARK_LEGACY_INFER_MAP_FROM_FIRST: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether the key and value types of a Python dict are inferred from its first pair only. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled"),
+};
+
+/// `spark.sql.execution.arrow.useLargeVarTypes`.
+pub static ARROW_USE_LARGE_VAR_TYPES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.arrow.useLargeVarTypes",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether Arrow data for strings and binaries uses the large (64-bit offset) variable-width types. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.execution.arrow.useLargeVarTypes"),
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, lookup};
+
+    /// Spark 4.3.0 `SQLConf.scala` defaults, by Spark key.
+    #[test]
+    fn the_client_read_keys_exist_with_spark_defaults() {
+        let c = Config::new();
+        for (key, want) in [
+            (
+                "spark.sql.timestampType",
+                ConfigValue::String("TIMESTAMP_LTZ".into()),
+            ),
+            (
+                "spark.sql.session.localRelationCacheThreshold",
+                ConfigValue::Int(1_048_576),
+            ),
+            (
+                "spark.sql.session.localRelationSizeLimit",
+                ConfigValue::Int(3_221_225_472),
+            ),
+            (
+                "spark.sql.session.localRelationChunkSizeRows",
+                ConfigValue::Int(10_000),
+            ),
+            (
+                "spark.sql.session.localRelationChunkSizeBytes",
+                ConfigValue::Int(16_777_216),
+            ),
+            (
+                "spark.sql.session.localRelationBatchOfChunksSizeBytes",
+                ConfigValue::Int(1_073_741_824),
+            ),
+            (
+                "spark.sql.execution.pandas.convertToArrowArraySafely",
+                ConfigValue::Bool(true),
+            ),
+            (
+                "spark.sql.execution.pandas.inferPandasDictAsMap",
+                ConfigValue::Bool(false),
+            ),
+            (
+                "spark.sql.pyspark.inferNestedDictAsStruct.enabled",
+                ConfigValue::Bool(false),
+            ),
+            (
+                "spark.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
+                ConfigValue::Bool(false),
+            ),
+            (
+                "spark.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
+                ConfigValue::Bool(false),
+            ),
+            (
+                "spark.sql.execution.arrow.useLargeVarTypes",
+                ConfigValue::Bool(false),
+            ),
+        ] {
+            let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
+            assert_eq!(c.get(entry), Some(&want), "{key}");
+        }
+    }
+
+    #[test]
+    fn timestamp_type_takes_either_type_in_any_case_and_refuses_others() {
+        let mut c = Config::new();
+        c.set("spark.sql.timestampType", "timestamp_ntz").unwrap();
+        assert_eq!(
+            c.get(&SQL_TIMESTAMP_TYPE),
+            Some(&ConfigValue::String("TIMESTAMP_NTZ".into()))
+        );
+        assert!(c.set("krishiv.sql.timestampType", "DATETIME").is_err());
+    }
+}
