@@ -312,7 +312,7 @@ pub(crate) async fn prepare_attempt(
         .await
         .map_err(|e| match e {
             FilterError::Error(e) => e,
-            FilterError::Missing(m) => internal(m),
+            FilterError::Missing(m) | FilterError::Partial(m) => internal(m),
         })
 }
 
@@ -520,6 +520,10 @@ pub(crate) async fn prepare(
     props.insert(MANIFESTS_KEPT.to_owned(), kept.to_string());
     let replaced = arranged.replaced + filtered.as_ref().map_or(0, |f| f.replaced);
     props.insert(MANIFESTS_REPLACED.to_owned(), replaced.to_string());
+    if new.removals.as_ref().is_some_and(|r| r.replace_partitions) {
+        // `BaseReplacePartitions` (`:36`).
+        props.insert("replace-partitions".to_owned(), "true".to_owned());
+    }
     props.insert("engine-name".to_owned(), "krishiv".to_owned());
     props.insert(
         "engine-version".to_owned(),
@@ -580,8 +584,12 @@ fn operation(new: &NewManifests) -> Operation {
     let Some(removals) = &new.removals else {
         return Operation::Append;
     };
+    // `BaseReplacePartitions.operation` (`:45-48`).
+    if removals.replace_partitions {
+        return Operation::Overwrite;
+    }
     let adds = !new.data_files.is_empty();
-    let deletes = !removals.data_files.is_empty();
+    let deletes = removals.deletes_data_files();
     match (adds, deletes) {
         (false, true) => Operation::Delete,
         (true, false) => Operation::Append,
