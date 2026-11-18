@@ -59,12 +59,13 @@
 //!   processes (workers, or a query retried after a restart) collide only if
 //!   their random keys line up, about 2^-64 per pair.
 //!
-//! [`IcebergTableProvider`](crate::IcebergTableProvider) declares
-//! `BATCH_WRITE` alone, so a truncate or an `INSERT OVERWRITE` is refused
-//! before a sink is built. The other commit is a copy-on-write rewrite's
-//! ([`IcebergWriteSink::try_rewrite`], `row_level.rs`): the same writers
-//! (with the lineage columns on v3), then an `OverwriteFiles` through
-//! [`commit_validated`] with the files it removes and its [`Validation`]. A
+//! The other commits are a copy-on-write rewrite's and an `INSERT
+//! OVERWRITE`'s ([`IcebergWriteSink::try_rewrite`], `row_level.rs`,
+//! `overwrite.rs`): the same writers (with the lineage columns on v3), then
+//! an `OverwriteFiles` or `ReplacePartitions` through [`commit_validated`]
+//! with what it removes and its [`Validation`]; a dynamic overwrite takes
+//! its partitions from the files written and commits nothing when it wrote
+//! none. A
 //! distributed write would need the `WrittenDataFile`s of
 //! every worker's tasks gathered to one place that runs the commit once; the
 //! `Sink` contract commits once per pipeline run of one process, which is what
@@ -96,7 +97,7 @@ use super::data_file::{WrittenDataFile, data_file};
 use super::filter::Removals;
 use super::storage::Registered;
 use super::types::arrow_schema;
-use super::validate::Validation;
+use super::validate::{PartitionSet, Validation};
 use super::write::{DataFileWriter, TaskIds};
 
 /// The branch an append commits to.
@@ -409,6 +410,15 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         };
+        let mut overwrite = self.overwrite.clone();
+        if let Some(o) = overwrite.as_mut().filter(|o| o.removals.replace_partitions) {
+            // Spark skips an empty dynamic overwrite (`SparkWrite.java:341-344`).
+            if entries.is_empty() {
+                written.delete().await;
+                return Ok(());
+            }
+            replaced_partitions(o, &t.base, &entries);
+        }
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
         let mut new = match write_new_manifests(
@@ -442,7 +452,7 @@ impl IcebergWriteSink {
             write_id: &self.write_id,
             query_id: Some(&query_id),
         };
-        match &self.overwrite {
+        match &overwrite {
             None => commit_append(t.committer.as_ref(), cx, &t.base, &mut new, ids)
                 .await
                 .map(drop),
@@ -461,6 +471,37 @@ impl IcebergWriteSink {
             }
         }
     }
+}
+
+/// A `ReplacePartitions`' removals and conflict scope from the files it
+/// writes (`BaseReplacePartitions.java:51-56`, `:113-117`): their partitions
+/// (spec id and tuple), or every row when their spec has no field.
+fn replaced_partitions(
+    o: &mut Overwrite,
+    base: &TableMetadata,
+    entries: &[(i32, iceberg::spec::DataFile)],
+) {
+    let schema = base.current_schema();
+    let unpartitioned = entries.iter().all(|(spec_id, _)| {
+        base.partition_spec_by_id(*spec_id)
+            .is_some_and(|s| s.fields().is_empty())
+    });
+    if unpartitioned {
+        o.removals.row_filter = Some(krishiv_io::PushdownExpr::Constant(true));
+        return;
+    }
+    let mut paths = std::collections::BTreeSet::new();
+    for (spec_id, f) in entries {
+        let key = (*spec_id, super::scan::content_file(f, *spec_id).partition);
+        o.removals.drop_partitions.insert(key);
+        if let Some(spec) = base.partition_spec_by_id(*spec_id) {
+            paths.insert(spec.partition_to_path(f.partition(), Arc::clone(schema)));
+        }
+    }
+    o.validation.partitions = Some(PartitionSet {
+        keys: o.removals.drop_partitions.clone(),
+        text: format!("[{}]", paths.into_iter().collect::<Vec<_>>().join(", ")),
+    });
 }
 
 /// The files of a write not yet handed to the commit loop: deleted on

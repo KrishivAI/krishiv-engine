@@ -41,7 +41,10 @@
 //!   and the format and UUID checks, before the next attempt is built; a check
 //!   that fires is `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the intervening
 //!   snapshot and the check, with §7.4's cleanup. [`commit_append`] passes
-//!   [`Validation::none`] and walks nothing.
+//!   [`Validation::none`] and walks nothing. A validation with an explicit
+//!   [`Validation::start`] (INSERT OVERWRITE) validates from there, before the
+//!   first attempt too. An overwrite whose row filter matches a data file in
+//!   part (`filter.rs`) ends as a conflict (check `rows to delete`).
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -102,6 +105,10 @@ use super::validate::{Validation, validate};
 /// The check named by a conflict whose overwrite found a file to remove no
 /// longer live (Java's `failMissingDeletePaths`).
 pub(crate) const CHECK_MISSING: &str = "files to delete";
+
+/// The check named by a failed overwrite whose row filter matches some, but
+/// not all, rows of a data file (`ManifestFilterManager.java:478-480`).
+pub(crate) const CHECK_PARTIAL: &str = "rows to delete";
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -283,7 +290,9 @@ pub(crate) async fn commit_validated(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
-        s0: branch_head(base, ids.branch).flatten(),
+        s0: validation
+            .start
+            .unwrap_or_else(|| branch_head(base, ids.branch).flatten()),
         validation,
         requests: 0,
         lists: Vec::new(),
@@ -427,6 +436,11 @@ impl Loop<'_> {
         mut current: TableMetadata,
         new: &mut NewManifests,
     ) -> Result<TableMetadata, End> {
+        // An explicit start validates the first attempt too (Java's
+        // `validate` runs on every `apply`); S0 itself has nothing between.
+        if self.validation.start.is_some() {
+            self.validate(&current).await?;
+        }
         'attempts: loop {
             self.before_request().await?;
             let attempt = match prepare(
@@ -444,6 +458,11 @@ impl Loop<'_> {
                 // (`filter.rs`, Java's `failMissingDeletePaths`).
                 Err(FilterError::Missing(message)) => {
                     return Err(self.conflict(&current, CHECK_MISSING, message));
+                }
+                // A data file the row filter matches in part (Java's
+                // `ValidationException` at `apply`).
+                Err(FilterError::Partial(message)) => {
+                    return Err(self.conflict(&current, CHECK_PARTIAL, message));
                 }
                 Err(FilterError::Error(e)) => return Err(End::Error(e)),
             };

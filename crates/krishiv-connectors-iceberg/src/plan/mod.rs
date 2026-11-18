@@ -17,6 +17,9 @@ pub(crate) mod file_metrics;
 pub(crate) mod metrics;
 pub(crate) mod prune;
 pub(crate) mod snapshot;
+pub(crate) mod strict;
+#[cfg(test)]
+mod strict_tests;
 pub(crate) mod theta_value;
 pub(crate) mod transform;
 pub(crate) mod types;
