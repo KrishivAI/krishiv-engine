@@ -253,8 +253,9 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
         // The mapped code is file-backed: an unoptimized test build with debug info maps 70+ MiB
         // of it, more on a CI runner's build than on a developer's, and it moved the high-water
         // mark past the bound with no change in the memory the queries hold. The bound is about
-        // the process's own memory: the peak less the file-backed part (read after the query, so
-        // never less than at the peak unless the kernel dropped code pages: conservative).
+        // the process's own memory: the peak less the file-backed part. That part is read after
+        // the query, so it may include code first mapped after the peak, by which the check
+        // under-counts own memory (a few pages; code pages the kernel dropped err the other way).
         let mapped = memory_field(&reply, "rss_file_bytes").expect("Linux reports RssFile");
         let own = peak.saturating_sub(mapped);
         let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();

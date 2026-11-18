@@ -26,8 +26,9 @@
 //!   unavailable. The peak covers everything the process holds (allocator retention, untracked buffers),
 //!   which is what a memory cap enforces; it starts from what the process already held.
 //!   `"rss_file_bytes"` is the file-backed part of the resident set (`RssFile`, the mapped code of the
-//!   executable and libraries) read after the query: `peak_rss_bytes` minus it is the peak of the
-//!   process's own memory, which is what `rss_bound` bounds (the code's share depends on the build).
+//!   executable and libraries) read after the query: `peak_rss_bytes` minus it is about the peak of
+//!   the process's own memory (less any code first mapped after the peak), which the memory-bound
+//!   tests compare with `rss_bound`, since the code's share depends on the build.
 //!   `"peak_heap_bytes"` is the live heap's peak during the query in a build with the `heap-stats`
 //!   feature (`null` otherwise; the resident set above it is what the allocator keeps), and
 //!   `"peak_untracked_bytes"` the most the live heap grew beyond what the memory pool reserved,
@@ -148,7 +149,9 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// pages); the floor what does not scale with the limit. The memory gate checks peak RSS against it
 /// and runs the process in a cgroup with `memory.max` at the bound plus room for the spill files'
 /// page cache, which the cgroup charges but which is not resident memory (64 MiB in the memory-bound
-/// test).
+/// test). The memory-bound tests compare the peak less the mapped code (`rss_file_bytes`): an
+/// unoptimized test build with debug info maps 70+ MiB of it, an amount that varies by build, so
+/// the floor's share for the program is spare there.
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
