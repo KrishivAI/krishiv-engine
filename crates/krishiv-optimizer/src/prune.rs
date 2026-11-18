@@ -87,7 +87,7 @@ impl Graph {
         let mut out = Vec::new();
         let mut child = |c: &Arc<LogicalPlan>, d: Option<Attrs>| out.push((self.id(c), d));
         match &p.node {
-            PlanNode::Project { input, exprs } => child(input, Some(refs(&keep(exprs, req)))),
+            PlanNode::Project { input, exprs } => child(input, Some(refs(&keep_read(exprs, req)))),
             PlanNode::Aggregate {
                 input, aggregates, ..
             } => {
@@ -267,10 +267,16 @@ impl Rewrite<'_> {
                 let kept = if has_required_cse(exprs, req) {
                     exprs.clone()
                 } else {
-                    keep(exprs, req)
+                    keep_read(exprs, req)
                 };
                 if kept.len() == exprs.len() {
                     rebuilt
+                } else if kept.is_empty() {
+                    // Nothing read: the consumer depends on the rows only, so
+                    // the input (already pruned to nothing read) stands in.
+                    // An empty projection would not be a fixed point, since
+                    // join ordering drops column selections it looks through.
+                    Arc::clone(input)
                 } else {
                     let input = Arc::clone(input);
                     replace(&rebuilt, PlanNode::Project { input, exprs: kept })
@@ -485,8 +491,20 @@ fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
     })
 }
 
-/// The output entries of a projection or aggregate that are read, keeping
-/// at least one so the row count survives.
+/// The output entries of a projection that are read, possibly none. A
+/// projection none of whose entries is read is replaced by its input, so a
+/// `COUNT(*)` over a view reads nothing of it and the scan below may keep
+/// no column.
+fn keep_read(exprs: &[Arc<Expr>], req: &Attrs) -> Vec<Arc<Expr>> {
+    exprs
+        .iter()
+        .filter(|e| output_of(e).is_none_or(|c| req.contains(&c.id)))
+        .cloned()
+        .collect()
+}
+
+/// The output entries of an aggregate that are read, keeping at least one
+/// so the row count survives.
 fn keep(exprs: &[Arc<Expr>], req: &Attrs) -> Vec<Arc<Expr>> {
     let mut kept: Vec<Arc<Expr>> = exprs
         .iter()
