@@ -8,13 +8,20 @@
 
 use std::process::Command;
 
+/// Whether the tests run as root, where the `user` check fails unless `--allow-root` is given.
+fn is_root() -> bool {
+    let out = Command::new("id").arg("-u").output().expect("run id -u");
+    String::from_utf8_lossy(&out.stdout).trim() == "0"
+}
+
 fn doctor(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_krishiv"))
-        .arg("doctor")
-        .args(["--port", "0", "--connect-port", "0"])
-        .args(args)
-        .output()
-        .expect("run krishiv doctor")
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_krishiv"));
+    cmd.arg("doctor")
+        .args(["--port", "0", "--connect-port", "0"]);
+    if is_root() {
+        cmd.arg("--allow-root");
+    }
+    cmd.args(args).output().expect("run krishiv doctor")
 }
 
 #[test]
@@ -24,7 +31,11 @@ fn a_default_configuration_passes_with_a_warning() {
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("ok      config"), "{text}");
     assert!(text.contains("warn    authentication"), "{text}");
-    assert!(text.contains("no failures, 1 warning(s)"), "{text}");
+    let warnings = if is_root() { 2 } else { 1 };
+    assert!(
+        text.contains(&format!("no failures, {warnings} warning(s)")),
+        "{text}"
+    );
 }
 
 #[test]
@@ -50,5 +61,32 @@ fn json_output_says_ok_and_lists_the_checks() {
     let out = doctor(&["--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(v["ok"], true);
-    assert!(v["checks"].as_array().is_some_and(|c| c.len() >= 8));
+    assert_eq!(out.status.code(), Some(0));
+    let checks: Vec<(&str, &str)> = v["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().expect("name"),
+                c["status"].as_str().expect("status"),
+            )
+        })
+        .collect();
+    let user = if is_root() { "warn" } else { "ok" };
+    assert_eq!(
+        checks,
+        [
+            ("config", "ok"),
+            ("listener", "ok"),
+            ("authentication", "warn"),
+            ("tls", "ok"),
+            ("ports", "ok"),
+            ("user", user),
+            ("directories", "ok"),
+            ("paths", "ok"),
+            ("object store", "skipped"),
+            ("catalogs", "skipped"),
+        ]
+    );
 }

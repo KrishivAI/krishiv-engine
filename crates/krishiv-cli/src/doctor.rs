@@ -334,7 +334,8 @@ fn directories(config: &Config) -> Check {
     }
 }
 
-/// A directory that exists and takes a file, or one whose parent does (it is created at start).
+/// A directory that exists and takes a file, or a missing one whose nearest existing ancestor
+/// does (it is created at start).
 fn writable_dir(dir: &Path) -> Result<(), String> {
     if dir.is_dir() {
         // `create_new` refuses an existing name, a planted symbolic link included; the name is not
@@ -357,9 +358,15 @@ fn writable_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         return Err("exists and is not a directory".to_owned());
     }
+    // The spill manager creates missing ancestors, so the nearest existing one must take a file.
     match dir.parent() {
-        Some(parent) if parent.as_os_str().is_empty() || parent.is_dir() => Ok(()),
-        _ => Err("its parent directory does not exist".to_owned()),
+        Some(parent) if parent.as_os_str().is_empty() => writable_dir(Path::new(".")),
+        Some(parent) => match parent.ancestors().find(|p| p.exists()) {
+            Some(ancestor) if ancestor.is_dir() => writable_dir(ancestor),
+            Some(ancestor) => Err(format!("{} is not a directory", ancestor.display())),
+            None => Err("no parent directory of it exists".to_owned()),
+        },
+        None => Err("it has no parent directory".to_owned()),
     }
 }
 
@@ -470,10 +477,18 @@ mod tests {
     #[test]
     fn the_defaults_pass() {
         let checks = diagnose(&args(&[]));
+        // Run as root, the `user` check fails without `--allow-root`: that is its job.
+        let root = host::is_root();
         assert!(
-            checks.iter().all(|c| c.status != Status::Fail),
+            checks
+                .iter()
+                .all(|c| c.status != Status::Fail || (root && c.name == "user")),
             "{}",
             render_text(&checks)
+        );
+        assert_eq!(
+            find(&checks, "user").status,
+            if root { Status::Fail } else { Status::Ok }
         );
         assert_eq!(find(&checks, "authentication").status, Status::Warn);
     }
@@ -550,12 +565,22 @@ mod tests {
         let c = find(&checks, "directories");
         assert_eq!(c.status, Status::Fail);
         assert!(c.detail.contains("not a directory"), "{}", c.detail);
+        // A missing directory is created with its missing ancestors, under a writable one.
         let missing = dir.path().join("no/such/parent");
         let checks = diagnose(&args(&[(
             "krishiv.spill.dir",
             missing.to_str().expect("utf8"),
         )]));
-        assert!(find(&checks, "directories").detail.contains("parent"));
+        assert_eq!(find(&checks, "directories").status, Status::Ok);
+        // Under a file it cannot be created.
+        let under_file = file.join("x/y");
+        let checks = diagnose(&args(&[(
+            "krishiv.spill.dir",
+            under_file.to_str().expect("utf8"),
+        )]));
+        let c = find(&checks, "directories");
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.detail.contains("is not a directory"), "{}", c.detail);
     }
 
     #[test]

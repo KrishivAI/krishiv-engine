@@ -335,7 +335,10 @@ fn syntax_errors_match_spark() {
         "the class literal is not echoed: {text}"
     );
     assert_eq!(e.error.error_class().sql_state(), Some("0A000"));
-    assert!(text.contains("built-in function `nvl`"), "{text}");
+    assert_eq!(
+        text,
+        "[KRISHIV_JVM_FUNCTION_UNSUPPORTED] The function my_nvl is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. Use the built-in function `nvl` instead. SQLSTATE: 0A000"
+    );
 }
 
 #[test]
