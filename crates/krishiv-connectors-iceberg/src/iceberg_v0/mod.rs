@@ -36,6 +36,8 @@ mod baseline_tests;
 #[cfg(test)]
 mod commit_tests;
 #[cfg(test)]
+mod cow_fault_tests;
+#[cfg(test)]
 mod cow_tests;
 #[cfg(test)]
 mod data_file_tests;

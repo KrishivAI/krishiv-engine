@@ -542,7 +542,7 @@ pub(super) struct Case {
     pub(super) new: NewManifests,
 }
 
-fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
+pub(super) fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     let env = env();
     let t = create(&env, version);
     let mut m0 = t.metadata().clone();
