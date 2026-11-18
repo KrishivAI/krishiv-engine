@@ -2029,3 +2029,26 @@ fn flight_sql_entries_default_and_parse() {
     );
     assert!(c.set("krishiv.flightSql.enabled", "maybe").is_err());
 }
+
+#[test]
+fn flight_sql_session_and_size_entries_default() {
+    let c = Config::new();
+    assert_eq!(
+        c.get(&FLIGHT_SQL_PROVISIONAL_TTL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(60))
+    );
+    assert_eq!(
+        c.get(&FLIGHT_SQL_FETCH_IDLE_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(300))
+    );
+    for (entry, default) in [
+        (&FLIGHT_SQL_MAX_STATEMENT_BYTES, 1_u64 << 20),
+        (&FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES, 16 << 20),
+        (&FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL, 64 << 20),
+    ] {
+        assert_eq!(c.get(entry), Some(&ConfigValue::Size(default)));
+        assert_eq!(entry.settable_by, SettableBy::Startup);
+    }
+}

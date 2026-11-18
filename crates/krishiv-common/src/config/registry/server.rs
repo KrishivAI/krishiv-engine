@@ -426,3 +426,48 @@ pub static FLIGHT_SQL_METADATA_TIMEOUT: ConfigEntry = startup(
     "The time limit of one Arrow Flight SQL metadata listing (`GetTables` and the others); past it the call is `DEADLINE_EXCEEDED`.",
     None,
 );
+
+/// `krishiv.flightSql.provisionalTtl` (P3-T101).
+pub static FLIGHT_SQL_PROVISIONAL_TTL: ConfigEntry = startup(
+    "krishiv.flightSql.provisionalTtl",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(60)),
+    "How long an Arrow Flight SQL session made for a call without a session cookie lives after its last call, unless a later call depends on its state (`SetSessionOptions`, a prepared statement, a `SET`/`USE`-class statement), in which case it lives as a cookie session does. A fetched cookie-less ticket ends its session at once.",
+    None,
+);
+
+/// `krishiv.flightSql.fetchIdleTimeout` (P3-T101).
+pub static FLIGHT_SQL_FETCH_IDLE_TIMEOUT: ConfigEntry = startup(
+    "krishiv.flightSql.fetchIdleTimeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(300)),
+    "How long an Arrow Flight SQL result stream may wait for its client to read the next message; past it the query is cancelled and the stream ends `DEADLINE_EXCEEDED` (`KRISHIV_FLIGHT_SQL_FETCH_IDLE`). Time the engine spends computing the next batch does not count.",
+    None,
+);
+
+/// `krishiv.flightSql.maxStatementBytes` (P3-T101).
+pub static FLIGHT_SQL_MAX_STATEMENT_BYTES: ConfigEntry = startup(
+    "krishiv.flightSql.maxStatementBytes",
+    ValueType::Size,
+    ConfigValue::Size(MIB),
+    "The longest SQL text an Arrow Flight SQL statement may have; a longer one is `INVALID_ARGUMENT` (`KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE`) before it is parsed.",
+    None,
+);
+
+/// `krishiv.flightSql.maxCommandResultBytes` (P3-T101).
+pub static FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES: ConfigEntry = startup(
+    "krishiv.flightSql.maxCommandResultBytes",
+    ValueType::Size,
+    ConfigValue::Size(16 * MIB),
+    "The largest result an Arrow Flight SQL command (a statement that is not a query, such as `SHOW TABLES`) may store for its ticket. The command runs once, at `GetFlightInfo`; a larger result is `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, which says the statement ran.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandleBytesPerPrincipal` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandleBytesPerPrincipal",
+    ValueType::Size,
+    ConfigValue::Size(64 * MIB),
+    "The most bytes (SQL text, bound literals, schemas and stored command results) one principal's Arrow Flight SQL handles hold; past it the principal's oldest idle statement tickets are released, and a new handle is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` when none is idle.",
+    None,
+);

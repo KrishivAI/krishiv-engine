@@ -338,6 +338,73 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         Ok(Inserted { id, evicted })
     }
 
+    /// As [`Self::set_payload`] for a payload that may grow past the owner's byte cap (a command's
+    /// stored rows, design §15 m3): the owner's other idle statement handles are evicted, the one
+    /// idle longest first, until it fits. Returns the sessions of the handles evicted.
+    ///
+    /// # Errors
+    /// `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` when it does not fit with every other idle statement handle
+    /// of the owner gone (nothing is evicted then) or `id` is gone or not `owner`'s (`INTERNAL_ERROR`).
+    pub fn store(
+        &self,
+        owner: &K,
+        id: &HandleId,
+        payload: P,
+        bytes: usize,
+    ) -> Result<Vec<String>, KrishivError> {
+        let cap = self.limits.bytes_per_owner;
+        let mut inner = self.lock();
+        let old = match inner.entries.get(id) {
+            Some(e) if e.owner == *owner => e.bytes,
+            _ => {
+                return Err(InternalError {
+                    message: "a Flight SQL handle left before its result was stored".to_owned(),
+                }
+                .into());
+            }
+        };
+        let held = inner.per_owner.get(owner).copied().unwrap_or_default();
+        let need = held.bytes.saturating_sub(old).saturating_add(bytes);
+        // Evictable: the owner's idle statement handles, oldest first.
+        let mut victims: Vec<(Instant, HandleId, usize)> = inner
+            .entries
+            .iter()
+            .filter(|(v, e)| **v != *id && e.owner == *owner && e.live == 0 && !e.prepared)
+            .map(|(v, e)| (e.idle_since, *v, e.bytes))
+            .collect();
+        victims.sort_unstable_by_key(|(at, _, _)| *at);
+        let mut over = need.saturating_sub(cap);
+        let mut chosen = Vec::new();
+        for (_, v, b) in victims {
+            if over == 0 {
+                break;
+            }
+            over = over.saturating_sub(b);
+            chosen.push(v);
+        }
+        if over > 0 {
+            return Err(KrishivFlightSqlHandleLimit {
+                limit_name: "krishiv.flightSql.maxHandleBytesPerPrincipal".to_owned(),
+                limit: cap.to_string(),
+            }
+            .into());
+        }
+        let mut evicted = Vec::with_capacity(chosen.len());
+        for v in &chosen {
+            if let Some((session, _)) = Self::remove_locked(&mut inner, v) {
+                evicted.push(session);
+            }
+        }
+        if let Some(e) = inner.entries.get_mut(id) {
+            e.bytes = bytes;
+            e.payload = payload;
+        }
+        if let Some(held) = inner.per_owner.get_mut(owner) {
+            held.bytes = held.bytes.saturating_sub(old).saturating_add(bytes);
+        }
+        Ok(evicted)
+    }
+
     /// The session id and payload of `id` for `owner`, without starting an operation (cancel,
     /// close). `None` for an unknown id, another owner's, or one past its TTL (which is removed).
     pub fn get(&self, owner: &K, id: &HandleId, now: Instant) -> Option<(String, P)> {
@@ -389,6 +456,23 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
             Some(e) if e.owner == *owner => Self::remove_locked(&mut inner, id),
             _ => None,
         }
+    }
+
+    /// How many handles session `session_id` holds, and how many of them are prepared statements
+    /// (the session table's `holds` closures; design §3.2 rules 1 and 3).
+    #[must_use]
+    pub fn held_by_session(&self, session_id: &str) -> (usize, usize) {
+        let inner = self.lock();
+        let held = inner.per_session.get(session_id).copied().unwrap_or(0);
+        if held == 0 {
+            return (0, 0);
+        }
+        let prepared = inner
+            .entries
+            .values()
+            .filter(|e| e.prepared && e.session_id == session_id)
+            .count();
+        (held, prepared)
     }
 
     /// Removes every handle of session `session_id` (its release, sweep or close); returns how
@@ -706,6 +790,51 @@ mod tests {
         h.insert(&"a", "s", 2, 0, false, t0 + Duration::from_secs(11))
             .unwrap();
         assert_eq!(h.len(), 1);
+    }
+
+    #[test]
+    fn storing_a_larger_payload_evicts_the_owners_idle_handles_or_refuses() {
+        // bytes_per_owner 100.
+        let h: Handles<&str, u32> = Handles::new(limits(10, 10));
+        let t0 = Instant::now();
+        let old = h.insert(&"a", "s", 1, 30, false, t0).unwrap().id;
+        let prep = h
+            .insert(&"a", "s", 2, 30, true, t0 + Duration::from_millis(1))
+            .unwrap()
+            .id;
+        let other = h
+            .insert(&"b", "s2", 3, 90, false, t0 + Duration::from_millis(2))
+            .unwrap()
+            .id;
+        let me = h
+            .reserve(&"a", "s", 4, 10, false, t0 + Duration::from_millis(3))
+            .unwrap()
+            .id;
+        // 30 + 30 + 10 -> 30 + 30 + 40 = 100: fits, nothing evicted.
+        assert_eq!(h.store(&"a", &me, 5, 40).unwrap(), Vec::<String>::new());
+        // 30 + 30 + 60 = 120: the idle statement handle goes, never the prepared one, never b's.
+        assert_eq!(h.store(&"a", &me, 6, 60).unwrap(), vec!["s".to_owned()]);
+        assert!(h.get(&"a", &old, t0).is_none());
+        assert!(h.get(&"a", &prep, t0).is_some());
+        assert!(h.get(&"b", &other, t0).is_some());
+        // 30 + 80 = 110 with nothing evictable left: refused, nothing changed.
+        let e = h.store(&"a", &me, 7, 80).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivFlightSqlHandleLimit);
+        assert_eq!(h.get(&"a", &me, t0).map(|(_, p)| p), Some(6));
+        // Another owner cannot store into a's handle.
+        assert!(h.store(&"b", &me, 8, 1).is_err());
+    }
+
+    #[test]
+    fn held_by_session_counts_handles_and_prepared_ones() {
+        let h: Handles<&str, u32> = Handles::new(HandleLimits::default());
+        let now = Instant::now();
+        assert_eq!(h.held_by_session("s"), (0, 0));
+        h.insert(&"a", "s", 1, 0, false, now).unwrap();
+        h.insert(&"a", "s", 2, 0, true, now).unwrap();
+        h.insert(&"a", "t", 3, 0, true, now).unwrap();
+        assert_eq!(h.held_by_session("s"), (2, 1));
+        assert_eq!(h.held_by_session("t"), (1, 1));
     }
 
     #[test]

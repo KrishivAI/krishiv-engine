@@ -92,6 +92,12 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_FLIGHT_SQL_FETCH_IDLE" : {
+    "message" : [
+      "The client did not read this Arrow Flight SQL result for <timeout>; the query was cancelled. Read results without pausing, or raise \"krishiv.flightSql.fetchIdleTimeout\"."
+    ],
+    "sqlState" : "HY008"
+  },
   "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" : {
     "message" : [
       "Cannot create a new Arrow Flight SQL handle: <limitName> allows at most <limit>. Close prepared statements and fetch or cancel statement tickets you no longer need, or raise \"<limitName>\"."
@@ -104,11 +110,29 @@
     ],
     "sqlState" : "55000"
   },
+  "KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED" : {
+    "message" : [
+      "The statement ran; its result of <bytes> bytes was not stored: <reason>. Do not run it again to see its effect; send a query to read the state it changed."
+    ],
+    "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE" : {
+    "message" : [
+      "A result row of <columns> columns is larger than the <limit>-byte Arrow Flight SQL message limit and cannot be sent. Select fewer or smaller columns."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" : {
     "message" : [
       "The result schema of this Arrow Flight SQL ticket changed since GetFlightInfo (a table it reads was altered). Call GetFlightInfo again for a new ticket."
     ],
     "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE" : {
+    "message" : [
+      "The Arrow Flight SQL statement is <bytes> bytes long, over the limit of <limit> bytes. Shorten it, or raise \"krishiv.flightSql.maxStatementBytes\"."
+    ],
+    "sqlState" : "54000"
   },
   "KRISHIV_GRANTS_STORE_FAILURE" : {
     "message" : [

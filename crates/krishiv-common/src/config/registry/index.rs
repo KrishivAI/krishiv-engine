@@ -143,6 +143,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
+        "krishiv.flightSql.provisionalTtl",
+        &FLIGHT_SQL_PROVISIONAL_TTL,
+    ),
+    (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
@@ -250,6 +254,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
+        "krishiv.flightSql.fetchIdleTimeout",
+        &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
+    ),
+    (
         "krishiv.iceberg.write.maxOpenFiles",
         &ICEBERG_WRITE_MAX_OPEN_FILES,
     ),
@@ -297,6 +305,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
+    ),
+    (
+        "krishiv.flightSql.maxStatementBytes",
+        &FLIGHT_SQL_MAX_STATEMENT_BYTES,
     ),
     (
         "krishiv.iceberg.manifestCache.bytes",
@@ -460,6 +472,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.flightSql.maxCommandResultBytes",
+        &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    ),
+    (
         "krishiv.optimizer.payloadAboveAggregate",
         &PAYLOAD_ABOVE_AGGREGATE,
     ),
@@ -578,6 +594,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.http2.maxPendingAcceptResets",
         &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    ),
+    (
+        "krishiv.flightSql.maxHandleBytesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     ),
     (
         "spark.sql.execution.arrow.maxRecordsPerBatch",
