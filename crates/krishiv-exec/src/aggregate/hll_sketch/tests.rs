@@ -142,3 +142,95 @@ fn size_is_charged_up_front() {
     assert_eq!(a.size(), before);
     assert!(a.projected(5) >= before + 5 * 4096);
 }
+
+#[test]
+fn every_value_carrier_is_counted_and_others_are_refused() {
+    use arrow_array::{LargeStringArray, StringViewArray};
+    let carriers: Vec<ArrayRef> = vec![
+        longs(&[Some(1), Some(2), Some(2)]),
+        strs(&[Some("a"), Some("b"), Some("b")]),
+        Arc::new(LargeStringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("b"),
+        ])),
+        Arc::new(StringViewArray::from(vec![Some("a"), Some("b"), Some("b")])),
+        binaries(&[Some(b"a"), Some(b"b"), Some(b"b")]),
+        Arc::new(BinaryViewArray::from_iter(vec![
+            Some(&b"a"[..]),
+            Some(&b"b"[..]),
+            Some(&b"b"[..]),
+        ])),
+    ];
+    for arg in carriers {
+        let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+        a.resize(1);
+        a.update(&[0, 0, 0], &arg, |_| true).unwrap();
+        assert_eq!(estimate(&a, 0), 2, "{:?}", arg.data_type());
+    }
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(1);
+    let bad: ArrayRef = Arc::new(arrow_array::BooleanArray::from(vec![true]));
+    assert!(a.update(&[0], &bad, |_| true).is_err());
+}
+
+#[test]
+fn malformed_inputs_are_internal_errors() {
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(1);
+    // A column and group ids of different lengths.
+    assert!(a.update(&[0, 0], &longs(&[Some(1)]), |_| true).is_err());
+    // A group past the accumulator's.
+    assert!(a.update(&[7], &longs(&[Some(1)]), |_| true).is_err());
+    assert!(a.state(&[7]).is_err());
+    // A state of another length than its groups.
+    let one = binaries(&[Some(b"x")]);
+    let states = one.as_any().downcast_ref::<BinaryArray>().unwrap();
+    assert!(a.merge(&[0, 0], states).is_err());
+
+    let mut u = HllSketchAcc::new(HllSketchOp::Union(false)).unwrap();
+    u.resize(1);
+    // A union column that is not binary.
+    assert!(u.update(&[0], &longs(&[Some(1)]), |_| true).is_err());
+    // A group past the accumulator's.
+    assert!(u.update(&[7], &binaries(&[Some(&[])]), |_| true).is_err());
+    assert!(u.state(&[7]).is_err());
+}
+
+#[test]
+fn reserve_shrink_and_empty_union_groups() {
+    for op in [HllSketchOp::Sketch(12), HllSketchOp::Union(false)] {
+        let mut a = HllSketchAcc::new(op).unwrap();
+        a.reserve(4);
+        a.resize(3);
+        a.resize(1);
+        assert!(a.size() <= a.projected(0) + 1);
+        // A union group that saw no sketch has an empty state.
+        if matches!(op, HllSketchOp::Union(_)) {
+            let st = a.state(&[0]).unwrap();
+            let b = st[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+            assert!(b.value(0).is_empty());
+        }
+    }
+}
+
+#[test]
+fn partial_states_merge_into_a_union_and_a_view_input_is_read() {
+    let mut s = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    s.resize(1);
+    s.update(&[0, 0], &longs(&[Some(1), Some(2)]), |_| true)
+        .unwrap();
+    let st = s.state(&[0]).unwrap();
+    let bytes = st[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+
+    let mut u = HllSketchAcc::new(HllSketchOp::Union(false)).unwrap();
+    u.resize(1);
+    u.merge(&[0], bytes).unwrap();
+    assert_eq!(estimate(&u, 0), 2);
+
+    let view: ArrayRef = Arc::new(BinaryViewArray::from_iter(vec![Some(bytes.value(0))]));
+    let mut v = HllSketchAcc::new(HllSketchOp::Union(false)).unwrap();
+    v.resize(1);
+    v.update(&[0], &view, |_| true).unwrap();
+    assert_eq!(estimate(&v, 0), 2);
+}

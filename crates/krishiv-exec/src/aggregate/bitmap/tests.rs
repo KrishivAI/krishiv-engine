@@ -111,3 +111,48 @@ fn the_mask_drops_rows_and_memory_is_charged_per_group() {
     assert!(a.projected(3) >= 4 * NUM_BYTES);
     assert!(a.size() >= NUM_BYTES);
 }
+
+#[test]
+fn reserve_and_evaluate_return_the_bitmaps() {
+    let mut a = BitmapAcc::new(BitmapOp::Construct);
+    a.reserve(3);
+    a.resize(2);
+    a.update(&[1], &longs(&[Some(3)]), |_| true).unwrap();
+    let r = a.evaluate(&[1, 0]).unwrap();
+    let r = r.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+    assert_eq!((r.value(0)[0], r.value(1)[0]), (8, 0));
+}
+
+#[test]
+fn a_view_binary_input_merges_like_a_binary_one() {
+    let mut a = BitmapAcc::new(BitmapOp::Or);
+    a.resize(1);
+    let arg: ArrayRef = Arc::new(BinaryViewArray::from_iter(vec![
+        Some(&[0x01_u8][..]),
+        None,
+        Some(&[0x02][..]),
+    ]));
+    a.update(&[0, 0, 0], &arg, |_| true).unwrap();
+    assert_eq!(out(&a, 0)[0], 3);
+}
+
+#[test]
+fn malformed_inputs_are_internal_errors() {
+    let mut a = BitmapAcc::new(BitmapOp::Construct);
+    a.resize(1);
+    // Column and group ids of different lengths.
+    assert!(a.update(&[0, 0], &longs(&[Some(1)]), |_| true).is_err());
+    // Positions of another type.
+    let text: ArrayRef = Arc::new(arrow_array::StringArray::from(vec!["x"]));
+    assert!(a.update(&[0], &text, |_| true).is_err());
+
+    let mut o = BitmapAcc::new(BitmapOp::Or);
+    o.resize(1);
+    // A bitmap column of another type.
+    assert!(o.update(&[0], &longs(&[Some(1)]), |_| true).is_err());
+    // A state of another length than its groups.
+    let states = BinaryArray::from_iter_values([&[1_u8][..]]);
+    assert!(o.merge(&[0, 0], &states).is_err());
+    // A group past the accumulator's groups.
+    assert!(o.state(&[5]).is_err());
+}
