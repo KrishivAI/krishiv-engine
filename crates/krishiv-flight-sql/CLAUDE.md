@@ -1,7 +1,7 @@
 # krishiv-flight-sql
 
 **Layer:** L6 (may depend only on crates in L6 or lower; `cargo xtask layering`).
-**Real code since:** P3-T101 (design `../krishiv-internal/design/P3-T101-flight-sql.md`, v4 under review; IP PR-65).
+**Real code since:** P3-T101 (design `../krishiv-internal/design/P3-T101-flight-sql.md`, v5, design-3; IP PR-65).
 
 ## Purpose
 Arrow Flight SQL, single endpoint (P3): a second gRPC service on the Spark Connect listener, on Connect's session
@@ -19,7 +19,8 @@ Paths are relative to this crate.
 - `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
   another owner's id answers as unknown; `HandleLimits` (TTL from the end of the last operation, never while
   `begin`..`end` holds one live; count per session and per owner, bytes per owner:
-  at a cap expired handles go, then the scope's oldest idle ones (statement before prepared); refused with
+  at a cap expired handles go, then the scope's oldest idle statement handles (prepared never; `reserve` keeps a
+  slot in flight until `end`, `set_payload` after the run); refused with
   `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` only when every handle of the scope is fetching); `get` (no operation), `begin`/`end` (a fetch),
   `remove_session`, `sweep(now, alive)` (`alive` must not stamp session access)
 - `src/metrics.rs` `Requests` (design §7): `krishiv_flight_sql_requests_total{command, outcome}`, fixed `Command` and

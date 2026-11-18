@@ -4,9 +4,10 @@
 //! its owner (another owner gets the answer an unknown handle gets), to one session, and holds
 //! no rows. Limits per session and per owner (count and bytes), a TTL that runs from the end of
 //! the handle's last operation and never while one is live (B3 of the v2 review), and removal with
-//! the session. At a cap the oldest idle handle of the scope is evicted (design v4 §4.1: Flight
-//! SQL has no RPC that closes an ad-hoc ticket); only a scope whose every handle has a fetch in
-//! flight refuses.
+//! the session. At a cap the oldest idle statement handle of the scope is evicted (design §4.1:
+//! Flight SQL has no RPC that closes an ad-hoc ticket); prepared handles are never evicted (a
+//! client closes them), and a handle is in flight from [`Handles::reserve`] until its
+//! `GetFlightInfo` answers ([`Handles::end`]), so a running command's slot is never evicted.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -83,7 +84,7 @@ struct Entry<K, P> {
     session_id: String,
     payload: P,
     bytes: usize,
-    /// A prepared-statement handle: evicted only after every statement handle of the scope.
+    /// A prepared-statement handle: never evicted.
     prepared: bool,
     /// Operations started with [`Handles::begin`] and not yet ended.
     live: usize,
@@ -162,8 +163,8 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
 
     /// Stores `payload` (holding `bytes` of SQL text, literals, schema and stored rows; a
     /// prepared statement's when `prepared`) under a fresh id for `owner` in session
-    /// `session_id`, idle from `now`. At a cap, expired handles go first, then the scope's oldest
-    /// idle ones (statement handles before prepared ones).
+    /// `session_id`, idle from `now`. At a cap, expired handles go first, then the scope's idle
+    /// statement handles, the one idle longest first.
     ///
     /// # Errors
     /// `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` when the session's or the owner's count or the owner's
@@ -177,6 +178,60 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         bytes: usize,
         prepared: bool,
         now: Instant,
+    ) -> Result<HandleId, KrishivError> {
+        self.insert_with(owner, session_id, payload, bytes, prepared, now, 0)
+    }
+
+    /// As [`Self::insert`], with the handle in flight until [`Self::end`]: the slot a
+    /// `GetFlightInfo` takes before it runs its statement (design §4.1 step 1), which no concurrent
+    /// call can evict.
+    ///
+    /// # Errors
+    /// As [`Self::insert`].
+    pub fn reserve(
+        &self,
+        owner: &K,
+        session_id: &str,
+        payload: P,
+        bytes: usize,
+        prepared: bool,
+        now: Instant,
+    ) -> Result<HandleId, KrishivError> {
+        self.insert_with(owner, session_id, payload, bytes, prepared, now, 1)
+    }
+
+    /// Replaces the payload of `id` (the schema or stored rows once the statement ran) and its
+    /// byte count; `false` when the handle is gone or `owner` does not hold it.
+    pub fn set_payload(&self, owner: &K, id: &HandleId, payload: P, bytes: usize) -> bool {
+        let mut inner = self.lock();
+        let Some(e) = inner.entries.get_mut(id) else {
+            return false;
+        };
+        if e.owner != *owner {
+            return false;
+        }
+        let old = std::mem::replace(&mut e.bytes, bytes);
+        e.payload = payload;
+        let key = e.owner.clone();
+        if let Some(held) = inner.per_owner.get_mut(&key) {
+            held.bytes = held.bytes.saturating_sub(old).saturating_add(bytes);
+        }
+        true
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the two public entry points differ only in `live`"
+    )]
+    fn insert_with(
+        &self,
+        owner: &K,
+        session_id: &str,
+        payload: P,
+        bytes: usize,
+        prepared: bool,
+        now: Instant,
+        live: usize,
     ) -> Result<HandleId, KrishivError> {
         let id = HandleId::random()?;
         let mut inner = self.lock();
@@ -227,13 +282,14 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 .iter()
                 .filter(|(_, e)| {
                     e.live == 0
+                        && !e.prepared
                         && if in_session {
                             e.session_id == session_id
                         } else {
                             e.owner == *owner
                         }
                 })
-                .min_by_key(|(_, e)| (e.prepared, e.idle_since))
+                .min_by_key(|(_, e)| e.idle_since)
                 .map(|(id, _)| *id);
             match victim {
                 Some(v) => {
@@ -261,7 +317,7 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 payload,
                 bytes,
                 prepared,
-                live: 0,
+                live,
                 idle_since: now,
             },
         );
@@ -536,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn eviction_takes_the_oldest_idle_statement_handle_before_prepared_ones() {
+    fn eviction_takes_the_oldest_idle_statement_handle_and_never_a_prepared_one() {
         let h: Handles<&str, u32> = Handles::new(limits(3, 100));
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
@@ -546,10 +602,32 @@ mod tests {
         // `older` was fetched last, so `newer` has been idle longest.
         h.begin(&"a", &older, at(3)).unwrap();
         h.end(&older, at(4));
-        h.insert(&"a", "s", 4, 0, false, at(5)).unwrap();
+        let fourth = h.insert(&"a", "s", 4, 0, false, at(5)).unwrap();
         assert!(h.get(&"a", &newer, at(5)).is_none());
         assert!(h.get(&"a", &older, at(5)).is_some());
-        assert!(h.get(&"a", &prepared, at(5)).is_some());
+        // Only the prepared handle and fetching ones left idle: refused, the prepared one kept.
+        h.begin(&"a", &older, at(6)).unwrap();
+        h.begin(&"a", &fourth, at(6)).unwrap();
+        assert!(h.insert(&"a", "s", 5, 0, false, at(7)).is_err());
+        assert!(h.get(&"a", &prepared, at(7)).is_some());
+    }
+
+    #[test]
+    fn a_reserved_slot_is_in_flight_until_answered() {
+        let h: Handles<&str, u32> = Handles::new(limits(1, 100));
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let slot = h.reserve(&"a", "s", 0, 10, false, at(0)).unwrap();
+        // A concurrent GetFlightInfo cannot evict the running statement's slot.
+        assert!(h.insert(&"a", "s", 1, 0, false, at(1)).is_err());
+        assert!(h.set_payload(&"a", &slot, 7, 30));
+        assert!(!h.set_payload(&"b", &slot, 8, 30), "another owner's");
+        h.end(&slot, at(2));
+        assert_eq!(h.get(&"a", &slot, at(2)), Some(("s".to_owned(), 7)));
+        // Answered: now idle and evictable; its 30 bytes were counted and are freed.
+        h.insert(&"a", "s", 2, 0, false, at(3)).unwrap();
+        assert!(h.get(&"a", &slot, at(3)).is_none());
+        h.insert(&"a", "t", 3, 100, false, at(4)).unwrap();
     }
 
     #[test]
