@@ -1,6 +1,9 @@
 <script lang="ts">
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
-  import { initToken } from "./api";
+  import { initSession } from "./api";
+  import Catalog from "./pages/Catalog.svelte";
+  import Editor from "./pages/Editor.svelte";
+  import Environment from "./pages/Environment.svelte";
   import Health from "./pages/Health.svelte";
   import Queries from "./pages/Queries.svelte";
   import QueryDetail from "./pages/QueryDetail.svelte";
@@ -13,7 +16,8 @@
   import markLight from "./brand/mark-light.svg";
   import "./app.css";
 
-  const hasToken = initToken() !== null;
+  let session = $state<"checking" | "yes" | "no">("checking");
+  initSession().then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   let hash = $state(window.location.hash || "#/health");
@@ -34,6 +38,9 @@
     ["queries", "Queries"],
     ["history", "History"],
     ["resources", "Resources"],
+    ["catalog", "Catalog"],
+    ["sql", "SQL"],
+    ["environment", "Environment"],
   ];
   const linkClass = (id: string, wide: boolean) =>
     cn(
@@ -84,7 +91,9 @@
     </div>
   </header>
   <main class="mx-auto max-w-7xl px-3 py-4 md:px-4 md:py-6">
-    {#if !hasToken}
+    {#if session === "checking"}
+      <p class="text-muted-foreground">Opening the session…</p>
+    {:else if session === "no"}
       <h1 class="mb-4">Open the address the server printed</h1>
       <p class="text-muted-foreground">
         The UI needs the token that <code>krishiv server</code> prints at start-up: open the
@@ -98,6 +107,12 @@
       <History />
     {:else if page === "resources"}
       <Resources />
+    {:else if page === "catalog"}
+      <Catalog />
+    {:else if page === "sql"}
+      <Editor />
+    {:else if page === "environment"}
+      <Environment />
     {:else}
       <Health />
     {/if}

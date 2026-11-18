@@ -878,17 +878,46 @@ impl Session {
         };
         // A view with no `path` has no files to list: it stays an empty relation of its declared columns.
         let has_files = !paths.is_empty();
-        let source = krishiv_plan::ReadSource::files(
-            provider,
-            paths,
-            options
+        let options: BTreeMap<String, OptionValue> = options
+            .into_iter()
+            .map(|(k, val)| {
+                let val = OptionValue::from_user(&k, val);
+                (k, val)
+            })
+            .collect();
+        // Declared columns over files are the read's user schema (Spark's `CreateTempViewUsing` resolves the
+        // relation with it now): the partition columns under the path come last, typed as declared, else
+        // inferred. Unlike Spark, which keeps the file listing it made here, each query lists the path again, so
+        // a partition directory added later is read (with the columns fixed now). Inferred columns read as a read
+        // by path does.
+        let (columns, schema) = if infer || !has_files {
+            (columns, None)
+        } else {
+            let schema = krishiv_types::StructType::new(columns.iter().map(|c| {
+                krishiv_types::StructField::new(&c.name, c.data_type.clone(), c.nullable)
+            }));
+            let resolver = env
+                .analysis
+                .files
+                .as_ref()
+                .ok_or_else(|| unsupported("reading files in this session"))?;
+            let columns = resolver
+                .with_schema(&provider, &paths, &options, &schema)
+                .await?
                 .into_iter()
-                .map(|(k, val)| {
-                    let val = OptionValue::from_user(&k, val);
-                    (k, val)
+                .map(|c| TableColumn {
+                    nullable: true,
+                    data_type: c.data_type.as_nullable(),
+                    ..c
                 })
-                .collect(),
-        );
+                .collect();
+            (columns, Some(schema))
+        };
+        let source = krishiv_plan::ReadSource::files(provider, paths, options);
+        let source = match schema {
+            Some(schema) => source.with_schema(schema),
+            None => source,
+        };
         self.state.catalog.put(
             name,
             crate::catalog::TempTable::Files {
@@ -896,7 +925,7 @@ impl Session {
                 columns,
                 // A view reads its files as a read by path does, partition directories included, so no registered
                 // partition set stands in for the listing (an empty one read nothing from a partitioned directory:
-                // RS-8). A declared column list is the schema as given and is not inferred again.
+                // RS-8). A declared column list is the read's user schema.
                 known: !has_files,
                 permanent: false,
                 partitions: (!has_files).then(Default::default),
@@ -1907,78 +1936,8 @@ use location::qualified_namespace_location;
 #[cfg(test)]
 mod tests;
 
-/// Why an [`OwnedDirectory`] could not be made.
-#[derive(Debug)]
-pub(crate) enum OwnedDirectoryError {
-    /// Something is already at the path (not ours to touch).
-    Exists,
-    Io(String),
-}
-
-/// A directory this statement created exclusively. Dropped without [`Self::keep`] (the statement
-/// failed, or its future was dropped), it removes what is in it, provided the path still names the
-/// directory that was created (same device and inode): a path swapped for another directory in the
-/// meantime is left alone.
-pub(crate) struct OwnedDirectory {
-    path: PathBuf,
-    identity: Option<(u64, u64)>,
-    kept: bool,
-}
-
-impl OwnedDirectory {
-    pub(crate) fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
-            })?;
-        }
-        match std::fs::create_dir(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(OwnedDirectoryError::Exists);
-            }
-            Err(e) => {
-                return Err(OwnedDirectoryError::Io(format!(
-                    "cannot create {}: {e}",
-                    path.display()
-                )));
-            }
-        }
-        let identity = Self::identity_of(&path);
-        Ok(Self {
-            path,
-            identity,
-            kept: false,
-        })
-    }
-
-    fn identity_of(path: &Path) -> Option<(u64, u64)> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::symlink_metadata(path).ok()?;
-            meta.is_dir().then(|| (meta.dev(), meta.ino()))
-        }
-        #[cfg(not(unix))]
-        {
-            let meta = std::fs::symlink_metadata(path).ok()?;
-            meta.is_dir().then_some((0, 0))
-        }
-    }
-
-    /// The statement succeeded: the directory stays.
-    pub(crate) fn keep(mut self) {
-        self.kept = true;
-    }
-}
-
-impl Drop for OwnedDirectory {
-    fn drop(&mut self) {
-        if !self.kept && self.identity.is_some() && Self::identity_of(&self.path) == self.identity {
-            drop(std::fs::remove_dir_all(&self.path));
-        }
-    }
-}
+mod owned_directory;
+pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 
 #[cfg(test)]
 mod owned_directory_tests;

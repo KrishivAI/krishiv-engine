@@ -683,6 +683,7 @@ fn show_tables_in_system_lists_the_tables() {
             "memory",
             "metrics",
             "operators",
+            "partition_advice",
             "queries",
             "resource_groups",
             "sessions"
@@ -937,6 +938,7 @@ fn use_system_shows_no_default_database() {
             "memory",
             "metrics",
             "operators",
+            "partition_advice",
             "queries",
             "resource_groups",
             "sessions"

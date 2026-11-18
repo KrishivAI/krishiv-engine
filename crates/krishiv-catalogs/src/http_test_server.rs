@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A fake Iceberg REST server for tests: real HTTP/1.1 over TCP on a loopback port, one connection at a time,
+//! A fake HTTP/JSON catalog server for tests (Iceberg REST, Unity): real HTTP/1.1 over TCP on a loopback port, one connection at a time,
 //! `Connection: close` on every answer. Each request is recorded (method, target, headers, body) and answered by a
 //! script, which can also stall, trickle bytes, redirect or send a body the client must refuse.
 
