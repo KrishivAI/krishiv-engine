@@ -482,7 +482,10 @@ fn timestamp(seconds: i64, nanos: i32, out: &mut String) -> Result<(), Failure> 
 /// `Durations.toString`.
 fn duration(seconds: i64, nanos: i32, out: &mut String) -> Result<(), Failure> {
     let signs_agree = (seconds >= 0 && nanos >= 0) || (seconds <= 0 && nanos <= 0);
-    if !signs_agree || seconds.abs() > 315_576_000_000 || nanos.abs() > 999_999_999 {
+    if !signs_agree
+        || seconds.unsigned_abs() > 315_576_000_000
+        || nanos.unsigned_abs() > 999_999_999
+    {
         return Err(Failure::Malformed);
     }
     out.push('"');

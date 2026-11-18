@@ -141,7 +141,11 @@ fn a_timestamp_beyond_the_microsecond_range_is_malformed() {
     inner.push(v as u8);
     let mut msg = vec![0x0a, inner.len() as u8];
     msg.extend(inner);
-    assert!(d.decode(&[Some(&msg)]).is_err());
+    let e = d.decode(&[Some(&msg)]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::MalformedProtobufMessage
+    );
 }
 
 #[test]
