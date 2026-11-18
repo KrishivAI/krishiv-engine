@@ -65,8 +65,17 @@ class DataFrameReader:
         if format is not None:
             self.format(format)
         schema = options.pop("schema", None)
-        if schema is not None:
-            self.schema(schema)  # ty: ignore[invalid-argument-type]
+        if isinstance(schema, (StructType, str)):
+            self.schema(schema)
+        elif schema is not None:
+            raise PySparkTypeError(
+                errorClass="NOT_EXPECTED_TYPE",
+                messageParameters={
+                    "arg_name": "schema",
+                    "expected_type": "str or struct type",
+                    "arg_type": type(schema).__name__,
+                },
+            )
         self.options(**options)
         if path is None:
             raise not_expected_type("path", "str or list of str", path)
