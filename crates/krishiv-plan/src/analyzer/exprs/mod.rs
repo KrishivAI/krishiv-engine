@@ -62,6 +62,7 @@ mod aggregates;
 mod by_k;
 mod calls;
 mod collation;
+pub(in crate::analyzer) use collation::has_key;
 mod columns;
 mod conditionals;
 mod display;

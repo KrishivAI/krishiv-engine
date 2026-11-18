@@ -33,11 +33,20 @@
 //!    **Group-key code**, once, with statistics (`group_code`, design P2b
 //!    D2): an aggregate's keys from one dimension travel as one integer
 //!    code, decoded above it.
+//!    **Derived group keys above**, once, with statistics (`derived_keys`,
+//!    P3-A part 2c; `krishiv.optimizer.derivedKeysAbove`), before eager
+//!    aggregation and the group-key code: a group key computed from other bare
+//!    group keys is computed above the aggregate.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
 //!    tidy repeat until neither changes the plan (folding can leave columns
 //!    unread).
+//!    **Payload above aggregate**, once, with statistics and
+//!    `krishiv.optimizer.payloadAboveAggregate` (`payload_above`, design P2b
+//!    A5): an aggregate grouping by a dimension's proven-unique key and its
+//!    payload groups by the other side's key, the dimension joined above it;
+//!    then join order, eager aggregation, prune and tidy again when it moved.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -60,6 +69,7 @@ mod collation_keys;
 mod constraints;
 mod cse;
 mod dag;
+mod derived_keys;
 mod eager;
 mod estimate;
 mod expr;
@@ -71,6 +81,8 @@ mod join_order;
 mod late_payload;
 mod limit;
 mod narrow;
+mod partition_advice;
+mod payload_above;
 mod plan_stats;
 mod project;
 mod prune;
@@ -86,10 +98,10 @@ mod win_magic;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION,
-    GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
+    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
+    SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -106,6 +118,8 @@ pub use group_limit::{
 };
 pub use join_order::DP_LIMIT;
 pub use limit::TopN;
+pub use narrow::selectivity_is_guessed;
+pub use partition_advice::{AdvisedColumn, AdvisedTable, MAX_PARTITIONS, PartitionAdvice, advise};
 pub use plan_stats::PlanStats;
 pub use stats::{
     AttrStats, ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, RelStats, StatSource,
@@ -174,6 +188,12 @@ pub struct Options {
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
     pub late_payload_join: bool,
+    /// Payload above the aggregate (`payload_above`, design P2b A5): an
+    /// aggregate grouping by a dimension's key and payload groups by the
+    /// other side's key, and the dimension joins above it. Needs statistics
+    /// and a session configuration with
+    /// `krishiv.optimizer.payloadAboveAggregate` on (on by default).
+    pub payload_above_aggregate: bool,
     /// Subquery as window (`win_magic`, P3 W1 shape (a)): a correlated
     /// aggregate subquery over the outer block's own join runs as a window.
     /// Runs only when `krishiv.optimizer.subqueryAsWindow` is also on.
@@ -187,6 +207,11 @@ pub struct Options {
     /// session configuration, when given, must also switch it on
     /// (`krishiv.optimizer.groupKeyCode`).
     pub group_key_code: bool,
+    /// Derived group keys above the aggregate (`derived_keys`, P3-A part 2c):
+    /// a group key computed from other group keys is computed above the
+    /// aggregate. Needs statistics and a session configuration, where
+    /// `krishiv.optimizer.derivedKeysAbove` is on by default.
+    pub derived_keys_above: bool,
     /// Inferred join filters (`InferJoinFilters`, P2-T072b unit 3):
     /// `isnotnull` on nullable `=` keys and literal comparisons moved across
     /// `=` keys, in every place the rule runs (after the rewrite batch, in
@@ -201,9 +226,11 @@ impl Default for Options {
             stats_propagation: true,
             eager_aggregation: true,
             late_payload_join: true,
+            payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
             group_key_code: true,
+            derived_keys_above: true,
             inferred_join_filters: true,
         }
     }
@@ -501,6 +528,46 @@ fn run(
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options, joins, &mut t)?;
         }
+        // After the final join order and before the rules that read an aggregate's
+        // shape (eager aggregation, the group-key code), so they see the narrowed
+        // aggregate and a second optimization finds nothing new: a group key
+        // computed from other keys is computed above the aggregate (P3-A part 2c).
+        // Only with a session configuration, where it is on by default.
+        let derived = options.derived_keys_above
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&DERIVED_KEYS_ABOVE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = match stats {
+            Some(stats) if derived => {
+                let ansi = udfs.is_some_and(|(_, config)| {
+                    config
+                        .get(&ANSI_ENABLED)
+                        .and_then(ConfigValue::as_bool)
+                        .unwrap_or(true)
+                });
+                let (after, notes) = derived_keys::rewrite(
+                    Arc::clone(&root),
+                    stats,
+                    options.stats_propagation,
+                    ansi,
+                )?;
+                t.step("DerivedKeysAbove", 1, "DerivedKeysAbove", &root, &after);
+                t.notes("DerivedKeysAbove", &after, notes);
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    // Narrowing a key list changes the aggregate's estimate (a
+                    // non-column key counts as the input's rows): order the joins
+                    // above it again, as a second optimization would.
+                    let ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
+                }
+            }
+            _ => root,
+        };
         // After the plan's joins are final, so the rule reads the join it
         // moves below; before pruning, which drops what it leaves unread.
         let eager = options.eager_aggregation
@@ -571,6 +638,66 @@ fn run(
             root
         };
         let root = prune_and_tidy(&root, stats, &mut t)?;
+        // After pruning, so the payload is what the aggregate really groups
+        // by; the moved join is then ordered with the dimension's joins (it
+        // sits above an aggregate, which ordering never looks through, so
+        // ordering cannot undo it), eager aggregation and the group-key code
+        // see the new aggregate, and the plan is pruned and tidied again
+        // (design P2b A5).
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = match stats {
+            Some(stats) if above => {
+                // To a fixed point: a move gives a new aggregate, which the
+                // group-key code (when on) may code, and the coded aggregate
+                // may carry another payload; a second optimization would do
+                // the same.
+                let mut root = root;
+                for _ in 1..=MAX_ITERATIONS {
+                    let (after, notes) = payload_above::rewrite(
+                        Arc::clone(&root),
+                        stats,
+                        options.stats_propagation,
+                    )?;
+                    t.step(
+                        "PayloadAboveAggregate",
+                        1,
+                        "PayloadAboveAggregate",
+                        &root,
+                        &after,
+                    );
+                    t.notes("PayloadAboveAggregate", &after, notes);
+                    if Arc::ptr_eq(&after, &root) {
+                        break;
+                    }
+                    let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                    if eager {
+                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                    }
+                    if coded {
+                        let (after, notes) = group_code::rewrite(
+                            Arc::clone(&ordered),
+                            stats,
+                            options.stats_propagation,
+                            forced,
+                        )?;
+                        t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
+                        t.notes("GroupKeyCode", &after, notes);
+                        if !Arc::ptr_eq(&after, &ordered) {
+                            ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                        }
+                    }
+                    root = prune_and_tidy(&ordered, Some(stats), &mut t)?;
+                }
+                root
+            }
+            _ => root,
+        };
         // After pruning, so a projection on the path holds only what is read
         // above it and the payload is what the path really carries; the moved
         // join is then ordered with the dimension's own joins and its path

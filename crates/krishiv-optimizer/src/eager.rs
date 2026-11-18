@@ -778,7 +778,7 @@ fn is_call(e: &Expr) -> bool {
 }
 
 /// The aggregate calls under `outputs`, once each.
-fn distinct_calls(outputs: &[Arc<Expr>]) -> Vec<(&Arc<Expr>, &ResolvedFunction)> {
+pub(crate) fn distinct_calls(outputs: &[Arc<Expr>]) -> Vec<(&Arc<Expr>, &ResolvedFunction)> {
     let mut calls: Vec<(&Arc<Expr>, &ResolvedFunction)> = Vec::new();
     for e in outputs {
         let mut stack = vec![e];
@@ -799,7 +799,7 @@ fn distinct_calls(outputs: &[Arc<Expr>]) -> Vec<(&Arc<Expr>, &ResolvedFunction)>
 }
 
 /// `e` with each call in `merged` replaced.
-fn replace_calls(e: &Arc<Expr>, merged: &[(Arc<Expr>, Arc<Expr>)]) -> Arc<Expr> {
+pub(crate) fn replace_calls(e: &Arc<Expr>, merged: &[(Arc<Expr>, Arc<Expr>)]) -> Arc<Expr> {
     let out = Arc::clone(e).transform_up(&mut |x| {
         Ok::<_, std::convert::Infallible>(if is_call(&x) {
             merged

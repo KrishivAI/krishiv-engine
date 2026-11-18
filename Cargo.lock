@@ -1563,6 +1563,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "datasketches"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17518a0e88b8a18c546a855d9db6455caaea7865774364bff759edf6a4731aca"
+
+[[package]]
 name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3124,6 +3130,7 @@ dependencies = [
  "chrono",
  "delta_kernel",
  "futures",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
@@ -3148,6 +3155,7 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "datasketches",
  "foldhash",
  "futures",
  "hashbrown 0.17.1",
@@ -3451,12 +3459,14 @@ name = "krishiv-server"
 version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-cast 60.1.0",
  "arrow-schema 60.1.0",
  "axum",
  "futures",
  "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-server",
  "krishiv-session",
  "krishiv-ui-assets",
  "prost",
@@ -3470,6 +3480,7 @@ dependencies = [
  "tonic-prost",
  "tower",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
@@ -3487,6 +3498,7 @@ dependencies = [
  "http",
  "insta",
  "krishiv-common",
+ "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
@@ -3519,6 +3531,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "twox-hash",
+ "url",
 ]
 
 [[package]]
@@ -6391,6 +6404,29 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+
+[[package]]
+name = "utoipa"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8765fe27aeff71012a3f90fa474cf1df863a7d0dd81ed25de4e63fff2544994f"
+dependencies = [
+ "indexmap 2.14.2",
+ "serde",
+ "serde_json",
+ "utoipa-gen",
+]
+
+[[package]]
+name = "utoipa-gen"
+version = "6.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d935f1c83fdf8b88f09bbe050d0cea78ea4afee6d7b0317403228c1200b2c8ab"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
 
 [[package]]
 name = "uuid"

@@ -373,3 +373,15 @@ fn runtime_error_context_carries_its_summary() {
         );
     }
 }
+
+/// `sql(q).count()` is `q`'s statement (Spark's `groupBy().count()` keeps the
+/// expressions' origins): a run-time error under it carries the SQL span.
+#[test]
+fn runtime_error_under_count_keeps_the_span() {
+    let sql = "SELECT a FROM VALUES (1, 0) AS t(a, b) WHERE a / b > 0";
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(sql)).unwrap();
+    let e = block_on(df.count()).expect_err("the count fails");
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(span(&e), (45, 49, "a / b"));
+}

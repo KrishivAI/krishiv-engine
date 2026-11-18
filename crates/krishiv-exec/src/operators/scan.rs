@@ -61,6 +61,11 @@ pub struct PushedFilter {
     /// filter may raise, only the conjuncts written before it
     /// ([`RowLevel::Prefix`]).
     pub rows: RowLevel,
+    /// The typed form of the filter's top-level conjuncts that cannot raise: what static partition pruning
+    /// drops a file by. Spark evaluates a filter on partition columns on each partition value before any other
+    /// conjunct runs, so the conjuncts that cannot raise prune whatever their order; one that may raise is
+    /// evaluated by the filter above on the rows of every file it could raise on (`None`: none prunes).
+    pub partitions: Option<PushdownExpr>,
 }
 
 impl PushedFilter {
@@ -71,14 +76,16 @@ impl PushedFilter {
             predicate,
             expr: None,
             rows: RowLevel::Full,
+            partitions: None,
         }
     }
 
-    /// A filter with its typed form.
+    /// A filter with its typed form, none of whose conjuncts may raise.
     #[must_use]
     pub fn typed(predicate: Arc<dyn Predicate>, expr: PushdownExpr) -> Self {
         Self {
             predicate,
+            partitions: Some(expr.clone()),
             expr: Some(expr),
             rows: RowLevel::Full,
         }
@@ -157,6 +164,14 @@ pub trait ScanPushdown: Send + Sync {
     /// How far a scan built with `filter` honours it. The planner keeps the
     /// `Filter` above the scan unless this is [`FilterPushdown::Exact`].
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown;
+    /// Whether a query that references exactly the table columns `referenced` (the columns the plan
+    /// above the scan reads, not the one a scan keeps only to count rows) reads nothing but the
+    /// JSON/CSV corrupt-record column, which Spark refuses (`QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+    /// The default is false: only JSON and CSV file scans have such a column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let _ = referenced;
+        false
+    }
     /// Whether [`ScanPushdowns::selection`] is honoured.
     fn supports_selection(&self) -> bool {
         false

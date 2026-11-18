@@ -32,6 +32,8 @@ mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
+#[cfg(test)]
+mod ui_hosts_tests;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
 pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
