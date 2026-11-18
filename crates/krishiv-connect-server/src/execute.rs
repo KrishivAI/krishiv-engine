@@ -51,6 +51,7 @@ pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
 mod sql_command;
+mod write_command;
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -567,18 +568,16 @@ impl Translated {
         conf: &TranslateConf,
         udfs: &mut dyn TranslateHost,
     ) -> Result<Self, KrishivError> {
-        let input = match &command.command_type {
-            Some(pb::command::CommandType::CheckpointCommand(c)) => {
-                let empty = pb::Relation::default();
-                // The error waits for the command's class check: a viewer is refused first.
-                Some(translate_relation_with(
-                    c.relation.as_ref().unwrap_or(&empty),
-                    conf,
-                    udfs,
-                ))
-            }
+        let relation = match &command.command_type {
+            Some(pb::command::CommandType::CheckpointCommand(c)) => Some(c.relation.as_ref()),
+            Some(pb::command::CommandType::WriteOperation(w)) => Some(w.input.as_ref()),
+            Some(pb::command::CommandType::WriteOperationV2(w)) => Some(w.input.as_ref()),
             _ => None,
         };
+        let empty = pb::Relation::default();
+        // The error waits for the command's class check: a viewer is refused first.
+        let input = relation
+            .map(|relation| translate_relation_with(relation.unwrap_or(&empty), conf, udfs));
         Ok(Self::Command(Box::new(TranslatedCommand {
             check: check_command(command),
             run: translate_command(command),
@@ -652,32 +651,56 @@ async fn execution_plan(
                     entry.python().register(session, udf)?;
                 }
                 RunCommand::Checkpoint(spec) => {
-                    let Some(input) = input else {
-                        return Err(krishiv_common::error::InternalError {
-                            message: "a checkpoint command lost its relation".to_owned(),
-                        }
-                        .into());
-                    };
-                    let input = input?;
-                    if udfs.seen() {
-                        crate::auth::enforce(&crate::auth::client_code(), session).await?;
-                        udfs.grant(session)?;
-                    }
                     // No operation id or tags on the source: the result is held by the session
                     // for good, and its frame would hold them with it.
-                    let source = Requested::bind(entry, input, &cached)?
-                        .frame(session, QueryOptions::new())
-                        .await?;
+                    let source = command_source(entry, input, udfs, &cached).await?;
                     let id = cache_command::checkpoint(entry, &source, spec).await?;
                     return Ok(Executed::Checkpointed(id));
                 }
                 RunCommand::RemoveCachedRemoteRelation { relation_id } => {
                     entry.remove_cached_frame(&relation_id);
                 }
+                RunCommand::Write(spec) => {
+                    let source = command_source(entry, input, udfs, &cached).await?;
+                    Box::pin(write_command::write(session, &source, spec)).await?;
+                }
+                RunCommand::WriteV2(spec) => {
+                    let source = command_source(entry, input, udfs, &cached).await?;
+                    Box::pin(write_command::write_v2(&source, spec)).await?;
+                }
             }
             Ok(Executed::Command)
         }
     }
+}
+
+/// The frame of a command's relation (`checkpoint_command`, the writes), once the command's class
+/// is checked: a relation with a Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// registered (ADR 0046 §3b, N1), as for a ROOT relation.
+///
+/// # Errors
+/// The relation's translation errors, the privilege refusal, and binding errors.
+async fn command_source(
+    entry: &SessionEntry,
+    input: Option<Result<krishiv_plan::Plan, KrishivError>>,
+    udfs: InlineUdfs<'_>,
+    cached: &[String],
+) -> Result<DataFrame, KrishivError> {
+    let session = entry.session();
+    let Some(input) = input else {
+        return Err(krishiv_common::error::InternalError {
+            message: "a command lost its relation".to_owned(),
+        }
+        .into());
+    };
+    let input = input?;
+    if udfs.seen() {
+        crate::auth::enforce(&crate::auth::client_code(), session).await?;
+        udfs.grant(session)?;
+    }
+    Requested::bind(entry, input, cached)?
+        .frame(session, QueryOptions::new())
+        .await
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed
