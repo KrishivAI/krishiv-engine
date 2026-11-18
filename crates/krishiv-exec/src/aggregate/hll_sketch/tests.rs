@@ -133,14 +133,28 @@ fn union_of_garbage_is_the_buffer_error() {
 }
 
 #[test]
-fn size_is_charged_up_front() {
+fn size_follows_the_coupons_not_the_full_registers() {
     let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
-    a.resize(10);
+    a.resize(1000);
     let before = a.size();
+    // A thousand empty groups are far below one full sketch each.
+    assert!(before < 1000 * 4096 / 4, "{before}");
     a.update(&[0; 3], &longs(&[Some(1), Some(2), Some(3)]), |_| true)
         .unwrap();
-    assert_eq!(a.size(), before);
-    assert!(a.projected(5) >= before + 5 * 4096);
+    assert!(a.size() > before);
+    assert!(a.size() < before + 1024);
+    // A new group and a row are projected at a header and a coupon.
+    assert!(a.projected(5, 10) >= a.size() + 5 * 128 + 10 * 8);
+    assert!(a.projected(5, 10) < a.size() + 5 * 4096);
+    // Many values in one group reach the full registers and stop there.
+    let many: Vec<Option<i64>> = (0..20_000).map(Some).collect();
+    a.update(&vec![1; many.len()], &longs(&many), |_| true)
+        .unwrap();
+    let full = a.size();
+    a.update(&vec![1; many.len()], &longs(&many), |_| true)
+        .unwrap();
+    assert_eq!(a.size(), full);
+    assert!(full >= before + 4096);
 }
 
 #[test]
@@ -203,8 +217,13 @@ fn reserve_shrink_and_empty_union_groups() {
         let mut a = HllSketchAcc::new(op).unwrap();
         a.reserve(4);
         a.resize(3);
+        let three = a.size();
         a.resize(1);
-        assert!(a.size() <= a.projected(0) + 1);
+        // A union group with no sketch yet holds nothing; a sketch group holds its empty sketch.
+        if matches!(op, HllSketchOp::Sketch(_)) {
+            assert!(a.size() < three, "{} vs {three}", a.size());
+        }
+        assert!(a.size() <= a.projected(0, 0));
         // A union group that saw no sketch has an empty state.
         if matches!(op, HllSketchOp::Union(_)) {
             let st = a.state(&[0]).unwrap();

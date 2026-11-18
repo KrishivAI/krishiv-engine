@@ -759,7 +759,7 @@ impl Accumulator {
             Kind::Hll(h) => h.projected(new),
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
-            Kind::HllSketch(h) => h.projected(new),
+            Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len)),
             _ => 0,
         };
         vecs + heap

@@ -209,3 +209,88 @@ fn the_result_does_not_depend_on_partitions() -> R {
     assert!((est - 997).abs() <= 997 / 50, "{est}");
     Ok(())
 }
+
+/// The same 100,000 values per type as `tests/spark-golden/functions/hll_interop/gen.py`.
+const INTEROP_SRC: [(&str, &str); 4] = [
+    ("int", "CAST(id AS INT)"),
+    ("bigint", "id * 100000 + 7"),
+    ("string", "CONCAT('value-', CAST(id AS STRING))"),
+    (
+        "binary",
+        "CAST(CONCAT('bin-', CAST(id AS STRING)) AS BINARY)",
+    ),
+];
+
+fn fx_dir_json(file: &str) -> R<serde_json::Value> {
+    let path = format!(
+        "{}/../../tests/spark-golden/functions/hll_interop/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+}
+
+fn interop_fixture() -> R<serde_json::Value> {
+    fx_dir_json("fixture.json")
+}
+
+/// Design §4: estimation-mode sketches written by Spark 4.2.0 (`fixture.json`). Krishiv's estimate of Spark's bytes
+/// is Spark's printed number exactly; its own sketch of the same data gives the same number (so the update hashing
+/// is Spark's, which the exact list/set modes cannot show); the union of the two is that number again.
+#[test]
+fn spark_written_estimation_mode_sketches_agree_with_krishivs() -> R {
+    let s = Session::new()?;
+    let fx = interop_fixture()?;
+    let n = fx["distinct"].as_i64().ok_or("distinct")?;
+    let mut dump = serde_json::Map::new();
+    for (name, expr) in INTEROP_SRC {
+        let want = fx["sketches"][name]["estimate"]
+            .as_i64()
+            .ok_or("estimate")?;
+        let spark_hex = fx["sketches"][name]["hex"].as_str().ok_or("hex")?;
+        let est = |e: &str| -> R<i64> {
+            Ok(rows(&s, &format!("SELECT hll_sketch_estimate({e})"))?[0].parse()?)
+        };
+        assert_eq!(
+            est(&format!("unhex('{spark_hex}')"))?,
+            want,
+            "{name}: Spark's bytes"
+        );
+        let own =
+            format!("(SELECT hll_sketch_agg(v) FROM (SELECT {expr} AS v FROM range(0, {n})))");
+        assert_eq!(
+            est(&own)?,
+            want,
+            "{name}: Krishiv's sketch of the same data"
+        );
+        assert_eq!(
+            est(&format!("hll_union(unhex('{spark_hex}'), {own})"))?,
+            want,
+            "{name}: the union"
+        );
+        let hex = rows(&s, &format!("SELECT hex({own})"))?.remove(0);
+        // Spark 4.2.0 read these very bytes (`reverse.json`, from `gen.py` with `krishiv-compact.json`) and
+        // estimated them, alone and unioned with its own sketch, at the same number.
+        assert_eq!(
+            fx_dir_json("krishiv-compact.json")?[name].as_str(),
+            Some(hex.as_str()),
+            "{name}: Krishiv's compact bytes changed; rerun gen.py with the new krishiv-compact.json"
+        );
+        let back = &fx_dir_json("reverse.json")?["krishiv_read_by_spark"][name];
+        assert_eq!(
+            back["estimate"].as_i64(),
+            Some(want),
+            "{name}: Spark reads Krishiv's bytes"
+        );
+        assert_eq!(
+            back["union_with_spark"].as_i64(),
+            Some(want),
+            "{name}: Spark unions them"
+        );
+        dump.insert(name.to_owned(), serde_json::Value::String(hex));
+    }
+    // The reverse step (Spark reads Krishiv's bytes) is `gen.py`'s second argument; this writes its input.
+    if let Ok(path) = std::env::var("KRISHIV_HLL_INTEROP_DUMP") {
+        std::fs::write(path, serde_json::to_string(&dump)?)?;
+    }
+    Ok(())
+}

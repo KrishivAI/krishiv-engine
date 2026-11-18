@@ -56,6 +56,7 @@ const COMPARING: &[&str] = &[
     "collect_set",
     "listagg",
     "approx_count_distinct",
+    "hll_sketch_agg",
 ];
 
 /// Comparisons that run on collation keys when their collation has a key built from existing

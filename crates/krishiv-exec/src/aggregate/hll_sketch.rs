@@ -3,8 +3,9 @@
 //! v4.2.0 (`datasketchesAggregates.scala`), over the `datasketches` crate through `krishiv_functions::sketch::hll`.
 //!
 //! `hll_sketch_agg` keeps one `HLL_8` sketch per group, created with the group (as Spark's
-//! `createAggregationBuffer`) and charged at its largest size (`2^lgK` registers plus a header), so the charge never
-//! grows during a fold. NULLs and empty strings and binaries are skipped. The partial state is the sketch's bytes;
+//! `createAggregationBuffer`). A sketch starts in list mode and grows to set mode and then to `2^lgK` registers, so
+//! a group is charged by its coupon count (8 bytes each, a bound for the list and set tables) plus a header, capped
+//! at the full `2^lgK`; the charge is recomputed for each group a batch touched. NULLs and empty strings and binaries are skipped. The partial state is the sketch's bytes;
 //! merging unions it into the group's sketch. An empty group is the empty sketch, never NULL.
 //!
 //! `hll_union_agg` keeps a union per group, created on the group's first sketch at that sketch's lgK (an empty
@@ -27,9 +28,36 @@ const DEFAULT_LG: u8 = 12;
 /// Header and bookkeeping bytes charged on top of a sketch's registers.
 const OVERHEAD: usize = 128;
 
-/// Bytes charged for a sketch or union of `lg_k`.
+/// Bytes charged for a sketch or union of `lg_k` at its largest.
 fn charge(lg_k: u8) -> usize {
     (1_usize << lg_k) + OVERHEAD
+}
+
+/// Bytes a list or set table holds per coupon, with its load factor.
+const COUPON_BYTES: usize = 8;
+
+/// Bytes charged for `sketch` now: its coupons while it is below the register array, the array after.
+fn sketch_charge(sketch: &HllSketch) -> usize {
+    let full = charge(sketch.lg_config_k());
+    // In list and set mode the estimate is the coupon count; in HLL mode it passes over the registers, but a
+    // group at the full charge is not asked again (`recharge`).
+    let est = sketch.estimate();
+    let coupons = if est.is_finite() && est >= 0.0 {
+        // Truncation is the point: a coupon count.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a non-negative estimate"
+        )]
+        {
+            est.ceil() as usize
+        }
+    } else {
+        usize::MAX
+    };
+    OVERHEAD
+        .saturating_add(coupons.saturating_mul(COUPON_BYTES))
+        .min(full)
 }
 
 /// Which HLL aggregate.
@@ -43,7 +71,8 @@ pub(crate) enum HllSketchOp {
 
 #[derive(Debug)]
 enum Groups {
-    Sketches(Vec<HllSketch>),
+    /// The sketches, their current charges and the sum of the charges.
+    Sketches(Vec<HllSketch>, Vec<usize>, usize),
     Unions(Vec<Option<HllUnion>>),
 }
 
@@ -65,7 +94,7 @@ impl HllSketchAcc {
         let groups = match op {
             HllSketchOp::Sketch(k) => {
                 hll::check_lg_k(i32::from(k))?;
-                Groups::Sketches(Vec::new())
+                Groups::Sketches(Vec::new(), Vec::new(), 0)
             }
             HllSketchOp::Union(_) => Groups::Unions(Vec::new()),
         };
@@ -76,22 +105,30 @@ impl HllSketchAcc {
     /// leaves its group missing, which the next access reports as an internal error.
     pub(crate) fn resize(&mut self, n: usize) {
         match (&mut self.groups, self.op) {
-            (Groups::Sketches(v), HllSketchOp::Sketch(k)) => {
+            (Groups::Sketches(v, charges, total), HllSketchOp::Sketch(k)) => {
                 while v.len() < n {
                     let Ok(s) = fresh(k) else { break };
+                    let c = sketch_charge(&s);
+                    *total = total.saturating_add(c);
+                    charges.push(c);
                     v.push(s);
                 }
                 v.truncate(n);
+                charges.truncate(n);
+                *total = charges.iter().sum();
             }
             (Groups::Unions(v), _) => v.resize_with(n, || None),
-            (Groups::Sketches(_), HllSketchOp::Union(_)) => {}
+            (Groups::Sketches(..), HllSketchOp::Union(_)) => {}
         }
     }
 
     /// Room for `new` more groups.
     pub(crate) fn reserve(&mut self, new: usize) {
         match &mut self.groups {
-            Groups::Sketches(v) => v.reserve(new),
+            Groups::Sketches(v, charges, _) => {
+                v.reserve(new);
+                charges.reserve(new);
+            }
             Groups::Unions(v) => v.reserve(new),
         }
     }
@@ -99,14 +136,15 @@ impl HllSketchAcc {
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
         match &self.groups {
-            Groups::Sketches(v) => v
-                .iter()
-                .map(|s| charge(s.lg_config_k()))
-                .sum::<usize>()
-                .saturating_add(
-                    v.capacity()
-                        .saturating_mul(std::mem::size_of::<HllSketch>()),
-                ),
+            Groups::Sketches(v, charges, total) => total.saturating_add(
+                v.capacity()
+                    .saturating_mul(std::mem::size_of::<HllSketch>())
+                    .saturating_add(
+                        charges
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<usize>()),
+                    ),
+            ),
             Groups::Unions(v) => v
                 .iter()
                 .flatten()
@@ -119,10 +157,23 @@ impl HllSketchAcc {
         }
     }
 
-    /// The size after adding `new` groups.
-    pub(crate) fn projected(&self, new: usize) -> usize {
+    /// The size after adding `new` groups and folding `rows` input rows: a new sketch starts at its header and a
+    /// value adds at most one coupon, none of it past the full registers.
+    pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
         let per_group = match self.op {
-            HllSketchOp::Sketch(k) => charge(k),
+            HllSketchOp::Sketch(k) => {
+                let groups = match &self.groups {
+                    Groups::Sketches(v, ..) => v.len().saturating_add(new),
+                    Groups::Unions(_) => new,
+                };
+                let growth = rows
+                    .saturating_mul(COUPON_BYTES)
+                    .min(groups.saturating_mul(charge(k)));
+                return self
+                    .size()
+                    .saturating_add(new.saturating_mul(OVERHEAD))
+                    .saturating_add(growth);
+            }
             // The union of a group is allocated on its first sketch: counted at the default lgK here, and at its
             // own by `size` once it exists.
             HllSketchOp::Union(_) => charge(DEFAULT_LG),
@@ -132,7 +183,7 @@ impl HllSketchAcc {
 
     fn sketch_mut(&mut self, g: usize) -> Result<&mut HllSketch> {
         match &mut self.groups {
-            Groups::Sketches(v) => v
+            Groups::Sketches(v, ..) => v
                 .get_mut(g)
                 .ok_or_else(|| internal("an HLL group past the accumulator's groups".to_owned())),
             Groups::Unions(_) => Err(internal(
@@ -141,12 +192,36 @@ impl HllSketchAcc {
         }
     }
 
+    /// Recomputes the charge of each sketch group in `groups`, which a fold touched. A group already at the full
+    /// registers keeps its charge without another pass over them.
+    fn recharge(&mut self, groups: &[u32]) {
+        let HllSketchOp::Sketch(k) = self.op else {
+            return;
+        };
+        let Groups::Sketches(v, charges, total) = &mut self.groups else {
+            return;
+        };
+        let full = charge(k);
+        for &g in groups {
+            let g = g as usize;
+            let (Some(s), Some(c)) = (v.get(g), charges.get_mut(g)) else {
+                continue;
+            };
+            if *c >= full {
+                continue;
+            }
+            let now = sketch_charge(s);
+            *total = total.saturating_sub(*c).saturating_add(now);
+            *c = now;
+        }
+    }
+
     fn union_slot(&mut self, g: usize) -> Result<&mut Option<HllUnion>> {
         match &mut self.groups {
             Groups::Unions(v) => v
                 .get_mut(g)
                 .ok_or_else(|| internal("an HLL group past the accumulator's groups".to_owned())),
-            Groups::Sketches(_) => Err(internal(
+            Groups::Sketches(..) => Err(internal(
                 "an HLL sketch where a union was expected".to_owned(),
             )),
         }
@@ -166,7 +241,11 @@ impl HllSketchAcc {
             ));
         }
         match self.op {
-            HllSketchOp::Sketch(_) => self.update_values(groups, arg, &valid),
+            HllSketchOp::Sketch(_) => {
+                self.update_values(groups, arg, &valid)?;
+                self.recharge(groups);
+                Ok(())
+            }
             HllSketchOp::Union(allow) => {
                 let rows = BinaryRows::of(arg)?;
                 for (i, &g) in groups.iter().enumerate() {
@@ -248,6 +327,7 @@ impl HllSketchAcc {
                 }
             }
         }
+        self.recharge(groups);
         Ok(())
     }
 
@@ -255,7 +335,7 @@ impl HllSketchAcc {
     fn bytes(&self, g: u32) -> Result<Vec<u8>> {
         let at = g as usize;
         match &self.groups {
-            Groups::Sketches(v) => v
+            Groups::Sketches(v, ..) => v
                 .get(at)
                 .map(hll::to_bytes)
                 .ok_or_else(|| internal("an HLL group past the accumulator's groups".to_owned())),
