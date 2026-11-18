@@ -13,5 +13,9 @@ workspace = true
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+arrow-flight = { workspace = true, features = ["flight-sql"] }
 getrandom.workspace = true
 tonic.workspace = true
+
+[dev-dependencies]
+arrow-array.workspace = true
