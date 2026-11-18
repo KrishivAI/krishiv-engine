@@ -613,6 +613,11 @@ async fn row_merge_presizes_pages_when_granted() {
         let tasks = extra(&m, "HashAggregate", "row_final_tasks");
         presized.push((tasks, extra(&m, "HashAggregate", "row_final_presized")));
     }
+    // Never more presized tasks than tasks, at any limit (a task that stalls
+    // and runs again counts once).
+    for &(t, p) in &presized {
+        assert!(p <= t, "presized {p} > tasks {t}: {presized:?}");
+    }
     let (tasks, all) = presized[0];
     assert!(tasks > 1);
     assert_eq!(all, tasks, "every task presized with ample memory");

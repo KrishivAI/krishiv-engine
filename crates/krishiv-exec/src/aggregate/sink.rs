@@ -109,8 +109,9 @@ struct Counters {
     resizes: Arc<AtomicU64>,
     /// Partition tasks of the row tables' final phase.
     row_final_tasks: AtomicU64,
-    /// Final-phase tasks whose row pages and accumulators were presized
-    /// from the estimate (the pool granted them at the task's start).
+    /// Final-phase tasks whose presizing from the estimate grew their row
+    /// pages or accumulators (counted once per task, even when the task stalls
+    /// and runs again).
     row_final_presized: AtomicU64,
     /// Final phases that moved to disk (out of memory, or a spill request).
     row_final_spills: AtomicU64,
