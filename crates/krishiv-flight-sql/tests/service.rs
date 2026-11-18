@@ -1584,3 +1584,96 @@ async fn admission_wait_outlives_provisional_ttl() {
     wait_sessions(&h, 1).await;
     drop(b);
 }
+
+/// The one string value of a one-row, one-column result.
+fn single_text(batches: &[RecordBatch]) -> String {
+    assert_eq!(rows(batches), 1, "{batches:?}");
+    let column = batches
+        .iter()
+        .find(|b| b.num_rows() == 1)
+        .expect("a row")
+        .column(0);
+    column
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("STRING")
+        .value(0)
+        .to_owned()
+}
+
+/// A Flight session records transport `flight_sql` in `system.sessions` (H3, §7 "History";
+/// the column's values are design P3-T064's, the auth surface label is `flight-sql`).
+#[tokio::test(flavor = "multi_thread")]
+async fn flight_sessions_in_system_sessions_as_flight_sql() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (_, cookie) = info(&mut h, OPS, None, "USE default").await.expect("info");
+    let cookie = cookie.expect("cookie");
+    // The runtime's other sessions (the factory's base) are not Flight's.
+    let sql = "SELECT array_join(sort_array(collect_list(transport)), ',') FROM system.sessions \
+               WHERE transport <> 'embedded'";
+    let (q, _) = info(&mut h, OPS, Some(&cookie), sql).await.expect("info");
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect("fetch");
+    assert_eq!(single_text(&batches), "flight_sql");
+}
+
+/// Each `DoGet` of a query ticket is one query in `system.queries`, in the handle's session
+/// (§4.1, §7 "History").
+#[tokio::test(flavor = "multi_thread")]
+async fn flight_query_in_system_queries() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (q, cookie) = info(&mut h, OPS, None, "SELECT 4242 AS marker")
+        .await
+        .expect("info");
+    let cookie = cookie.expect("cookie");
+    for _ in 0..2 {
+        fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+            .await
+            .expect("fetch");
+    }
+    let sql = String::from(
+        "SELECT CAST(count(*) AS STRING) FROM system.queries \
+         WHERE query_text = 'SELECT 4242 AS marker'",
+    );
+    let (count, _) = info(&mut h, OPS, Some(&cookie), &sql).await.expect("info");
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&count))
+        .await
+        .expect("fetch");
+    assert_eq!(single_text(&batches), "2", "one row per fetch");
+}
+
+/// Flight's own releases record no tombstone (H5, §3.2 "Tombstones"), so cookie-less fetches
+/// never evict the tombstone of a session a Connect client released.
+#[tokio::test(flavor = "multi_thread")]
+async fn flight_release_leaves_connect_tombstones() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let mut credentials = krishiv_session::auth::Credentials::new(
+        "127.0.0.1:1".parse().expect("addr"),
+        krishiv_session::auth::Surface::Connect,
+    );
+    credentials.bearer = Some(OPS);
+    let caller = h
+        .auth
+        .authenticate(&credentials)
+        .await
+        .expect("authenticated");
+    let connect_id = "00000000-0000-4000-8000-000000000002";
+    h.manager
+        .get_or_create(&caller, connect_id, None, "ops")
+        .expect("a Connect session");
+    h.manager.release(&caller, connect_id, false);
+    let before = h.manager.counts().tombstones;
+    assert_eq!(before, 1, "Connect's release keeps a tombstone");
+    for _ in 0..5 {
+        let (q, _) = info(&mut h, OPS, None, "SELECT 1").await.expect("info");
+        fetch(&mut h, OPS, None, ticket(&q)).await.expect("fetch");
+    }
+    wait_sessions(&h, 0).await;
+    assert_eq!(h.manager.counts().live, 0);
+    assert_eq!(
+        h.manager.counts().tombstones,
+        before,
+        "five Flight releases, no tombstone"
+    );
+}
