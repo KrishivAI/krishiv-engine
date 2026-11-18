@@ -144,7 +144,7 @@ def test_a_tar_hard_link_counts_as_its_target(tmp_path: Path) -> None:
     assert unpack.unpack(str(archive([("pkg/b", "./pkg/a")])), str(dest), 120) == 120
     assert (dest / "pkg" / "b").read_bytes() == b"x" * 60
     # A link to no earlier member counts nothing (tarfile cannot extract it).
-    assert unpack._tar_member_size(_link("missing"), {}) == 0
+    assert unpack._tar_sizes([_link("missing")]) == [0]
 
 
 def _link(target: str) -> tarfile.TarInfo:
@@ -152,3 +152,42 @@ def _link(target: str) -> tarfile.TarInfo:
     link.type = tarfile.LNKTYPE
     link.linkname = target
     return link
+
+
+def _symlink(name: str, target: str) -> tarfile.TarInfo:
+    link = tarfile.TarInfo(name)
+    link.type = tarfile.SYMTYPE
+    link.linkname = target
+    return link
+
+
+def test_a_tar_symbolic_link_counts_as_its_target(tmp_path: Path) -> None:
+    # tarfile copies a symbolic link's target when the link cannot be made (the sandbox off, a filesystem
+    # without links), so a link counts as its target: resolved from the link's directory, over the whole
+    # archive (a later member too), the last member of that name, through links to links.
+    path = tmp_path / "syms.tar"
+    with tarfile.open(path, "w") as tf:
+        tf.addfile(_symlink("pkg/early", "a"))
+        data = b"x" * 60
+        info = tarfile.TarInfo("pkg/a")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+        tf.addfile(_symlink("pkg/chain", "early"))
+        tf.addfile(_symlink("top", "pkg/a"))
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with pytest.raises(unpack.Refused, match="more than the 239 bytes left"):
+        unpack.unpack(str(path), str(dest), 239)
+    assert list(dest.iterdir()) == []
+    assert unpack.unpack(str(path), str(dest), 240) == 240
+    assert (dest / "top").read_bytes() == data
+
+
+def test_a_tar_link_loop_or_dangling_link_counts_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "loop.tar"
+    with tarfile.open(path, "w") as tf:
+        tf.addfile(_symlink("a", "b"))
+        tf.addfile(_symlink("b", "a"))
+        tf.addfile(_symlink("c", "missing"))
+    with tarfile.open(path) as tf:
+        assert unpack._tar_sizes(tf.getmembers()) == [0, 0, 0]

@@ -120,6 +120,10 @@ pub struct RestConfig {
     pub allow_http: bool,
     /// The limits.
     pub limits: RestLimits,
+    /// The egress policy connector every request goes out on (design P3-T067 §5.2): the server's policy scoped to
+    /// this catalog's declared hosts, no redirects. `None` is a connector under no rule (embedded use, tests), still
+    /// with no redirect followed and no ambient proxy.
+    pub egress: Option<krishiv_store::PolicyConnector>,
 }
 
 /// Why a declaration is refused.
@@ -144,6 +148,25 @@ impl RestConfig {
             vended_credentials: false,
             allow_http: false,
             limits: RestLimits::default(),
+            egress: None,
+        })
+    }
+
+    /// The connector requests go out on: [`Self::egress`], or one under no rule.
+    pub(crate) fn connector(&self) -> krishiv_store::PolicyConnector {
+        self.egress.clone().unwrap_or_else(|| {
+            use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+            let policy = EgressPolicy::new(
+                PrivateAddresses::Allow,
+                Vec::new(),
+                ProviderEndpoints::default(),
+            );
+            krishiv_store::PolicyConnector::new(
+                policy.scope(Vec::<String>::new()),
+                krishiv_store::Redirects::None,
+                None,
+            )
+            .without_provider_literals()
         })
     }
 

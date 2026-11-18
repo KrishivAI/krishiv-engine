@@ -546,6 +546,26 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
+                // A Python UDAF takes no `DISTINCT` or `FILTER` (Spark 4.2.0
+                // `checkUnsupportedAggregateClause`); its `prettyName` has no
+                // alias tag, so it is the class name `pythonudaf`.
+                if entry.kind == FunctionKind::Aggregate
+                    && matches!(entry.id, FunctionId::PythonUdf { .. })
+                    && (f.distinct || f.filter.is_some())
+                {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: "`pythonudaf`".to_owned(),
+                            syntax: if f.distinct {
+                                "DISTINCT"
+                            } else {
+                                "FILTER CLAUSE"
+                            }
+                            .to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it
                 // as `collect_list` throughout.

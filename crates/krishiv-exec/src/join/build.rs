@@ -972,6 +972,11 @@ impl BuildGlobal {
 }
 
 impl Sink for BuildSink {
+    // A build's tables do not depend on its input's batches (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinBuild"
     }
