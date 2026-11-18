@@ -612,6 +612,16 @@ fn flat(body: &[u8]) -> Result<(), Reject> {
     Ok(())
 }
 
+/// Checks the bytes of a flat extension message (`krishiv.v1`: scalar and string fields, no nested
+/// message) before prost reads them: no groups (prost would recurse once per nesting level of an
+/// unknown group, with no limit here) and no overrunning lengths. Nothing is entered.
+///
+/// # Errors
+/// The wire error of a malformed message.
+pub(crate) fn flat_message(body: &[u8]) -> Result<(), KrishivError> {
+    flat(body).map_err(KrishivError::from)
+}
+
 /// The position `n` bytes after `pos`, which must lie within `buf`.
 fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
     pos.checked_add(n)

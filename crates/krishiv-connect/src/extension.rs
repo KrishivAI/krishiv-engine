@@ -6,8 +6,10 @@
 //! once: a registered `krishiv.v1` message becomes an [`Extension`]; anything else, including an
 //! extension of a newer client this server does not know, is `KRISHIV_UNSUPPORTED_FEATURE` naming
 //! the message and the capability, never a decode failure. The messages are `proto/krishiv/v1/krishiv.proto`
-//! (a checked-in snapshot, additive only) written out as `prost` types: they are flat, so the
-//! bounded `wire` decoder is not needed, and the `Any` payload was already bounded with its plan.
+//! (a checked-in snapshot, additive only) written out as `prost` types. They are flat (no nested
+//! message), so the payload goes through `wire::flat_message` before prost reads it: prost
+//! recurses once per nesting level of an unknown group (the crate builds it without a recursion
+//! limit), so a group is refused first. A registered message must stay flat to be decoded this way.
 //!
 //! A stock client never meets a `krishiv.v1` message: no response carries one unless the request did.
 //! A Krishiv client learns the capability set from `system.capabilities` or by reading the
@@ -142,9 +144,10 @@ pub fn resolve(any: &Any, slot: Slot) -> Result<Extension, KrishivError> {
 
 #[expect(
     clippy::disallowed_methods,
-    reason = "a flat extension message: no recursion, and the Any was bounded with its plan"
+    reason = "a flat extension message, checked by `wire::flat_message` (no group, no overrun) first"
 )]
 fn decode(row: &Registration, bytes: &[u8]) -> Result<Extension, KrishivError> {
+    crate::wire::flat_message(bytes)?;
     let malformed = |_| {
         KrishivError::from(ConnectInvalidPlanAssertionFailure {
             message: format!("the {PACKAGE}.{} extension does not decode", row.message),

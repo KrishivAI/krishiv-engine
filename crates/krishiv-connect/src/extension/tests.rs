@@ -68,12 +68,25 @@ fn another_package_is_refused_with_a_bounded_printable_name() {
 }
 
 #[test]
-fn a_registered_message_with_bad_bytes_is_an_invalid_plan() {
-    let err = resolve(&any("Echo", vec![0x0A, 0x7F]), Slot::Relation).unwrap_err();
-    assert_eq!(
-        err.error_class(),
-        krishiv_common::error::ErrorClass::ConnectInvalidPlanAssertionFailure
-    );
+fn a_registered_message_with_bad_bytes_is_refused_by_the_wire_check() {
+    // A length that runs past the end, and a valid length with bytes that are not UTF-8.
+    for bytes in [vec![0x0A, 0x7F], vec![0x0A, 0x01, 0xFF]] {
+        let err = resolve(&any("Echo", bytes), Slot::Relation).unwrap_err();
+        assert_ne!(
+            err.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        );
+    }
+}
+
+/// prost recurses once per level of an unknown group and this crate builds it without a recursion
+/// limit: a payload of group-start bytes would overflow the stack. It is refused before prost sees it.
+#[test]
+fn nested_groups_in_an_extension_are_refused_without_recursing() {
+    for slot in [Slot::Relation, Slot::Expression] {
+        let hostile = any("Echo", vec![0x13; 4 * 1024 * 1024]);
+        assert!(resolve(&hostile, slot).is_err());
+    }
 }
 
 #[test]
