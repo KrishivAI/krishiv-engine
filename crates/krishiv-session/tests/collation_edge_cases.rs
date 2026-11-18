@@ -172,3 +172,137 @@ fn null_safe_equal_over_a_collated_column() {
         "false"
     );
 }
+
+/// S3 and S4 of the #493 review, each the answer of a real Spark 4.2.0 run: `nvl2` over a
+/// collated selector is named as written (no cast shown), and a written `CAST(.. AS STRING)`
+/// ends the inherited collation (the result is `UTF8_BINARY`, so `'a' LCASE` cast is not `'A'`).
+#[test]
+fn nvl2_name_and_cast_to_string_end_the_collation() {
+    let v = "(SELECT 'a' COLLATE utf8_lcase AS c) t";
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("SELECT nvl2(c, 'x', 'y') FROM {v}"))).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(batches[0].schema().field(0).name(), "nvl2(c, x, y)");
+    assert_eq!(
+        one(&format!(
+            "SELECT CAST(CAST(c AS STRING) = 'A' AS STRING) FROM {v}"
+        )),
+        "false"
+    );
+    assert_eq!(
+        one(&format!(
+            "SELECT collation(CAST(c AS STRING) || 'x') FROM {v}"
+        )),
+        "SYSTEM.BUILTIN.UTF8_BINARY"
+    );
+}
+
+/// A comparison of two operands whose collations differ and are both implicit (a `UTF8_LCASE`
+/// column against a plain `STRING` column, or against its own cast to `STRING`) has no one
+/// collation: Spark 4.2.0 raises `INDETERMINATE_COLLATION_IN_EXPRESSION` (SQLSTATE 42P22) for
+/// `=` in a join, a correlated subquery and a projection alike.
+#[test]
+fn comparing_two_implicit_collations_is_indeterminate() {
+    let s = Session::new().unwrap();
+    let with = "WITH t AS (SELECT 'a' COLLATE utf8_lcase AS c), u AS (SELECT 'A' AS k) ";
+    for q in [
+        "SELECT 1 FROM t JOIN u ON t.c = u.k",
+        "SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.c)",
+        "SELECT CAST(c AS STRING) = c FROM t",
+    ] {
+        let err = match block_on(s.sql(&format!("{with}{q}"))) {
+            Err(e) => e.to_string(),
+            Ok(df) => block_on(df.collect())
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default(),
+        };
+        assert!(
+            err.contains("INDETERMINATE_COLLATION_IN_EXPRESSION"),
+            "{q}: {err}"
+        );
+    }
+}
+
+/// A correlated scalar subquery whose correlation is a collated equality runs through the
+/// domain join on the keys: `a` finds `A` and `a`, `b` finds nothing (Spark 4.2.0: `a:2, b:0`).
+#[test]
+fn correlated_scalar_subquery_over_a_collated_equality() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create temporary view cx as select * from (values \
+         (cast('a' as string collate utf8_lcase)), (cast('b' as string collate utf8_lcase))) v(c)",
+        "create temporary view cy as select * from (values \
+         (cast('A' as string collate utf8_lcase)), (cast('a' as string collate utf8_lcase)), \
+         (cast('z' as string collate utf8_lcase))) v(d)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let df = block_on(s.sql(
+        "select cast(c as string) || ':' || cast((select count(*) from cy where cy.d = cx.c) as string) \
+         from cx order by c",
+    ))
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let c = &batches[0].columns()[0];
+    let got: Vec<String> = (0..c.len())
+        .map(|i| match c.as_string_view_opt() {
+            Some(v) => v.value(i).to_owned(),
+            None => c.as_string::<i32>().value(i).to_owned(),
+        })
+        .collect();
+    assert_eq!(got, ["a:2", "b:0"]);
+}
+
+/// Review M1: a correlation key that is an array of collated strings is never answered by the
+/// binary comparison: it is refused (or keyed), so `array('a')` never silently misses `array('A')`.
+#[test]
+fn correlated_scalar_subquery_over_a_collated_array_is_not_answered_binary() {
+    let s = Session::new().unwrap();
+    let q = "with x as (select array(cast('a' as string collate utf8_lcase)) as c), \
+             y as (select array(cast('A' as string collate utf8_lcase)) as d) \
+             select (select count(*) from y where y.d = x.c) from x";
+    let outcome = match block_on(s.sql(q)) {
+        Err(e) => Err(e.to_string()),
+        Ok(df) => block_on(df.collect())
+            .map(|b| format!("{:?}", b[0].columns()[0]))
+            .map_err(|e| e.to_string()),
+    };
+    match outcome {
+        Err(e) => assert!(e.contains("COLLATION") || e.contains("UNSUPPORTED"), "{e}"),
+        Ok(dump) => assert!(dump.contains('1'), "binary answer: {dump}"),
+    }
+}
+
+/// Review of #854: a correlation compared under another collation than the outer column's
+/// (`COLLATE UTF8_BINARY`, a cast) must not be keyed on the column's own `UTF8_LCASE` key, which
+/// would copy one case variant's answer to its twins. Spark answers `1,0` / `2,3` here; the
+/// engine refuses instead of answering `1,1` / `2,1`.
+#[test]
+fn a_correlation_under_another_collation_is_refused_not_keyed_wrongly() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create temporary view hx as select * from (values \
+         (cast('a' as string collate utf8_lcase), 1), (cast('A' as string collate utf8_lcase), 2)) v(c, n)",
+        "create temporary view hy as select * from (values \
+         (cast('A' as string collate utf8_lcase)), (cast('A' as string collate utf8_lcase)), \
+         (cast('a' as string collate utf8_lcase))) v(d)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    for q in [
+        "select n, (select count(*) from hy where hy.d = hx.c collate utf8_binary) from hx",
+        "select n, (select count(*) from hy where cast(hy.d as string) = cast(hx.c as string)) from hx",
+    ] {
+        match block_on(s.sql(q)) {
+            Err(_) => {}
+            Ok(df) => {
+                let rows = block_on(df.collect()).map(|b| format!("{b:?}"));
+                assert!(
+                    rows.is_err(),
+                    "{q}: answered {rows:?} (Spark: 1,0 / 2,3), expected a refusal"
+                );
+            }
+        }
+    }
+}

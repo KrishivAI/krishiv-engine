@@ -130,7 +130,7 @@ fn note(notes: &mut Vec<String>, line: String) {
 
 /// The nodes of `root` that more than one parent reads (subquery plans not
 /// entered: the rule rewrites inside them as their own roots).
-fn shared_nodes(root: &Arc<LogicalPlan>) -> HashSet<*const LogicalPlan> {
+pub(crate) fn shared_nodes(root: &Arc<LogicalPlan>) -> HashSet<*const LogicalPlan> {
     let mut parents: HashMap<*const LogicalPlan, usize> = HashMap::new();
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(root)];
@@ -733,7 +733,7 @@ impl Shape {
 }
 
 /// Whether `e` is a column, not renamed.
-fn plain_column(e: &Expr) -> bool {
+pub(crate) fn plain_column(e: &Expr) -> bool {
     matches!(
         &e.node,
         krishiv_plan::ExprNode::Resolved(krishiv_plan::ResolvedExpr::Column(_))
@@ -741,7 +741,7 @@ fn plain_column(e: &Expr) -> bool {
 }
 
 /// The column `e` is, under aliases only.
-fn bare_column(e: &Arc<Expr>) -> Option<&BoundColumn> {
+pub(crate) fn bare_column(e: &Arc<Expr>) -> Option<&BoundColumn> {
     match &crate::expr::strip_alias(e).node {
         krishiv_plan::ExprNode::Resolved(krishiv_plan::ResolvedExpr::Column(c)) => Some(c),
         _ => None,
@@ -749,7 +749,7 @@ fn bare_column(e: &Arc<Expr>) -> Option<&BoundColumn> {
 }
 
 /// Bytes a row of a fixed-width type; `None` for a variable-width one.
-fn fixed_width(t: &DataType) -> Option<usize> {
+pub(crate) fn fixed_width(t: &DataType) -> Option<usize> {
     Some(match t {
         DataType::Boolean | DataType::Byte => 1,
         DataType::Short => 2,
@@ -761,14 +761,18 @@ fn fixed_width(t: &DataType) -> Option<usize> {
     })
 }
 
-fn children(p: &LogicalPlan) -> Vec<Arc<LogicalPlan>> {
+pub(crate) fn children(p: &LogicalPlan) -> Vec<Arc<LogicalPlan>> {
     let mut v = Vec::new();
     p.for_each_child(&mut |c| v.push(Arc::clone(c)));
     v
 }
 
 /// `p` with its child `i` replaced (a relation with one input, or a join).
-fn with_child(p: &Arc<LogicalPlan>, i: usize, child: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+pub(crate) fn with_child(
+    p: &Arc<LogicalPlan>,
+    i: usize,
+    child: Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
     match &p.node {
         PlanNode::Join { .. } => {
             let mut j = LogicalPlan::clone(p);

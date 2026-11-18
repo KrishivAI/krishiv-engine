@@ -14,6 +14,7 @@ from typing import final
 
 __version__: str
 __allocator__: str
+__commit__: str
 __all__ = [
     "AnonymousPythonUdf",
     "ArrowStream",
@@ -24,6 +25,7 @@ __all__ = [
     "Session",
     "WindowSpec",
     "__allocator__",
+    "__commit__",
     "__version__",
     "_udf_pool_shutdown",
     "_udf_runner_conf",
@@ -42,7 +44,14 @@ class Session:
     def __new__(cls, config: list[tuple[str, str]] | None = ...) -> Session: ...
     def sql(self, query: str) -> DataFrame: ...
     def table(self, name: str) -> DataFrame: ...
-    def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None = ...) -> DataFrame: ...
+    def read(
+        self,
+        format: str,
+        paths: list[str],
+        options: list[tuple[str, str]] | None = ...,
+        schema_json: str | None = ...,
+        schema_ddl: str | None = ...,
+    ) -> DataFrame: ...
     def create_dataframe(self, data: object) -> DataFrame: ...
     def temp_table_names(self) -> list[str]: ...
     def drop_temp_view(self, name: str) -> bool: ...
