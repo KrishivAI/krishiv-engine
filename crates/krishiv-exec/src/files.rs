@@ -58,6 +58,7 @@ use krishiv_types::DataType;
 use object_store::path::Path;
 
 use crate::error::Result;
+use crate::operators::PathRoots;
 
 /// Spark 4.2's built-in data sources that read no files:
 /// `UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY`.
@@ -283,6 +284,16 @@ pub struct FileListing {
     pub partition_columns: Arc<[FieldRef]>,
     /// The parsed read options.
     pub options: FormatOptions,
+    /// The roots `_metadata.file_path` prints the files under: per read path, the scheme and
+    /// authority it was written with.
+    pub path_roots: PathRoots,
+}
+
+/// The store and key of `at` and the root Spark prints the files under it with, for a cloud
+/// path (a local path prints under its store id, `file:`).
+fn spark_root(at: &LocatedPath) -> Option<(StoreId, Path, String)> {
+    let root = parse_object_url(&at.display).ok()?.spark_root()?;
+    Some((at.store.clone(), at.path.clone(), root))
 }
 
 impl fmt::Debug for FileListing {
@@ -442,6 +453,7 @@ impl FileReads {
         mode.skip_all_dirs = mode.skip_foreign_dirs && !partitioned;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
+        let mut roots: Vec<(StoreId, Path, String)> = Vec::new();
         for p in paths {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
@@ -449,7 +461,8 @@ impl FileReads {
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
-                Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                let at = Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                roots.extend(spark_root(&at));
                 continue;
             }
             // The store is instantiated from the plan's option values
@@ -457,7 +470,9 @@ impl FileReads {
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
             Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
+            roots.extend(spark_root(&at));
         }
+        let path_roots = PathRoots::new(roots);
         // By store, then path; of a file reached through overlapping roots the entry with the fewest partition
         // segments (the nearest root's) comes first and is the one kept.
         listed.sort_by(|a, b| {
@@ -527,6 +542,7 @@ impl FileReads {
                 schema,
                 partition_columns: partition_columns.into(),
                 options,
+                path_roots,
             });
         }
         if files.is_empty() {
@@ -604,6 +620,7 @@ impl FileReads {
             schema,
             partition_columns: partition_columns.into(),
             options,
+            path_roots,
         })
     }
 
@@ -641,7 +658,7 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         mode: &ListMode,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
-    ) -> Result<()> {
+    ) -> Result<LocatedPath> {
         let first = text.find(['*', '?', '[', '{']).unwrap_or(text.len());
         let cut = text[..first].rfind('/').map_or(0, |i| i + 1);
         let (prefix, rest) = text.split_at(cut);
@@ -762,7 +779,7 @@ impl FileReads {
             };
             Box::pin(self.list_path(&found, &inner, false, out)).await?;
         }
-        Ok(())
+        Ok(at)
     }
 
     /// The `recursiveFileLookup` and `basePath` read options.

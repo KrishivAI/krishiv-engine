@@ -242,8 +242,9 @@ pub(super) struct Resolver<'a> {
     pub(super) pending_nondeterministic: Option<AnalysisError>,
     /// Binding the metrics of an `observe` (Spark checks them in `CheckAnalysis`, not as an aggregate).
     pub(super) observing: bool,
-    /// The ids of the `Range` leaves resolved so far: a later one with the same id gets a fresh one.
-    range_ids: std::collections::HashSet<AttrId>,
+    /// The ids front ends chose that this analysis kept so far (`Range` leaves, the Python relations'
+    /// declared columns): a later one with the same id gets a fresh one (`built_id`).
+    pub(super) built_ids: std::collections::HashSet<AttrId>,
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
     /// declared with (see `char_varchar`).
     pub(super) declared: HashMap<AttrId, Arc<str>>,
@@ -304,7 +305,7 @@ pub(super) fn resolve(
         in_stored_view: false,
         sql_calls: 0,
         pending_nondeterministic: None,
-        range_ids: std::collections::HashSet::new(),
+        built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
     };
@@ -381,7 +382,7 @@ pub(super) fn resolve(
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
 /// offset).
-fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
+pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     use crate::walk::{Node, visit_distinct};
     use crate::{ExprNode, ResolvedExpr};
     let mut top = 0_u64;
@@ -392,6 +393,10 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
             Node::Plan(p) => match &p.node {
                 PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
                 PlanNode::Range { output, .. } => bump(output),
+                PlanNode::MapPartitions { output, .. }
+                | PlanNode::GroupMap { output, .. }
+                | PlanNode::CoGroupMap { output, .. }
+                | PlanNode::PythonTableFunction { output, .. } => output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -1019,11 +1024,28 @@ impl Resolver<'_> {
             | PlanNode::Sample { .. }
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
-            | PlanNode::MapPartitions { .. }
-            | PlanNode::GroupMap { .. }
-            | PlanNode::CoGroupMap { .. }
             | PlanNode::PythonTableFunction { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => self.map_partitions(o, input, udf, output, *barrier, env),
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => self.group_map(o, input, keys, udf, output, env),
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => self.cogroup_map(o, left, right, left_keys, right_keys, udf, output, env),
         }
     }
 
@@ -1173,13 +1195,7 @@ impl Resolver<'_> {
                 // before and stored, as a temporary view's, still names it
                 // above the leaf, SQL-25), a later one with the same id gets
                 // this analysis's own fresh id (past every id the plan holds).
-                let id = if self.range_ids.insert(output.id) {
-                    output.id
-                } else {
-                    let id = self.fresh();
-                    self.range_ids.insert(id);
-                    id
-                };
+                let id = self.built_id(output.id);
                 let col = BoundColumn {
                     id,
                     ..output.clone()
@@ -1229,13 +1245,13 @@ impl Resolver<'_> {
             | PlanNode::Generate { .. }
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
-            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
-            // Resolved-only nodes: the front ends that build them (Connect,
-            // design P3-T014 PR-26d) resolve their inputs first.
-            PlanNode::MapPartitions { .. }
+            | PlanNode::Window { .. }
+            // `python_relations`.
+            | PlanNode::MapPartitions { .. }
             | PlanNode::GroupMap { .. }
-            | PlanNode::CoGroupMap { .. }
-            | PlanNode::PythonTableFunction { .. } => Err(unsupported(
+            | PlanNode::CoGroupMap { .. } => Err(unsupported("a plan shape", o)),
+            // Built by no front end yet (UDTFs, P3-T014).
+            PlanNode::PythonTableFunction { .. } => Err(unsupported(
                 "a Python UDF relation in an unresolved plan",
                 o,
             )),

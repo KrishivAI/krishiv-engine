@@ -54,6 +54,7 @@ fn current_database_and_catalog() {
     );
 }
 
+/// The binding is the no-file value: calls over a file scan read its `_metadata` column instead (analyzer).
 #[test]
 fn input_file_functions_read_no_file() {
     assert_eq!(strings(&bind("input_file_name", &[]), 2, 0), vec![""; 2]);

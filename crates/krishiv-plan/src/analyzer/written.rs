@@ -6,7 +6,7 @@
 //! refusal name a table's other columns. Asked only once a column is refused, so the walk costs
 //! nothing on a granted query.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::walk::{Node, PtrSet, children};
 use crate::{ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr, SourceId};
@@ -92,6 +92,9 @@ pub(super) fn wrote_column(
     let mut written: HashSet<u64> = HashSet::new();
     let mut seen: HashSet<(*const LogicalPlan, u64)> = HashSet::new();
     let mut seen_exprs: HashSet<(*const crate::Expr, u64)> = HashSet::new();
+    // An expansion's (`ROLLUP`, `CUBE`, `GROUPING SETS`) bare-column entries: output id to the
+    // input attribute it passes through, so a key written above it reads the scan's column.
+    let mut passes: HashMap<u64, HashSet<u64>> = HashMap::new();
     let mut stack: Vec<(&LogicalPlan, u64)> = vec![(root, 0)];
     while let Some((p, off)) = stack.pop() {
         if !seen.insert((std::ptr::from_ref(p), off)) {
@@ -131,9 +134,34 @@ pub(super) fn wrote_column(
                 stack.push((input, off.saturating_add(*offset)));
                 continue;
             }
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                for row in projections.iter().filter(|row| row.len() == output.len()) {
+                    for (e, out) in row.iter().zip(output) {
+                        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node
+                            && let (Some(from), Some(to)) =
+                                (out.id.0.checked_add(off), c.id.0.checked_add(off))
+                        {
+                            passes.entry(from).or_default().insert(to);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         p.for_each_child(&mut |c| stack.push((c, off)));
+    }
+    // Close the written attributes over the expansions' pass-throughs.
+    let mut todo: Vec<u64> = written.iter().copied().collect();
+    while let Some(id) = todo.pop() {
+        for &to in passes.get(&id).into_iter().flatten() {
+            if written.insert(to) {
+                todo.push(to);
+            }
+        }
     }
     !written.is_disjoint(&column_ids)
 }

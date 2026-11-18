@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "id": "histogram_numeric#c9d1e8032a8b/ansi_on",
+      "reason": "SELECT histogram_numeric(col, 'abc') FROM VALUES (0), (1), (2), (10) AS tab(col) | CAST_INVALID_INPUT"
+    }
+  ],
+  "format_version": 1,
+  "function": "histogram_numeric"
+}

@@ -42,8 +42,20 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../worker/krishiv/_udf/pool_worker.py"),
     ),
     (
+        "krishiv/_udf/relations.py",
+        include_str!("../worker/krishiv/_udf/relations.py"),
+    ),
+    (
         "krishiv/_udf/types.py",
         include_str!("../worker/krishiv/_udf/types.py"),
+    ),
+    (
+        "krishiv/_udf/udtf.py",
+        include_str!("../worker/krishiv/_udf/udtf.py"),
+    ),
+    (
+        "krishiv/_udf/unpack.py",
+        include_str!("../worker/krishiv/_udf/unpack.py"),
     ),
     (
         "krishiv/_udf/worker.py",
@@ -155,11 +167,48 @@ const CLOSE_RANGE: u32 = 436;
 /// implement `os.closerange` as a loop over every number, which takes minutes up to `2**31`. Where the call
 /// is missing (Linux before 5.9), `os.closerange` runs up to `fd_limit`, the server's descriptor limit, which
 /// bounds every descriptor the server could have opened.
+#[cfg(test)]
 pub(crate) fn bootstrap(
     package: &Path,
     fd_limit: u64,
     limits: Option<&BootstrapLimits>,
     deny_exec: bool,
+) -> String {
+    bootstrap_for(
+        package,
+        fd_limit,
+        limits,
+        deny_exec,
+        &Entry::Worker { paths: &[] },
+    )
+}
+
+/// What a bootstrap runs once the descriptors are closed and the limits set.
+pub(crate) enum Entry<'a> {
+    /// The worker (`pool_worker.main`), which adds `paths` to `sys.path` (each at index 1, in order, as
+    /// Spark's `add_path` does) once its own modules are imported.
+    Worker {
+        /// The session's artifact paths.
+        paths: &'a [PathBuf],
+    },
+    /// The unpacking of one archive artifact (`unpack.main`) into `dest`, within `budget` bytes.
+    Unpack {
+        /// The archive.
+        archive: &'a Path,
+        /// The empty directory it is unpacked into.
+        dest: &'a Path,
+        /// The bytes left of the artifact limit.
+        budget: u64,
+    },
+}
+
+/// [`bootstrap`] running `entry`.
+pub(crate) fn bootstrap_for(
+    package: &Path,
+    fd_limit: u64,
+    limits: Option<&BootstrapLimits>,
+    deny_exec: bool,
+    entry: &Entry<'_>,
 ) -> String {
     let mut lines = vec![
         "import os".to_owned(),
@@ -215,9 +264,26 @@ pub(crate) fn bootstrap(
     lines.extend([
         "import sys".to_owned(),
         format!("sys.path.insert(0, {})", python_str(package)),
-        "from krishiv._udf.pool_worker import main".to_owned(),
-        "main()".to_owned(),
     ]);
+    match entry {
+        Entry::Worker { paths } => {
+            let list: Vec<String> = paths.iter().map(|p| python_str(p)).collect();
+            lines.push("from krishiv._udf.pool_worker import main".to_owned());
+            lines.push(format!("main(paths=[{}])", list.join(", ")));
+        }
+        Entry::Unpack {
+            archive,
+            dest,
+            budget,
+        } => {
+            lines.push("from krishiv._udf.unpack import main".to_owned());
+            lines.push(format!(
+                "main({}, {}, {budget})",
+                python_str(archive),
+                python_str(dest)
+            ));
+        }
+    }
     lines.join("\n")
 }
 

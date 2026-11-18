@@ -395,32 +395,15 @@ fn sql_function_roots(
 
 /// The SQL-bodied function `node` calls, if any (a table function or a registry call).
 fn called_sql_function(ctx: &AnalysisContext, node: Node<'_>) -> Option<Arc<super::SqlFunction>> {
-    let parts = match node {
-        Node::Plan(p) => {
-            let PlanNode::TableFunction { name, .. } = &p.node else {
-                return None;
-            };
-            name.split(crate::TABLE_FUNCTION_NAME_SEP)
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        }
-        Node::Expr(e) => {
-            let ExprNode::Function(f) = &e.node else {
-                return None;
-            };
-            if !is_registry_call(&f.name)
-                || (!is_session_qualifier(&f.qualifier) && is_builtin_qualifier(&f.qualifier))
-            {
-                return None;
-            }
-            let mut parts = f.qualifier.clone();
-            parts.push(f.name.clone());
-            parts
-        }
-    };
-    match ctx.functions.lookup(&parts, ctx.profile) {
-        FunctionLookup::Sql(def) => Some(def),
-        _ => None,
+    match node {
+        Node::Plan(p) => match &p.node {
+            PlanNode::TableFunction { name, .. } => sql_table_function(ctx, name),
+            _ => None,
+        },
+        Node::Expr(e) => match &e.node {
+            ExprNode::Function(f) => sql_call(ctx, f),
+            _ => None,
+        },
     }
 }
 
@@ -488,6 +471,43 @@ fn check_in_stored_view(ctx: &AnalysisContext, node: Node<'_>) -> Result<(), Ana
         }
     }
     Ok(())
+}
+
+/// The SQL-bodied table function `name` (a `FROM f(..)` table function name, parts joined by
+/// [`crate::TABLE_FUNCTION_NAME_SEP`]), if it is one.
+pub(super) fn sql_table_function(
+    ctx: &AnalysisContext,
+    name: &str,
+) -> Option<Arc<super::SqlFunction>> {
+    let parts: Vec<String> = name
+        .split(crate::TABLE_FUNCTION_NAME_SEP)
+        .map(str::to_owned)
+        .collect();
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
+}
+
+/// The SQL-bodied function an unresolved call `f` calls, if it calls one (a `builtin.` call never does).
+pub(super) fn sql_call(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+) -> Option<Arc<super::SqlFunction>> {
+    if !is_registry_call(&f.name) || is_builtin_qualifier(&f.qualifier) {
+        return None;
+    }
+    let parts = if f.qualifier.is_empty() {
+        vec![f.name.clone()]
+    } else {
+        let mut parts = f.qualifier.clone();
+        parts.push(f.name.clone());
+        parts
+    };
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
 }
 
 /// Whether a call of `name` is for the function registry to answer: not a
@@ -767,7 +787,7 @@ fn lower_sql(
         return Err(unsupported("SQL text without a SQL front end", origin));
     };
     let source = SourceId(u32::try_from(b.sql.len()).unwrap_or(u32::MAX));
-    let lowered = Arc::clone(frontend.lower(query, source)?.root());
+    let lowered = super::time_window::rewrite(Arc::clone(frontend.lower(query, source)?.root()))?;
     // SQL text follows the session's CTE precedence like the plan around it.
     let policy = super::legacy::CtePolicy {
         precedence: ctx.conf.cte_precedence,

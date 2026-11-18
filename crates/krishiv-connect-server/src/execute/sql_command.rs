@@ -27,7 +27,7 @@ use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect::translate::{sql_command_relation, sql_has_parameters};
 use krishiv_session::{QueryOptions, Session, SqlOutcome};
 
-use super::{Sender, Stop, arrow, decode_command, decompress, settle};
+use super::{Sender, Stop, arrow, decode_command, decompress};
 use crate::operation::ExecuteLimits;
 
 /// The `SqlCommand` of `plan`, when its command is one (a compressed command is decompressed
@@ -168,19 +168,8 @@ fn internal(message: &str) -> KrishivError {
     .into()
 }
 
-/// Streams the answer of a `sql_command` and ends the operation.
-pub(super) async fn encode(sender: Sender, answer: Answer) {
-    let op = Arc::clone(&sender.op);
-    let outcome = tokio::select! {
-        biased;
-        () = op.closed() => Err(Stop::Gone),
-        () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, answer) => r,
-    };
-    settle(&op, outcome);
-}
-
-async fn produce(sender: &Sender, answer: Answer) -> Result<(), Stop> {
+/// Streams the answer of a `sql_command` and ends the operation (`Work::Command`).
+pub(super) async fn produce(sender: &Sender, answer: Answer) -> Result<(), Stop> {
     sender.admit().await?;
     sender
         .send(

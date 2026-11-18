@@ -15,7 +15,7 @@ use crate::guard::{GuardRequest, Refusal, TokenGuard};
 struct Fake;
 
 impl AdminApi for Fake {
-    fn get_version(&self) -> BoxFuture<'_, AdminResult<GetVersionResponse>> {
+    fn get_version(&self, _: &Call) -> BoxFuture<'_, AdminResult<GetVersionResponse>> {
         async {
             Ok(GetVersionResponse {
                 version: "9.9.9".to_owned(),
@@ -26,7 +26,7 @@ impl AdminApi for Fake {
         .boxed()
     }
 
-    fn get_capabilities(&self) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>> {
+    fn get_capabilities(&self, _: &Call) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>> {
         async {
             Ok(GetCapabilitiesResponse {
                 capabilities: vec![Capability {
@@ -38,6 +38,46 @@ impl AdminApi for Fake {
             })
         }
         .boxed()
+    }
+
+    fn list_sessions(
+        &self,
+        _: &Call,
+        _: ListSessionsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListSessionsResponse>> {
+        async { Ok(ListSessionsResponse::default()) }.boxed()
+    }
+
+    fn kill_session(
+        &self,
+        _: &Call,
+        _: KillSessionRequest,
+    ) -> BoxFuture<'_, AdminResult<KillSessionResponse>> {
+        async { Ok(KillSessionResponse::default()) }.boxed()
+    }
+
+    fn list_queries(
+        &self,
+        _: &Call,
+        _: ListQueriesRequest,
+    ) -> BoxFuture<'_, AdminResult<ListQueriesResponse>> {
+        async { Ok(ListQueriesResponse::default()) }.boxed()
+    }
+
+    fn cancel_query(
+        &self,
+        _: &Call,
+        _: CancelQueryRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueryResponse>> {
+        async { Ok(CancelQueryResponse::default()) }.boxed()
+    }
+
+    fn cancel_queries_by_tag(
+        &self,
+        _: &Call,
+        _: CancelQueriesByTagRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueriesByTagResponse>> {
+        async { Ok(CancelQueriesByTagResponse::default()) }.boxed()
     }
 }
 
@@ -56,6 +96,7 @@ fn app(guard: Arc<dyn Guard>, loopback: bool) -> Router {
         AdminConfig {
             loopback,
             allowed_hosts: vec!["admin.internal".to_owned()],
+            idempotency_ttl: std::time::Duration::from_secs(60),
         },
     )
 }
@@ -105,7 +146,11 @@ async fn rest_returns_the_proto_json_of_the_messages() {
     assert_eq!(headers[header::CONTENT_TYPE], "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     assert_eq!(json["version"], "9.9.9");
-    assert_eq!(json["adminV1Revision"], "1", "64-bit integers are strings");
+    assert_eq!(
+        json["adminV1Revision"],
+        ADMIN_V1_REVISION.to_string(),
+        "64-bit integers are strings"
+    );
     assert_eq!(json["preview"], true);
     let (status, _, body) = send(&app, get("/api/admin/v1/capabilities")).await;
     assert_eq!(status, StatusCode::OK);

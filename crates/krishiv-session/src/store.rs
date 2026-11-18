@@ -909,7 +909,14 @@ impl CatalogStore for InMemoryCatalogStore {
 /// existing location).
 #[derive(Debug, Default)]
 pub(crate) struct Warehouse {
-    own: Mutex<Option<PathBuf>>,
+    own: Mutex<Option<OwnDir>>,
+}
+
+/// The runtime's own warehouse directory: its name, chosen once, and whether it was made.
+#[derive(Debug)]
+struct OwnDir {
+    dir: PathBuf,
+    made: bool,
 }
 
 impl Warehouse {
@@ -919,29 +926,53 @@ impl Warehouse {
     /// # Errors
     /// The I/O error creating the directory.
     pub(crate) fn root(&self, configured: Option<&str>) -> std::io::Result<PathBuf> {
-        if let Some(dir) = configured.filter(|d| !d.is_empty()) {
-            let dir = dir.strip_prefix("file:").unwrap_or(dir);
-            return Ok(PathBuf::from(dir));
+        if let Some(dir) = configured_dir(configured) {
+            return Ok(dir);
         }
         let mut own = self.own.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(dir) = &*own {
-            return Ok(dir.clone());
+        let own = own.get_or_insert_with(OwnDir::named);
+        if !own.made {
+            std::fs::create_dir_all(&own.dir)?;
+            own.made = true;
         }
+        Ok(own.dir.clone())
+    }
+
+    /// The path [`Self::root`] gives for `configured`, without making the runtime's own directory
+    /// (its name is chosen now, so a later `root` gives the same path): what the analyze API lists.
+    pub(crate) fn path(&self, configured: Option<&str>) -> PathBuf {
+        if let Some(dir) = configured_dir(configured) {
+            return dir;
+        }
+        let mut own = self.own.lock().unwrap_or_else(PoisonError::into_inner);
+        own.get_or_insert_with(OwnDir::named).dir.clone()
+    }
+}
+
+/// `spark.sql.warehouse.dir` as a path, when set and not empty.
+fn configured_dir(configured: Option<&str>) -> Option<PathBuf> {
+    let dir = configured.filter(|d| !d.is_empty())?;
+    Some(PathBuf::from(dir.strip_prefix("file:").unwrap_or(dir)))
+}
+
+impl OwnDir {
+    /// A new name under the temporary directory, not made yet.
+    fn named() -> Self {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("krishiv-warehouse-{}-{stamp}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        *own = Some(dir.clone());
-        Ok(dir)
+        Self {
+            dir: std::env::temp_dir()
+                .join(format!("krishiv-warehouse-{}-{stamp}", std::process::id())),
+            made: false,
+        }
     }
 }
 
 impl Drop for Warehouse {
     fn drop(&mut self) {
         let own = self.own.get_mut().unwrap_or_else(PoisonError::into_inner);
-        if let Some(dir) = own.take() {
+        if let Some(OwnDir { dir, made: true }) = own.take() {
             // Best effort: a leftover directory is the temp directory's to clean.
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -1214,7 +1245,17 @@ mod tests {
         let own = w.root(None).unwrap();
         assert!(own.is_dir());
         assert_eq!(w.root(Some("")).unwrap(), own);
+        assert_eq!(w.path(None), own);
         drop(w);
         assert!(!own.exists());
+        // `path` names the directory `root` makes later, without making it.
+        let w = Warehouse::default();
+        assert_eq!(w.path(Some("/data/wh")), Path::new("/data/wh"));
+        let named = w.path(None);
+        assert!(!named.exists());
+        assert_eq!(w.root(None).unwrap(), named);
+        assert!(named.is_dir());
+        drop(w);
+        assert!(!named.exists());
     }
 }

@@ -82,6 +82,7 @@ mod coerce;
 pub mod contract;
 mod exprs;
 mod table_change;
+mod time_window;
 
 /// Spark's `toPrettySQL` name of a resolved expression (timestamp literals
 /// in UTC): for errors raised outside the analyzer.
@@ -104,6 +105,7 @@ mod generate;
 mod having_subquery;
 mod hints;
 mod hof;
+mod input_file;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
@@ -112,6 +114,7 @@ mod observe;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
+mod python_relations;
 mod reads;
 mod recursive;
 mod repartition;
@@ -162,6 +165,7 @@ pub use catalog::{
 };
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
+pub use input_file::bind_input_files;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
@@ -1110,6 +1114,19 @@ async fn analyze_with(
     } else {
         plan
     };
+    // `window(..)` and `session_window(..)` calls of a plan that is not SQL text (SQL text is rewritten as
+    // Bind lowers it).
+    let windowed;
+    let plan = {
+        let root = time_window::rewrite(Arc::clone(plan.root()))?;
+        if Arc::ptr_eq(&root, plan.root()) {
+            plan
+        } else {
+            windowed =
+                Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+            &windowed
+        }
+    };
     let bindings = bind::bind(plan, ctx).await?;
     let metadata = started.elapsed();
     let resolving = std::time::Instant::now();
@@ -1152,6 +1169,7 @@ async fn analyze_with(
             .collect();
     }
     unexecutable::check(&root, ctx.conf.time_type)?;
+    input_file::check(plan.root(), &bindings, ctx)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {
         if warm_started {

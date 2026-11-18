@@ -35,6 +35,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("krishiv.ui.allowedHosts", &UI_ALLOWED_HOSTS),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
@@ -51,6 +52,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.exec.coalesceInput", &EXEC_COALESCE_INPUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
@@ -228,8 +230,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.connect.artifacts.maxBytes",
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+    ),
+    (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
+    ),
+    (
+        "krishiv.iceberg.write.maxOpenFiles",
+        &ICEBERG_WRITE_MAX_OPEN_FILES,
     ),
     (
         "krishiv.io.credentials.refreshSkew",
@@ -247,6 +257,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillScratchReserve",
         &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
+    ("krishiv.optimizer.derivedKeysAbove", &DERIVED_KEYS_ABOVE),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
@@ -274,6 +285,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
+    ),
+    (
+        "krishiv.iceberg.manifestCache.bytes",
+        &ICEBERG_MANIFEST_CACHE_BYTES,
     ),
     ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
     (
@@ -377,6 +392,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
     (
+        "krishiv.runtimeFilter.bloom.memoryTier",
+        &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
+    ),
+    (
         "krishiv.runtimeFilter.inList.maxValues",
         &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
     ),
@@ -399,6 +418,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.connect.artifacts.maxTotalBytes",
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
     ),
     (
         "krishiv.connect.execute.detachedTimeout",
@@ -487,6 +510,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "krishiv.connect.artifacts.maxArtifactBytes",
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
     ),
     (
         "krishiv.connect.http2.maxConcurrentStreams",
@@ -591,6 +618,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.execute.reattachable.senderMaxStreamSize",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
     ),
     (
         "spark.connect.execute.reattachable.observerRetryBufferSize",

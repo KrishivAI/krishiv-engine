@@ -11,7 +11,9 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, false)
+            .await?;
         Ok((optimized, physical))
     }
 
@@ -24,7 +26,9 @@ impl Session {
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         // A plan that is shown shows the queries of its definer views (P3-T062 §2.4).
         self.authorize_shown_definer_reads(analyzed).await?;
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, true)
+            .await?;
         Ok((optimized, physical))
     }
 
@@ -38,7 +42,7 @@ impl Session {
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        self.physical_with(analyzed, env, trace, false).await
+        self.physical_with(analyzed, env, trace, false, true).await
     }
 
     /// As [`Self::physical_inspected`] with every table's statistics and planning hints withheld
@@ -50,7 +54,7 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true, true).await?;
         Ok((optimized, physical))
     }
 
@@ -60,6 +64,7 @@ impl Session {
         env: &QueryEnv,
         trace: bool,
         withheld: bool,
+        inspected: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         let start = query_start_micros();
         // A recursive CTE runs as an operator of the physical plan; the
@@ -70,6 +75,21 @@ impl Session {
             &limited
         } else {
             analyzed
+        };
+        // `input_file_name()` and the block functions read the file of the rows, after the cache substituted
+        // its snapshots (whose rows have no file).
+        let bound;
+        let analyzed = match krishiv_plan::analyzer::bind_input_files(&analyzed.plan, &|s| {
+            env.catalog.scan_file_metadata(s)
+        })? {
+            Some(plan) => {
+                bound = AnalyzedPlan {
+                    plan,
+                    ..analyzed.clone()
+                };
+                &bound
+            }
+            None => analyzed,
         };
         let tables = if withheld {
             env.catalog
@@ -105,7 +125,8 @@ impl Session {
             .with_query_start(start)
             .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
-            .with_udfs(Arc::clone(&self.state.udfs));
+            .with_udfs(Arc::clone(&self.state.udfs))
+            .with_inspection(inspected);
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {

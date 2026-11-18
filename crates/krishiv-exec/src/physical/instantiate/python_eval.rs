@@ -44,6 +44,11 @@ impl Instantiation<'_> {
             .range_ordered
             .contains(&std::ptr::from_ref(node).addr());
         let ordered = ends_in_sort(input) || range_ordered;
+        // Scalar iterator calls (a node holds calls of one eval type) run as
+        // tasks over the driver's rows.
+        if calls.iter().any(|c| scalar_iter(&c.call)) {
+            return self.python_scalar_iter(node, ordered, range_ordered);
+        }
         let mut input = self.node(input)?;
         if range_ordered {
             input.node = Arc::new(OrderedNode { inner: input.node });
@@ -143,6 +148,18 @@ impl Instantiation<'_> {
             self.spill.clone(),
         ))
     }
+}
+
+/// Whether `call` is a scalar iterator Python UDF (Spark's 204, 251).
+fn scalar_iter(call: &Expr) -> bool {
+    matches!(
+        &call.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if matches!(
+            &f.id,
+            FunctionId::PythonUdf { eval_type, .. }
+                if eval_type.kind() == krishiv_plan::PythonUdfKind::ScalarIter
+        )
+    )
 }
 
 /// Whether `n` ends in a sort (through row-wise nodes): its rows are in

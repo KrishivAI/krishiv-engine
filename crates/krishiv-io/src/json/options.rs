@@ -74,6 +74,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
         string("charset", "Alias of `encoding`.");
@@ -165,6 +166,9 @@ pub(crate) struct JsonOptions {
     pub line_sep: LineSep,
     pub drop_field_if_all_null: bool,
     pub ignore_null_fields: bool,
+    /// `ignoreCorruptFiles` (or `spark.sql.files.ignoreCorruptFiles`): inference keeps the lines of a broken
+    /// compressed file.
+    pub ignore_corrupt_files: bool,
 }
 
 impl JsonOptions {
@@ -209,6 +213,7 @@ impl JsonOptions {
             line_sep,
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
             ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
+            ignore_corrupt_files: o.bool("ignoreCorruptFiles").unwrap_or(false),
         })
     }
 }

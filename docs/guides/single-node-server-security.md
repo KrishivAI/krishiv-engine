@@ -57,7 +57,7 @@ Rules that apply:
 - Glob characters, `%`, `?`, `#`, embedded credentials, and `.` or `..` segments are refused when the server starts.
 - With `allowedRoots` set, a symbolic link that points outside every listed root is refused.
 - `http://` and `https://` locations are refused until you list them in `allowedPrefixes`. Listing one is the way
-  to enable it.
+  to enable it. Even then, a read that infers its schema is refused, as in Spark.
 
 These settings are read at start-up.
 

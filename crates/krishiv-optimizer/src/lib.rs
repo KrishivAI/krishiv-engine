@@ -33,6 +33,10 @@
 //!    **Group-key code**, once, with statistics (`group_code`, design P2b
 //!    D2): an aggregate's keys from one dimension travel as one integer
 //!    code, decoded above it.
+//!    **Derived group keys above**, once, with statistics (`derived_keys`,
+//!    P3-A part 2c; `krishiv.optimizer.derivedKeysAbove`), before eager
+//!    aggregation and the group-key code: a group key computed from other bare
+//!    group keys is computed above the aggregate.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
@@ -60,6 +64,7 @@ mod collation_keys;
 mod constraints;
 mod cse;
 mod dag;
+mod derived_keys;
 mod eager;
 mod estimate;
 mod expr;
@@ -86,10 +91,10 @@ mod win_magic;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION,
-    GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
+    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
+    LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -187,6 +192,16 @@ pub struct Options {
     /// session configuration, when given, must also switch it on
     /// (`krishiv.optimizer.groupKeyCode`).
     pub group_key_code: bool,
+    /// Derived group keys above the aggregate (`derived_keys`, P3-A part 2c):
+    /// a group key computed from other group keys is computed above the
+    /// aggregate. Needs statistics and a session configuration, where
+    /// `krishiv.optimizer.derivedKeysAbove` is on by default.
+    pub derived_keys_above: bool,
+    /// Inferred join filters (`InferJoinFilters`, P2-T072b unit 3):
+    /// `isnotnull` on nullable `=` keys and literal comparisons moved across
+    /// `=` keys, in every place the rule runs (after the rewrite batch, in
+    /// join ordering's loop, after restriction).
+    pub inferred_join_filters: bool,
 }
 
 impl Default for Options {
@@ -199,6 +214,8 @@ impl Default for Options {
             subquery_as_window: true,
             share_repeated_subtrees: true,
             group_key_code: true,
+            derived_keys_above: true,
+            inferred_join_filters: true,
         }
     }
 }
@@ -470,7 +487,11 @@ fn run(
         // conjuncts into the side they read; the rule then runs over the joins
         // below them in join ordering (or once more after restriction), not
         // only in a second optimization.
-        let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+        let inferred = if options.inferred_join_filters {
+            t.once("InferJoinFilters", &root, infer_join_filters)?
+        } else {
+            Arc::clone(&root)
+        };
         let root = if Arc::ptr_eq(&inferred, &root) {
             inferred
         } else {
@@ -489,8 +510,48 @@ fn run(
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
         if let Some(stats) = stats {
-            root = order_and_restrict(root, stats, options.stats_propagation, joins, &mut t)?;
+            root = order_and_restrict(root, stats, options, joins, &mut t)?;
         }
+        // After the final join order and before the rules that read an aggregate's
+        // shape (eager aggregation, the group-key code), so they see the narrowed
+        // aggregate and a second optimization finds nothing new: a group key
+        // computed from other keys is computed above the aggregate (P3-A part 2c).
+        // Only with a session configuration, where it is on by default.
+        let derived = options.derived_keys_above
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&DERIVED_KEYS_ABOVE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = match stats {
+            Some(stats) if derived => {
+                let ansi = udfs.is_some_and(|(_, config)| {
+                    config
+                        .get(&ANSI_ENABLED)
+                        .and_then(ConfigValue::as_bool)
+                        .unwrap_or(true)
+                });
+                let (after, notes) = derived_keys::rewrite(
+                    Arc::clone(&root),
+                    stats,
+                    options.stats_propagation,
+                    ansi,
+                )?;
+                t.step("DerivedKeysAbove", 1, "DerivedKeysAbove", &root, &after);
+                t.notes("DerivedKeysAbove", &after, notes);
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    // Narrowing a key list changes the aggregate's estimate (a
+                    // non-column key counts as the input's rows): order the joins
+                    // above it again, as a second optimization would.
+                    let ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
+                }
+            }
+            _ => root,
+        };
         // After the plan's joins are final, so the rule reads the join it
         // moves below; before pruning, which drops what it leaves unread.
         let eager = options.eager_aggregation
@@ -501,9 +562,7 @@ fn run(
                     .unwrap_or(true)
             });
         let root = match stats {
-            Some(stats) if eager => {
-                eager_pass(&root, stats, options.stats_propagation, joins, &mut t)?
-            }
+            Some(stats) if eager => eager_pass(&root, stats, options, joins, &mut t)?,
             _ => root,
         };
         // After eager aggregation (which may pre-empt it) and the final join
@@ -538,7 +597,7 @@ fn run(
                 if Arc::ptr_eq(&after, &root) {
                     after
                 } else {
-                    order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?
+                    order_and_restrict(after, stats, options, joins, &mut t)?
                 }
             }
             _ => root,
@@ -549,7 +608,7 @@ fn run(
         // The rule and the batch alternate until the rule adds nothing, as in
         // `order_and_restrict`: what it adds can make another outer join
         // one-sided, whose `ON` conjuncts the batch then moves.
-        let root = if stats.is_none() {
+        let root = if stats.is_none() && options.inferred_join_filters {
             let mut root = root;
             for _ in 1..=MAX_ITERATIONS {
                 let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
@@ -562,7 +621,7 @@ fn run(
         } else {
             root
         };
-        let root = prune_and_tidy(&root, &mut t)?;
+        let root = prune_and_tidy(&root, stats, &mut t)?;
         // After pruning, so a projection on the path holds only what is read
         // above it and the payload is what the path really carries; the moved
         // join is then ordered with the dimension's own joins and its path
@@ -586,16 +645,14 @@ fn run(
                 if Arc::ptr_eq(&after, &root) {
                     after
                 } else {
-                    let mut ordered =
-                        order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?;
+                    let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     // The moved join may now sit directly under its aggregate,
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered =
-                            eager_pass(&ordered, stats, options.stats_propagation, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
                     }
-                    prune_and_tidy(&ordered, &mut t)?
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
             }
             _ => root,
@@ -625,7 +682,7 @@ fn run(
             // can leave a column unread (an aggregate output, a join side's
             // column): prune again so that a second optimization finds
             // nothing to remove.
-            let pruned = prune::prune(&after);
+            let pruned = prune::prune(&after, stats);
             t.step("Cse", 1, "Prune", &after, &pruned);
             if Arc::ptr_eq(&pruned, &after) {
                 after
@@ -746,9 +803,10 @@ fn broadcast_max(config: Option<&Config>) -> Option<f64> {
 /// while tidying leaves a constant `false` filter and changes the plan.
 fn prune_and_tidy(
     root: &Arc<LogicalPlan>,
+    stats: Option<&dyn Statistics>,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let pruned = t.once("Prune", root, |r| Ok(prune::prune(r)))?;
+    let pruned = t.once("Prune", root, |r| Ok(prune::prune(r, stats)))?;
     let mut root = batch(Arc::clone(&pruned), "Tidy", t)?;
     // Tidying can fold a filter to a constant `false` and leave columns
     // unread (a `false` that reached a filter on `b` frees `b`; constants
@@ -759,7 +817,7 @@ fn prune_and_tidy(
     let mut changed = !Arc::ptr_eq(&root, &pruned) && has_false_filter(&root);
     let mut round = 2;
     while changed && round <= MAX_ITERATIONS {
-        let pruned = prune::prune(&root);
+        let pruned = prune::prune(&root, stats);
         t.step("Prune", round, "Prune", &root, &pruned);
         if Arc::ptr_eq(&pruned, &root) {
             break;
@@ -776,31 +834,33 @@ fn prune_and_tidy(
 fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
-    propagate: bool,
+    options: &Options,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) = eager::rewrite(Arc::clone(root), stats, propagate)?;
+    let (after, notes) = eager::rewrite(Arc::clone(root), stats, options.stats_propagation)?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.
     if Arc::ptr_eq(&after, root) {
         Ok(after)
     } else {
-        order_and_restrict(after, stats, propagate, joins, t)
+        order_and_restrict(after, stats, options, joins, t)
     }
 }
 
 /// Join ordering alternating with restriction and inferred join filters,
 /// until neither changes the plan. The trees of the last ordering, the
-/// plan's own, are described in the trace.
+/// plan's own, are described in the trace. Without
+/// [`Options::inferred_join_filters`] the loop orders and restricts only.
 fn order_and_restrict(
     mut root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
-    propagate: bool,
+    options: &Options,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let propagate = options.stats_propagation;
     let mut notes = Vec::new();
     for round in 1..=MAX_ITERATIONS {
         let input = Arc::clone(&root);
@@ -840,7 +900,11 @@ fn order_and_restrict(
         // The filters of the joins ordering and restriction formed: ordering
         // keys its canonical input order on them, so they are part of the
         // loop.
-        let inferred = infer_join_filters(&rewritten)?;
+        let inferred = if options.inferred_join_filters {
+            infer_join_filters(&rewritten)?
+        } else {
+            Arc::clone(&rewritten)
+        };
         t.step(
             "JoinOrder",
             round,

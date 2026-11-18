@@ -40,32 +40,44 @@ impl Session {
         })
     }
 
-    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
-    /// external local location) as [`Self::authorize_path`] does, a relative external location after
-    /// qualifying it against the working directory as its writes do, and an object-store location in its
-    /// qualified form. Returns the canonical local path checked (`None` for an object store).
+    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: where [`Self::location_asked`]
+    /// places it. Returns the canonical local path checked (`None` for an object store).
     pub(super) async fn authorize_location(
         &self,
         location: &Path,
         managed: bool,
     ) -> Result<Option<CheckedDir>, KrishivError> {
         let (create, class) = (&[Privilege::Create], StatementClass::Ddl);
+        match self.location_asked(location, managed)? {
+            LocationAsked::Local(local) => {
+                self.authorize_path(&local, create, class).await.map(Some)
+            }
+            LocationAsked::Store(qualified) => {
+                let securable = Securable::Path(OptionValue::from_user("path", qualified));
+                self.authorize_securable(&securable, create, class).await?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Where CREATE TABLE asks `CREATE` on a table's `location` ([`Self::authorize_location`]): a managed
+    /// table's directory (and an external local location) as [`Self::authorize_path`] asks it, a relative
+    /// external location after qualifying it against the working directory as its writes do, and an
+    /// object-store location in its qualified form. The analyze API lists the same (`questions.rs`).
+    pub(super) fn location_asked(
+        &self,
+        location: &Path,
+        managed: bool,
+    ) -> Result<LocationAsked, KrishivError> {
         match location.to_str() {
             Some(text) if !managed && !location.is_absolute() => {
                 let qualified = self.qualify_path(text)?;
-                match qualified.strip_prefix("file:") {
-                    Some(local) => self
-                        .authorize_path(Path::new(local), create, class)
-                        .await
-                        .map(Some),
-                    None => {
-                        let securable = Securable::Path(OptionValue::from_user("path", qualified));
-                        self.authorize_securable(&securable, create, class).await?;
-                        Ok(None)
-                    }
-                }
+                Ok(match qualified.strip_prefix("file:") {
+                    Some(local) => LocationAsked::Local(PathBuf::from(local)),
+                    None => LocationAsked::Store(qualified),
+                })
             }
-            _ => self.authorize_path(location, create, class).await.map(Some),
+            _ => Ok(LocationAsked::Local(location.to_path_buf())),
         }
     }
 
@@ -214,11 +226,38 @@ impl Session {
         &self,
         table: &CatalogTable,
     ) -> Result<Option<PathBuf>, KrishivError> {
+        let Some((location, canonical)) = self.deletable_location(table)? else {
+            return Ok(None);
+        };
+        let location = &location;
+        // Asked about the location as written (`..` folded): the policy gets it resolved, the caller's
+        // denial names it as written. It resolves to the directory checked above, or nothing is deleted.
+        let checked = self
+            .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
+            .await?;
+        if checked.path != canonical {
+            return Err(internal(format!(
+                "refusing to delete {}: it changed while it was checked",
+                location.display()
+            )));
+        }
+        Ok(Some(checked.path))
+    }
+
+    /// The directory of the managed `table` that [`Self::deletable_dir`] asks the policy about, before it
+    /// asks: the location as written (`..` folded) and the directory it resolves to, after the containment
+    /// checks (inside the root the table was created under, not that root, not a link). `None` when there
+    /// is nothing to delete (an external table, or a directory that does not exist). The analyze API lists
+    /// `MODIFY` on it as a run's question (`analyze/dirs.rs`).
+    pub(crate) fn deletable_location(
+        &self,
+        table: &CatalogTable,
+    ) -> Result<Option<(PathBuf, PathBuf)>, KrishivError> {
         if !table.managed {
             return Ok(None);
         }
         // `..` folded in the text first, as every other check and the writes fold it.
-        let location = &local_of(&crate::access::lexical_dir(&table.location)?.display);
+        let location = local_of(&crate::access::lexical_dir(&table.location)?.display);
         let meta = match location.symlink_metadata() {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -241,18 +280,7 @@ impl Session {
                 location.display()
             )));
         }
-        // Asked about the location as written (`..` folded): the policy gets it resolved, the caller's
-        // denial names it as written. It resolves to the directory checked above, or nothing is deleted.
-        let checked = self
-            .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
-            .await?;
-        if checked.path != canonical {
-            return Err(internal(format!(
-                "refusing to delete {}: it changed while it was checked",
-                location.display()
-            )));
-        }
-        Ok(Some(checked.path))
+        Ok(Some((location, canonical)))
     }
 }
 
@@ -307,6 +335,14 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
         let _ = path;
         None
     }
+}
+
+/// Where a CREATE TABLE asks about a table's location ([`Session::location_asked`]).
+pub(super) enum LocationAsked {
+    /// A local path, asked as [`Session::authorize_path`] asks it.
+    Local(PathBuf),
+    /// An object-store location, in its qualified form.
+    Store(String),
 }
 
 /// A local directory as [`Session::authorize_path`] checked it: `path`, canonical, is the one to act on;

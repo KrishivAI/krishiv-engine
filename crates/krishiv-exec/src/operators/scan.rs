@@ -157,6 +157,14 @@ pub trait ScanPushdown: Send + Sync {
     /// How far a scan built with `filter` honours it. The planner keeps the
     /// `Filter` above the scan unless this is [`FilterPushdown::Exact`].
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown;
+    /// Whether a query that references exactly the table columns `referenced` (the columns the plan
+    /// above the scan reads, not the one a scan keeps only to count rows) reads nothing but the
+    /// JSON/CSV corrupt-record column, which Spark refuses (`QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+    /// The default is false: only JSON and CSV file scans have such a column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let _ = referenced;
+        false
+    }
     /// Whether [`ScanPushdowns::selection`] is honoured.
     fn supports_selection(&self) -> bool {
         false
@@ -212,6 +220,13 @@ pub trait ScanPushdown: Send + Sync {
         Box::pin(std::future::ready(Err(internal(
             "this scan can't read rows by position".to_owned(),
         ))))
+    }
+    /// What `EXPLAIN` adds to the scan's line for a scan built with
+    /// `pushdowns` (for example a table format's snapshot and file counts),
+    /// after its columns and pushed filters. The default adds nothing.
+    fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
+        let _ = pushdowns;
+        None
     }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the

@@ -154,6 +154,91 @@ fn column_grants_allow_only_their_columns() {
     assert_eq!(ok(&ana, "SELECT count(*), max(b) FROM t"), 1);
 }
 
+/// `observe()` metrics read the columns they name: a metric over a column without a grant refuses
+/// the action, even when the frame's output (a projection above the observation) needs only
+/// granted columns. A DataFrame column is no reference the statement wrote, so the refusal names
+/// the table, never the column (ADR 0048 A1 §3, `krishiv_plan` `analyzer/written.rs`).
+#[test]
+fn observe_metrics_need_a_grant_on_their_columns() {
+    use krishiv_session::Observation;
+    use krishiv_session::functions::{col, max};
+    let w = World::new();
+    table(&w, "t");
+    let (root, ana) = (w.admin(), w.user("ana"));
+    ok(&root, "GRANT SELECT (a) ON t TO user:ana");
+    let count = |metric: &str| {
+        block_on(async {
+            let obs = Observation::new();
+            let df = ana
+                .table("t")
+                .observe(&obs, [max(col(metric))])?
+                .select([col("a")]);
+            df.collect().await.map(|b| {
+                b.iter()
+                    .map(arrow_array::RecordBatch::num_rows)
+                    .sum::<usize>()
+            })
+        })
+    };
+    let rows = count("a").unwrap_or_else(|e| panic!("observe(max(a)): {e}"));
+    assert_eq!(rows, 1, "the one row of `t`");
+    match count("b") {
+        Err(e) if e.error_class().name() == DENIED => {
+            let text = e.to_string();
+            assert!(text.contains("`t`") && !text.contains("`b`"), "{e}");
+        }
+        other => panic!("observe(max(b)): expected a denial, got {other:?}"),
+    }
+}
+
+/// `ROLLUP`, `CUBE` and `GROUPING SETS` read the columns they name and no other: a column grant
+/// on exactly those runs them, and one referenced column without a grant refuses them.
+#[test]
+fn column_grants_cover_grouping_sets_over_their_columns() {
+    let w = World::new();
+    let root = w.admin();
+    ok(
+        &root,
+        "CREATE TABLE g (a INT, b INT, c INT, d INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO g VALUES (1, 2, 3, 4)");
+    let ana = w.user("ana");
+    ok(&root, "GRANT SELECT (a, b, c) ON g TO user:ana");
+    // One input row: one output row per grouping set.
+    let shapes = [
+        (
+            "SELECT a, b, sum(c), grouping(a), grouping_id() FROM g GROUP BY ROLLUP(a, b)",
+            3,
+        ),
+        ("SELECT a, sum(c) FROM g GROUP BY CUBE(a, b)", 4),
+        (
+            "SELECT a, grouping_id(a, b), max(c) FROM g GROUP BY GROUPING SETS ((a), (a, b), ())",
+            3,
+        ),
+        ("SELECT a + b, count(c) FROM g GROUP BY ROLLUP(a + b)", 2),
+    ];
+    for (sql, rows) in shapes {
+        assert_eq!(ok(&ana, sql), rows, "{sql}");
+    }
+    // The same shapes with `d` referenced (a key, an aggregate input, a computed key).
+    for sql in [
+        "SELECT a, b, sum(c), grouping(a) FROM g GROUP BY ROLLUP(a, b, d)",
+        "SELECT a, sum(d) FROM g GROUP BY CUBE(a, b)",
+        "SELECT a, grouping_id(a, d) FROM g GROUP BY GROUPING SETS ((a), (a, d))",
+        "SELECT a + d, count(c) FROM g GROUP BY ROLLUP(a + d)",
+    ] {
+        let e = denied(&ana, sql);
+        assert!(e.contains("`d`"), "{sql}: {e}");
+    }
+    // Without `c`, the shapes reading `c` are refused.
+    let bob = w.user("bob");
+    ok(&root, "GRANT SELECT (a, b) ON g TO user:bob");
+    for (sql, _) in shapes {
+        let e = denied(&bob, sql);
+        assert!(e.contains("`c`"), "{sql}: {e}");
+    }
+}
+
 #[test]
 fn roles_are_transitive_and_cycles_are_refused() {
     let w = World::new();

@@ -134,8 +134,10 @@ pub(crate) struct QueryFunctions {
     map: Arc<FunctionMap>,
     catalog: Arc<SessionCatalog>,
     case_sensitive: bool,
-    /// The current catalog is `system` (which has no namespaces): a two-part call is no stored function.
-    in_system: bool,
+    /// The current catalog is another than `spark_catalog` (`system`, which has no namespaces, or a
+    /// declared one): a two-part call is no stored function, and a stored body's calls are
+    /// `spark_catalog`'s.
+    outside_session: bool,
     /// The functions stored in the catalog's namespaces, as of the start of
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
@@ -267,9 +269,11 @@ impl QueryFunctions {
     ) -> Self {
         let stored = catalog.store.functions();
         let path = catalog.sql_path("");
-        let in_system = crate::system::is_system(&catalog.current_catalog());
+        let outside_session = !catalog
+            .current_catalog()
+            .eq_ignore_ascii_case(crate::catalog::CATALOG);
         Self {
-            in_system,
+            outside_session,
             path,
             base,
             map,
@@ -293,7 +297,7 @@ impl QueryFunctions {
             map: Arc::clone(&self.map),
             catalog: Arc::clone(&self.catalog),
             case_sensitive: self.case_sensitive,
-            in_system: self.in_system,
+            outside_session: self.outside_session,
             stored: Arc::clone(&self.stored),
             path: self.path.clone(),
             views: self.views.clone(),
@@ -526,9 +530,9 @@ impl QueryFunctions {
             .clone()
     }
 
-    /// This registry as the query snapshot saw the current catalog (`system` or not).
-    pub(crate) fn in_system(mut self, in_system: bool) -> Self {
-        self.in_system = in_system;
+    /// This registry as the query snapshot saw the current catalog (`spark_catalog` or not).
+    pub(crate) fn outside_session(mut self, outside_session: bool) -> Self {
+        self.outside_session = outside_session;
         self
     }
 
@@ -649,7 +653,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
-                    in_system: self.in_system,
+                    outside_session: self.outside_session,
                     // A body's definer views are not trusted by identity (no `DefinerTexts`).
                     cte_precedence: krishiv_plan::analyzer::CtePrecedencePolicy::Corrected,
                     path: if def.path.is_empty() {
@@ -789,7 +793,7 @@ impl QueryFunctions {
                     };
                     // A call written `ns.f()` inside a stored body is the defining catalog's, whatever
                     // catalog is current when the body is expanded.
-                    if self.in_system
+                    if self.outside_session
                         && let [q] = call.qualifier.as_slice()
                         && !q.eq_ignore_ascii_case("session")
                         && !q.eq_ignore_ascii_case("system")
@@ -877,7 +881,7 @@ impl QueryFunctions {
                 fold(namespace, self.case_sensitive),
             ]),
             None if in_view => None,
-            None if self.in_system => Some(vec![
+            None if self.outside_session => Some(vec![
                 crate::catalog::CATALOG.to_owned(),
                 namespace.to_owned(),
             ]),
@@ -1229,7 +1233,7 @@ impl FunctionRegistry for QueryFunctions {
             }),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
-            [_, f] if !self.in_system => stored(&ns(0), f),
+            [_, f] if !self.outside_session => stored(&ns(0), f),
             [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
             _ => None,
         };

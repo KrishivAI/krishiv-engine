@@ -855,6 +855,30 @@ fn a_region_cannot_name_a_host() {
 }
 
 #[test]
+fn the_spark_root_keeps_the_scheme_and_authority_as_written() {
+    // Spark 4.2.0 run (hadoop-aws 3.5.0, hadoop-azure 3.5.0 `makeQualified`): the scheme is
+    // lower-cased, the authority kept as written, an Azure host lower-cased.
+    for (input, root) in [
+        ("s3a://bucket/dir/k", Some("s3a://bucket")),
+        ("S3A://bucket/dir", Some("s3a://bucket")),
+        ("s3://bucket/k", Some("s3://bucket")),
+        ("gs://bucket/k", Some("gs://bucket")),
+        (
+            "abfss://c@Acct.DFS.core.windows.net/k",
+            Some("abfss://c@acct.dfs.core.windows.net"),
+        ),
+        (
+            "abfs://c@acct.blob.core.windows.net",
+            Some("abfs://c@acct.blob.core.windows.net"),
+        ),
+        ("hf://datasets/org/name/k", None),
+    ] {
+        let url = parse_object_url(input).unwrap();
+        assert_eq!(url.spark_root().as_deref(), root, "{input}");
+    }
+}
+
+#[test]
 fn onelake_hosts_keep_their_host_and_never_share_an_azure_store() {
     // (url, account, host, store id): object_store 0.14.2 `azure/builder.rs` `parse_url`
     // (l.720-756) takes the account from the first label (two labels for a workspace private

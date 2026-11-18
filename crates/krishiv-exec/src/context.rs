@@ -90,6 +90,10 @@ pub struct ExecConfig {
     /// 0 (`krishiv.sql.unionOutputPartitioning`, Spark's
     /// `spark.sql.unionOutputPartitioning`).
     pub union_output_partitioning: bool,
+    /// Drivers join small batches before a sink that asks for it and the
+    /// operators of its pipeline that do (`krishiv.exec.coalesceInput`;
+    /// Polars item 2, J1).
+    pub coalesce_input: bool,
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -117,6 +121,7 @@ impl Default for ExecConfig {
             join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
             union_output_partitioning: true,
+            coalesce_input: true,
         }
     }
 }
@@ -173,6 +178,10 @@ impl ExecConfig {
             .get(&krishiv_common::config::UNION_OUTPUT_PARTITIONING)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let coalesce_input = config
+            .get(&krishiv_common::config::EXEC_COALESCE_INPUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -195,6 +204,7 @@ impl ExecConfig {
             shared_broadcast_bytes,
             join_idle_spill_after,
             union_output_partitioning,
+            coalesce_input,
             ..Self::default()
         }
     }

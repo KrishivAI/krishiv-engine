@@ -59,6 +59,14 @@ impl FileFormat for JsonFormat {
         c
     }
 
+    fn corrupt_record_column(&self, o: &FormatOptions) -> Option<String> {
+        Some(
+            o.str("columnNameOfCorruptRecord")
+                .unwrap_or("_corrupt_record")
+                .to_owned(),
+        )
+    }
+
     fn file_suffix(&self, o: &FormatOptions) -> String {
         crate::text::output_suffix(".json", o)
     }
@@ -130,6 +138,8 @@ impl FileFormat for JsonFormat {
     }
 }
 
+#[cfg(test)]
+mod corrupt_tests;
 #[cfg(test)]
 mod golden_tests;
 #[cfg(test)]

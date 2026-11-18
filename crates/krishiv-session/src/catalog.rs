@@ -681,6 +681,27 @@ impl QueryCatalog {
         }
     }
 
+    /// The `_metadata` column `scan` can read (`input_file_name()` reads it): its file source's, none for a
+    /// table that is no file source or a cached snapshot substituted after analysis (Spark's cached data has no
+    /// file either). Iceberg and Delta scans are no `TempTable::Files`: none (a recorded divergence,
+    /// `krishiv-plan` `analyzer/input_file.rs`).
+    pub(crate) fn scan_file_metadata(&self, scan: &Scan) -> FileMetadata {
+        let format = match &scan.source {
+            ReadSource::Files { format, .. } => format.clone(),
+            ReadSource::Table { name, .. } if !crate::system::is_system_table(name) => {
+                match self.loaded_for(name).as_deref() {
+                    Some(TempTable::Files {
+                        source: ReadSource::Files { format, .. },
+                        ..
+                    }) => format.clone(),
+                    _ => return FileMetadata::None,
+                }
+            }
+            _ => return FileMetadata::None,
+        };
+        file_metadata(&format)
+    }
+
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
     /// temporary view or table by its single part, a permanent table by
     /// `namespace.table`.
@@ -807,6 +828,9 @@ impl QueryCatalog {
                         // lease is (no assignment: a stage of one task reads it whole);
                         // a disk snapshot is a driver-local file no worker can open, so
                         // such a plan is refused, not failed as an internal error.
+                        if let Some(e) = self.declared_read(name) {
+                            return Err(e);
+                        }
                         if crate::cache::is_cache_name(last) {
                             if self.cache.is_on_disk(last) {
                                 return Err(unsupported(
@@ -1202,6 +1226,28 @@ fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
+impl QueryCatalog {
+    /// The refusal of a scan of `name` in a declared catalog: such a catalog resolves names only for
+    /// now (design P3-T067 PR-58a), so its table is never loaded and its read is refused, not failed
+    /// as an internal error. `None` when `name` is no declared catalog's.
+    fn declared_read(&self, name: &[String]) -> Option<KrishivError> {
+        let catalog = match name {
+            [c, _, _, ..] if self.system.catalogs.catalog(c).is_some() => c.clone(),
+            [_] | [_, _]
+                if !self.catalog.eq_ignore_ascii_case(CATALOG)
+                    && !crate::system::is_system(&self.catalog) =>
+            {
+                self.catalog.clone()
+            }
+            _ => return None,
+        };
+        Some(unsupported(&format!(
+            "reading the tables of the declared catalog `{}`",
+            catalog.replace('`', "``")
+        )))
+    }
+}
+
 impl Catalog for QueryCatalog {
     fn name(&self) -> &str {
         CATALOG
@@ -1268,7 +1314,7 @@ impl Catalog for QueryCatalog {
     }
 }
 
-/// The resolver of one query: the session catalog only.
+/// The resolver of one query: the session catalog, `system` and the declared catalogs.
 #[derive(Debug)]
 pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
@@ -1289,8 +1335,12 @@ impl CatalogResolver for QueryCatalogs {
         if crate::system::is_system(name) {
             return Some(Arc::new(self.0.system_catalog()));
         }
-        name.eq_ignore_ascii_case(CATALOG)
-            .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
+        if name.eq_ignore_ascii_case(CATALOG) {
+            return Some(Arc::clone(&self.0) as Arc<dyn Catalog>);
+        }
+        // A declared catalog the principal sees (design P3-T067 §2.3, §2.4); a hidden one is
+        // absent, exactly as an undeclared name.
+        self.0.system.catalogs.catalog(name)
     }
 
     fn epoch(&self) -> u64 {
@@ -1333,6 +1383,9 @@ impl TableProviderResolver for QueryCatalog {
                         .map(|(table, _)| Arc::clone(table));
                     if let Some(cached) = pinned.or_else(|| self.cache.table(last)) {
                         return Ok(cached);
+                    }
+                    if let Some(e) = self.declared_read(name) {
+                        return Err(e);
                     }
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),
@@ -1416,8 +1469,9 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
-    /// Whether `system` was the current catalog as the query snapshot saw it.
-    pub(crate) in_system: bool,
+    /// Whether the current catalog was another than `spark_catalog` (`system` or a declared one) as
+    /// the query snapshot saw it.
+    pub(crate) outside_session: bool,
     /// `spark.sql.legacy.ctePrecedencePolicy` in the query's snapshot. A stored view's text resolves its own
     /// `WITH`s under the policy captured with the view, never this one (review r4 Y1): unless both are
     /// `CORRECTED` they are inlined in the text alone before it is expanded

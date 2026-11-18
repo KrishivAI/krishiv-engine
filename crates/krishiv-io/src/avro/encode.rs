@@ -146,6 +146,8 @@ fn put_items(
 
 /// `v`, the unscaled value of an Arrow decimal of scale `from`, as the
 /// unscaled value of an Avro decimal of `precision` digits and scale `to`.
+/// Spark's `AvroSerializer` needs the precision and scale to be equal; this rescales when no digit is lost (the Avro file
+/// writer relies on it), so `to_avro` writes a decimal where Spark raises.
 ///
 /// # Errors
 /// [`FormatError::WriteFailed`] when the rescale overflows, drops non-zero
@@ -184,7 +186,7 @@ fn rescale(v: i128, from: i8, to: usize, precision: usize) -> FormatResult<i128>
 /// # Errors
 /// [`FormatError::WriteFailed`] for a null in a non-nullable schema or a
 /// value the schema cannot hold.
-fn put_cell(
+pub(super) fn put_cell(
     out: &mut Vec<u8>,
     schema: &AvroSchema,
     array: &ArrayRef,
@@ -250,7 +252,7 @@ fn put_scalar(
         (AvroSchema::Int, DataType::Int16) => {
             put_long(out, i64::from(prim::<t::Int16Type>(array, row)));
         }
-        (AvroSchema::Int | AvroSchema::Long, DataType::Int32) => {
+        (AvroSchema::Int, DataType::Int32) => {
             put_long(out, i64::from(prim::<t::Int32Type>(array, row)));
         }
         (AvroSchema::Long, DataType::Int64) => put_long(out, prim::<t::Int64Type>(array, row)),
@@ -262,9 +264,6 @@ fn put_scalar(
         }
         (AvroSchema::Float, DataType::Float32) => {
             out.extend_from_slice(&prim::<t::Float32Type>(array, row).to_le_bytes());
-        }
-        (AvroSchema::Double, DataType::Float32) => {
-            out.extend_from_slice(&f64::from(prim::<t::Float32Type>(array, row)).to_le_bytes());
         }
         (AvroSchema::Double, DataType::Float64) => {
             out.extend_from_slice(&prim::<t::Float64Type>(array, row).to_le_bytes());
@@ -278,17 +277,9 @@ fn put_scalar(
         (AvroSchema::Bytes, DataType::LargeBinary) => {
             put_bytes(out, array.as_binary::<i64>().value(row));
         }
-        (AvroSchema::Bytes, DataType::Utf8View) => {
-            put_bytes(out, array.as_string_view().value(row).as_bytes());
-        }
         (AvroSchema::String, DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8) => {
             let s = str_at(array, row).ok_or_else(|| fail("string"))?;
             put_bytes(out, s.as_bytes());
-        }
-        (AvroSchema::String, DataType::BinaryView) => {
-            let v = array.as_binary_view().value(row);
-            std::str::from_utf8(v).map_err(|_| write_failed("binary bytes that are not UTF-8"))?;
-            put_bytes(out, v);
         }
         (AvroSchema::Fixed(f), DataType::BinaryView | DataType::Binary) => {
             let v = match array.data_type() {
@@ -332,16 +323,22 @@ fn put_scalar(
         (AvroSchema::TimeMicros, DataType::Time64(TimeUnit::Microsecond)) => {
             put_long(out, prim::<t::Time64MicrosecondType>(array, row));
         }
-        (
-            AvroSchema::TimestampMillis | AvroSchema::LocalTimestampMillis,
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => put_long(out, prim::<t::TimestampMillisecondType>(array, row)),
-        (
-            AvroSchema::TimestampMicros | AvroSchema::LocalTimestampMicros,
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-        ) => put_long(out, prim::<t::TimestampMicrosecondType>(array, row)),
+        // TIMESTAMP maps to `timestamp-*` and TIMESTAMP_NTZ to `local-timestamp-*`, never across.
+        (AvroSchema::TimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, Some(_)))
+        | (AvroSchema::LocalTimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, None)) => {
+            put_long(out, prim::<t::TimestampMillisecondType>(array, row));
+        }
+        (AvroSchema::TimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, Some(_)))
+        | (AvroSchema::LocalTimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, None)) => {
+            put_long(out, prim::<t::TimestampMicrosecondType>(array, row));
+        }
         (AvroSchema::Record(r), DataType::Struct(_)) => {
             let s = array.as_struct();
+            // Stricter than Spark 4.2, which refuses extra SQL fields but allows extra nullable Avro fields and matches names
+            // case-insensitively by default: here a different number of fields is refused (loudly, never a wrong result).
+            if s.num_columns() != r.fields.len() {
+                return Err(fail("struct with a different number of fields"));
+            }
             for f in &r.fields {
                 let Some(child) = s.column_by_name(&f.name) else {
                     return Err(write_failed(format!(
@@ -673,9 +670,12 @@ mod tests {
         let one_f32: ArrayRef = Arc::new(arrow_array::Float32Array::from(vec![1.5]));
         assert!(cell_bytes(&parse(r#""int""#), &one_i8).is_ok());
         assert!(cell_bytes(&parse(r#""int""#), &one_i16).is_ok());
-        // A `float` column holds a `double`, widening as the readers do.
-        assert!(cell_bytes(&parse(r#""double""#), &one_f32).is_ok());
         assert!(cell_bytes(&parse(r#""float""#), &one_f32).is_ok());
+        // Spark's `AvroSerializer` never widens a SQL float to a double, or an int to a long (`IncompatibleSchemaException`).
+        assert!(cell_bytes(&parse(r#""double""#), &one_f32).is_err());
+        let one_i32: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
+        assert!(cell_bytes(&parse(r#""int""#), &one_i32).is_ok());
+        assert!(cell_bytes(&parse(r#""long""#), &one_i32).is_err());
     }
 
     #[test]
@@ -687,15 +687,13 @@ mod tests {
         assert!(cell_bytes(&bytes_schema, &binary).is_ok());
         assert!(cell_bytes(&bytes_schema, &large).is_ok());
         assert!(cell_bytes(&bytes_schema, &view).is_ok());
-        // `Utf8View` bytes are bytes too.
+        // A SQL string is not Avro bytes (`IncompatibleSchemaException` in Spark).
         let text: ArrayRef = Arc::new(StringViewArray::from(vec!["hi"]));
-        assert!(cell_bytes(&parse(r#""bytes""#), &text).is_ok());
+        assert!(cell_bytes(&parse(r#""bytes""#), &text).is_err());
         // A `string` column holds binary bytes that are UTF-8, nothing else.
         assert!(cell_bytes(&parse(r#""string""#), &text).is_ok());
-        assert!(cell_bytes(&parse(r#""string""#), &view).is_ok());
-        let bad: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"\xff".as_slice()]));
-        let e = cell_bytes(&parse(r#""string""#), &bad).unwrap_err();
-        assert!(e.to_string().contains("not UTF-8"), "{e}");
+        // Binary is not a string (`IncompatibleSchemaException` in Spark).
+        assert!(cell_bytes(&parse(r#""string""#), &view).is_err());
     }
 
     #[test]
@@ -727,14 +725,16 @@ mod tests {
             )
             .is_ok()
         );
-        let ms: ArrayRef = Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]));
-        assert!(
-            cell_bytes(
-                &parse(r#"{"type":"long","logicalType":"timestamp-millis"}"#),
-                &ms
-            )
-            .is_ok()
-        );
+        let ms: ArrayRef =
+            Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]).with_timezone("UTC"));
+        let ntz: ArrayRef = Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]));
+        let ts = parse(r#"{"type":"long","logicalType":"timestamp-millis"}"#);
+        let local = parse(r#"{"type":"long","logicalType":"local-timestamp-millis"}"#);
+        assert!(cell_bytes(&ts, &ms).is_ok());
+        assert!(cell_bytes(&local, &ntz).is_ok());
+        // TIMESTAMP and TIMESTAMP_NTZ never cross (`IncompatibleSchemaException` in Spark).
+        assert!(cell_bytes(&ts, &ntz).is_err());
+        assert!(cell_bytes(&local, &ms).is_err());
     }
 
     #[test]

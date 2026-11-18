@@ -71,15 +71,26 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<crate::access::Checked, KrishivError> {
+        let at = self.locate_write_text(text, options, env)?;
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+    }
+
+    /// The path a write of `text` goes to as the caller wrote it (qualified, `.` and `..` folded in the
+    /// text, no link resolved): what [`Self::locate_write_path`] resolves, and the text its denial names.
+    pub(crate) fn locate_write_text(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        env: &QueryEnv,
+    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
         let stores = self.scoped_stores(&env.config);
-        let at = ObjectPaths::new(
+        ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
             Arc::clone(&self.state.io),
             stores,
         )
-        .locate_with_options(text, options)?;
-        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+        .locate_with_options(text, options)
     }
 
     /// A write's options, before its target is located: locating builds the
@@ -163,6 +174,19 @@ impl Session {
             Privilege::Manage,
         )
         .await
+    }
+
+    /// Whether [`Self::authorize_store_options`] of `options` asks `Manage` on the cluster under the
+    /// session's stored configuration (what a DDL run passes): the analyze API lists it then.
+    pub(crate) fn store_options_asked<'a>(
+        &self,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        options.any(krishiv_io::is_server_scoped_option)
+            || self
+                .state
+                .conf
+                .store_settings_changed(&self.state.conf.snapshot())
     }
 
     /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
@@ -557,5 +581,89 @@ pub(super) struct AbortOnDrop(pub(super) krishiv_exec::TaskHandle);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+impl Session {
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    pub(super) async fn admit(
+        &self,
+        log_id: &str,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        // A query that reads only `system.*` is never queued behind the load it inspects.
+        if exempt {
+            return Ok(self.exempt_permit(log_id));
+        }
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.effective_tags(),
+            class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
+            estimate: env.catalog.estimate(),
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                let done = admit.await;
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => {
+                let queued_ns = permit
+                    .slot::<crate::resource_groups::GroupSlot>()
+                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
+                self.state
+                    .queries
+                    .mark_started(log_id, permit.group(), queued_ns);
+                Ok(permit)
+            }
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
+    /// that is about to change something (a write replacing files) takes the permit first and
+    /// passes it on, so a refused or cancelled query has changed nothing.
+    pub(crate) async fn admit_query(
+        &self,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<Admitted, KrishivError> {
+        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        let log_id = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
+            env.text.as_deref(),
+            env.statement_class,
+            self.operation_id(),
+        )?;
+        crate::action::note_row(&log_id);
+        // The request tags join the row's tags at once, so a queued query shows them too.
+        self.stamp_row(&log_id);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id, env, exempt).await?;
+        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

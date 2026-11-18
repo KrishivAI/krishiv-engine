@@ -249,6 +249,13 @@ impl Session {
             .map_err(|e| internal(format!("cannot create the warehouse directory: {e}")))
     }
 
+    /// The path [`Self::warehouse_dir`] gives, without making the runtime's own directory (the
+    /// analyze API's lookup, review D3: an analysis changes nothing on disk).
+    pub(crate) fn warehouse_path(&self) -> PathBuf {
+        let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
+        self.state.catalog.warehouse.path(configured.as_deref())
+    }
+
     /// Whether `name` is a temporary view (or table) that a bare table name
     /// resolves to before any permanent table.
     pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
@@ -446,23 +453,33 @@ impl Session {
         // Spark's catalog-first rule: unless the statement says NAMESPACE, a
         // first part that names a catalog is the catalog.
         let parts = crate::access::ddl_parts(&u.name, &env)?;
-        let canonical = |p: &str| {
+        // A declared catalog counts only when the principal sees it (design P3-T067 §2.4): a
+        // hidden one is a namespace name like any other.
+        let declared = self.declared_catalogs();
+        let canonical = |p: &str| -> Option<String> {
             if crate::system::is_system(p) {
-                Some("system")
+                Some("system".to_owned())
             } else if p.eq_ignore_ascii_case(crate::catalog::CATALOG) {
-                Some(crate::catalog::CATALOG)
+                Some(crate::catalog::CATALOG.to_owned())
             } else {
-                None
+                declared.canonical(p)
             }
         };
         let quoted = |ps: &[String]| format!("`{}`", ps.join("`.`"));
         if u.kind.is_none()
             && let Some(catalog) = parts.first().and_then(|p| canonical(p))
         {
-            match (catalog, &parts[1..]) {
+            match (catalog.as_str(), &parts[1..]) {
                 (_, []) => {
-                    self.state.catalog.use_catalog(catalog);
+                    self.state.catalog.use_catalog(&catalog);
                     return self.empty_frame().await;
+                }
+                (c, _) if c != "system" && c != crate::catalog::CATALOG => {
+                    // A declared catalog's namespaces are its own: `USE cat.ns` arrives with them.
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("USE of a namespace in the declared catalog `{c}`"),
+                    }
+                    .into());
                 }
                 ("system", rest) => {
                     return Err(SchemaNotFound {
@@ -1141,30 +1158,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.table_name(&a.table, &env)?;
-        if self
-            .state
-            .catalog
-            .store
-            .table(&name.namespace, &name.name)
-            .is_some_and(|t| t.view.is_some())
-        {
-            if matches!(a.action, AlterTableAction::SetComment(_)) {
-                // Spark's error for a view here is not recorded in the goldens yet.
-                return Err(unsupported("COMMENT ON TABLE of a view"));
-            }
-            return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
-                operation: "`ALTER TABLE`".to_owned(),
-                view_name: name.quoted(),
-            }
-            .into());
-        }
-        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
-            "COMMENT ON TABLE"
-        } else {
-            "ALTER TABLE"
-        };
-        let table = self.table_for_write(&name, operation, &env)?;
+        let (name, table) = self.altered_table(a, &env)?;
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
@@ -1363,22 +1357,55 @@ impl Session {
         Ok(())
     }
 
-    /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
-    /// between puts the directory back.
-    async fn rename_table(
+    /// The table an `ALTER TABLE` changes, and its name: a view is refused (`ALTER VIEW` changes it), as
+    /// is a temporary view or a missing table (`table_for_write`). The run's first step, and analyze's.
+    pub(super) fn altered_table(
+        &self,
+        a: &AlterTable,
+        env: &QueryEnv,
+    ) -> Result<(TableName, Arc<CatalogTable>), KrishivError> {
+        let name = self.table_name(&a.table, env)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+        {
+            if matches!(a.action, AlterTableAction::SetComment(_)) {
+                // Spark's error for a view here is not recorded in the goldens yet.
+                return Err(unsupported("COMMENT ON TABLE of a view"));
+            }
+            return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
+                operation: "`ALTER TABLE`".to_owned(),
+                view_name: name.quoted(),
+            }
+            .into());
+        }
+        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+            "COMMENT ON TABLE"
+        } else {
+            "ALTER TABLE"
+        };
+        let table = self.table_for_write(&name, operation, env)?;
+        Ok((name, table))
+    }
+
+    /// The checks of `ALTER TABLE old RENAME TO new` before anything moves (the run's and analyze's,
+    /// `questions.rs`): the new name, in the source's namespace when bare (a table never changes namespace,
+    /// Spark 4.2), and not taken.
+    pub(super) fn rename_target(
         &self,
         table: &CatalogTable,
         to: &TableName,
-    ) -> Result<DataFrame, KrishivError> {
-        // A bare target stays in the source's namespace, and a table never changes namespace (Spark 4.2).
+    ) -> Result<TableName, KrishivError> {
         let mut to = to.clone();
         if to.bare {
             to.namespace.clone_from(&table.namespace);
         }
-        let to = &to;
         check_new_name(&to.namespace)?;
         check_new_name(&to.name)?;
-        self.check_namespace(to)?;
+        self.check_namespace(&to)?;
         if to.namespace != table.namespace {
             return Err(krishiv_common::error::LegacyErrorTemp1073 {
                 db: table.namespace.clone(),
@@ -1386,13 +1413,30 @@ impl Session {
             }
             .into());
         }
-        let store = &self.state.catalog.store;
-        if store.table(&to.namespace, &to.name).is_some() {
+        if self
+            .state
+            .catalog
+            .store
+            .table(&to.namespace, &to.name)
+            .is_some()
+        {
             return Err(krishiv_common::error::TableOrViewAlreadyExists {
                 relation_name: to.quoted(),
             }
             .into());
         }
+        Ok(to)
+    }
+
+    /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
+    /// between puts the directory back.
+    async fn rename_table(
+        &self,
+        table: &CatalogTable,
+        to: &TableName,
+    ) -> Result<DataFrame, KrishivError> {
+        let to = &self.rename_target(table, to)?;
+        let store = &self.state.catalog.store;
         let mut renamed = table.clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
@@ -1882,6 +1926,7 @@ pub(crate) fn now_ms() -> i64 {
 
 mod files;
 pub(crate) use files::CheckedDir;
+mod questions;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
@@ -1889,78 +1934,8 @@ use location::qualified_namespace_location;
 #[cfg(test)]
 mod tests;
 
-/// Why an [`OwnedDirectory`] could not be made.
-#[derive(Debug)]
-pub(crate) enum OwnedDirectoryError {
-    /// Something is already at the path (not ours to touch).
-    Exists,
-    Io(String),
-}
-
-/// A directory this statement created exclusively. Dropped without [`Self::keep`] (the statement
-/// failed, or its future was dropped), it removes what is in it, provided the path still names the
-/// directory that was created (same device and inode): a path swapped for another directory in the
-/// meantime is left alone.
-pub(crate) struct OwnedDirectory {
-    path: PathBuf,
-    identity: Option<(u64, u64)>,
-    kept: bool,
-}
-
-impl OwnedDirectory {
-    pub(crate) fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
-            })?;
-        }
-        match std::fs::create_dir(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(OwnedDirectoryError::Exists);
-            }
-            Err(e) => {
-                return Err(OwnedDirectoryError::Io(format!(
-                    "cannot create {}: {e}",
-                    path.display()
-                )));
-            }
-        }
-        let identity = Self::identity_of(&path);
-        Ok(Self {
-            path,
-            identity,
-            kept: false,
-        })
-    }
-
-    fn identity_of(path: &Path) -> Option<(u64, u64)> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::symlink_metadata(path).ok()?;
-            meta.is_dir().then(|| (meta.dev(), meta.ino()))
-        }
-        #[cfg(not(unix))]
-        {
-            let meta = std::fs::symlink_metadata(path).ok()?;
-            meta.is_dir().then_some((0, 0))
-        }
-    }
-
-    /// The statement succeeded: the directory stays.
-    pub(crate) fn keep(mut self) {
-        self.kept = true;
-    }
-}
-
-impl Drop for OwnedDirectory {
-    fn drop(&mut self) {
-        if !self.kept && self.identity.is_some() && Self::identity_of(&self.path) == self.identity {
-            drop(std::fs::remove_dir_all(&self.path));
-        }
-    }
-}
+mod owned_directory;
+pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 
 #[cfg(test)]
 mod owned_directory_tests;

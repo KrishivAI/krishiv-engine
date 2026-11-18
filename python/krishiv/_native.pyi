@@ -14,6 +14,7 @@ from typing import final
 
 __version__: str
 __allocator__: str
+__commit__: str
 __all__ = [
     "AnonymousPythonUdf",
     "ArrowStream",
@@ -24,6 +25,7 @@ __all__ = [
     "Session",
     "WindowSpec",
     "__allocator__",
+    "__commit__",
     "__version__",
     "_udf_pool_shutdown",
     "_udf_runner_conf",
@@ -227,6 +229,8 @@ class ArrowStream:
     def from_arrow(data: object) -> ArrowStream: ...
     def __arrow_c_schema__(self) -> object: ...
     def __arrow_c_stream__(self, requested_schema: object | None = ...) -> object: ...
+    def use_placeholder_names(self) -> None: ...
+    def names(self) -> list[str]: ...
     def check_error(self) -> None: ...
     @property
     def consumed(self) -> bool: ...
