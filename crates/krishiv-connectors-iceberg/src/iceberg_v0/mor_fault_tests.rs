@@ -17,7 +17,7 @@ use krishiv_exec::planner::RowLevelOperation;
 use krishiv_memory::{ConsumerHandle, MemoryConfig, MemoryPool, TreePool};
 
 use super::commit::{CommitOutcome, CommitTable};
-use super::cow_tests::{add_deletes, append, create, dvs_in_one_puffin, summary};
+use super::cow_tests::{add_deletes, append, create, dvs_in_one_puffin, position_delete, summary};
 use super::mor_tests::{Mor, Task, files_ending, only_data_file};
 use super::provider_tests::{Env, env};
 use super::sink_tests::{Catalog, expected, parquet_files, range, read_back};
@@ -241,4 +241,173 @@ fn an_aborted_task_leaves_nothing() {
     });
     assert_eq!(parquet_files(&env, true), before);
     assert_eq!(catalog.metadata().snapshots().count(), 1);
+}
+
+/// Every file under the test's directory.
+fn all_files(env: &Env) -> std::collections::BTreeSet<String> {
+    files_ending(env, "").into_iter().collect()
+}
+
+/// Waits (up to 5 s) for background deletes to bring the directory back to
+/// `before` and keep it there for 100 ms (a write in flight may land late);
+/// returns what is left over.
+fn settle(env: &Env, before: &std::collections::BTreeSet<String>) -> Vec<String> {
+    let extra = || {
+        all_files(env)
+            .difference(before)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mut quiet = 0;
+    let mut left = extra();
+    for _ in 0..1_000 {
+        left = extra();
+        quiet = if left.is_empty() { quiet + 1 } else { 0 };
+        if quiet >= 20 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    left
+}
+
+/// Polls a `DELETE` task's `finish` over `ids` until it is ready (its
+/// output), or after `polls` polls (`Some`), or (`None`) once at least
+/// `files` files beyond `before` exist; then drops it.
+fn drive(
+    env: &Env,
+    w: &Arc<super::row_delta::MergeOnReadWrite>,
+    ids: &[super::mor_tests::RowId],
+    stop: Option<usize>,
+    files: usize,
+    before: &std::collections::BTreeSet<String>,
+) -> Option<super::row_delta::TaskOutput> {
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let mut task = w.task(0, ConsumerHandle::register(pool, "t", None));
+    for (f, p) in ids {
+        task.delete(f, *p).unwrap();
+    }
+    env.rt.block_on(async {
+        let mut finish = std::pin::pin!(task.finish());
+        let mut n = 0;
+        loop {
+            if let std::task::Poll::Ready(out) = futures::poll!(finish.as_mut()) {
+                return Some(out.unwrap());
+            }
+            n += 1;
+            let done = match stop {
+                Some(max) => n >= max,
+                None => all_files(env).difference(before).count() >= files,
+            };
+            if done {
+                return None;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+}
+
+/// Review 36c1 M3: a `DELETE` task's `finish` over two data files (v2: two
+/// position delete files; v3: one Puffin file; each absorbing an old
+/// file-scoped delete of the first file, so it reads before it writes),
+/// dropped after a growing number of polls, yielding in between, leaves no file
+/// wherever it stopped: `finish`'s guard deletes the delete files written,
+/// and a `put` dropped in flight deletes its file once the store is done.
+/// Then, deterministically, a drop once two new files exist (v2: the first
+/// file written, the second's upload begun). Once `finish` completes, the
+/// output never committed is aborted (`MergeOnReadWrite::abort`) and leaves
+/// no file either. (A task's data writer dropped while it closes a file is
+/// `write.rs`'s documented limit, so new rows are tested through
+/// `an_aborted_statement_deletes_its_finished_tasks_files`.)
+#[test]
+fn a_dropped_finish_and_an_uncommitted_output_leave_no_file() {
+    for version in [2_u8, 3] {
+        let env = env();
+        let t = create(&env, version, false, &[]);
+        let catalog = Catalog::new(&t);
+        append(&env, &catalog, range(0, 10));
+        let first = only_data_file(&env, &catalog);
+        append(&env, &catalog, range(10, 20));
+        add_deletes(&env, &catalog, |_| {
+            if version == 3 {
+                dvs_in_one_puffin(&env, "old.puffin", std::slice::from_ref(&first), &[0])
+            } else {
+                vec![position_delete(&env, "old.parquet", &first, 0)]
+            }
+        });
+        let before = all_files(&env);
+        let mor = Mor::open(&env, &catalog, RowLevelOperation::Delete);
+        let ids = mor.ids("id IN (2, 3, 12)");
+        let w = mor.writer();
+        let none = Vec::<String>::new();
+        let mut polls = 1;
+        loop {
+            let out = drive(&env, &w, &ids, Some(polls), 0, &before);
+            if let Some(out) = out {
+                assert_eq!(out.files.len(), if version == 3 { 1 } else { 2 });
+                assert!(all_files(&env).len() > before.len());
+                env.rt.block_on(w.abort(vec![out]));
+                assert_eq!(settle(&env, &before), none, "v{version}");
+                break;
+            }
+            assert_eq!(
+                settle(&env, &before),
+                none,
+                "v{version} after {polls} polls"
+            );
+            // Every early stop, then sparser (a put spins many polls).
+            polls += 1 + polls / 8;
+        }
+        let mut caught = version == 3;
+        for _ in 0..if caught { 0 } else { 100 } {
+            match drive(&env, &w, &ids, None, 2, &before) {
+                Some(out) => env.rt.block_on(w.abort(vec![out])),
+                None => caught = true,
+            }
+            assert_eq!(settle(&env, &before), none, "v{version}");
+            if caught {
+                break;
+            }
+        }
+        assert!(caught, "v{version}: no drop caught two files");
+        assert_eq!(catalog.metadata().snapshots().count(), 3);
+    }
+}
+
+/// Review 36c1 M3: two tasks, the first finished, the second aborted, then
+/// the statement aborted before its commit (Java's
+/// `PositionDeltaBatchWrite.abort`): no file is left, for DVs and v2
+/// position delete files alike.
+#[test]
+fn an_aborted_statement_deletes_its_finished_tasks_files() {
+    for version in [2_u8, 3] {
+        let env = env();
+        let t = create(&env, version, false, &[]);
+        let catalog = Catalog::new(&t);
+        append(&env, &catalog, range(0, 10));
+        let before = all_files(&env);
+        let mor = Mor::open(&env, &catalog, RowLevelOperation::Merge);
+        let ids = mor.ids("id = 4");
+        let rows = mor.updated("id = 4", "'m'");
+        let w = mor.writer();
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        env.rt.block_on(async {
+            let mut first = w.task(0, ConsumerHandle::register(Arc::clone(&pool), "a", None));
+            for (f, p) in &ids {
+                first.delete(f, *p).unwrap();
+            }
+            for b in &rows {
+                first.insert(b).await.unwrap();
+            }
+            let out = first.finish().await.unwrap();
+            assert_eq!(out.files.len(), 1, "v{version}");
+            assert_eq!(out.data.len(), 1, "v{version}");
+            let mut second = w.task(1, ConsumerHandle::register(Arc::clone(&pool), "b", None));
+            second.insert(&mor.new_rows(30, 32)).await.unwrap();
+            second.abort().await;
+            w.abort(vec![out]).await;
+        });
+        assert_eq!(settle(&env, &before), Vec::<String>::new(), "v{version}");
+        assert_eq!(read_back(&env, &catalog), expected(0..10));
+    }
 }
