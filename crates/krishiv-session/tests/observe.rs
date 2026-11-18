@@ -420,7 +420,15 @@ fn retained_states_and_the_merge_are_charged_to_the_memory_pool() {
         .range(0, 200_000, 1, Some(2))
         .observe(&obs, [expr("collect_list(id)").unwrap().alias("l")])
         .unwrap();
-    let ran = block_on(df.count());
+    // Drained, not counted: `count()` is an aggregate of its own, which the
+    // pool would refuse first.
+    let ran = block_on(async {
+        let mut stream = df.execute_stream().await?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+        Ok::<_, krishiv_common::error::KrishivError>(())
+    });
     let got = obs.get_timeout(Duration::from_secs(10));
     let e = ran
         .err()
