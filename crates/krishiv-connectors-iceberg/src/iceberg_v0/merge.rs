@@ -64,6 +64,7 @@ use iceberg::spec::{
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
+use super::filter::widen_partition;
 use super::scan::read_capped;
 use super::storage::from_iceberg;
 
@@ -381,7 +382,10 @@ async fn copy_entries(
         let seq = |v: Option<i64>| v.or(inherits.then_some(m.sequence_number));
         let data_seq = seq(e.sequence_number());
         let file_seq = seq(e.file_sequence_number);
-        let file = e.data_file();
+        // A manifest written before `int -> long` or `float -> double` on a
+        // partition source column holds the old literal, which the writer on
+        // the current schema refuses (review 36b2b round 2, finding 1).
+        let file = &widen_partition(e.data_file().clone(), cx.metadata, m.partition_spec_id)?;
         let row_id = match &mut next_row_id {
             Some(next) if status != ManifestStatus::Deleted && file.first_row_id().is_none() => {
                 let id = *next;

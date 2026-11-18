@@ -231,8 +231,8 @@ pub(crate) struct FilterContext<'a> {
 /// `f` with its partition tuple at the spec's current partition type
 /// (review 36b2b M3): a manifest written before `int -> long` or `float ->
 /// double` holds the old literal, which iceberg-rust refuses to write under
-/// the promoted type when the manifest is rewritten.
-fn widen_partition(
+/// the promoted type when the manifest is rewritten or merged.
+pub(super) fn widen_partition(
     f: DataFile,
     metadata: &TableMetadata,
     spec_id: i32,
