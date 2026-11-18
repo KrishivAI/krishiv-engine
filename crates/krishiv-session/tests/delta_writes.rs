@@ -540,3 +540,37 @@ fn a_new_table_round_trips() {
         serde_json::json!([[2]])
     );
 }
+
+/// An `INSERT` whose rows read a file table (a frame analyzed afresh by each action) writes into
+/// the Delta table it opened: the target is opened in the analysis that is planned. An append of
+/// no rows commits nothing.
+#[test]
+fn an_insert_from_a_file_table_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("d").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE src (a INT) USING parquet").unwrap();
+    run(&s, "INSERT INTO src VALUES (5), (6)").unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE d (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO d SELECT a FROM src").unwrap();
+    run(&s, "CREATE TABLE m USING delta AS SELECT 1 AS a").unwrap();
+    run(&s, "INSERT INTO m SELECT a FROM src").unwrap();
+    run(&s, "INSERT OVERWRITE TABLE d SELECT a + 1 FROM src").unwrap();
+    // An append of no rows writes no version, as delta-spark 4.4.1 (an empty overwrite commits).
+    let dir = tmp.path().join("d");
+    let before = versions(&dir);
+    run(&s, "INSERT INTO d SELECT a FROM src WHERE a > 100").unwrap();
+    assert_eq!(versions(&dir), before);
+    assert_eq!(
+        query(&s, "SELECT a FROM d ORDER BY a"),
+        serde_json::json!([[6], [7]])
+    );
+    assert_eq!(
+        query(&s, "SELECT a FROM m ORDER BY a"),
+        serde_json::json!([[1], [5], [6]])
+    );
+}

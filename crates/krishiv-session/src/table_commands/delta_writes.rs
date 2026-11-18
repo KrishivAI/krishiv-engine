@@ -108,8 +108,10 @@ impl Session {
         options: BTreeMap<String, String>,
         quoted: &str,
     ) -> Result<(), KrishivError> {
-        let (scan, df) = match target {
+        let (scan, df, opened) = match target {
             DeltaTarget::Existing { source, name } => {
+                // The target is opened in the analysis that is planned: a frame that reads files
+                // is analyzed afresh by each action, in a new query catalog.
                 let a = df.action_analysis().await?;
                 let table = a.env.catalog.delta.open(&source, name).await?;
                 let columns = delta_columns(&table)?;
@@ -118,7 +120,7 @@ impl Session {
                     output: bound(&columns),
                     version: None,
                 };
-                (scan, df.clone())
+                (scan, df.clone(), Some(a))
             }
             DeltaTarget::Create {
                 source,
@@ -174,10 +176,13 @@ impl Session {
                 hidden.keep.push(entry);
                 let fresh =
                     DataFrame::new(self.clone(), Arc::clone(&df.plan)).union(&hidden.limit(0));
-                (scan, fresh)
+                (scan, fresh, None)
             }
         };
-        let analysis = df.action_analysis().await?;
+        let analysis = match opened {
+            Some(a) => a,
+            None => df.action_analysis().await?,
+        };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
         request.options = options;

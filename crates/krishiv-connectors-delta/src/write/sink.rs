@@ -1003,6 +1003,13 @@ impl DeltaWriteSink {
             metrics.push(("numCopiedRows".to_owned(), Some("0".to_owned())));
             metrics.push(("numAddedChangeFiles".to_owned(), Some("0".to_owned())));
         }
+        // An append that wrote no file commits nothing: delta-spark 4.4.1 writes no version for
+        // an empty `INSERT INTO` or DataFrame append (probe `ops/reports/2026-11-18-o2-empty-append.md`
+        // in krishiv-internal), and the kernel refuses a blind append without files.
+        if !self.mode.removes() && written.adds.is_empty() {
+            g.release_writers();
+            return Ok(());
+        }
         let staged = StagedCommit {
             table: name.clone(),
             write_id: self.write_id.clone(),
