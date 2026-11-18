@@ -702,7 +702,8 @@ enum Source {
     Whole {
         reader: WholeReader,
         text: Option<String>,
-        pos: usize,
+        /// The file's one record has gone out.
+        done: bool,
     },
 }
 
@@ -800,7 +801,7 @@ impl JsonDecoder {
             Source::Whole {
                 reader: WholeReader::new(m.size, split).compressed(m.codec),
                 text: None,
-                pos: 0,
+                done: false,
             }
         } else {
             Source::Lines(
@@ -890,14 +891,13 @@ impl JsonDecoder {
                         return Ok(Next::Record(parsed, line));
                     }
                 },
-                Source::Whole { reader, text, pos } => {
+                Source::Whole { reader, text, done } => {
                     // The file is one record: its first value, as Spark's
                     // `JacksonParser` reads one root from the whole stream;
                     // whatever follows it is not read. The record's text
                     // (the corrupt column) is the whole file, as Spark's:
-                    // the text moves into the record, never copied. `pos`
-                    // is 1 once the record has gone out.
-                    if *pos > 0 {
+                    // the text moves into the record, never copied.
+                    if *done {
                         return Ok(Next::End);
                     }
                     if text.is_none() {
@@ -915,7 +915,7 @@ impl JsonDecoder {
                     let Some(t) = text.take() else {
                         return Ok(Next::End);
                     };
-                    *pos = 1;
+                    *done = true;
                     return Ok(match parse_next(&t, 0, self.syntax) {
                         Ok(None) => Next::End,
                         Ok(Some((top, _))) => Next::Record(Ok(top), t),
