@@ -22,4 +22,5 @@ getrandom.workspace = true
 tonic.workspace = true
 
 [dev-dependencies]
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
 tokio = { workspace = true, features = ["rt", "macros"] }

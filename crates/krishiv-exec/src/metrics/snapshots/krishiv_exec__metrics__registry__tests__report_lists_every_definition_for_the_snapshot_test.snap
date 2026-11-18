@@ -30,3 +30,4 @@ krishiv.exec.driver.stalls counter 1 [] -> krishiv_exec_driver_stalls_total
 krishiv.build.info gauge 1 [version,git_sha] -> krishiv_build_info
 krishiv.auth.failed counter {request} [surface=connect|admin|metrics|ui|flight-sql,method=token|oidc|mtls|throttle|none] -> krishiv_auth_failed_total
 krishiv.auth.denied counter {request} [surface=connect|admin|metrics|ui|flight-sql,privilege=SELECT|MODIFY|CREATE|DROP|MONITOR|USAGE|BROWSE|OPERATE|MANAGE|IMPERSONATE] -> krishiv_auth_denied_total
+krishiv.flight_sql.requests counter {request} [command=handshake|statement_query|statement_update|fetch|prepared_create|prepared_query|prepared_update|prepared_close|catalogs|db_schemas|tables|table_types|keys|sql_info|xdbc_type_info|cancel|session_options|session_close|unsupported,outcome=ok|invalid|not_found|denied|exhausted|cancelled|unavailable|unimplemented|failed] -> krishiv_flight_sql_requests_total

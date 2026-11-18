@@ -3258,6 +3258,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-exec",
  "krishiv-memory",
  "tokio",
  "tonic",
