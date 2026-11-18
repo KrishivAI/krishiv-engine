@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI: `python -m pyspark_suite {static,collect,run,report}` (from tests/scripts)."""
+"""CLI: `python -m pyspark_suite {static,collect,run,ratchet,report}` (from tests/scripts)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from . import manifest as mf
 from .collect import CollectError, check_drift, collect_ids
 from .denominator import compute
 from .junit import oracle_skips
-from .report import dashboard, summarize, write_summary
+from .report import dashboard, ratchet_regressions, summarize, write_summary
 from .runner import check_pytest_timeout, run_file
 from .static_count import census
 
@@ -102,6 +102,22 @@ def cmd_run(a: argparse.Namespace) -> None:
     print(f"wrote {path}")
 
 
+def cmd_ratchet(a: argparse.Namespace) -> None:
+    """Fail when a test in the previous summary's pass list is not in the current one."""
+
+    prev = json.loads(a.previous.read_text())
+    cur = json.loads(a.current.read_text())
+    if prev["version"] != cur["version"]:
+        raise SystemExit(f"ratchet: versions differ ({prev['version']} vs {cur['version']})")
+    if cur["source"] != "run":
+        raise SystemExit(f"ratchet: {a.current} is a {cur['source']} summary, not a run")
+    lost = ratchet_regressions(prev, cur)
+    print(f"ratchet {cur['version']}: {len(prev.get('passed_ids', []))} passed before, {cur['passed']} now")
+    if lost:
+        print("\n".join(f"  regressed: {t}" for t in lost))
+        raise SystemExit(f"ratchet: {len(lost)} test(s) that passed no longer do")
+
+
 def cmd_report(_: argparse.Namespace) -> None:
     summaries = [json.loads(p.read_text()) for p in sorted((DATA / "summary").glob("*.json"))]
     (DATA / "DASHBOARD.md").write_text(dashboard(summaries), encoding="utf-8")
@@ -135,6 +151,10 @@ def main() -> None:
     c.add_argument("--oracle-junit", type=Path, help="dir of JUnit XML from a Spark oracle run")
     c.add_argument("--update", action="store_true", help="write the collected summary instead of failing on drift")
     c.set_defaults(fn=cmd_collect)
+    k = sub.add_parser("ratchet", help="fail if a test that passed in the previous summary does not pass now")
+    k.add_argument("--previous", type=Path, required=True)
+    k.add_argument("--current", type=Path, required=True)
+    k.set_defaults(fn=cmd_ratchet)
     r = sub.add_parser("report", help="render DASHBOARD.md from the committed summaries")
     r.set_defaults(fn=cmd_report)
     a = p.parse_args()

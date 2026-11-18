@@ -33,6 +33,9 @@ def suite_env(checkout: Path, scratch: Path, port: int | None = None) -> dict[st
     env = {k: v for k, v in os.environ.items() if k != "SPARK_HOME"}
     env["SPARK_HOME"] = str(home)
     env["PYTHONPATH"] = str(checkout / "python")
+    # Remote-only client mode, as `pyspark-client` runs it: there is no JVM, so tests that need one skip themselves
+    # ("Requires JVM access"): the conditional-skip bucket, and setUpClass stops reading a classic SparkContext.
+    env["SPARK_SKIP_CONNECT_COMPAT_TESTS"] = "1"
     if port is not None:
         env["SPARK_CONNECT_TESTING_REMOTE"] = f"sc://127.0.0.1:{port}"
     return env

@@ -84,6 +84,23 @@ def dashboard(summaries: list[dict]) -> str:
             f"{s['pass_rate_without_client_only']}% | {100 * d['excluded_share']:.1f}%"
             f"{'' if d['within_cap'] else ' **OVER CAP**'} |"
         )
+    runs = [s for s in summaries if s["source"] == "run"]
+    if runs:
+        lines += [
+            "",
+            "Run outcomes of the denominator tests (`skip` is a runtime skip under the Krishiv server; the oracle's",
+            "conditional skips are the `conditional skips` count of the denominator, kept apart):",
+            "",
+            "| Spark | pass | fail | error | timeout | skip | not run | conditional skips | files that failed whole |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for s in sorted(runs, key=lambda x: x["version"], reverse=True):
+            c = s["counts"]
+            lines.append(
+                f"| {s['version']} | {c.get('pass', 0)} | {c.get('fail', 0)} | {c.get('error', 0)} | "
+                f"{c.get('timeout', 0)} | {c.get('skip', 0)} | {s['not_run']} | "
+                f"{s['denominator'].get('conditional_skips', 0)} | {len(s['file_failures'])} |"
+            )
     lines += ["", "Excluded tests by reason class:", ""]
     for s in sorted(summaries, key=lambda x: x["version"], reverse=True):
         parts = ", ".join(f"{k} {v}" for k, v in s["denominator"]["by_reason"].items()) or "none"

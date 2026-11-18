@@ -225,3 +225,61 @@ def test_suite_env_stubs_spark_home(tmp_path, monkeypatch):
     assert (tmp_path / "spark-home" / "bin" / "spark-submit").is_file()
     assert (tmp_path / "spark-home" / "jars").is_dir()
     assert env["SPARK_CONNECT_TESTING_REMOTE"] == "sc://127.0.0.1:15002"
+
+
+def _summary(version, source, passed):
+    return {"version": version, "source": source, "passed": len(passed), "passed_ids": sorted(passed)}
+
+
+def test_ratchet_command_fails_on_a_lost_pass(tmp_path):
+    import argparse
+    import json
+
+    from pyspark_suite.__main__ import cmd_ratchet
+
+    prev, cur = tmp_path / "p.json", tmp_path / "c.json"
+    prev.write_text(json.dumps(_summary("4.3.0", "run", ["a::T::1", "a::T::2"])))
+    cur.write_text(json.dumps(_summary("4.3.0", "run", ["a::T::1", "a::T::3"])))
+    with pytest.raises(SystemExit, match="1 test"):
+        cmd_ratchet(argparse.Namespace(previous=prev, current=cur))
+    cur.write_text(json.dumps(_summary("4.3.0", "run", ["a::T::1", "a::T::2", "a::T::3"])))
+    cmd_ratchet(argparse.Namespace(previous=prev, current=cur))  # gaining passes is fine
+    prev.write_text(json.dumps(_summary("4.3.0", "collected", [])))
+    cmd_ratchet(argparse.Namespace(previous=prev, current=cur))  # nothing passed before: nothing to protect
+
+
+def test_ratchet_refuses_a_non_run_summary(tmp_path):
+    import argparse
+    import json
+
+    from pyspark_suite.__main__ import cmd_ratchet
+
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(_summary("4.3.0", "collected", [])))
+    with pytest.raises(SystemExit, match="not a run"):
+        cmd_ratchet(argparse.Namespace(previous=p, current=p))
+
+
+def test_dashboard_has_a_run_outcome_table_only_for_runs():
+    den, remaining = compute("4.3.0", {"a.py::T::t"}, set(), set(), [], None)
+    assert "Run outcomes" not in dashboard([summarize(den, remaining, [], source="collected")])
+    out = dashboard([summarize(den, remaining, [], source="run")])
+    assert "| 4.3.0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |" in out
+
+
+def test_pytest_wrapper_exits_with_pytest_status(tmp_path):
+    import subprocess
+    import sys
+
+    from pyspark_suite.runner import _PYTEST_THEN_EXIT
+
+    t = tmp_path / "test_x.py"
+    t.write_text("def test_a():\n    assert False\n")
+    done = subprocess.run(
+        [sys.executable, "-c", _PYTEST_THEN_EXIT, str(t), "-q", "-p", "no:cacheprovider"],
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert b"1 failed" in done.stdout

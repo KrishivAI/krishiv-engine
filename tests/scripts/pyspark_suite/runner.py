@@ -18,6 +18,12 @@ from pathlib import Path
 from .collect import suite_env
 from .junit import Record, parse
 
+_PYTEST_THEN_EXIT = (
+    "import os, sys, pytest\n"
+    "rc = int(pytest.main(sys.argv[1:]))\n"
+    "sys.stdout.flush(); sys.stderr.flush()\n"
+    "os._exit(rc)\n"
+)
 TEST_TIMEOUT_S = 120  # per test, recalibrated at the first measured run
 FILE_TIMEOUT_S = 30 * 60
 
@@ -76,10 +82,7 @@ def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: 
     xml = out_dir / (rel.replace("/", "__") + ".xml")
     scratch = Path(tempfile.mkdtemp(prefix="pyspark-run-"))
     env = suite_env(checkout, scratch, port)
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
+    args = [
         str(tests_dir / rel),
         f"--junitxml={xml}",
         "-p",
@@ -89,6 +92,10 @@ def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: 
         "-q",
         f"--timeout={TEST_TIMEOUT_S}",
     ]
+    # `os._exit` right after the session: grpc's channel `__del__` can deadlock during interpreter shutdown when a
+    # test left a channel to a failing server open, which would keep this file waiting for FILE_TIMEOUT_S after the
+    # JUnit XML was complete. The XML is written before `pytest.main` returns.
+    cmd = [sys.executable, "-c", _PYTEST_THEN_EXIT, *args]
     out_dir.mkdir(parents=True, exist_ok=True)
     xml.unlink(missing_ok=True)  # a crash that writes nothing must not pick up the last run's results
     try:
