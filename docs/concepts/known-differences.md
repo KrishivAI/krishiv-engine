@@ -479,6 +479,10 @@ the table, and the first action fails.
   `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Its operation id is not
   remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
+- **A raw-proto `lateral_join` with a right, full, semi or anti join type** fails with `INVALID_LATERAL_JOIN_TYPE`
+  (SQLSTATE 42613, an `AnalysisException`). Spark 4.3.0 fails a classless `require` and the client gets an
+  `IllegalArgumentException("requirement failed: Unsupported lateral join type ...")`. PySpark never sends these
+  types (it refuses them locally with `UNSUPPORTED_JOIN_TYPE`), so only a raw-proto client sees the difference.
 
 ## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
 
