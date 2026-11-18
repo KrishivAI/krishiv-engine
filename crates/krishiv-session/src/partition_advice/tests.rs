@@ -282,12 +282,8 @@ fn a_unique_key_is_not_advised_through_the_history() {
     }
     flush(&rt);
     let advice = from_history(history.path());
-    assert!(
-        advice
-            .iter()
-            .all(|t| t.advice.iter().all(|a| a.column != "id")),
-        "{advice:?}"
-    );
+    let suggestions: Vec<_> = advice.iter().flat_map(|t| t.advice.iter()).collect();
+    assert!(suggestions.is_empty(), "{advice:?}");
 }
 
 #[test]

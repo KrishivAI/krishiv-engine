@@ -2952,6 +2952,13 @@ fn a_scan_that_prunes_every_partition_shows_its_pruned_units() {
     );
     let plan = rows(&s, "EXPLAIN ANALYZE SELECT id FROM ap WHERE k = 5").join("\n");
     assert!(plan.contains("scan_splits=0"), "{plan}");
-    assert!(plan.contains("scan_units_pruned=2"), "{plan}");
+    let pruned: String = plan
+        .split("scan_units_pruned=")
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    assert_eq!(pruned, "2", "{plan}");
     assert!(plan.contains("scan_rows_decoded=0"), "{plan}");
 }
