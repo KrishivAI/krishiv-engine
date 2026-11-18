@@ -568,10 +568,11 @@ pub(super) fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
         };
         // A collated key compares on its own collation key: an outer side under another
         // collation (an explicit `COLLATE`, a cast) is refused, not keyed wrongly.
-        let (it, ot) = (typed(i).0, typed(o).0);
-        if (it.as_ref().is_some_and(DataType::is_collated_string)
-            || ot.as_ref().is_some_and(DataType::is_collated_string))
-            && (it != ot || !matches!(&o.node, ExprNode::Resolved(ResolvedExpr::OuterColumn(_))))
+        let (inner_t, outer_t) = (typed(i).0, typed(o).0);
+        if (inner_t.as_ref().is_some_and(DataType::is_collated_string)
+            || outer_t.as_ref().is_some_and(DataType::is_collated_string))
+            && (inner_t != outer_t
+                || !matches!(&o.node, ExprNode::Resolved(ResolvedExpr::OuterColumn(_))))
         {
             return Err(unsupported(
                 "a correlation over collated strings compared under another collation",
