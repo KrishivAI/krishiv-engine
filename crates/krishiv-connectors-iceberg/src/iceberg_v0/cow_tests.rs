@@ -39,7 +39,7 @@ use super::sink_tests::{
 use crate::plan::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, encode_dv};
 
 /// A provider whose scan is `0`.
-pub(super) struct Over(Arc<dyn ScanPushdown>);
+pub(super) struct Over(pub(super) Arc<dyn ScanPushdown>);
 
 impl std::fmt::Debug for Over {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -964,7 +964,7 @@ fn the_iceberg_scan_takes_rows_by_position() {
 
 /// The DVs of `files` (each deleting positions `positions`), one blob per
 /// file in the one Puffin file `name`.
-fn dvs_in_one_puffin(
+pub(super) fn dvs_in_one_puffin(
     env: &Env,
     name: &str,
     files: &[String],
@@ -999,7 +999,12 @@ fn dvs_in_one_puffin(
 }
 
 /// A position delete file `name` deleting position `pos` of `of`.
-fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::DataFile {
+pub(super) fn position_delete(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+) -> iceberg::spec::DataFile {
     let path = env.at(name);
     let b = super::provider_tests::batch(
         vec![
