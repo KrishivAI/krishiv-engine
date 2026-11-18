@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
+assertion_line: 664
 expression: tpch.plan(q).to_string()
 ---
 Sort [s_name#1 ASC NULLS FIRST]
@@ -23,7 +24,7 @@ Sort [s_name#1 ASC NULLS FIRST]
                   :        +- Filter ((p_name#17 like 'forest%') and isnotnull(p_partkey#16))
                   :           +- Scan spark_catalog.default.part [p_partkey#16, p_name#17], PushedFilters: [((p_name#17 like 'forest%') and isnotnull(p_partkey#16))]
                   +- BroadcastExchange
-                     +- Project [(0.5 * sum(l_quantity#29)#4611686018427387939) AS (0.5 * sum(l_quantity))#41, l_partkey#26, l_suppkey#27]
+                     +- Project [(0.5 * sum(l_quantity#29)#4611686018427387940) AS (0.5 * sum(l_quantity))#41, l_partkey#26, l_suppkey#27]
                         +- HashAggregate keys=[l_partkey#26, l_suppkey#27], functions=[sum(l_quantity#29)]
                            +- Exchange hashpartitioning(l_partkey#26, l_suppkey#27)
                               +- PartialHashAggregate keys=[l_partkey#26, l_suppkey#27], functions=[sum(l_quantity#29)]
@@ -32,7 +33,7 @@ Sort [s_name#1 ASC NULLS FIRST]
                                     +- BroadcastExchange
                                        +- Project [ps_partkey#11, ps_suppkey#12] (ids +42)
                                           +- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #3: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, probe filter: (isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))
-                                             :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13], PushedFilters: [(isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))]
+                                             :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12], PushedFilters: [(isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))]
                                              +- BroadcastExchange
                                                 +- Project [p_partkey#16]
                                                    +- Filter ((p_name#17 like 'forest%') and isnotnull(p_partkey#16))

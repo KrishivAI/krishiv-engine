@@ -379,7 +379,7 @@ pub(super) fn columns_read<'e>(
 
 /// `demand` with the columns `predicate` reads added; `None` when there is no demand or the
 /// predicate may read its input otherwise ([`columns_read`]).
-pub(super) fn with_columns_of(
+pub(crate) fn with_columns_of(
     demand: Option<HashSet<AttrId>>,
     predicate: &Expr,
 ) -> Option<HashSet<AttrId>> {

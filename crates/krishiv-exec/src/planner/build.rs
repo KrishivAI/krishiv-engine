@@ -475,7 +475,7 @@ impl<'a> Planner<'a> {
                 right,
                 kind,
                 condition,
-            } => self.join(left, right, *kind, condition),
+            } => self.join(left, right, *kind, condition, demand),
             PlanNode::SubqueryAlias { input, .. } => {
                 self.demand = demand;
                 self.plan(input)

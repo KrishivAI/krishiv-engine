@@ -71,6 +71,20 @@ fn tpch_scan_instances_read_their_own_columns() {
             on.sort();
             assert_eq!(on, vec!["l_orderkey, l_suppkey", four, four], "{plan_on}");
         }
+        if q == 20 {
+            // The demand passes through a join: the `partsupp` instance under the
+            // aggregate's semi join reads only the join keys.
+            let three = "ps_partkey, ps_suppkey, ps_availqty";
+            assert_eq!(
+                scans_of(&plan_off, "partsupp"),
+                vec![three; 2],
+                "{plan_off}"
+            );
+            let mut on = scans_of(&plan_on, "partsupp");
+            on.sort();
+            assert_eq!(on, vec!["ps_partkey, ps_suppkey", three], "{plan_on}");
+        }
     }
     assert!(narrowed.contains(&21), "{narrowed:?}");
+    assert!(narrowed.contains(&20), "{narrowed:?}");
 }
