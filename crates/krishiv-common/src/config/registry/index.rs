@@ -592,6 +592,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
     (
+        "krishiv.catalog.delegation.maxExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
+    ),
+    (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
@@ -618,6 +622,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.execute.reattachable.senderMaxStreamSize",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

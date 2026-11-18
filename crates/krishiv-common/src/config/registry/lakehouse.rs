@@ -70,6 +70,38 @@ pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Most token exchanges per minute for one principal and one set of exchange claims (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(60)),
+    doc: "Most RFC 8693 token exchanges a catalog with `auth = delegated` makes in one minute for \
+          one principal and one set of exchange claims (scope, audience, groups). An exchanged \
+          token is reused until it expires, so a client that sends a fresh token with the same \
+          claims on every call costs one exchange per exchanged-token lifetime. Past the limit a \
+          catalog call fails with `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most distinct claim sets exchanged per minute for one principal (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(20)),
+    doc: "Most distinct sets of exchange claims (scope, audience, groups) a catalog with \
+          `auth = delegated` exchanges tokens for in one minute for one principal: the ceiling a \
+          client meets that varies its claims to get past \
+          `krishiv.catalog.delegation.maxExchangesPerMinute`. Past it a catalog call fails with \
+          `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// How long one catalog call may take before it fails.
 pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.requestTimeout",
