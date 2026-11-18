@@ -317,8 +317,8 @@ fn the_plan_has_a_top_n_and_no_sort() {
     );
 }
 
-/// `array(literals)` folds to one literal; the values, NULL elements, a column element and the empty array are as
-/// they were.
+/// `array(literals)` outside a vector call is still the constructor: its values, NULL elements, a column element and
+/// the empty array are as they were.
 #[test]
 fn array_of_literals_keeps_its_values() {
     let s = Session::new().unwrap();

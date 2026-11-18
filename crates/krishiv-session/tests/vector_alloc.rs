@@ -22,8 +22,8 @@ static HEAP: Counting<System> = Counting(System);
 const ROWS: i32 = 8_192;
 const DIM: usize = 768;
 
-/// `array(literals)` folds to one array literal (`krishiv-optimizer` `fold.rs`), which a vector kernel reads at its one
-/// row. Unfolded, `array()` broadcast each element to the batch's rows (13 MB of a 25 MB broadcast per batch here).
+/// `array(literals)` as an argument of a `vector_*` call folds to one array literal (`krishiv-optimizer` `fold.rs`),
+/// which the kernel reads at its one row. Unfolded, `array()` broadcast each element to the batch's rows (13 MB of a 25 MB broadcast per batch here).
 #[test]
 fn a_literal_query_vector_is_not_copied_per_row() {
     let field = Arc::new(Field::new("element", DataType::Float32, true));
