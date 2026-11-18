@@ -383,3 +383,38 @@ fn a_map_entry_with_key_and_value_reads_as_a_map() {
     let d = super::Decoder::new(&set, "M", std::iter::empty()).unwrap();
     assert_eq!(d.spark_type().simple_string(), "struct<m:map<string,int>>");
 }
+
+/// `M0 { M1 f = 1; }`, `M1 { M2 f = 1; }`, ... `M<n-1> { int32 v = 1; }`: a chain of `n` distinct (not recursive) types.
+fn chain(n: usize) -> Vec<u8> {
+    let messages: Vec<Vec<u8>> = (0..n)
+        .map(|i| {
+            let f = if i + 1 == n {
+                build::field("v", 1, 1, 5, "")
+            } else {
+                build::field("f", 1, 1, 11, &format!(".t.M{}", i + 1))
+            };
+            build::message(&format!("M{i}"), &[f], &[], false)
+        })
+        .collect();
+    build::file("a.proto", &[], &messages)
+}
+
+#[test]
+fn a_chain_of_distinct_types_past_the_nesting_cap_is_refused_not_a_stack_overflow() {
+    let set = DescriptorSet::parse(&chain(200_000)).unwrap();
+    let err = super::Decoder::new(&set, "M0", std::iter::empty()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    let input = DataType::from(krishiv_types::StructType::new([
+        krishiv_types::StructField::new("v", DataType::Integer, true),
+    ]));
+    // The encoder walks the input type, which stays shallow; it never follows the chain.
+    let _ = super::Encoder::new(&set, "M0", &input);
+}
+
+#[test]
+fn a_chain_of_distinct_types_within_the_cap_reads() {
+    let set = DescriptorSet::parse(&chain(super::schema::MAX_NESTING)).unwrap();
+    assert!(super::Decoder::new(&set, "M0", std::iter::empty()).is_ok());
+    let set = DescriptorSet::parse(&chain(super::schema::MAX_NESTING + 1)).unwrap();
+    assert!(super::Decoder::new(&set, "M0", std::iter::empty()).is_err());
+}

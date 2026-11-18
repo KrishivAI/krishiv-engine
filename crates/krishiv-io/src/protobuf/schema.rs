@@ -15,6 +15,13 @@ use krishiv_common::error::{CannotParseProtobufDescriptor, KrishivError, Recursi
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
 use super::options::ProtoOptions;
+use crate::error::unsupported;
+
+/// The most levels of message structs a schema may have, the root's included: past it the schema is refused
+/// (`KRISHIV_UNSUPPORTED_FEATURE`) instead of recursing on (a chain of distinct types is not bounded by the recursion depth
+/// option). Spark has no cap of its own (a deep enough chain is a `StackOverflowError` there); 100 is protobuf-java's recursion
+/// limit for the messages themselves, so no value nested deeper could be read anyway.
+pub(crate) const MAX_NESTING: usize = 100;
 
 /// How a value of a field becomes a Spark value.
 #[derive(Debug, Clone)]
@@ -79,7 +86,7 @@ pub(crate) fn build(
     opts: &ProtoOptions,
 ) -> Result<(DataType, StructPlan), KrishivError> {
     let existing = HashMap::from([(msg.full_name().to_owned(), 1)]);
-    let (fields, plan) = struct_of(msg, &existing, opts)?;
+    let (fields, plan) = struct_of(msg, &existing, opts, 0)?;
     Ok((struct_type(&fields, plan.dummy), plan))
 }
 
@@ -98,15 +105,17 @@ fn dummy_struct() -> DataType {
     )]))
 }
 
+/// The struct of `msg` at nesting `level` (the root is 0).
 fn struct_of(
     msg: &MessageDescriptor,
     existing: &HashMap<String, i32>,
     opts: &ProtoOptions,
+    level: usize,
 ) -> Result<(Vec<StructField>, StructPlan), KrishivError> {
     let mut fields = Vec::new();
     let mut plans = Vec::new();
     for fd in msg.fields() {
-        if let Some((f, p)) = field(&fd, existing, opts)? {
+        if let Some((f, p)) = field(&fd, existing, opts, level)? {
             fields.push(f);
             plans.push(p);
         }
@@ -127,6 +136,7 @@ fn field(
     fd: &FieldDescriptor,
     existing: &HashMap<String, i32>,
     opts: &ProtoOptions,
+    level: usize,
 ) -> Result<Option<(StructField, PlanField)>, KrishivError> {
     if fd.is_map() {
         let Kind::Message(entry) = fd.kind() else {
@@ -135,10 +145,10 @@ fn field(
         let Some((kf, vf)) = entry.map_entry_fields() else {
             return Err(CannotParseProtobufDescriptor {}.into());
         };
-        let Some((kt, kc)) = element(&kf, existing, opts)? else {
+        let Some((kt, kc)) = element(&kf, existing, opts, level)? else {
             return Ok(None);
         };
-        let Some((vt, vc)) = element(&vf, existing, opts)? else {
+        let Some((vt, vc)) = element(&vf, existing, opts, level)? else {
             return Ok(None);
         };
         let dt = DataType::from(MapType::new(kt, vt, false));
@@ -150,7 +160,7 @@ fn field(
             },
         )));
     }
-    let Some((dt, conv)) = element(fd, existing, opts)? else {
+    let Some((dt, conv)) = element(fd, existing, opts, level)? else {
         return Ok(None);
     };
     if fd.is_list() {
@@ -203,6 +213,7 @@ fn element(
     fd: &FieldDescriptor,
     existing: &HashMap<String, i32>,
     opts: &ProtoOptions,
+    level: usize,
 ) -> Result<Option<(DataType, FieldConv)>, KrishivError> {
     let plain = |t: DataType| Ok(Some((t, conv(fd, Out::Plain))));
     match fd.kind() {
@@ -221,7 +232,7 @@ fn element(
             Ok(Some((DataType::Integer, conv(fd, Out::EnumInt))))
         }
         Kind::Enum(_) => plain(DataType::String),
-        Kind::Message(m) => message(fd, &m, existing, opts),
+        Kind::Message(m) => message(fd, &m, existing, opts, level),
     }
 }
 
@@ -234,6 +245,7 @@ fn message(
     m: &MessageDescriptor,
     existing: &HashMap<String, i32>,
     opts: &ProtoOptions,
+    level: usize,
 ) -> Result<Option<(DataType, FieldConv)>, KrishivError> {
     if pair_named(m, "Duration") {
         return Ok(Some((
@@ -281,9 +293,15 @@ fn message(
     if existing.contains_key(name) && depth >= max {
         return Ok(None);
     }
+    if level + 1 >= MAX_NESTING {
+        return Err(unsupported(format!(
+            "a protobuf message nested more than {MAX_NESTING} levels deep (field {})",
+            fd.full_name()
+        )));
+    }
     let mut next = existing.clone();
     next.insert(name.to_owned(), depth + 1);
-    let (fields, plan) = struct_of(m, &next, opts)?;
+    let (fields, plan) = struct_of(m, &next, opts, level + 1)?;
     if fields.is_empty() && !opts.retain_empty {
         return Ok(None);
     }
