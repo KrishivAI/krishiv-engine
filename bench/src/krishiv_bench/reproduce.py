@@ -41,6 +41,7 @@ from . import compare, result_check
 from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg, wait_idle
 from .adapters import Dataset, Engine, Query
 from .adapters.base import check_query, result_rows
+from .adapters.krishiv import require_shipped_build
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 from .dialect import dialect_reason
 from .errors import describe_error, error_fields
@@ -534,6 +535,8 @@ def run_reproduce(
         raise SystemExit(f"--engines must include {REFERENCE} (the correctness reference)")
     if reps < 1 or (runs is not None and runs < 1):
         raise SystemExit("--reps and --runs must be at least 1")
+    if "krishiv" in names:
+        require_shipped_build()  # before the lock and hours of baselines, not at Krishiv's first query
     ds = resolve_dataset(suite, dataset, sf)
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]

@@ -2,8 +2,8 @@
 
 The commits between ``--good`` (exclusive) and ``--bad`` (inclusive) are listed along the first-parent line of
 ``--bad`` (merge-queue history: one commit per PR) and searched by bisection. Every probed commit is built into
-its own runner binary (``cargo build --profile dist -p krishiv-bench-runner`` in a scratch worktree, one shared
-target directory so builds are incremental) and judged by one of two checks:
+its own runner binary (``cargo build --profile dist -p krishiv-bench-runner`` at the shipped CPU level, in a
+scratch worktree, one shared target directory so builds are incremental) and judged by one of two checks:
 
 * ``--correctness`` (default): the runner's rows for the query must equal DuckDB's (``compare.rows_match``);
   an engine error, a crash or a timeout counts as bad.
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import shutil
 import signal
 import subprocess
@@ -35,7 +36,7 @@ from .ab import one_query
 from .abba import bench_lock, wait_idle
 from .adapters.base import Dataset, check_query
 from .adapters.duckdb_engine import SPARK_NULL_ORDER, DuckDBEngine
-from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
+from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError, shipped_rustflags
 from .dataset import resolve_dataset
 from .errors import describe_error
 from .paths import bench_root, data_root, results_dir
@@ -179,6 +180,11 @@ class Builder:
                     *("--target-dir", str(self.target)),
                 ],
                 cwd=self.tree,
+                # The shipped CPU level, as every timed runner (bench/README.md); the caller's flags stay first.
+                env={
+                    **os.environ,
+                    "RUSTFLAGS": " ".join(f for f in (os.environ.get("RUSTFLAGS", ""), shipped_rustflags()) if f),
+                },
                 capture_output=True,
                 text=True,
                 timeout=BUILD_TIMEOUT_S,

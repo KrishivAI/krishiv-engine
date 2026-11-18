@@ -124,12 +124,14 @@ class FakeRun:
     def __init__(self, target: Path, fail: frozenset[str] | set[str] = frozenset(), source: Path | None = None):
         self.target, self.fail, self.source = target, fail, source
         self.builds: list[str] = []
+        self.envs: list[dict] = []
 
     def __call__(self, cmd, **kw):
         if cmd[0] != "cargo":
             return subprocess.run(cmd, **{k: v for k, v in kw.items() if k != "timeout"})
         sha = git_head(kw["cwd"])
         self.builds.append(sha)
+        self.envs.append(kw.get("env") or {})
         if sha in self.fail:
             return subprocess.CompletedProcess(cmd, 101, "", "error: boom\n")
         out = self.target / "dist"

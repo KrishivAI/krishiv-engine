@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import platform
 import select
 import shutil
 import signal
@@ -47,6 +48,80 @@ class RunnerError(RuntimeError):
 
 class RunnerCrashed(RuntimeError):
     """The runner died or timed out; it is restarted on the next command."""
+
+
+class RunnerBuildMismatch(RuntimeError):
+    """The runner is not built at the shipped CPU level, so its timings are not the product's (bench/README.md)."""
+
+
+# The CPU level the shipped binaries and wheels are built for, per machine (`.github/workflows/binaries.yml`).
+SHIPPED_TARGET_CPU = {"x86_64": "x86-64-v3", "amd64": "x86-64-v3", "aarch64": "neoverse-n1", "arm64": "neoverse-n1"}
+# Set to 1 to run a runner of another CPU level anyway (a build-level experiment, never a Krishiv timing).
+ANY_BUILD_ENV = "KRISHIV_BENCH_ANY_BUILD"
+SHIPPED_BUILD_COMMAND = (
+    "RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' "
+    "cargo build --profile dist -p krishiv-bench-runner"
+)
+
+
+def shipped_rustflags(machine: str | None = None) -> str:
+    """The ``RUSTFLAGS`` of a runner at the shipped level of ``machine`` (bench/README.md); empty where none is."""
+    want = SHIPPED_TARGET_CPU.get((machine or platform.machine()).lower())
+    if want is None:
+        return ""
+    align = " -C llvm-args=-x86-branches-within-32B-boundaries" if want.startswith("x86-64") else ""
+    return f"-C target-cpu={want}{align}"
+
+
+def build_level_problem(binary: Path, build: dict[str, str], machine: str | None = None) -> str | None:
+    """Why ``build`` (a runner's ``--build-info`` fields) is not the shipped CPU level of ``machine``, or None.
+
+    A runner that cannot report its level (``unknown``: too old, or a test double) and a machine with no shipped
+    level are not judged. Study 28 measured a ``target-cpu=default`` runner 1.14x slower over TPC-H (q04 1.59x), so a
+    timing of one says little about what users run.
+    """
+    want = SHIPPED_TARGET_CPU.get((machine or platform.machine()).lower())
+    cpu = build.get("target_cpu", "unknown")
+    if want is None or cpu in ("unknown", want):
+        return None
+    return (
+        f"{binary} is built for target-cpu={cpu}, not the shipped {want}: rebuild it "
+        f"(RUSTFLAGS='{shipped_rustflags(machine)}' cargo build --profile dist -p krishiv-bench-runner), "
+        f"or set {ANY_BUILD_ENV}=1 for a run that compares build levels"
+    )
+
+
+def any_build_allowed() -> bool:
+    """Whether ``$KRISHIV_BENCH_ANY_BUILD`` lets a runner of another CPU level run."""
+    return os.environ.get(ANY_BUILD_ENV, "") not in ("", "0")
+
+
+def read_build_info(binary: Path) -> dict[str, str]:
+    """``binary``'s ``--build-info`` as ``build_profile``, ``target_cpu`` and (when reported) ``branch_align``;
+    ``unknown`` fields when it cannot say (missing, too old, or run on a CPU below its build level)."""
+    build = {"build_profile": "unknown", "target_cpu": "unknown"}
+    try:
+        out = subprocess.run(
+            [str(binary), "--build-info"], capture_output=True, text=True, timeout=30, check=True
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return build
+    fields = dict(kv.split("=", 1) for kv in out.split() if "=" in kv)
+    build = {"build_profile": fields.get("profile", "unknown"), "target_cpu": fields.get("target-cpu", "unknown")}
+    if "branch-align" in fields:
+        build["branch_align"] = fields["branch-align"]
+    return build
+
+
+def require_shipped_build(binary: Path | str | None = None) -> None:
+    """Exits with the reason when the runner (``runner_binary(binary)``) is not built at the shipped CPU level and
+    ``$KRISHIV_BENCH_ANY_BUILD`` is unset: a check made before a long run starts, not after its first query."""
+    path = runner_binary(binary)
+    if any_build_allowed() or not path.exists():
+        return
+    problem = build_level_problem(path, read_build_info(path))
+    if problem:
+        raise SystemExit(problem)
 
 
 def runner_binary(explicit: Path | str | None = None) -> Path:
@@ -131,20 +206,7 @@ class KrishivEngine(Engine):
         ``unknown`` when the binary cannot say (missing, too old, or run on a CPU below its build level).
         """
         if self._build is None:
-            self._build = {"build_profile": "unknown", "target_cpu": "unknown"}
-            try:
-                out = subprocess.run(
-                    [str(self.binary), "--build-info"], capture_output=True, text=True, timeout=30, check=True
-                ).stdout
-                fields = dict(kv.split("=", 1) for kv in out.split() if "=" in kv)
-                self._build = {
-                    "build_profile": fields.get("profile", "unknown"),
-                    "target_cpu": fields.get("target-cpu", "unknown"),
-                }
-                if "branch-align" in fields:
-                    self._build["branch_align"] = fields["branch-align"]
-            except (OSError, subprocess.SubprocessError):
-                pass
+            self._build = read_build_info(self.binary)
         return self._build
 
     def runner_build_info(self) -> dict[str, str] | None:
@@ -156,11 +218,7 @@ class KrishivEngine(Engine):
     def _start(self) -> None:
         assert self._dataset is not None, "setup() not called"
         if not self.binary.exists():
-            raise FileNotFoundError(
-                f"{self.binary} missing: "
-                "RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' "
-                "cargo build --profile dist -p krishiv-bench-runner"
-            )
+            raise FileNotFoundError(f"{self.binary} missing: {SHIPPED_BUILD_COMMAND}")
         cmd = [
             *self.launcher,
             str(self.binary),
@@ -265,7 +323,17 @@ class KrishivEngine(Engine):
     def setup(self, dataset: Dataset) -> None:
         self._tmp.mkdir(parents=True, exist_ok=True)  # `teardown()` removes it; setup may run again
         self._dataset = dataset
+        self.check_build_level()
         self._start()
+
+    def check_build_level(self) -> None:
+        """Refuses (``RunnerBuildMismatch``) a runner not built at the shipped CPU level, unless
+        ``$KRISHIV_BENCH_ANY_BUILD`` is set. A missing binary is left to ``_start`` to report."""
+        if any_build_allowed() or not self.binary.exists():
+            return
+        problem = build_level_problem(self.binary, self._runner_build())
+        if problem:
+            raise RunnerBuildMismatch(problem)
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         """Executes to completion; returns the row count and the runner-measured seconds.
