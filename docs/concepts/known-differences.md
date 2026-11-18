@@ -358,6 +358,14 @@ connection string for a stock `pyspark-client` (see [the guide](../guides/embedd
 local mode, it protects the port with a token made for each start; unlike it, the URL has the host `localhost`
 and the token in the connection string.
 
+## A declared schema on a Delta read
+
+`spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
+`KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
+asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
+the table, and the first action fails.
+
 ## `krishiv server` (Spark Connect)
 
 > The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
