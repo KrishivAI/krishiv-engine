@@ -626,7 +626,9 @@ fn expired_tokens_do_not_count_toward_the_throttle() {
 #[test]
 fn an_empty_key_set_keeps_the_cached_keys() {
     let cache = JwksCache::default();
-    assert_eq!(cache.install(&jwks(&[])).expect("empty start"), 0);
+    // Even on a fresh cache an empty set is refused, so `jwks_ready` never turns ready with no key.
+    assert!(cache.install(&jwks(&[])).is_err());
+    assert!(cache.age().is_none());
     cache
         .install(&jwks(&[rsa_jwk(rsa(), "k1")]))
         .expect("install");

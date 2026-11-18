@@ -370,6 +370,15 @@ fn a_draining_runtime_refuses_new_queries_but_runs_system_tables_and_cancels_the
     let err = block_on(df.collect()).unwrap_err();
     assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING");
     assert_eq!(texts(&s, "SELECT state FROM system.sessions").len(), 1);
+    // The refused query's row is closed as failed with the drain class, not left live.
+    assert_eq!(
+        texts(
+            &s,
+            "SELECT error_class FROM system.queries WHERE state = 'failed' \
+             AND error_class = 'KRISHIV_SERVER_DRAINING'"
+        ),
+        ["KRISHIV_SERVER_DRAINING"]
+    );
     // The deadline cancels what is left, with the drain reason.
     assert!(rt.cancel_all(CancelReason::Drain) >= 1);
     drop(running);

@@ -146,8 +146,9 @@ impl JwksCache {
     }
 
     /// Replaces the keys with the set in `document`. A document that does not parse, or holds
-    /// no usable key while keys are cached, keeps the old keys (an empty set from a provider in
-    /// trouble must not lock every user out).
+    /// no usable key, is refused: cached keys stay (an empty set from a provider in trouble must
+    /// not lock every user out) and a fresh cache stays "not fetched", so readiness waits for a
+    /// usable set.
     ///
     /// # Errors
     /// The parse error, or `no usable key`.
