@@ -772,10 +772,55 @@ def _java_string(v: Any) -> str:
     if kind == "List":
         return "[" + ", ".join("null" if e is None else _java_string(e) for e in v) + "]"
     if kind == "Map":
-        return "{" + ", ".join(f"{_java_text(k)}={_java_text(x)}" for k, x in v.items()) + "}"
+        return "{" + ", ".join(f"{_java_text(k)}={_java_text(x)}" for k, x in _hash_map_order(v)) + "}"
     if kind == "Double":
         return _java_double(v)
     return str(v)
+
+
+def _java_hash(v: Any) -> int | None:
+    """The Java ``hashCode`` (as an unsigned 32-bit int) of the key Pyrolite unpickles ``v`` as; ``None`` for a
+    key whose hash is identity-based or not modelled here (``byte[]``, ``Object[]``, ``BigInteger``, ...)."""
+    import struct
+
+    mask = 0xFFFFFFFF
+    if v is None:
+        return 0
+    kind = _java_kind(v)
+    if kind == "Boolean":
+        return 1231 if v else 1237
+    if kind == "Integer":
+        return v & mask
+    if kind == "Long":
+        u = v & 0xFFFFFFFFFFFFFFFF
+        return (u ^ (u >> 32)) & mask
+    if kind == "Double":
+        # `Double.hashCode`: `doubleToLongBits` (one canonical NaN), its halves XORed.
+        bits = 0x7FF8000000000000 if v != v else struct.unpack(">Q", struct.pack(">d", v))[0]
+        return (bits ^ (bits >> 32)) & mask
+    if kind == "String":
+        h = 0
+        data = v.encode("utf-16-be")
+        for i in range(0, len(data), 2):
+            h = (31 * h + ((data[i] << 8) | data[i + 1])) & mask
+        return h
+    return None
+
+
+def _hash_map_order(m: dict[Any, Any]) -> list[tuple[Any, Any]]:
+    """``m``'s entries in the order ``java.util.HashMap`` iterates them once Pyrolite has put them, in Python's
+    order, into a default ``HashMap`` (``Unpickler.load_empty_dictionary``): by bucket (the spread hash
+    ``h ^ (h >>> 16)`` over a table of 16 doubled while more than 3/4 full), then by insertion within a bucket.
+    A key whose Java hash is not modelled keeps Python's order (a documented difference)."""
+    items = list(m.items())
+    hashes = [_java_hash(k) for k, _ in items]
+    if any(h is None for h in hashes):
+        return items
+    size = 16
+    while len(items) > size * 3 // 4:
+        size *= 2
+    buckets = [((h ^ (h >> 16)) & (size - 1), i) for i, h in enumerate(hashes) if h is not None]
+    return [items[i] for _, i in sorted(buckets)]
 
 
 def _java_text(v: Any) -> str:

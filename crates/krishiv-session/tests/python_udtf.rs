@@ -43,6 +43,8 @@ struct Seen {
     slow_dropped: Arc<std::sync::atomic::AtomicBool>,
     /// Each task's input rows.
     tasks: Vec<usize>,
+    /// Each task's input, all its frames in one batch.
+    inputs: Vec<RecordBatch>,
 }
 
 #[derive(Debug, Default)]
@@ -110,8 +112,8 @@ impl UdfRuntime for Fake {
             DataType::Integer,
             true,
         )]));
-        if let Some(bad) = bad_metadata(&spec.name, schema.clone()) {
-            return Box::pin(std::future::ready(Ok(bad)));
+        if let Some(scripted) = scripted_analysis(&spec.name, schema.clone()) {
+            return Box::pin(std::future::ready(Ok(scripted)));
         }
         let analysis = UdtfAnalysis {
             schema,
@@ -133,9 +135,9 @@ impl UdfRuntime for Fake {
     }
 }
 
-/// The `analyze` results Spark 4.2.0 refuses (`PythonUDTFAnalyzeResult.applyToTableArgument`), by the UDTF's
-/// name: each asks a `TABLE` argument for metadata that cannot hold.
-fn bad_metadata(name: &str, schema: DataType) -> Option<UdtfAnalysis> {
+/// Scripted `analyze` results, by the UDTF's name (`PythonUDTFAnalyzeResult.applyToTableArgument`, v4.2.0): the
+/// metadata a `TABLE` argument cannot hold, which Spark refuses, and a full request it applies.
+fn scripted_analysis(name: &str, schema: DataType) -> Option<UdtfAnalysis> {
     let base = UdtfAnalysis {
         schema,
         pickled: Arc::from(b"pickled".to_vec()),
@@ -165,6 +167,31 @@ fn bad_metadata(name: &str, schema: DataType) -> Option<UdtfAnalysis> {
         "aliased_order" => UdtfAnalysis {
             with_single_partition: true,
             order_by: vec![order("id AS k")],
+            ..base
+        },
+        // Partitioned by `g`, ordered by `id` descending with NULLs first, selecting `id` bare and `g` as `grp`.
+        "keyed" => UdtfAnalysis {
+            partition_by: vec!["g".to_owned()],
+            order_by: vec![UdtfOrdering {
+                name: "id".to_owned(),
+                ascending: false,
+                nulls_first: Some(true),
+            }],
+            select: vec![
+                UdtfSelect {
+                    name: "id".to_owned(),
+                    alias: String::new(),
+                },
+                UdtfSelect {
+                    name: "g".to_owned(),
+                    alias: "grp".to_owned(),
+                },
+            ],
+            ..base
+        },
+        // A result schema that is no struct.
+        "not_a_struct" => UdtfAnalysis {
+            schema: DataType::Integer,
             ..base
         },
         // A selected expression that is not a column, without an alias.
@@ -289,7 +316,11 @@ impl UdfTask for Task {
                     Some(s) => arrow_select::concat::concat_batches(&s, &frames).unwrap(),
                     None => RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())),
                 };
-                self.seen.lock().unwrap().tasks.push(input.num_rows());
+                {
+                    let mut seen = self.seen.lock().unwrap();
+                    seen.tasks.push(input.num_rows());
+                    seen.inputs.push(input.clone());
+                }
                 if let Some(tx) = self.tx.lock().unwrap().take()
                     && (input.num_rows() > 0 || input.num_columns() == 0)
                 {
@@ -772,4 +803,56 @@ async fn analyze_metadata_a_table_argument_cannot_hold_is_refused() {
         seen.lock().unwrap().calls.is_empty(),
         "a refused analysis runs no task"
     );
+}
+
+/// The partitioning, ordering and selection `analyze` asks of a `TABLE` argument reach the tasks: the rows of
+/// one `g` together, `id` descending within it, and the argument's struct holding `id` and `g` as `grp`
+/// (`PythonUDTFAnalyzeResult.applyToTableArgument`, v4.2.0). A result that is no struct is refused.
+#[tokio::test]
+async fn analyze_partitioning_ordering_and_selection_reach_the_tasks() {
+    let (session, seen) = session();
+    session.sql(T).await.unwrap();
+    session
+        .register_python_udtf(udtf("keyed", PythonEvalType::TableUdf, &[]))
+        .unwrap();
+    rows(&session, "SELECT * FROM keyed(TABLE(t))")
+        .await
+        .unwrap();
+    let (call, inputs) = {
+        let seen = seen.lock().unwrap();
+        (seen.calls.last().unwrap().clone(), seen.inputs.clone())
+    };
+    assert_eq!(call.table_arg_offsets, [0], "{call:?}");
+    assert!(!call.partition_child_indexes.is_empty(), "{call:?}");
+    let mut groups: Vec<(String, Vec<Option<i32>>)> = Vec::new();
+    for input in inputs.iter().filter(|b| b.num_rows() > 0) {
+        let table = input.column(0).as_struct();
+        let names: Vec<&str> = table.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(&names[..2], ["id", "grp"], "{names:?}");
+        let ids = ints(table.column(0));
+        let grp = table.column(1);
+        for (r, id) in ids.into_iter().enumerate() {
+            let g = arrow_cast::display::array_value_to_string(grp, r).unwrap();
+            match groups.last_mut() {
+                Some((last, ids_of)) if *last == g => ids_of.push(id),
+                _ => groups.push((g, vec![id])),
+            }
+        }
+    }
+    groups.sort();
+    assert_eq!(
+        groups,
+        [
+            ("a".to_owned(), vec![Some(2), Some(1)]),
+            ("b".to_owned(), vec![Some(4), Some(3)]),
+            ("c".to_owned(), vec![Some(5)]),
+        ]
+    );
+    session
+        .register_python_udtf(udtf("not_a_struct", PythonEvalType::TableUdf, &[]))
+        .unwrap();
+    let err = rows(&session, "SELECT * FROM not_a_struct(1)")
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
 }

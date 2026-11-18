@@ -750,7 +750,26 @@ def test_java_narrowing_and_text() -> None:
     assert udtf._java_string(True) == "true"
     assert udtf._java_string(False) == "false"
     assert udtf._java_string([1, None, "a"]) == "[1, null, a]"
-    assert udtf._java_string({"k": None, "j": 1.0}) == "{k=null, j=1.0}"
+    # A dict is a `java.util.HashMap` to the JVM: `toString` iterates it by bucket, not insertion. Expected texts
+    # are JDK 21.0.13's `HashMap.toString` of the same puts in the same order.
+    maps: list[tuple[dict[Any, Any], str]] = [
+        ({"k": None, "j": 1.0}, "{j=1.0, k=null}"),
+        ({"zeta": 1, "alpha": 2, "mid": 3, "éß": 4}, "{zeta=1, éß=4, alpha=2, mid=3}"),
+        ({100: "a", 3: "b", 17: "c", -5: "d"}, "{17=c, 3=b, 100=a, -5=d}"),
+        ({5000000000: "x", 1 << 40: "y"}, "{1099511627776=y, 5000000000=x}"),
+        ({True: 1, False: 2}, "{false=2, true=1}"),
+        ({2.5: "p", -0.0: "q", float("nan"): "r"}, "{-0.0=q, 2.5=p, NaN=r}"),
+        ({None: 1, "a": 2}, "{null=1, a=2}"),
+        (
+            {f"key{19 - i}": i for i in range(20)},
+            "{key1=18, key2=17, key0=19, key5=14, key6=13, key3=16, key4=15, key9=10, key7=12, key8=11, key11=8, "
+            "key10=9, key15=4, key14=5, key13=6, key12=7, key19=0, key18=1, key17=2, key16=3}",
+        ),
+        # A key whose Java hash is identity-based keeps Python's order.
+        ({b"b": 1, b"a": 2}, "{b'b'=1, b'a'=2}"),
+    ]
+    for value, text in maps:
+        assert udtf._java_string(value) == text, value
     assert udtf._java_string(7) == "7"
     doubles = [
         (float("nan"), "NaN"),
