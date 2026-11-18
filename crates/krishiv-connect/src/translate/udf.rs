@@ -29,7 +29,6 @@ use krishiv_types::DataType;
 
 use super::Result;
 use super::errors::{not_set, unsupported, unsupported_field, unsupported_variant};
-use super::types::data_type;
 use super::udtf::PythonUdtf;
 use crate::proto::v4_3 as pb;
 use crate::proto::v4_3::command::CommandType;
@@ -202,7 +201,9 @@ pub fn python_udf(fun: &pb::CommonInlineUserDefinedFunction) -> Result<PythonUdf
         ));
     }
     let plan_eval_type = scalar_eval_type(udf.eval_type)?;
-    let return_type = data_type(udf.output_type.as_ref().unwrap_or(&pb::DataType::default()))?;
+    let return_type = super::udtf::transform_data_type(
+        udf.output_type.as_ref().unwrap_or(&pb::DataType::default()),
+    )?;
     Ok(PythonUdf {
         name: fun.function_name.clone(),
         deterministic: fun.deterministic,
