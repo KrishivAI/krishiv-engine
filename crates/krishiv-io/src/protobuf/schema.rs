@@ -184,14 +184,9 @@ fn field(
         return Ok(None);
     };
     if fd.is_list() {
-        // An empty wrapper element (`0A00`) unwraps to NULL, which Spark keeps as a NULL element; the element type must allow it.
-        let contains_null = matches!(conv.out, Out::Unwrap(_));
+        // Spark declares `array<T NOT NULL>` here (its goldens, 3.5.7 to 4.3.0), also for wrapper elements.
         return Ok(Some((
-            StructField::new(
-                fd.name(),
-                DataType::from(ArrayType::new(dt, contains_null)),
-                true,
-            ),
+            StructField::new(fd.name(), DataType::from(ArrayType::new(dt, false)), true),
             PlanField {
                 fd: fd.clone(),
                 shape: Shape::List(conv),

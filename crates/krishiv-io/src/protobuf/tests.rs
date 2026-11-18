@@ -469,7 +469,7 @@ fn two_malformed_embedded_pieces_do_not_merge_into_a_valid_message() {
 }
 
 #[test]
-fn a_descriptor_file_that_is_a_symbolic_link_is_not_read() {
+fn a_descriptor_file_that_is_a_symbolic_link_is_read_as_spark_reads_it() {
     let dir = std::env::temp_dir().join(format!("krishiv-pb-link-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let real = dir.join("real.desc");
@@ -478,8 +478,10 @@ fn a_descriptor_file_that_is_a_symbolic_link_is_not_read() {
     let _ = std::fs::remove_file(&link);
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert!(DescriptorSet::read_file("real", real.to_str().unwrap()).is_ok());
-    let err = DescriptorSet::read_file("link", link.to_str().unwrap()).unwrap_err();
-    assert_eq!(err.error_class().name(), "CANNOT_PARSE_PROTOBUF_DESCRIPTOR");
+    assert_eq!(
+        DescriptorSet::read_file("link", link.to_str().unwrap()).unwrap(),
+        GOLDEN
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

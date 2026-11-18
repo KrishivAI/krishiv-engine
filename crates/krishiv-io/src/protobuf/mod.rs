@@ -197,12 +197,8 @@ impl DescriptorSet {
                 .into()
             }
         };
-        // The path as the policy saw it must not be a link at the last component, and the file read is the file opened
-        // (same device and inode), so a swap after the access check cannot redirect the read.
-        let before = std::fs::symlink_metadata(local).map_err(|e| fail(&e))?;
-        if before.file_type().is_symlink() {
-            return Err(CannotParseProtobufDescriptor {}.into());
-        }
+        // Spark follows links (a mounted ConfigMap is one); the file read is the file opened, whatever the path now names.
+        let before = std::fs::metadata(local).map_err(|e| fail(&e))?;
         let file = std::fs::File::open(local).map_err(|e| fail(&e))?;
         let opened = file.metadata().map_err(|e| fail(&e))?;
         {
