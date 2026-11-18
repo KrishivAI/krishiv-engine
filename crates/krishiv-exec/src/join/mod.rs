@@ -404,6 +404,9 @@ pub(crate) enum Counter {
     IdleSpills,
     /// The bytes of their spill files.
     IdleSpilledBytes,
+    /// The build's partitions whose salted directory is roomy
+    /// (`krishiv.exec.join.directoryLoad`; reported only when some are).
+    RoomyPartitions,
 }
 
 /// The build sink's counters, by name.
@@ -447,7 +450,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 33]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 34]);
 
 impl Default for Counters {
     fn default() -> Self {
@@ -500,6 +503,10 @@ impl Counters {
                 std::borrow::Cow::Borrowed("hash_index"),
                 Metric::Text(table::IndexKind::names(kinds)),
             ));
+        }
+        // Only a build that took roomy directories reports how many.
+        if self.get(Counter::RoomyPartitions) > 0 {
+            out.extend(self.report(&[(Counter::RoomyPartitions, "roomy_partitions")]));
         }
         out
     }

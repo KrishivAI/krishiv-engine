@@ -17,7 +17,7 @@ use super::grace::{
     Grace, Part, SPILL_MIN, SPILL_SCRATCH, choose, reserve_chunks, spill_parts, write_sliced,
 };
 use super::keys::{Encoded, Hashing, any_invalid};
-use super::table::{JoinTable, RowArena, key_bytes};
+use super::table::{IndexKind, JoinTable, RowArena, key_bytes};
 use super::{Counter, FilterPublisher, JoinType, Shared, record, unsupported};
 use crate::context::JoinDirectoryLoad;
 use crate::context::{QueryContext, TaskContext};
@@ -876,7 +876,10 @@ fn build_need(
 
 /// What a partition's index reserves at the roomy load beyond the compact
 /// one (growth allowance included): 0 for arrow-row keys and for an index
-/// small enough to be flat, which the load does not size.
+/// small enough to be flat, which the load does not size. Sized by rows, not
+/// by the distinct-key estimate: the bound that keeps the directory within
+/// its reservation; a build with many duplicates asks for more than it
+/// keeps, and completion shrinks the reservation to what the index holds.
 fn roomy_extra(part: &Part, row_layout: bool) -> usize {
     if part.chunks.is_empty() || !row_layout {
         return 0;
@@ -1387,8 +1390,13 @@ impl Sink for BuildSink {
                                     .map(|j| j.need.0.saturating_add(j.need.1))
                                     .fold(0, usize::saturating_add)
                             };
-                            if index.try_grow(roomy_extra.saturating_add(queued)).is_ok() {
-                                index.shrink(queued);
+                            // The room is read, not reserved, so other
+                            // consumers never see a moment's refusal for
+                            // the queued bytes (review F3).
+                            let room = ctx.query().pool().available().unwrap_or(usize::MAX);
+                            if room >= roomy_extra.saturating_add(queued)
+                                && index.try_grow(roomy_extra).is_ok()
+                            {
                                 index_bytes = index_bytes.saturating_add(roomy_extra);
                                 load = DirectoryLoad::Roomy;
                             }
@@ -1470,6 +1478,9 @@ impl Sink for BuildSink {
                 n.add(Counter::IndexBytes, table.index_memory() as u64);
                 let (keys, buckets, kind) = table.index_size();
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
+                if kind == IndexKind::RowSaltedRoomy {
+                    self.0.counters.add(Counter::RoomyPartitions, 1);
+                }
                 self.0.counters.add(Counter::HashEntries, keys as u64);
                 self.0.counters.add(Counter::HashBuckets, buckets as u64);
                 // Of `kept`, what the index reservation still holds once the

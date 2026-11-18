@@ -60,6 +60,15 @@ async fn run_join(
     limit: usize,
     spills: bool,
 ) -> (Vec<String>, String, u64) {
+    try_join(load, limit, spills).await.unwrap()
+}
+
+/// [`run_join`], or the query's error (the pool released either way).
+async fn try_join(
+    load: JoinDirectoryLoad,
+    limit: usize,
+    spills: bool,
+) -> krishiv_exec::Result<(Vec<String>, String, u64)> {
     let root = root(limit);
     let (_manager, scope) = spill();
     let config = ExecConfig {
@@ -84,13 +93,23 @@ async fn run_join(
         scan(&schema(), batches(&data(0..BUILD), 4096)),
         scan(&schema(), batches(&data((0..2 * BUILD).step_by(3)), 4096)),
     );
-    let out = run(&runner_for(2, limit), plan, &q).await.unwrap();
+    let out = run(&runner_for(2, limit), plan, &q).await;
     assert_released(&root);
-    (
+    let out = out?;
+    let kind = hash_index(&q);
+    // `roomy_partitions` counts the roomy tables: none, all 8 level-0
+    // partitions, or some of them when `hash_index` lists both kinds.
+    let roomy = metric(&q, "HashJoinBuild", "roomy_partitions");
+    match kind.as_str() {
+        ROOMY => assert_eq!(roomy, 8, "{kind}"),
+        k if k.contains(ROOMY) => assert!((1..8).contains(&roomy), "{kind}: {roomy}"),
+        _ => assert_eq!(roomy, 0, "{kind}"),
+    }
+    Ok((
         render(&out),
-        hash_index(&q),
+        kind,
         metric(&q, "HashJoinBuild", "spilled_partitions"),
-    )
+    ))
 }
 
 /// With memory to spare, `auto` and `roomy` build roomy directories and
@@ -144,4 +163,33 @@ async fn a_tight_pool_keeps_the_compact_directory() {
         assert!(spilled > 0, "{load:?}: the build spills");
         assert!(got == expect, "{load:?}: spilled rows differ");
     }
+}
+
+/// Without a spill scope a build cannot spill, so a partition the pool
+/// refuses waits and, with nothing else running, fails the query. At the
+/// smallest budget (in 1 MiB steps) where the compact build succeeds, `auto`
+/// succeeds too with the same rows: a partition takes the roomy directory
+/// only if the pool also holds what the partitions still queued will ask
+/// for, so it never leaves a later one short (review F2).
+#[tokio::test(start_paused = true)]
+async fn without_a_spill_scope_roomy_never_starves_a_later_partition() {
+    let (expect, _, _) = run_join(JoinDirectoryLoad::Compact, 256 * MIB, false).await;
+    let mut fits = None;
+    for mib in 8..48 {
+        if let Ok((got, kind, _)) = try_join(JoinDirectoryLoad::Compact, mib * MIB, false).await {
+            assert!(got == expect, "compact at {mib} MiB: other rows");
+            assert_eq!(kind, COMPACT);
+            fits = Some(mib * MIB);
+            break;
+        }
+    }
+    let limit = fits.unwrap_or_else(|| panic!("no budget under 48 MiB holds the build"));
+    let (got, kind, _) = try_join(JoinDirectoryLoad::Auto, limit, false)
+        .await
+        .unwrap_or_else(|e| panic!("auto at {limit} bytes failed: {e}"));
+    assert!(got == expect, "auto at {limit} bytes: other rows");
+    assert!(
+        kind.split("; ").any(|k| k == COMPACT),
+        "auto at {limit} bytes: {kind}"
+    );
 }
