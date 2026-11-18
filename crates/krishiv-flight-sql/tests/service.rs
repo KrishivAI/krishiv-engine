@@ -1483,3 +1483,104 @@ async fn refetch_rechecks_access() {
         Some("KRISHIV_INSUFFICIENT_PERMISSIONS")
     );
 }
+
+/// Flight's sweep asks the manager whether a session is live without stamping its access
+/// (H5, §4.1): a cookie session nobody calls still reaches the manager's idle timeout, however
+/// often Flight sweeps meanwhile; then Flight's row goes too.
+#[tokio::test(flavor = "multi_thread")]
+async fn sweep_does_not_stamp_session_access() {
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        Setup {
+            limits: SessionLimits {
+                idle_timeout: Some(Duration::from_millis(200)),
+                ..SessionLimits::default()
+            },
+            ..Setup::default()
+        },
+    )
+    .await;
+    let (_, cookie) = info(&mut h, OPS, None, "USE default").await.expect("info");
+    let cookie = cookie.expect("cookie");
+    // Promoted to a cookie session: only the manager's idle timeout ends it.
+    let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT 1")
+        .await
+        .expect("info");
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(10);
+    while h.manager.counts().live != 0 {
+        assert!(Instant::now() < deadline, "the idle session was kept alive");
+        h.flight.sweep_at(Instant::now());
+        h.manager.sweep();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    h.flight.sweep_at(Instant::now());
+    assert_eq!(
+        h.flight.session_count(),
+        0,
+        "Flight's row follows the manager"
+    );
+    let e = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect_err("its handle went with it");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+}
+
+/// A cookie-less `DoGet` waiting for its share of the response budget is a call in flight, so
+/// its provisional session outlives `provisionalTtl` while it waits (§3.2, v3 review M2), and
+/// rule 1 releases it when the fetch ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn admission_wait_outlives_provisional_ttl() {
+    let mut h = start(FlightSqlConfig {
+        provisional_ttl: Duration::from_millis(50),
+        encode: krishiv_flight_sql::EncodeLimits {
+            batch_bytes: 400 << 20,
+            data_bytes: 100 << 20,
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    // Two stalled readers of a cookie session hold the budget.
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let a = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    let b = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    let (small, provisional) = info(&mut h, OPS, None, "SELECT 1 AS n")
+        .await
+        .expect("cookie-less info");
+    assert!(provisional.is_some());
+    assert_eq!(h.flight.session_count(), 2);
+    let mut client = h.client.clone();
+    let waiting = tokio::spawn({
+        let request = authed(ticket(&small), OPS, None);
+        async move { client.do_get(request).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "the fetch should wait at the budget"
+    );
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(120));
+    assert_eq!(
+        h.flight.session_count(),
+        2,
+        "a waiting call keeps its provisional session"
+    );
+    drop(a);
+    let stream = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("admitted once a reader ends")
+        .expect("task")
+        .expect("do_get")
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(stream)
+        .try_collect()
+        .await
+        .expect("rows");
+    assert_eq!(rows(&batches), 1);
+    // Rule 1: a cookie-less fetch ends its provisional session.
+    wait_sessions(&h, 1).await;
+    drop(b);
+}
