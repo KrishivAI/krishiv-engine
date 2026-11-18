@@ -45,7 +45,10 @@ def state(spark, name, v3):
                 f"summary['total-data-files'] AS total_data_files FROM {t}.snapshots ORDER BY committed_at, snapshot_id"
             )
         ),
-        "history": [r["snapshot_id"] for r in spark.sql(f"SELECT snapshot_id FROM {t}.history ORDER BY made_current_at, snapshot_id").collect()],
+        "history": [
+            r["snapshot_id"]
+            for r in spark.sql(f"SELECT snapshot_id FROM {t}.history ORDER BY made_current_at, snapshot_id").collect()
+        ],
         "schema": rows_of(spark.sql(f"DESCRIBE TABLE {t}")),
         "files": rows_of(spark.sql(f"SELECT file_path, record_count FROM {t}.files ORDER BY file_path")),
         "partitions": rows_of(spark.sql(f"SELECT record_count, file_count FROM {t}.partitions")),
@@ -53,9 +56,7 @@ def state(spark, name, v3):
     }
     if v3:
         try:
-            out["row_ids"] = [
-                r["_row_id"] for r in spark.sql(f"SELECT _row_id FROM {t} ORDER BY _row_id").collect()
-            ]
+            out["row_ids"] = [r["_row_id"] for r in spark.sql(f"SELECT _row_id FROM {t} ORDER BY _row_id").collect()]
             out["last_updated"] = [
                 r["_last_updated_sequence_number"]
                 for r in spark.sql(f"SELECT _last_updated_sequence_number FROM {t} ORDER BY id, name").collect()
@@ -86,7 +87,11 @@ def main(out_dir):
         entry["after"] = state(spark, name, v3)
         meta = os.path.join(wh, "db", name, "metadata")
         # The Hadoop catalog's own names (``v<N>.metadata.json``); Krishiv's test catalog also left ``v<N>-sink`` files.
-        versions = [p for p in glob.glob(os.path.join(meta, "v*.metadata.json")) if re.fullmatch(r"v\d+\.metadata\.json", os.path.basename(p))]
+        versions = [
+            p
+            for p in glob.glob(os.path.join(meta, "v*.metadata.json"))
+            if re.fullmatch(r"v\d+\.metadata\.json", os.path.basename(p))
+        ]
         latest = max(versions, key=lambda p: int(os.path.basename(p)[1:].split(".")[0]))
         entry["after"]["metadata"] = f"file:{latest}"
         result[name] = entry
