@@ -2,7 +2,7 @@
 description: "Krishiv sessions: Spark SQL and DataFrames over the engine."
 ---
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 # Module `krishiv_session`
 
@@ -169,6 +169,7 @@ Everything, including durable writes, DDL and cluster changes.
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -322,6 +323,7 @@ The web UI and its `/api/internal` routes.
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -465,6 +467,7 @@ No credential was presented.
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -600,6 +603,7 @@ pub struct Credentials<''a> {
     fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -655,6 +659,7 @@ pub struct Authenticated {
     pub principal: krishiv_common::principal::Principal,
     pub role: Option<Role>,
     pub method: Method,
+    pub token_id: Option<String>,
 }
 ```
 
@@ -665,6 +670,7 @@ pub struct Authenticated {
 | `principal` | `krishiv_common::principal::Principal` | Who the request acts for. |
 | `role` | `Option<Role>` | The role; `None` when the credential maps to no role (every request is then refused by<br>the policy). |
 | `method` | `Method` | How it authenticated. |
+| `token_id` | `Option<String>` | The credential's own id (an OIDC token's `jti`), for the audit record; never enforced. |
 
 ##### Implementations
 
@@ -674,6 +680,11 @@ pub struct Authenticated {
   pub fn new(principal: Principal, role: Option<Role>, method: Method) -> Self { /* ... */ }
   ```
   An authentication result.
+
+- ```rust
+  pub fn with_token_id(self: Self, token_id: Option<String>) -> Self { /* ... */ }
+  ```
+  This result with the credential's id `token_id`.
 
 ###### Trait Implementations
 
@@ -715,6 +726,7 @@ pub struct Authenticated {
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -869,6 +881,7 @@ The peer failed too often and is refused for a while.
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -999,6 +1012,18 @@ pub use config::TokenSpec;
 pub use config::is_auth_key;
 ```
 
+#### Re-export `DeniedCount`
+
+```rust
+pub use denials::DeniedCount;
+```
+
+#### Re-export `DeniedCounts`
+
+```rust
+pub use denials::DeniedCounts;
+```
+
 #### Re-export `CertNames`
 
 ```rust
@@ -1009,6 +1034,30 @@ pub use der::CertNames;
 
 ```rust
 pub use der::DerError;
+```
+
+#### Re-export `ActAs`
+
+```rust
+pub use impersonation::ActAs;
+```
+
+#### Re-export `ActAsHint`
+
+```rust
+pub use impersonation::ActAsHint;
+```
+
+#### Re-export `Denial`
+
+```rust
+pub use impersonation::Denial;
+```
+
+#### Re-export `ImpersonationConfig`
+
+```rust
+pub use impersonation::ImpersonationConfig;
 ```
 
 #### Re-export `Alg`
@@ -1041,6 +1090,30 @@ pub use mtls::PrincipalFrom;
 pub use oidc_config::OidcConfig;
 ```
 
+#### Re-export `ImpersonationTarget`
+
+```rust
+pub use principals::ImpersonationTarget;
+```
+
+#### Re-export `PrincipalPrivilege`
+
+```rust
+pub use principals::PrincipalPrivilege;
+```
+
+#### Re-export `PrincipalRights`
+
+```rust
+pub use principals::PrincipalRights;
+```
+
+#### Re-export `PrincipalTable`
+
+```rust
+pub use principals::PrincipalTable;
+```
+
 #### Re-export `RolePolicy`
 
 ```rust
@@ -1057,6 +1130,12 @@ pub use secret_ref::SecretRef;
 
 ```rust
 pub use server::FailureCount;
+```
+
+#### Re-export `ImpersonationCount`
+
+```rust
+pub use server::ImpersonationCount;
 ```
 
 #### Re-export `ServerAuth`
@@ -1087,6 +1166,1335 @@ pub use tls_config::check_listener;
 
 ```rust
 pub use tokens::StaticTokens;
+```
+
+## Module `catalog_decl`
+
+Declared catalogs (design P3-T067 §2; ADR 0036 R11, R14): the `krishiv.catalog.<name>.*` keys
+and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
+same for the server at startup and for an embedded session builder (R11). Validation never
+connects: a catalog that is down does not stop the server.
+
+```text
+krishiv.catalog.<name>.type            = iceberg-rest | hive | unity | glue | sqlite | memory
+krishiv.catalog.<name>.uri             = https://catalog.example.com/api/catalog
+krishiv.catalog.<name>.warehouse       = analytics
+krishiv.catalog.<name>.auth            = none | token | client-credentials   (default none)
+krishiv.catalog.<name>.token           = env:NAME | file:/path               (auth=token)
+krishiv.catalog.<name>.clientId        = krishiv                              (client-credentials)
+krishiv.catalog.<name>.clientSecret    = env:NAME | file:/path
+krishiv.catalog.<name>.tokenEndpoint   = https://idp.example.com/oauth2/token (required)
+krishiv.catalog.<name>.scope / .audience
+krishiv.catalog.<name>.storage         = vended | allowed-prefixes
+krishiv.catalog.<name>.tenants         = acme, globex                         (absent: every tenant)
+krishiv.catalog.<name>.allowConfigKeys = s3.endpoint
+krishiv.catalog.<name>.allowInsecure   = true                                  (an http:// uri, server mode)
+krishiv.catalog.<name>.option.<key>    = <value>                               (per type, fixed list)
+krishiv.catalog.default                = <name>
+```
+
+`auth = delegated` (and `.delegation`, `.actorToken`) is PR-58b's: refused here as not in this
+build, never accepted and ignored.
+
+```rust
+pub mod catalog_decl { /* ... */ }
+```
+
+### Types
+
+#### Enum `DeclMode`
+
+Where the declarations come from.
+
+```rust
+pub enum DeclMode {
+    Server,
+    Embedded,
+}
+```
+
+##### Variants
+
+###### `Server`
+
+`krishiv server`: references only, `https` only unless `allowInsecure`.
+
+###### `Embedded`
+
+An embedded session (no principal boundary).
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> DeclMode { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &DeclMode) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `CatalogType`
+
+A catalog type.
+
+```rust
+pub enum CatalogType {
+    IcebergRest,
+    Hive,
+    Unity,
+    Glue,
+    Sqlite,
+    Memory,
+}
+```
+
+##### Variants
+
+###### `IcebergRest`
+
+An Iceberg REST catalog.
+
+###### `Hive`
+
+A Hive metastore (Thrift).
+
+###### `Unity`
+
+Unity Catalog (read only).
+
+###### `Glue`
+
+AWS Glue.
+
+###### `Sqlite`
+
+A SQLite catalog file.
+
+###### `Memory`
+
+An in-memory catalog.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn name(self: Self) -> &''static str { /* ... */ }
+  ```
+  The name in `type`.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogType { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Ord**
+  - ```rust
+    fn cmp(self: &Self, other: &CatalogType) -> $crate::cmp::Ordering { /* ... */ }
+    ```
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CatalogType) -> bool { /* ... */ }
+    ```
+
+- **PartialOrd**
+  - ```rust
+    fn partial_cmp(self: &Self, other: &CatalogType) -> $crate::option::Option<$crate::cmp::Ordering> { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `CatalogAuth`
+
+How the server authenticates to the catalog (§3.1; `delegated` is PR-58b's). `Debug` shows
+the token endpoint without its userinfo.
+
+```rust
+pub enum CatalogAuth {
+    None,
+    Token(crate::auth::SecretRef),
+    ClientCredentials {
+        client_id: String,
+        client_secret: crate::auth::SecretRef,
+        token_endpoint: String,
+        scope: Option<String>,
+        audience: Option<String>,
+    },
+}
+```
+
+##### Variants
+
+###### `None`
+
+Anonymous.
+
+###### `Token`
+
+One static bearer token.
+
+Fields:
+
+| Index | Type | Documentation |
+|-------|------|---------------|
+| 0 | `crate::auth::SecretRef` |  |
+
+###### `ClientCredentials`
+
+OAuth2 client credentials at the declared token endpoint.
+
+Fields:
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `client_id` | `String` | `clientId`. |
+| `client_secret` | `crate::auth::SecretRef` | `clientSecret`. |
+| `token_endpoint` | `String` | `tokenEndpoint` (required: the catalog's own `/v1/oauth/tokens` is deprecated). |
+| `scope` | `Option<String>` | `scope`. |
+| `audience` | `Option<String>` | `audience`. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn name(self: &Self) -> &''static str { /* ... */ }
+  ```
+  The mode name (`system.catalogs.auth`).
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogAuth { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CatalogAuth) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `CatalogStorage`
+
+Where table data credentials come from (§4).
+
+```rust
+pub enum CatalogStorage {
+    Vended,
+    AllowedPrefixes,
+}
+```
+
+##### Variants
+
+###### `Vended`
+
+Credentials the catalog vends.
+
+###### `AllowedPrefixes`
+
+The server's credentials under `krishiv.io.objectStore.allowedPrefixes`.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn name(self: Self) -> &''static str { /* ... */ }
+  ```
+  The mode name (`system.catalogs.storage`).
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogStorage { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CatalogStorage) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `CatalogDecl`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+One declared catalog. `Debug` shows the `uri` without its userinfo.
+
+```rust
+pub struct CatalogDecl {
+    pub name: String,
+    pub kind: CatalogType,
+    pub uri: Option<String>,
+    pub warehouse: Option<String>,
+    pub auth: CatalogAuth,
+    pub storage: CatalogStorage,
+    pub tenants: Option<std::collections::BTreeSet<String>>,
+    pub allow_config_keys: std::collections::BTreeSet<String>,
+    pub allow_insecure: bool,
+    pub options: std::collections::BTreeMap<String, String>,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `name` | `String` | The catalog name (a lowercase identifier). |
+| `kind` | `CatalogType` | The type. |
+| `uri` | `Option<String>` | `uri`. |
+| `warehouse` | `Option<String>` | `warehouse`. |
+| `auth` | `CatalogAuth` | `auth` with its credentials. |
+| `storage` | `CatalogStorage` | `storage`. |
+| `tenants` | `Option<std::collections::BTreeSet<String>>` | `tenants`: `None` means every tenant (and principals without one). |
+| `allow_config_keys` | `std::collections::BTreeSet<String>` | `allowConfigKeys`. |
+| `allow_insecure` | `bool` | `allowInsecure`. |
+| `options` | `std::collections::BTreeMap<String, String>` | `option.<key>` values. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn visible_to(self: &Self, tenant: Option<&str>) -> bool { /* ... */ }
+  ```
+  Whether a principal of `tenant` sees this catalog (§2.4: hidden means absent).
+
+- ```rust
+  pub fn declared_hosts(self: &Self) -> Vec<String> { /* ... */ }
+  ```
+  The hosts this catalog's own clients may reach at private addresses by name (§5.1): its
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogDecl { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CatalogDecl) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `CatalogDeclarations`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The parsed declarations.
+
+```rust
+pub struct CatalogDeclarations {
+    pub catalogs: Vec<CatalogDecl>,
+    pub default: Option<String>,
+    pub warnings: Vec<String>,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `catalogs` | `Vec<CatalogDecl>` | The catalogs, by name. |
+| `default` | `Option<String>` | `krishiv.catalog.default` (`None`: `spark_catalog`). |
+| `warnings` | `Vec<String>` | Startup warnings (options accepted and ignored), never carrying a value. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn parse<''a, /* synthetic */ impl IntoIterator<Item = (&'a str, &'a str)>: IntoIterator<Item = (&''a str, &''a str)>>(settings: impl IntoIterator<Item = (&''a str, &''a str)>, mode: DeclMode, compiled: &[CatalogType], egress: Option<&Arc<EgressPolicy>>) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  Parses every catalog declaration key of `settings` (other keys, registered
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogDeclarations { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Default**
+  - ```rust
+    fn default() -> CatalogDeclarations { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CatalogDeclarations) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Functions
+
+#### Function `is_catalog_key`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key, the
+prefix in any letter case. In server mode such keys are startup only, for every role (§2.2,
+decision 1).
+
+```rust
+pub fn is_catalog_key(key: &str) -> bool { /* ... */ }
+```
+
+#### Function `is_declaration_key`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Whether `key` is part of a catalog declaration: a catalog key ([`is_catalog_key`]) that is
+not a registered engine setting (`krishiv.catalog.requestTimeout`, `maxMetadataBytes`, ...
+configure every catalog client and stay engine configuration). The server reads these at
+startup and never stores them as configuration; a session in server mode cannot set them.
+
+```rust
+pub fn is_declaration_key(key: &str) -> bool { /* ... */ }
+```
+
+### Constants and Statics
+
+#### Constant `CATALOG_PREFIX`
+
+The prefix of every Krishiv catalog key.
+
+```rust
+pub const CATALOG_PREFIX: &str = "krishiv.catalog.";
+```
+
+#### Constant `SPARK_CATALOG_PREFIX`
+
+The prefix of Spark's catalog keys (the alias).
+
+```rust
+pub const SPARK_CATALOG_PREFIX: &str = "spark.sql.catalog.";
+```
+
+#### Constant `DEFAULT_CATALOG_KEY`
+
+`krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`).
+
+```rust
+pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
+```
+
+## Module `catalog_registry`
+
+The catalog registry (design P3-T067 §2.3, §2.4; ADR 0036 R11, R14): the declared catalogs of
+one engine runtime, each built by the [`CatalogFactory`] of its type on first use and then
+shared by every session of the process.
+
+- **One code path.** A [`CatalogSetup`] carries the declaration keys, the mode and the
+  factories this build compiles in; [`crate::EngineRuntimeBuilder::catalogs`] hands it to the
+  runtime, which parses it with [`CatalogDeclarations::parse`] (the egress rule checking every
+  declared literal endpoint), resolves every secret reference and asks each factory to
+  validate its declarations. Any failure stops the build: a server does not start. Nothing
+  connects: a catalog that is down does not stop the server.
+- **Factories.** The session crate has no connector dependency: the server and the facade
+  register the factories their cargo features compile in. A type without one is refused at
+  startup, naming the type and the catalog, never skipped.
+- **Lazy, shared, never poisoned.** A catalog is built on its first use; a build that fails
+  fails that query and is tried again by the next one.
+- **Per tenant (§2.4).** A catalog that lists tenants does not exist for a principal of any
+  other tenant, or of none: listings omit it and a name lookup fails as for an undeclared name.
+- **Server mode** (decisions 1 and 7): the declaration keys are startup only. A session's
+  `SET`/`RESET` of one, or a session builder's, is `CANNOT_MODIFY_STATIC_CONFIG` for every
+  role (`conf.rs`, `runtime.rs`). Embedded sessions are unchanged.
+
+```rust
+pub mod catalog_registry { /* ... */ }
+```
+
+### Types
+
+#### Struct `CatalogDeps`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What a factory builds a catalog with: the mode, the runtime's egress policy (a catalog's
+clients scope it to its declared hosts, `CatalogDecl::declared_hosts`), the admin's egress
+proxy and the catalog client limits (`krishiv.catalog.requestTimeout`,
+`krishiv.catalog.maxMetadataBytes`). `Debug` never shows the proxy URL.
+
+```rust
+pub struct CatalogDeps {
+    pub mode: crate::catalog_decl::DeclMode,
+    pub egress: std::sync::Arc<krishiv_io::egress::EgressPolicy>,
+    pub proxy: Option<String>,
+    pub request_timeout: std::time::Duration,
+    pub max_response_bytes: u64,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `mode` | `crate::catalog_decl::DeclMode` | Server or embedded. |
+| `egress` | `std::sync::Arc<krishiv_io::egress::EgressPolicy>` | The runtime's egress policy. |
+| `proxy` | `Option<String>` | `krishiv.io.egress.proxy`, when the admin set one. |
+| `request_timeout` | `std::time::Duration` | The longest one catalog call may take. |
+| `max_response_bytes` | `u64` | The largest response a catalog call may read. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(mode: DeclMode, egress: Arc<EgressPolicy>) -> Self { /* ... */ }
+  ```
+  Dependencies with the default limits (30 s, 256 MiB) and no proxy.
+
+- ```rust
+  pub fn with_proxy(self: Self, proxy: Option<String>) -> Self { /* ... */ }
+  ```
+  The same with the admin's egress proxy.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CatalogDeps { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `CatalogSetup`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The catalogs a runtime is built with: the declaration keys, where they come from and the
+factories of this build (see the module docs).
+
+```rust
+pub struct CatalogSetup {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(mode: DeclMode) -> Self { /* ... */ }
+  ```
+  No declarations yet, for `mode`.
+
+- ```rust
+  pub fn setting</* synthetic */ impl Into<String>: Into<String>, /* synthetic */ impl Into<String>: Into<String>>(self: Self, key: impl Into<String>, value: impl Into<String>) -> Self { /* ... */ }
+  ```
+  One setting; keys that are not catalog declarations are ignored.
+
+- ```rust
+  pub fn factory(self: Self, factory: Arc<dyn CatalogFactory>) -> Self { /* ... */ }
+  ```
+  The factory of one catalog type (a later one of the same type replaces it).
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `CatalogRegistry`
+
+The declared catalogs of one runtime (see the module docs).
+
+```rust
+pub struct CatalogRegistry {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn empty(mode: DeclMode) -> Self { /* ... */ }
+  ```
+  No declared catalogs (an embedded runtime built without a [`CatalogSetup`]).
+
+- ```rust
+  pub fn mode(self: &Self) -> DeclMode { /* ... */ }
+  ```
+  Where the declarations came from: in server mode the declaration keys are startup only.
+
+- ```rust
+  pub fn default_catalog(self: &Self) -> Option<&str> { /* ... */ }
+  ```
+  `krishiv.catalog.default` when it names a declared catalog (`None`: `spark_catalog`).
+
+- ```rust
+  pub fn warnings(self: &Self) -> &[String] { /* ... */ }
+  ```
+  The startup warnings (options accepted and ignored), never carrying a value.
+
+- ```rust
+  pub fn declarations(self: &Self) -> impl Iterator<Item = &CatalogDecl> { /* ... */ }
+  ```
+  Every declaration, sorted by name, whoever sees it (readiness checks, T066).
+
+- ```rust
+  pub fn visible<''a>(self: &''a Self, tenant: Option<&''a str>) -> impl Iterator<Item = &''a CatalogDecl> { /* ... */ }
+  ```
+  The declarations a principal of `tenant` sees, sorted by name (§2.4).
+
+- ```rust
+  pub fn catalog(self: &Self, name: &str, tenant: Option<&str>) -> Option<Arc<dyn Catalog>> { /* ... */ }
+  ```
+  The catalog `name` (any letter case) as a principal of `tenant` sees it: `None` when it is
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Traits
+
+#### Trait `CatalogFactory`
+
+Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
+crates (`krishiv-catalogs`: `iceberg-rest`), registered by the binary that compiles them in.
+
+```rust
+pub trait CatalogFactory: fmt::Debug + Send + Sync {
+    /* Associated items */
+}
+```
+
+##### Required Items
+
+###### Required Methods
+
+- `kind`: The type it builds.
+- `build`: The catalog `decl` declares, on its first use. It must not connect to validate itself:
+
+##### Provided Methods
+
+- ```rust
+  fn validate(self: &Self, decl: &CatalogDecl, deps: &CatalogDeps) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Checks `decl` at startup without connecting (what [`Self::build`] would refuse for the
+
+## Module `egress`
+
+The server's egress policy from its startup configuration (design P3-T067 §5; threat model
+T-C2): `krishiv.io.egress.privateAddresses`, `allowedCidrs`, `proxy`, the credential-provider
+endpoints of the server's environment, and the admin-set store endpoints that object-store
+clients may reach at private addresses by name.
+
+The rule itself is `krishiv_io::egress` (krishiv-store). Embedded sessions default to `allow`;
+`krishiv server` sets `deny` unless the admin chose otherwise.
+
+```rust
+pub mod egress { /* ... */ }
+```
+
+### Functions
+
+#### Function `egress_policy`
+
+The egress policy of `config`, reading the provider endpoints through `env`.
+
+# Errors
+`KRISHIV_INVALID_CONFIG_VALUE` for a network in `allowedCidrs` that does not parse.
+
+```rust
+pub fn egress_policy</* synthetic */ impl Fn(&str) -> Option<String>: Fn(&str) -> Option<String>>(config: &krishiv_common::config::Config, env: impl Fn(&str) -> Option<String>) -> Result<std::sync::Arc<krishiv_io::egress::EgressPolicy>, krishiv_common::error::KrishivError> { /* ... */ }
+```
+
+#### Function `egress_proxy`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The admin's egress proxy (`krishiv.io.egress.proxy`), if set.
+
+```rust
+pub fn egress_proxy(config: &krishiv_common::config::Config) -> Option<String> { /* ... */ }
+```
+
+#### Function `store_scope`
+
+The scope of the object-store clients: the hosts of the admin-set store endpoints of
+`config`, each literal endpoint checked now (§5.2: no later point exists for a request the
+store builds itself).
+
+# Errors
+`KRISHIV_INVALID_CONFIG_VALUE` naming the key (never the address) for an endpoint whose
+literal address the rule refuses even with the exemption (link-local, special-purpose).
+
+```rust
+pub fn store_scope(policy: &std::sync::Arc<krishiv_io::egress::EgressPolicy>, config: &krishiv_common::config::Config) -> Result<krishiv_io::egress::EgressScope, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 ## Module `functions`
@@ -1209,6 +2617,26 @@ assert!(shown.contains("FAILFAST"), "{shown}");
 
 ```rust
 pub fn map_literal(pairs: Vec<(String, String)>) -> crate::Column { /* ... */ }
+```
+
+#### Function `lambda`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The lambda `params -> body` of a higher-order function call (`transform`, `filter`,
+`aggregate`, ...). The body refers to a parameter through `col(name)`, as the SQL form
+`x -> x + 1` does; the analyzer binds the names when the call is resolved.
+
+```
+use krishiv_session::functions::{call_function, col, lambda, lit};
+let plus_one = lambda(["x"], col("x") + lit(1));
+let call = call_function("transform", [col("xs"), plus_one]);
+```
+
+```rust
+pub fn lambda<S: Into<String>, /* synthetic */ impl IntoIterator<Item = S>: IntoIterator<Item = S>>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }
 ```
 
 #### Function `lit_null`
@@ -1432,6 +2860,651 @@ let c = coalesce([col("a"), lit(0)]);
 pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
+## Module `grants`
+
+The `grants` access-policy provider (P3-T062 unit G2; design `P3-T062-access-policy-providers.md`
+§2, ADR 0046 §7, ADR 0036 R2).
+
+[`Grants`] is the server-wide part: the [`GrantStore`] (roles, grant rows, owners, the epoch)
+and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as ADR 0046
+§7 says: data securables (tables, views, columns, namespaces, functions, paths, secrets,
+connections) are decided by the grants alone; `System(..)` securables and the reserved
+`system` catalog's tables by the `system` policy (the role matrix in server mode); an admin
+passes every data check. Path confinement (`PathPrefixPolicy`) wraps the whole policy, so it
+is asked first and grants never lift it.
+
+Decisions: any grant of the principal's effective grantees (the user, its groups, and their
+roles transitively) on the securable or a parent allows; nothing else does (no `DENY`, Q2).
+An owner (the creator, Q4) holds every privilege with the grant option. Reads are decided per
+column ([`AccessPolicy::column_level`]): `Browse` on a table needs any grant on it (a column
+grant included), its rows `Select` per column the final plan reads. Each refusal is counted
+here ([`Grants::denied_counts`], `krishiv_access_denied_total{privilege,provider}`, the
+canonical per-provider counter); the one `krishiv::audit` record is the session's
+(`access::log_denial`, with `provider` and `policy_epoch`; the query id is the enclosing
+`krishiv.sql`/`krishiv.query` span's).
+
+Names match as the catalog resolves them (review M1): keys keep the catalog's spelling and
+are never folded; a key is compared ignoring ASCII case only when the session catalog holds
+no case twin of it (`GrantsPolicy::exact_for`). A user and a service principal of one name
+share grants and ownership (review m8: principals are keyed by name).
+
+```rust
+pub mod grants { /* ... */ }
+```
+
+### Types
+
+#### Enum `DecidedBy`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Who decided a securable under [`GrantsPolicy`] (the `provider` label).
+
+```rust
+pub enum DecidedBy {
+    Grants,
+    Roles,
+}
+```
+
+##### Variants
+
+###### `Grants`
+
+The grants.
+
+###### `Roles`
+
+The `system` policy (the role matrix).
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn as_str(self: Self) -> &''static str { /* ... */ }
+  ```
+  `grants` or `roles`.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> DecidedBy { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &DecidedBy) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `DeniedCount`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+One denial counter (`krishiv_access_denied_total{privilege,provider}`).
+
+```rust
+pub struct DeniedCount {
+    pub privilege: krishiv_plan::analyzer::Privilege,
+    pub provider: DecidedBy,
+    pub count: u64,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `privilege` | `krishiv_plan::analyzer::Privilege` | The privilege refused. |
+| `provider` | `DecidedBy` | Who refused it. |
+| `count` | `u64` | Refusals so far. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> DeniedCount { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &DeniedCount) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Grants`
+
+The server-wide grants: the store and the denial counters, shared by every session's
+[`GrantsPolicy`].
+
+```rust
+pub struct Grants {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(store: Arc<dyn GrantStore>) -> Arc<Self> { /* ... */ }
+  ```
+  Grants over `store`.
+
+- ```rust
+  pub fn epoch(self: &Self) -> u64 { /* ... */ }
+  ```
+  The grants epoch: bumped by every `GRANT`, `REVOKE`, role change and ownership change.
+
+- ```rust
+  pub fn denied_counts(self: &Self) -> Vec<DeniedCount> { /* ... */ }
+  ```
+  The denial counters, every (privilege, provider) pair, zeros included.
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `GrantsPolicy`
+
+One session's policy: grants for data securables, `system` for the rest, admin passes every
+data check (see the module docs).
+
+```rust
+pub struct GrantsPolicy {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(grants: Arc<Grants>, system: Arc<dyn AccessPolicy>, admin: bool) -> Self { /* ... */ }
+  ```
+  The policy of a session over `grants`, with `system` deciding `System(..)` securables (the
+
+- ```rust
+  pub fn grants(self: &Self) -> &Arc<Grants> { /* ... */ }
+  ```
+  The shared grants.
+
+- ```rust
+  pub fn is_admin(self: &Self) -> bool { /* ... */ }
+  ```
+  Whether the principal is an admin (passes every data check, may grant anything).
+
+- ```rust
+  pub fn decided_by(securable: &Securable) -> DecidedBy { /* ... */ }
+  ```
+  Who decides `securable`.
+
+###### Trait Implementations
+
+- **AccessPolicy**
+  - ```rust
+    fn version(self: &Self) -> PolicyVersion { /* ... */ }
+    ```
+
+  - ```rust
+    fn check<''a>(self: &''a Self, principal: &''a Principal, securable: &''a Securable, privilege: Privilege) -> BoxFuture<''a, Result<AccessDecision, KrishivError>> { /* ... */ }
+    ```
+
+  - ```rust
+    fn column_level(self: &Self) -> bool { /* ... */ }
+    ```
+
+  - ```rust
+    fn denied(self: &Self, principal: &Principal, securable: &Securable, privilege: Privilege) { /* ... */ }
+    ```
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut std::fmt::Formatter<''_>) -> std::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `AccessProvider`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The access provider a server configures (`krishiv.access.provider`).
+
+```rust
+pub enum AccessProvider {
+    Roles,
+    Grants,
+}
+```
+
+##### Variants
+
+###### `Roles`
+
+No provider beyond the role matrix (or `AllowAll` without authentication).
+
+###### `Grants`
+
+The `grants` provider.
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> AccessProvider { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &AccessProvider) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Functions
+
+#### Function `access_provider`
+
+The provider `config` selects. Unset, it is `grants` when the server authenticates and the
+role matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog`, `external`
+and lists (`grants+catalog`) are refused until their units land (G5, G6).
+
+# Errors
+`KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
+
+```rust
+pub fn access_provider(config: &krishiv_common::config::Config, authenticated: bool) -> Result<AccessProvider, krishiv_common::error::KrishivError> { /* ... */ }
+```
+
+### Re-exports
+
+#### Re-export `FileGrantStore`
+
+```rust
+pub use store::FileGrantStore;
+```
+
+#### Re-export `GrantStateHandle`
+
+```rust
+pub use store::GrantStateHandle;
+```
+
+#### Re-export `GrantStore`
+
+```rust
+pub use store::GrantStore;
+```
+
+#### Re-export `MemoryGrantStore`
+
+```rust
+pub use store::MemoryGrantStore;
+```
+
 ## Module `resource_groups`
 
 Resource groups: an [`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
@@ -1469,6 +3542,16 @@ pub struct ResourceGroups {
 ###### Methods
 
 - ```rust
+  pub fn file_etag(path: &str) -> Option<String> { /* ... */ }
+  ```
+  The etag of the file at `path` as it is on disk now (`file_etag`), or `None` when it cannot
+
+- ```rust
+  pub fn replace_file(self: &Self, path: &str, document: &str, etag: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Replaces the group file at `path` with `document` and swaps the tree for it. In order:
+
+- ```rust
   pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
   ```
   Builds the controller from the text of a group file. `total_memory` is what a
@@ -1477,6 +3560,46 @@ pub struct ResourceGroups {
   pub fn with_clock(json: &str, total_memory: usize, now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, KrishivError> { /* ... */ }
   ```
   As [`ResourceGroups::from_json`], with the clock (milliseconds since the Unix epoch)
+
+- ```rust
+  pub fn validate(json: &str, total_memory: usize) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Checks a candidate document without changing anything (`ValidateResourceGroupConfig`).
+
+- ```rust
+  pub fn reload_json(self: &Self, json: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Swaps the tree for the one `json` describes. A group the new document keeps (by dotted
+
+- ```rust
+  pub fn reload_file(self: &Self, path: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  As [`ResourceGroups::reload_json`], from the file at `path`.
+
+- ```rust
+  pub fn document(self: &Self) -> String { /* ... */ }
+  ```
+  The loaded document as canonical JSON.
+
+- ```rust
+  pub fn etag(self: &Self) -> String { /* ... */ }
+  ```
+  SHA-256 (hex) of [`ResourceGroups::document`]: what a replace is checked against.
+
+- ```rust
+  pub fn loaded_at_ms(self: &Self) -> u64 { /* ... */ }
+  ```
+  When the loaded document was read, in milliseconds since the Unix epoch.
+
+- ```rust
+  pub fn from_file(path: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  Builds the controller from the group file at `path` (`krishiv.workload.resourceGroups.file`).
+
+- ```rust
+  pub fn rows(self: &Self) -> Vec<GroupRow> { /* ... */ }
+  ```
+  One row per group of the tree, parents first, with the counters now (the source of
 
 - ```rust
   pub fn counts(self: &Self, id: &str) -> Option<(usize, usize)> { /* ... */ }
@@ -1515,6 +3638,7 @@ pub struct ResourceGroups {
     fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -1550,12 +3674,743 @@ pub struct ResourceGroups {
 - **WithSubscriber**
 ### Re-exports
 
+#### Re-export `tag_matches`
+
+```rust
+pub use select::tag_matches;
+```
+
+#### Re-export `GroupRow`
+
+```rust
+pub use tree::GroupRow;
+```
+
 #### Re-export `GroupSlot`
 
 ```rust
 pub use tree::GroupSlot;
 ```
 
+## Module `spark_catalog`
+
+`spark.catalog` (Spark's `org.apache.spark.sql.catalog.Catalog`, plan row PR-46, T082): the embedded
+catalog API every surface shares. Listings and lookups read the session catalog and the permanent store
+directly and return Spark's structs (`Database`, `Table`, `Column`, `Function`); the mutating calls run
+the SQL statement Spark's `CatalogImpl` runs, so the access checks, errors and cache invalidation are
+those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions
+(`design/P3-connect-mapping.md` section 2.1).
+
+```rust
+pub mod spark_catalog { /* ... */ }
+```
+
+### Types
+
+#### Struct `Database`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Spark's `Database`.
+
+```rust
+pub struct Database {
+    pub name: String,
+    pub catalog: String,
+    pub description: Option<String>,
+    pub location_uri: String,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `name` | `String` | The namespace's name. |
+| `catalog` | `String` | The catalog it belongs to. |
+| `description` | `Option<String>` | Its comment. |
+| `location_uri` | `String` | Its location URI. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Database { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Database) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Table`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Spark's `Table`.
+
+```rust
+pub struct Table {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub table_type: String,
+    pub is_temporary: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `name` | `String` | The table's name. |
+| `catalog` | `Option<String>` | The catalog; `None` for a temporary view. |
+| `namespace` | `Option<Vec<String>>` | The namespace parts: empty for a local temporary view, `[global_temp]` for a global one. |
+| `description` | `Option<String>` | Its comment. |
+| `table_type` | `String` | `MANAGED`, `EXTERNAL`, `VIEW` or `TEMPORARY`. |
+| `is_temporary` | `bool` | Whether it is a temporary view (local or global). |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Table { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Table) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Column`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Spark's `Column`.
+
+```rust
+pub struct Column {
+    pub name: String,
+    pub description: Option<String>,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_partition: bool,
+    pub is_bucket: bool,
+    pub is_cluster: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `name` | `String` | The column's name. |
+| `description` | `Option<String>` | Its comment. |
+| `data_type` | `String` | Its type, as `DESCRIBE` prints it. |
+| `nullable` | `bool` | Whether it accepts null. |
+| `is_partition` | `bool` | Whether it is a partition column. |
+| `is_bucket` | `bool` | Whether it is a bucket column. |
+| `is_cluster` | `bool` | Whether it is a clustering column. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Column { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Column) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Function`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Spark's `Function`.
+
+```rust
+pub struct Function {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `name` | `String` | The function's name. |
+| `catalog` | `Option<String>` | The catalog; `None` for a built-in or temporary function. |
+| `namespace` | `Option<Vec<String>>` | The namespace parts; `None` for a built-in or temporary function. |
+| `description` | `Option<String>` | Its description. |
+| `class_name` | `String` | The implementing class, where Spark reports one. |
+| `is_temporary` | `bool` | Whether it is built in or temporary. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Function { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Function) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Catalog`
+
+The catalog API of one session ([`Session::catalog`]).
+
+```rust
+pub struct Catalog<''a> {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn current_catalog(self: &Self) -> String { /* ... */ }
+  ```
+  The current catalog's name.
+
+- ```rust
+  pub async fn set_current_catalog(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees (design P3-T067
+
+- ```rust
+  pub fn list_catalogs(self: &Self) -> Vec<String> { /* ... */ }
+  ```
+  The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (design P3-T067 §2.4;
+
+- ```rust
+  pub fn current_database(self: &Self) -> String { /* ... */ }
+  ```
+  The current namespace.
+
+- ```rust
+  pub async fn set_current_database(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Makes `name` the current namespace.
+
+- ```rust
+  pub async fn list_databases(self: &Self, pattern: Option<&str>) -> Result<Vec<Database>, KrishivError> { /* ... */ }
+  ```
+  The namespaces of the current catalog, sorted by name, optionally only those matching the
+
+- ```rust
+  pub async fn get_database(self: &Self, name: &str) -> Result<Database, KrishivError> { /* ... */ }
+  ```
+  The namespace `name`.
+
+- ```rust
+  pub async fn database_exists(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }
+  ```
+  Whether the namespace exists.
+
+- ```rust
+  pub async fn list_tables(self: &Self, database: Option<&str>, pattern: Option<&str>) -> Result<Vec<Table>, KrishivError> { /* ... */ }
+  ```
+  The tables, views and temporary views of `database` (default: the current one), sorted by name.
+
+- ```rust
+  pub async fn get_table(self: &Self, name: &str) -> Result<Table, KrishivError> { /* ... */ }
+  ```
+  The table, view or temporary view `name` (`t`, `db.t` or `global_temp.v`).
+
+- ```rust
+  pub async fn table_exists(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }
+  ```
+  Whether the table or view exists.
+
+- ```rust
+  pub async fn list_columns(self: &Self, name: &str) -> Result<Vec<Column>, KrishivError> { /* ... */ }
+  ```
+  The columns of the table or view `name`, in table order.
+
+- ```rust
+  pub async fn list_functions(self: &Self, pattern: Option<&str>) -> Result<Vec<Function>, KrishivError> { /* ... */ }
+  ```
+  The functions: the built-ins, the session's temporary functions and the current namespace's
+
+- ```rust
+  pub async fn get_function(self: &Self, name: &str) -> Result<Function, KrishivError> { /* ... */ }
+  ```
+  The function `name`.
+
+- ```rust
+  pub async fn function_exists(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }
+  ```
+  Whether the function exists.
+
+- ```rust
+  pub fn drop_temp_view(self: &Self, name: &str) -> bool { /* ... */ }
+  ```
+  Drops the local temporary view; whether it existed.
+
+- ```rust
+  pub fn drop_global_temp_view(self: &Self, name: &str) -> bool { /* ... */ }
+  ```
+  Drops the global temporary view; whether it existed.
+
+- ```rust
+  pub async fn cache_table(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `CACHE TABLE name`.
+
+- ```rust
+  pub async fn create_table(self: &Self, name: &str, source: Option<&str>, schema: Option<&str>, description: Option<&str>, options: &[(&str, &str)]) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `spark.catalog.createTable(name, source, schema, description, options)`: creates a table of the data
+
+- ```rust
+  pub async fn is_cached(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }
+  ```
+  Whether the table or view `name` is cached (`spark.catalog.isCached`).
+
+- ```rust
+  pub async fn uncache_table(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `UNCACHE TABLE name`.
+
+- ```rust
+  pub fn clear_cache(self: &Self) { /* ... */ }
+  ```
+  `CLEAR CACHE`.
+
+- ```rust
+  pub async fn refresh_table(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `REFRESH TABLE name`.
+
+- ```rust
+  pub async fn refresh_by_path(self: &Self, path: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `REFRESH 'path'`: drops the cached relations reading files by that path.
+
+- ```rust
+  pub async fn recover_partitions(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `ALTER TABLE name RECOVER PARTITIONS` (`MSCK REPAIR TABLE`).
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Catalog<''a> { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
 ## Module `agent`
 
 Compact injection-safe query results for tools and agents (`krishiv.agent-result` v1).
@@ -1688,6 +4543,7 @@ pub struct AgentLimits {
     ```
     [`DEFAULT_MAX_ROWS`], [`DEFAULT_MAX_BYTES`], [`DEFAULT_MAX_CELL_CHARS`], no time cap.
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -1826,6 +4682,7 @@ The stream was cancelled.
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -1942,6 +4799,7 @@ pub struct AgentResult {
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -2053,6 +4911,7 @@ pub struct AgentRender<''a> {
     fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -2159,6 +5018,7 @@ The query was cancelled ([`AgentStatus::StoppedCancelled`]).
     fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -2264,6 +5124,7 @@ pub struct ErrorSource<''a> {
     fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
+- **ErasedDestructor**
 - **Freeze**
 - **From**
   - ```rust
@@ -2432,10 +5293,28 @@ pub use krishiv_kernels::datetime::ZoneRef;
 
 ## Re-exports
 
+### Re-export `StoredProfile`
+
+```rust
+pub use profile_history::StoredProfile;
+```
+
+### Re-export `read_history`
+
+```rust
+pub use profile_history::read_history as read_profile_history;
+```
+
 ### Re-export `PathPrefixPolicy`
 
 ```rust
 pub use access::PathPrefixPolicy;
+```
+
+### Re-export `READ_ONLY_PRIVILEGES`
+
+```rust
+pub use access::READ_ONLY_PRIVILEGES;
 ```
 
 ### Re-export `ReadOnlyPolicy`
@@ -2448,6 +5327,18 @@ pub use access::ReadOnlyPolicy;
 
 ```rust
 pub use access::StatementInfo;
+```
+
+### Re-export `QueryInfo`
+
+```rust
+pub use admin_view::QueryInfo;
+```
+
+### Re-export `SessionInfo`
+
+```rust
+pub use admin_view::SessionInfo;
 ```
 
 ### Re-export `AdmissionController`
@@ -2474,16 +5365,46 @@ pub use admission::QueryRequest;
 pub use admission::Unlimited;
 ```
 
+### Re-export `Analysis`
+
+```rust
+pub use analyze::Analysis;
+```
+
+### Re-export `AnalysisWarning`
+
+```rust
+pub use analyze::AnalysisWarning;
+```
+
+### Re-export `OutputColumn`
+
+```rust
+pub use analyze::OutputColumn;
+```
+
 ### Re-export `Transport`
 
 ```rust
 pub use sessions::Transport;
 ```
 
+### Re-export `capabilities`
+
+```rust
+pub use system::capabilities;
+```
+
 ### Re-export `register_build_features`
 
 ```rust
 pub use system::register_build_features;
+```
+
+### Re-export `register_surface`
+
+```rust
+pub use system::register_surface;
 ```
 
 ### Re-export `CancelReason`
@@ -2814,6 +5735,12 @@ pub use krishiv_udf_sdk::UdfLibrary;
 
 ```rust
 pub use krishiv_udf_sdk::UdfProperties;
+```
+
+### Re-export `Observation`
+
+```rust
+pub use observation::Observation;
 ```
 
 ### Re-export `ExplainVerbose`
