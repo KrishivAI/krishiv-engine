@@ -15,7 +15,7 @@ use iceberg::spec::{
 
 use super::append_tests::{MAX, create, file};
 use super::filter::{
-    FilterContext, FilterError, Filtered, Removals, filter_manifests, overwrite_summary,
+    DeleteKey, FilterContext, FilterError, Filtered, Removals, filter_manifests, overwrite_summary,
 };
 use super::provider_tests::{Env, env};
 
@@ -111,10 +111,10 @@ fn entries(env: &Env, m: &ManifestFile) -> Vec<(ManifestStatus, String, i64, i64
         .collect()
 }
 
-fn removals(data: &[&str], deletes: &[&str], env: &Env) -> Removals {
+fn removals(data: &[&str], env: &Env) -> Removals {
     Removals {
         data_files: data.iter().map(|n| env.at(n)).collect::<BTreeSet<_>>(),
-        delete_files: deletes.iter().map(|n| env.at(n)).collect::<BTreeSet<_>>(),
+        delete_files: BTreeSet::new(),
     }
 }
 
@@ -185,7 +185,7 @@ fn a_hit_manifest_is_rewritten_from_live_entries_and_a_miss_is_kept() {
         &env,
         &m,
         vec![hit, miss.clone()],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut written,
     )
     .unwrap();
@@ -258,7 +258,7 @@ fn a_v3_rewrite_keeps_row_ids() {
         &env,
         &m,
         vec![hit],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut Vec::new(),
     )
     .unwrap();
@@ -306,7 +306,7 @@ fn a_duplicate_is_counted_not_doubled() {
         &env,
         &m,
         vec![hit],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut Vec::new(),
     )
     .unwrap();
@@ -354,7 +354,7 @@ fn a_file_not_live_is_missing() {
         &env,
         &m,
         vec![only],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut Vec::new(),
     )
     .unwrap_err();
@@ -371,7 +371,7 @@ fn a_file_not_live_is_missing() {
             &env,
             &m,
             Vec::new(),
-            &removals(&["a.parquet"], &[], &env),
+            &removals(&["a.parquet"], &env),
             &mut Vec::new()
         ),
         Err(FilterError::Missing(_))
@@ -436,7 +436,7 @@ fn dangling_dvs_and_old_deletes_are_removed() {
         &env,
         &m,
         vec![data_m, deletes],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut Vec::new(),
     )
     .unwrap();
@@ -471,6 +471,11 @@ fn dangling_dvs_and_old_deletes_are_removed() {
     let removed: u64 = summary["removed-files-size"].parse().unwrap();
     assert!(removed > 540);
     // A delete file named outright goes too; a missing one fails.
+    let c_dv = delete_file(&env, "c.dv", Some("c.parquet"), part.clone());
+    let named = |f: &DataFile| Removals {
+        data_files: BTreeSet::new(),
+        delete_files: BTreeSet::from([DeleteKey::of(f)]),
+    };
     let deletes2 = manifest(
         &env,
         &m,
@@ -478,18 +483,13 @@ fn dangling_dvs_and_old_deletes_are_removed() {
         ManifestContentType::Deletes,
         20,
         4,
-        vec![(
-            ManifestStatus::Added,
-            delete_file(&env, "c.dv", Some("c.parquet"), part),
-            20,
-            4,
-        )],
+        vec![(ManifestStatus::Added, c_dv.clone(), 20, 4)],
     );
     let f = run(
         &env,
         &m,
         vec![deletes2.clone()],
-        &removals(&[], &["c.dv"], &env),
+        &named(&c_dv),
         &mut Vec::new(),
     )
     .unwrap();
@@ -499,7 +499,7 @@ fn dangling_dvs_and_old_deletes_are_removed() {
             &env,
             &m,
             vec![deletes2],
-            &removals(&[], &["x.dv"], &env),
+            &named(&delete_file(&env, "x.dv", Some("c.parquet"), part)),
             &mut Vec::new()
         ),
         Err(FilterError::Missing(_))
@@ -528,7 +528,7 @@ fn the_overwrite_summary_merges_added_and_removed() {
         &env,
         &m,
         vec![hit],
-        &removals(&["a.parquet"], &[], &env),
+        &removals(&["a.parquet"], &env),
         &mut Vec::new(),
     )
     .unwrap();
@@ -559,4 +559,131 @@ fn the_overwrite_summary_merges_added_and_removed() {
     let s = overwrite_summary(&added, &changed, &f.removed, 1);
     assert!(!s.keys().any(|k| k.starts_with("partitions.")));
     assert!(!s.contains_key("partition-summaries-included"));
+}
+
+/// A DV of `of` at `offset` in the Puffin file `name`.
+fn dv_at(env: &Env, name: &str, of: &str, offset: i64, partition: Struct) -> DataFile {
+    let mut b = DataFileBuilder::default();
+    b.content(DataContentType::PositionDeletes)
+        .file_path(env.at(name))
+        .file_size_in_bytes(500)
+        .record_count(2)
+        .partition(partition)
+        .partition_spec_id(0)
+        .file_format(DataFileFormat::Puffin)
+        .referenced_data_file(Some(env.at(of)))
+        .content_offset(Some(offset))
+        .content_size_in_bytes(Some(40));
+    b.build().unwrap()
+}
+
+/// One Puffin file holds the DVs of two data files (review 36b2a B1): the
+/// rewrite of one removes that DV's blob only; the other file's DV stays
+/// live, so its deleted rows stay deleted.
+#[test]
+fn a_shared_puffin_file_keeps_the_dv_of_an_untouched_file() {
+    let env = env();
+    let t = create(&env, 3);
+    let m = t.metadata().clone();
+    let a = data(&env, &m, "a.parquet", 3);
+    let b = data(&env, &m, "b.parquet", 3);
+    let part = a.partition().clone();
+    let dv_a = dv_at(&env, "p.puffin", "a.parquet", 4, part.clone());
+    let dv_b = dv_at(&env, "p.puffin", "b.parquet", 44, part);
+    let data_m = manifest(
+        &env,
+        &m,
+        "m1.avro",
+        ManifestContentType::Data,
+        20,
+        1,
+        vec![
+            (ManifestStatus::Added, a, 20, 1),
+            (ManifestStatus::Added, b, 20, 1),
+        ],
+    );
+    let deletes = manifest(
+        &env,
+        &m,
+        "d1.avro",
+        ManifestContentType::Deletes,
+        20,
+        1,
+        vec![
+            (ManifestStatus::Added, dv_a.clone(), 20, 1),
+            (ManifestStatus::Added, dv_b, 20, 1),
+        ],
+    );
+    let r = Removals {
+        data_files: BTreeSet::from([env.at("a.parquet")]),
+        delete_files: BTreeSet::from([DeleteKey::of(&dv_a)]),
+    };
+    let f = run(&env, &m, vec![data_m, deletes], &r, &mut Vec::new()).unwrap();
+    let e = entries(&env, &f.manifests[1]);
+    assert_eq!(
+        e.iter().map(|e| e.0).collect::<Vec<_>>(),
+        [ManifestStatus::Deleted, ManifestStatus::Existing]
+    );
+    let io = env.reg.file_io();
+    let bytes = env
+        .rt
+        .block_on(async {
+            io.new_input(&f.manifests[1].manifest_path)
+                .unwrap()
+                .read()
+                .await
+        })
+        .unwrap();
+    let (parsed, _) = Manifest::parse_avro(&bytes).unwrap().into_parts();
+    assert_eq!(
+        parsed[1].data_file().referenced_data_file(),
+        Some(env.at("b.parquet"))
+    );
+}
+
+/// The touched file's DV was replaced concurrently (its blob is no longer
+/// live, another DV of the same Puffin file is): the removal is missing.
+#[test]
+fn a_replaced_dv_in_a_shared_puffin_file_is_missing() {
+    let env = env();
+    let t = create(&env, 3);
+    let m = t.metadata().clone();
+    let a = data(&env, &m, "a.parquet", 3);
+    let b = data(&env, &m, "b.parquet", 3);
+    let part = a.partition().clone();
+    let old_a = dv_at(&env, "p.puffin", "a.parquet", 4, part.clone());
+    let dv_b = dv_at(&env, "p.puffin", "b.parquet", 44, part.clone());
+    let new_a = dv_at(&env, "q.puffin", "a.parquet", 4, part);
+    let data_m = manifest(
+        &env,
+        &m,
+        "m1.avro",
+        ManifestContentType::Data,
+        20,
+        1,
+        vec![
+            (ManifestStatus::Added, a, 20, 1),
+            (ManifestStatus::Added, b, 20, 1),
+        ],
+    );
+    let deletes = manifest(
+        &env,
+        &m,
+        "d1.avro",
+        ManifestContentType::Deletes,
+        20,
+        1,
+        vec![
+            (ManifestStatus::Added, dv_b, 20, 1),
+            (ManifestStatus::Added, new_a, 20, 1),
+        ],
+    );
+    let r = Removals {
+        data_files: BTreeSet::from([env.at("a.parquet")]),
+        delete_files: BTreeSet::from([DeleteKey::of(&old_a)]),
+    };
+    match run(&env, &m, vec![data_m, deletes], &r, &mut Vec::new()) {
+        Err(FilterError::Missing(text)) => assert!(text.contains("p.puffin"), "{text}"),
+        other => panic!("{other:?}"),
+    }
 }

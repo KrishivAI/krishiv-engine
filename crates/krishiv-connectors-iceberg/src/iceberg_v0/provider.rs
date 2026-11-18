@@ -755,8 +755,8 @@ impl IcebergScan {
     }
 
     /// Whether `column` is read from the files by [`ScanPushdown::take`]: not
-    /// an identity-partition constant, the equality deletes' file ordinal or
-    /// a lineage column.
+    /// an identity-partition constant, the equality deletes' file ordinal, a
+    /// lineage column or `_metadata`.
     fn takes(&self, column: &str) -> bool {
         !self
             .parts
@@ -766,6 +766,7 @@ impl IcebergScan {
             && column != FILE_ORDINAL
             && column != lineage::ROW_ID
             && column != lineage::LAST_UPDATED
+            && column != krishiv_exec::METADATA_COLUMN
     }
 
     /// The table's columns and, for a lineage scan, the two lineage columns.

@@ -363,7 +363,8 @@ async fn copy_entries(
     let ours = cx.snapshot_id;
     let lineage = version == FormatVersion::V3 && m.content == ManifestContentType::Data;
     // `plan::entry::inherit`'s row-id rule: assigned in order to the live
-    // entries without one, from the manifest's `first_row_id`; none without it.
+    // entries without one, from the manifest's `first_row_id`; without one, each entry
+    // keeps its own (explicit or none).
     let mut next_row_id = match (lineage, m.first_row_id) {
         (true, Some(id)) => Some(i64::try_from(id).map_err(|_| {
             internal(format!(
@@ -391,8 +392,10 @@ async fn copy_entries(
                     })?;
                 Some(id)
             }
-            Some(_) => file.first_row_id(),
-            None => None,
+            // An explicit id always wins, also over a manifest without a
+            // `first_row_id` (a manifest `filter.rs` rewrote: its entries
+            // carry explicit ids, review 36b2a B2).
+            _ => file.first_row_id(),
         };
         let explicit = |v: Option<i64>, what: &str| {
             v.filter(|n| *n >= 0).ok_or_else(|| {

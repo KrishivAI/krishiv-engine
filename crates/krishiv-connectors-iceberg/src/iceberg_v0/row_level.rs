@@ -38,7 +38,14 @@
 //! Divergences: the conflict message prints the filter as Krishiv's typed
 //! predicate, not Java's `Expression`; an isolation level other than
 //! `serializable`/`snapshot` (any case) is `KRISHIV_UNSUPPORTED_FEATURE`
-//! (Java's `IsolationLevel.fromName`; its text was not read).
+//! (Java's `IsolationLevel.fromName`; its text was not read); an empty
+//! change is still validated, where Spark commits with no validation when
+//! the optimizer replaced the scan with an empty relation (`scan == null`,
+//! `SparkWrite.java:473-492`; notes 36b2 §6): an empty `serializable`
+//! `DELETE` fails against a concurrent append where Spark commits. This
+//! refuses more, never less; whether Krishiv's planner ever produces Spark's
+//! `scan == null` shape is open. The removed DVs are keyed per blob
+//! ([`DeleteKey`]): one Puffin file holds the DVs of many data files.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -50,7 +57,7 @@ use krishiv_exec::planner::{
 };
 use krishiv_exec::{ScanPushdown, Sink};
 
-use super::filter::Removals;
+use super::filter::{DeleteKey, Removals};
 use super::provider::IcebergTableProvider;
 use super::sink::{IcebergWriteSink, Overwrite};
 use super::validate::{Checks, Isolation, Validation};
@@ -153,10 +160,14 @@ impl RowLevelTable for IcebergRowLevel {
         let touched = self.provider.touched(&request.touched)?;
         let data_files: BTreeSet<String> =
             touched.iter().map(|(e, _)| e.file.path.clone()).collect();
-        let delete_files: BTreeSet<String> = touched
+        let delete_files: BTreeSet<DeleteKey> = touched
             .iter()
             .flat_map(|(_, d)| d.deletion_vector.iter())
-            .map(|d| d.entry.file.path.clone())
+            .map(|d| DeleteKey {
+                path: d.entry.file.path.clone(),
+                referenced_data_file: d.entry.file.referenced_data_file.clone(),
+                content_offset: d.entry.file.content_offset,
+            })
             .collect();
         let filter = request.read_filter_pushdown();
         let filter_text = filter
@@ -171,7 +182,10 @@ impl RowLevelTable for IcebergRowLevel {
             isolation,
             filter,
             filter_text,
-            removes: data_files.clone(),
+            // `removes` stays empty: it is `RewriteFiles`' set for the
+            // removed-data-files check, which CoW's `OverwriteFiles` does not
+            // run (notes 36b2 §1 item 3); the removed files' existence is
+            // the filter's missing-files check.
             replaced: touched.iter().map(|(e, _)| (**e).clone()).collect(),
             max_intervening: target.max_intervening,
             ..Validation::none()

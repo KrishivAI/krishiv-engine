@@ -279,6 +279,7 @@ fn live(env: &Env, m: &TableMetadata) -> (Vec<String>, Vec<String>) {
     let mut data = Vec::new();
     let mut deletes = Vec::new();
     let mut dv_of = Vec::new();
+    let mut delete_refs = Vec::new();
     for mf in list {
         let bytes = env
             .rt
@@ -293,20 +294,30 @@ fn live(env: &Env, m: &TableMetadata) -> (Vec<String>, Vec<String>) {
             match mf.content {
                 ManifestContentType::Data => data.push(name),
                 ManifestContentType::Deletes => {
-                    if let Some(r) = e.data_file().referenced_data_file() {
+                    let r = e.data_file().referenced_data_file();
+                    if let Some(r) = &r {
                         dv_of.push(r.rsplit('/').next().unwrap().to_owned());
                     }
+                    delete_refs.push(r.unwrap_or_default());
                     deletes.push(name);
                 }
             }
         }
     }
-    let unique: BTreeSet<&String> = data.iter().chain(&deletes).collect();
-    assert_eq!(
-        unique.len(),
-        data.len() + deletes.len(),
-        "{data:?} {deletes:?}"
-    );
+    // A Puffin file holds one entry per DV: delete entries are told apart
+    // by the file they apply to as well.
+    let keys: Vec<String> = data
+        .iter()
+        .cloned()
+        .chain(
+            deletes
+                .iter()
+                .zip(&delete_refs)
+                .map(|(d, r)| format!("{d}#{r}")),
+        )
+        .collect();
+    let unique: BTreeSet<&String> = keys.iter().collect();
+    assert_eq!(unique.len(), keys.len(), "{data:?} {deletes:?}");
     for d in &dv_of {
         assert!(data.contains(d), "a delete file of {d}, which is not live");
     }
@@ -940,10 +951,210 @@ fn the_iceberg_scan_takes_rows_by_position() {
     // The file of x = 0 holds 0, 3, 6: positions 0 and 2.
     assert_eq!(ids.len(), 2);
     assert!(ids.iter().all(|i| i % 3 == ids[0] % 3), "{ids:?}");
-    let err = take(&["x"]).unwrap_err();
-    assert_eq!(
-        err.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{err}"
+    for refused in ["x", krishiv_exec::METADATA_COLUMN] {
+        let err = take(&[refused]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{refused}: {err}"
+        );
+        assert!(err.to_string().contains(refused), "{err}");
+    }
+}
+
+/// The DVs of `files` (each deleting positions `positions`), one blob per
+/// file in the one Puffin file `name`.
+fn dvs_in_one_puffin(
+    env: &Env,
+    name: &str,
+    files: &[String],
+    positions: &[u64],
+) -> Vec<iceberg::spec::DataFile> {
+    let bitmap: roaring::RoaringTreemap = positions.iter().copied().collect();
+    let blob = encode_dv(&bitmap).unwrap();
+    let mut bytes = b"PFA1".to_vec();
+    for _ in files {
+        bytes.extend_from_slice(&blob);
+    }
+    let path = env.at(name);
+    std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
+    files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let mut d = DataFileBuilder::default();
+            d.content(DataContentType::PositionDeletes)
+                .file_path(path.clone())
+                .file_format(DataFileFormat::Puffin)
+                .file_size_in_bytes(bytes.len() as u64)
+                .record_count(positions.len() as u64)
+                .partition(Struct::empty())
+                .partition_spec_id(0)
+                .referenced_data_file(Some(f.clone()))
+                .content_offset(Some(4 + (i * blob.len()) as i64))
+                .content_size_in_bytes(Some(blob.len() as i64));
+            d.build().unwrap()
+        })
+        .collect()
+}
+
+/// A position delete file `name` deleting position `pos` of `of`.
+fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::DataFile {
+    let path = env.at(name);
+    let b = super::provider_tests::batch(
+        vec![
+            id_field("file_path", A::Utf8, DELETE_FILE_PATH_ID),
+            id_field("pos", A::Int64, DELETE_FILE_POS_ID),
+        ],
+        vec![
+            Arc::new(arrow_array::StringArray::from(vec![of.to_owned()])),
+            Arc::new(Int64Array::from(vec![pos])),
+        ],
     );
+    let size = write_parquet(&path, &b);
+    let mut d = DataFileBuilder::default();
+    d.content(DataContentType::PositionDeletes)
+        .file_path(path)
+        .file_format(DataFileFormat::Parquet)
+        .file_size_in_bytes(size)
+        .record_count(1)
+        .partition(Struct::empty())
+        .partition_spec_id(0);
+    d.build().unwrap()
+}
+
+/// Review 36b2a B1: one Puffin file holds the DVs of two data files and the
+/// statement rewrites one of them. Only that file's DV is removed; the other
+/// DV stays live, so its file's deleted rows stay deleted.
+#[test]
+fn a_shared_puffin_file_keeps_the_dv_of_an_untouched_file() {
+    let env = env();
+    let t = create(&env, 3, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 10));
+    append(&env, &catalog, range(10, 20));
+    add_deletes(&env, &catalog, |files| {
+        assert_eq!(files.len(), 2);
+        dvs_in_one_puffin(&env, "shared.puffin", files, &[0, 1])
+    });
+    let mut want = expected(2..10);
+    want.extend(expected(12..20));
+    assert_eq!(read_back(&env, &catalog), want);
+    Dml::open(&env, &catalog, RowLevelOperation::Delete)
+        .delete("id = 5")
+        .unwrap();
+    let m = catalog.metadata();
+    let mut want = expected([2, 3, 4, 6, 7, 8, 9]);
+    want.extend(expected(12..20));
+    assert_eq!(read_back(&env, &catalog), want);
+    assert_eq!(live(&env, &m).1, ["shared.puffin"]);
+    let s = summary(&m).1;
+    assert_eq!(get(&s, "removed-dvs"), Some("1"));
+}
+
+/// Review 36b2a medium: a foreign row delta (a DV on v3, a position delete
+/// file on v2) on a touched file lands between the read and the commit: the
+/// statement fails under both isolation levels and the foreign delete
+/// stays.
+#[test]
+fn a_foreign_row_delta_on_a_touched_file_fails_under_both_levels() {
+    for version in [2_u8, 3] {
+        for level in ["serializable", "snapshot"] {
+            let env = env();
+            let t = create(
+                &env,
+                version,
+                false,
+                &[("write.delete.isolation-level", level)],
+            );
+            let catalog = Catalog::new(&t);
+            append(&env, &catalog, range(0, 5));
+            let dml = Dml::open(&env, &catalog, RowLevelOperation::Delete);
+            let touched = dml.find("id = 1");
+            add_deletes(&env, &catalog, |files| {
+                if version == 3 {
+                    dvs_in_one_puffin(&env, "foreign.puffin", files, &[0])
+                } else {
+                    vec![position_delete(&env, "foreign.parquet", &files[0], 0)]
+                }
+            });
+            let snapshots = catalog.metadata().snapshots().count();
+            let err = dml
+                .rewrite(
+                    touched,
+                    &format!(
+                        "SELECT {} FROM t WHERE NOT coalesce((id = 1), false)",
+                        dml.select_list(None)
+                    ),
+                    Vec::new(),
+                )
+                .unwrap_err();
+            assert_eq!(
+                err.error_class(),
+                ErrorClass::KrishivIcebergCommitConflict,
+                "v{version} {level}: {err}"
+            );
+            assert!(
+                err.to_string()
+                    .contains("Cannot commit, found new delete for replaced data file"),
+                "v{version} {level}: {err}"
+            );
+            let m = catalog.metadata();
+            assert_eq!(m.snapshots().count(), snapshots);
+            assert_eq!(read_back(&env, &catalog), expected(1..5));
+            live(&env, &m);
+        }
+    }
+}
+
+/// `id|_row_id|_last_updated_sequence_number` of every row, by id, read
+/// through the lineage scan.
+fn lineage_rows(env: &Env, catalog: &Arc<Catalog>) -> Vec<String> {
+    let p = provider(env, &catalog.location(), catalog);
+    let scan = p.lineage_scan().unwrap();
+    let mut schema: Vec<StructField> = p.snapshot().schema.fields().to_vec();
+    schema.push(StructField::new(ROW_ID, DataType::Long, true));
+    schema.push(StructField::new(LAST_UPDATED, DataType::Long, true));
+    render(
+        &session(vec![("t", StructType::new(schema), Arc::new(Over(scan)))])
+            .run(&format!(
+                "SELECT id, {ROW_ID}, {LAST_UPDATED} FROM t ORDER BY id"
+            ))
+            .unwrap(),
+    )
+}
+
+/// Review 36b2a B2: on v3, the manifest the filter rewrote is merged on the
+/// first attempt (`commit.manifest.min-count-to-merge` 2); the untouched
+/// file's rows keep their `_row_id` (an entry's explicit `first_row_id`
+/// wins over the rewritten manifest's absent one).
+#[test]
+fn a_v3_rewritten_manifest_merged_on_the_first_attempt_keeps_row_ids() {
+    let env = env();
+    let t = create(
+        &env,
+        3,
+        false,
+        &[("commit.manifest.min-count-to-merge", "2")],
+    );
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 5));
+    append(&env, &catalog, range(5, 10));
+    let before = lineage_rows(&env, &catalog);
+    assert_eq!(before.len(), 10);
+    Dml::open(&env, &catalog, RowLevelOperation::Delete)
+        .delete("id = 1")
+        .unwrap();
+    let m = catalog.metadata();
+    let s = summary(&m).1;
+    // The new manifest and the filter's rewrite merged into one.
+    assert_eq!(get(&s, "manifests-replaced"), Some("1"), "{s:?}");
+    assert_eq!(get(&s, "manifests-created"), Some("1"), "{s:?}");
+    assert_eq!(get(&s, "manifests-kept"), Some("0"), "{s:?}");
+    let want: Vec<String> = before
+        .into_iter()
+        .filter(|r| !r.starts_with("1|"))
+        .collect();
+    assert_eq!(lineage_rows(&env, &catalog), want);
+    live(&env, &m);
 }
