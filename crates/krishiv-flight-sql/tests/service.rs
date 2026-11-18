@@ -77,32 +77,40 @@ struct Harness {
 }
 
 async fn start(config: FlightSqlConfig) -> Harness {
-    start_with(
-        config,
-        ConnectServerConfig::default(),
-        None,
-        SessionLimits::default(),
-    )
-    .await
+    start_with(config, Setup::default()).await
 }
 
-/// `stream_window`: the client's HTTP/2 stream window, so a test can keep a fetch's last pieces
-/// from fitting in the transport's buffers.
-async fn start_with(
-    config: FlightSqlConfig,
-    server_config: ConnectServerConfig,
+/// What a test changes around the Flight service.
+#[derive(Default)]
+struct Setup {
+    server: ConnectServerConfig,
+    /// The client's HTTP/2 stream window, so a test can keep a fetch's last pieces from
+    /// fitting in the transport's buffers.
     stream_window: Option<u32>,
     limits: SessionLimits,
-) -> Harness {
+    /// The session factory; `role_sessions` when `None`.
+    factory: Option<Box<krishiv_connect_server::manager::SessionFactory>>,
+}
+
+async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
+    let Setup {
+        server: server_config,
+        stream_window,
+        limits,
+        factory,
+    } = setup;
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
-    let factory = role_sessions(
-        Session::new().expect("session"),
-        &Config::new(),
-        Arc::clone(&denials),
-    )
-    .expect("factory");
+    let factory = match factory {
+        Some(f) => f,
+        None => role_sessions(
+            Session::new().expect("session"),
+            &Config::new(),
+            Arc::clone(&denials),
+        )
+        .expect("factory"),
+    };
     let manager = Arc::new(SessionManager::new(factory, limits));
     let connect_auth = || {
         ConnectAuth::new(Arc::clone(&auth) as Arc<dyn Authenticator>)
@@ -1017,12 +1025,14 @@ async fn start_graceful() -> Harness {
             },
             ..FlightSqlConfig::default()
         },
-        ConnectServerConfig {
-            shutdown_timeout: Duration::from_secs(30),
-            ..ConnectServerConfig::default()
+        Setup {
+            server: ConnectServerConfig {
+                shutdown_timeout: Duration::from_secs(30),
+                ..ConnectServerConfig::default()
+            },
+            stream_window: Some(16 << 10),
+            ..Setup::default()
         },
-        Some(16 << 10),
-        SessionLimits::default(),
     )
     .await
 }
@@ -1246,11 +1256,12 @@ async fn doget_with_other_sessions_cookie_uses_handle_session() {
 async fn cookieless_get_flight_info_loop_hits_session_cap() {
     let mut h = start_with(
         FlightSqlConfig::default(),
-        ConnectServerConfig::default(),
-        None,
-        SessionLimits {
-            max_sessions_per_principal: 3,
-            ..SessionLimits::default()
+        Setup {
+            limits: SessionLimits {
+                max_sessions_per_principal: 3,
+                ..SessionLimits::default()
+            },
+            ..Setup::default()
         },
     )
     .await;
@@ -1347,5 +1358,128 @@ async fn slow_first_batch_is_not_idle() {
     assert!(
         took > Duration::from_millis(300),
         "the first batch came in {took:?}: not slow enough to test the idle clock"
+    );
+}
+
+/// `${...}` substitution reads session conf, so the same ticket's text can turn from a query
+/// into a command between `GetFlightInfo` and `DoGet`: the fetch refuses it before running
+/// anything (`KRISHIV_FLIGHT_SQL_NOT_A_QUERY`, §2, v4 review M1).
+#[tokio::test(flavor = "multi_thread")]
+async fn substitution_turning_query_into_command_refused_at_doget() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (_, cookie) = info(&mut h, OPS, None, "SET q = SELECT 1 AS n")
+        .await
+        .expect("set");
+    let cookie = cookie.expect("cookie");
+    let (query, _) = info(&mut h, OPS, Some(&cookie), "${q}")
+        .await
+        .expect("a query today");
+    info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SET q = CREATE TEMPORARY VIEW w AS SELECT 2 AS n",
+    )
+    .await
+    .expect("set again");
+    let e = fetch(&mut h, OPS, Some(&cookie), ticket(&query))
+        .await
+        .expect_err("now a command");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_NOT_A_QUERY")
+    );
+    let e = info(&mut h, OPS, Some(&cookie), "SELECT n FROM w")
+        .await
+        .expect_err("the command did not run");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("TABLE_OR_VIEW_NOT_FOUND"),
+        "{e:?}"
+    );
+}
+
+/// Sessions under the `grants` provider over one runtime (one catalog): `ops` is an admin,
+/// `other` reads what it is granted.
+fn grant_sessions(dir: &Path) -> Box<krishiv_connect_server::manager::SessionFactory> {
+    use krishiv_session::AccessPolicy;
+    use krishiv_session::grants::{Grants, GrantsPolicy, MemoryGrantStore};
+    let rt = krishiv_session::EngineRuntime::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.join("wh").to_str().expect("utf-8 path"),
+        )
+        .build()
+        .expect("runtime");
+    let grants = Grants::new(Arc::new(MemoryGrantStore::new()));
+    Box::new(move |caller, _transport| {
+        let admin = caller.principal.name == "ops";
+        let policy = Arc::new(GrantsPolicy::new(
+            Arc::clone(&grants),
+            Arc::new(krishiv_session::AllowAll),
+            admin,
+        ));
+        Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(caller.principal.clone())
+            .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+            .grants(policy)
+            .build()
+    })
+}
+
+/// A re-fetch analyses the query again under the session's policy now: a grant revoked since
+/// the first fetch refuses the second (§4.1, ADR 0046 §3b).
+#[tokio::test(flavor = "multi_thread")]
+async fn refetch_rechecks_access() {
+    let wh = tempfile::tempdir().expect("tempdir");
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        Setup {
+            factory: Some(grant_sessions(wh.path())),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let (_, admin) = info(&mut h, OPS, None, "CREATE TABLE t (a INT) USING parquet")
+        .await
+        .expect("create");
+    let admin = admin.expect("cookie");
+    for sql in [
+        "INSERT INTO t VALUES (1)",
+        "GRANT SELECT ON TABLE t TO user:other",
+    ] {
+        info(&mut h, OPS, Some(&admin), sql).await.expect(sql);
+    }
+    let (q, cookie) = info(&mut h, OTHER, None, "SELECT a FROM t")
+        .await
+        .expect("granted");
+    let cookie = cookie.expect("cookie");
+    let first = fetch(&mut h, OTHER, Some(&cookie), ticket(&q))
+        .await
+        .expect("first fetch");
+    assert_eq!(rows(&first), 1);
+    info(
+        &mut h,
+        OPS,
+        Some(&admin),
+        "REVOKE SELECT ON t FROM user:other",
+    )
+    .await
+    .expect("revoke");
+    let e = fetch(&mut h, OTHER, Some(&cookie), ticket(&q))
+        .await
+        .expect_err("revoked");
+    assert_eq!(e.code(), Code::PermissionDenied, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_INSUFFICIENT_PERMISSIONS")
     );
 }
