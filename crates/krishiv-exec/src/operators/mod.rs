@@ -33,6 +33,7 @@ mod filter;
 mod generate;
 mod late_fetch;
 mod limit;
+mod partition_prune;
 mod project;
 mod range;
 mod replicate;

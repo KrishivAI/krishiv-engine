@@ -1916,80 +1916,12 @@ impl GroupedData {
     }
 }
 
-/// Reads files ([`Session::read`]; PySpark's `DataFrameReader`).
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct DataFrameReader {
-    session: Session,
-    format: String,
-    options: BTreeMap<String, OptionValue>,
-}
-
-impl DataFrameReader {
-    pub(crate) fn new(session: Session) -> Self {
-        Self {
-            session,
-            format: "parquet".to_owned(),
-            options: BTreeMap::new(),
-        }
-    }
-
-    /// The file format (default `parquet`, as Spark's
-    /// `spark.sql.sources.default`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().format("parquet").load(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    pub fn format(mut self, format: &str) -> Self {
-        self.format = format.to_owned();
-        self
-    }
-
-    /// A read option; values are typed as secrets where Spark redacts them.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().option("mergeSchema", "false").parquet(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    pub fn option(mut self, key: &str, value: &str) -> Self {
-        self.options
-            .insert(key.to_owned(), OptionValue::from_user(key, value));
-        self
-    }
-
-    /// Reads `paths` in the format.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().load(["/data/t", "/data/u"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn load<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
-        let plan = read_files(&self.format, typed_paths(paths), self.options);
-        DataFrame::new(self.session, Arc::new(plan))
-    }
-
-    /// Reads Parquet files (PySpark's `read.parquet`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().parquet(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn parquet<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
-        self.format("parquet").load(paths)
-    }
-}
-
 /// The expressions of `cols`.
 fn exprs(cols: impl IntoIterator<Item = impl Into<Column>>) -> Vec<Arc<Expr>> {
     cols.into_iter().map(|c| Arc::new(c.into().expr)).collect()
 }
 
+mod reader;
+pub use reader::DataFrameReader;
 mod writer;
 pub use writer::{DataFrameWriter, DataFrameWriterV2};

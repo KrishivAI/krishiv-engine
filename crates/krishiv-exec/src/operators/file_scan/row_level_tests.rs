@@ -12,9 +12,8 @@ fn filter(rows: RowLevel) -> PushedFilter {
             Ok(BooleanArray::from(vec![true; b.num_rows()]))
         }));
     PushedFilter {
-        predicate,
-        expr: Some(PushdownExpr::Constant(true)),
         rows,
+        ..PushedFilter::typed(predicate, PushdownExpr::Constant(true))
     }
 }
 

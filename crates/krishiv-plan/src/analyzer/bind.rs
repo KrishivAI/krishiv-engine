@@ -1297,32 +1297,23 @@ async fn bind_files(
     if server_scoped(options) {
         authorize_store_options(ctx, b, checked, origin).await?;
     }
-    let columns = if let Some(schema) = schema {
-        // A declared schema replaces inference. The nullability rule is the
-        // inferred one: every file column nullable, nested elements, values
-        // and fields too (Spark builds the relation over
-        // `dataSchema.asNullable`, declared or inferred).
-        schema
-            .fields()
-            .iter()
-            .map(|f| TableColumn::new(f.name(), f.data_type().as_nullable(), true))
-            .collect()
-    } else {
-        files
-            .infer(format, &qualified, options)
-            .await
-            .map_err(fail)?
-            .into_iter()
-            // Spark reads every file column as nullable, nested elements,
-            // values and fields too (`HadoopFsRelation` over
-            // `dataSchema.asNullable`), as the scan's rows are typed.
-            .map(|c| TableColumn {
-                nullable: true,
-                data_type: c.data_type.as_nullable(),
-                ..c
-            })
-            .collect()
-    };
+    // A user schema is never checked against inference: the files are read
+    // as it says (Spark's `userSpecifiedSchema`). Either way every file
+    // column is nullable, nested elements, values and fields too
+    // (`HadoopFsRelation` over `dataSchema.asNullable`), as the scan's rows
+    // are typed.
+    let columns = match schema {
+        Some(schema) => files.with_schema(format, &qualified, options, schema).await,
+        None => files.infer(format, &qualified, options).await,
+    }
+    .map_err(fail)?
+    .into_iter()
+    .map(|c| TableColumn {
+        nullable: true,
+        data_type: c.data_type.as_nullable(),
+        ..c
+    })
+    .collect();
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {

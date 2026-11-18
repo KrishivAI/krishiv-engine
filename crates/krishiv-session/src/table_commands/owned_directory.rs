@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `OwnedDirectory`: a directory a statement created exclusively, removed unless the statement keeps it.
+//! `OwnedDirectory`: a directory a statement created exclusively, removed again if the statement fails.
 
 use std::path::{Path, PathBuf};
 

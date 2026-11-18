@@ -419,12 +419,19 @@ impl DataFrame {
             Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
             Err(e) => return Err(e),
         }
-        let (optimized, physical) = match self
+        let (optimized, physical, scanned) = match self
             .session
             .physical_inspected(&analysis.analyzed, &analysis.env)
             .await
         {
-            Ok((optimized, physical)) => (optimized, physical.explain_all()),
+            Ok((optimized, physical)) => {
+                let scanned: Vec<String> =
+                    krishiv_exec::profile::profile_scans(&physical, &|_| None)
+                        .into_iter()
+                        .map(|s| s.table)
+                        .collect();
+                (optimized, physical.explain_all(), scanned)
+            }
             Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
             Err(e) => return Err(e),
         };
@@ -451,6 +458,11 @@ impl DataFrame {
         // Only when the cache is on for the query, so the plan text stays Spark's by default.
         if let Some(note) = self.session.result_cache_note(&planned.analysis) {
             let _ = write!(text, "\n== Result Cache ==\n{note}\n");
+        }
+        // Only with a history that has advice for a table the query reads (P3-T025); read here, after
+        // planning, so no query's planning pays for it.
+        if let Some(section) = self.session.partition_advice_section(&scanned).await {
+            let _ = write!(text, "\n{section}");
         }
         Ok(text)
     }
