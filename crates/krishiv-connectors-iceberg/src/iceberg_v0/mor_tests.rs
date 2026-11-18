@@ -326,6 +326,20 @@ pub(super) fn files_ending(env: &Env, suffix: &str) -> Vec<String> {
     out
 }
 
+/// The paths of the catalog's live data files (sorted by path, so their
+/// order is random across runs: pick one by identity, never by position
+/// when there are several).
+pub(super) fn data_files(env: &Env, catalog: &Arc<Catalog>) -> Vec<String> {
+    super::append_tests::iceberg_rust_files(env, &catalog.metadata(), &catalog.location())
+}
+
+/// The one data file of a table with a single data file.
+pub(super) fn only_data_file(env: &Env, catalog: &Arc<Catalog>) -> String {
+    let mut files = data_files(env, catalog);
+    assert_eq!(files.len(), 1, "{files:?}");
+    files.pop().unwrap()
+}
+
 fn without(ids: impl IntoIterator<Item = i64>, gone: &[i64]) -> Vec<String> {
     expected(ids.into_iter().filter(|i| !gone.contains(i)))
 }
@@ -732,6 +746,8 @@ fn delete_application_matches_model_with_krishiv_deletes_across_an_upgrade() {
     let t = create(&env, 2, false, &[]);
     let catalog = Catalog::new(&t);
     append(&env, &catalog, range(0, 10));
+    // Rows 0..10; file names carry a random attempt id, so never by position.
+    let first = only_data_file(&env, &catalog);
     append(&env, &catalog, range(10, 20));
     add_deletes(&env, &catalog, |files| vec![wide_delete(&env, files, 0)]);
     let mut gone = vec![0, 10];
@@ -762,15 +778,22 @@ fn delete_application_matches_model_with_krishiv_deletes_across_an_upgrade() {
     assert_eq!(get(&s, "added-dvs"), Some("2"));
     assert_eq!(get(&s, "removed-position-delete-files"), Some("2"));
     let after = delete_entries(&env, &m);
-    let mut records: Vec<(String, u64)> = after
+    let after_names: Vec<(&str, Option<&String>)> = after
+        .iter()
+        .map(|d| (d.name.as_str(), d.referenced.as_ref()))
+        .collect();
+    // Per data file, keyed by whether it holds rows 0..10.
+    let records: HashMap<bool, u64> = after
         .iter()
         .filter(|d| d.format == DataFileFormat::Puffin)
-        .map(|d| (d.referenced.clone().unwrap(), d.records))
+        .map(|d| (d.referenced.as_deref() == Some(first.as_str()), d.records))
         .collect();
-    records.sort();
     // The first file: 0 (wide), 3, 4, 5; the second: 10 (wide), 13, 15.
-    let counts: Vec<u64> = records.iter().map(|(_, n)| *n).collect();
-    assert_eq!(counts, [4, 3], "{records:?}");
+    assert_eq!(
+        records,
+        HashMap::from([(true, 4), (false, 3)]),
+        "{after_names:?}"
+    );
     assert!(after.iter().any(|d| d.name == "wide-deletes.parquet"));
     assert_eq!(after.len(), 3);
     // Another statement on v3 keeps the model.
