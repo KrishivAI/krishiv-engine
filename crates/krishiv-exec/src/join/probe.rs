@@ -248,7 +248,7 @@ impl Cursor {
                 probe.push(u32::try_from(i).unwrap_or(u32::MAX));
                 build.push((p, self.chain));
             }
-            self.chain = table.map_or(NONE, |t| t.next()[self.chain as usize]);
+            self.chain = table.map_or(NONE, |t| t.next_of(self.chain));
             if self.chain == NONE {
                 self.pos += 1;
             }
@@ -702,6 +702,14 @@ impl ProbeOp {
 }
 
 impl Operator for ProbeOp {
+    // The same pairs whatever the batches; only a left outer join's
+    // unmatched rows move with them, an order Spark leaves open (J1). A
+    // fused filter that can fail (ANSI) may meet rows a limit above would
+    // have cut, as it already can within one scan batch.
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     // A hash probe always needs a flush barrier (`needs_flush`), which already keeps its
     // pipeline at one driver; the grace join's state is not lane-ordered, so it says no.
     fn lane_safe(&self) -> bool {
@@ -762,7 +770,8 @@ impl Operator for ProbeOp {
             signal: Arc::clone(memory.signal()),
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
-            partition: ctx.partition(),
+            // Spark's partition index (a `UNION ALL` branch numbers its own).
+            partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
             select,
             selected: None,
         }))

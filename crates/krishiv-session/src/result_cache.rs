@@ -357,6 +357,9 @@ struct Found {
     /// implementer chooses, not the code).
     nondeterministic: bool,
     session_udf: bool,
+    /// The plan observes metrics (`Dataset.observe`): every action must run it, so its
+    /// observation completes.
+    observed: bool,
 }
 
 /// The functions that return a clock, the session or the environment: constant within a query,
@@ -396,6 +399,9 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
     while let Some(step) = stack.pop() {
         match step {
             Step::Plan(p) => {
+                if matches!(&p.node, PlanNode::CollectMetrics { .. }) {
+                    found.observed = true;
+                }
                 // An unseeded sample draws its seed per physical plan.
                 if let PlanNode::Sample { seed: None, .. } = &p.node {
                     found.nondeterministic = true;
@@ -403,6 +409,10 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
                 if let PlanNode::Scan(s) = &p.node {
                     match &s.source {
                         ReadSource::Table { name, .. } => found.tables.push(name.clone()),
+                        // Content-addressed input: no file or table dependency.
+                        ReadSource::Local(_) => {}
+                        // Files by path, and any source added later, are assumed
+                        // to read files.
                         _ => found.files = true,
                     }
                 }
@@ -442,6 +452,9 @@ impl Session {
     /// anything but permanent catalog tables, or calls a non-deterministic function.
     pub(crate) fn result_verdict(&self, a: &Analysis) -> Result<ResultKey, &'static str> {
         let found = survey(a.analyzed.plan.root());
+        if found.observed {
+            return Err("it observes metrics");
+        }
         if found.files {
             return Err("it reads files by path");
         }
@@ -466,6 +479,11 @@ impl Session {
                 .ok_or("it reads a table that is not in the catalog")?;
             if table.view.is_some() {
                 return Err("it reads a view that is not inlined");
+            }
+            // Delta resolves the latest version per query (ADR 0037): the key would not see it.
+            #[cfg(feature = "delta")]
+            if crate::table_commands::is_delta_table(&table) {
+                return Err("it reads a Delta table");
             }
             tables.push(TableId {
                 namespace: table.namespace.clone(),

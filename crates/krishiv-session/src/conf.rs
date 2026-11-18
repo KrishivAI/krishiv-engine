@@ -10,12 +10,10 @@ use krishiv_common::error::{
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 
-/// Prefixes of entries read once, when the session is built (memory pool,
-/// spill directory, I/O scheduler): setting them later would not apply,
-/// so it fails like a static config.
-pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
-
-/// Session keys fixed when the session is built (its memory pool).
+/// Session-scope keys fixed when the session is built (its memory pool): `SET` of one fails like
+/// a static config, a builder option sets it. Every other session-scope key is read per query, so
+/// `SET` takes it, whatever its prefix (SQL-23: the `krishiv.io.*` format-option fallbacks and
+/// `krishiv.io.prefetchBytes` are read from each query's configuration snapshot).
 const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
@@ -33,6 +31,9 @@ pub(crate) struct ConfStore {
     /// The default of `spark.sql.session.timeZone`, read once when the
     /// session is built (see [`local_zone`]).
     local_zone: Arc<str>,
+    /// Whether the catalog declaration keys are startup only (a server runtime, design P3-T067
+    /// §2.2, decisions 1 and 7): set when the session is built, never changed.
+    pub(crate) static_catalogs: bool,
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -102,6 +103,7 @@ impl ConfStore {
             current: RwLock::new((config, 0)),
             initial,
             local_zone: Arc::clone(&self.local_zone),
+            static_catalogs: self.static_catalogs,
         }
     }
 
@@ -110,6 +112,7 @@ impl ConfStore {
             current: RwLock::new((Arc::new(config.clone()), 0)),
             initial: config,
             local_zone: Arc::from(local_zone),
+            static_catalogs: false,
         }
     }
 
@@ -325,11 +328,7 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 /// Whether `key` can change after the session is built.
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
-        Some(entry) => {
-            entry.scope == Scope::Session
-                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
-                && !SESSION_BUILD_TIME.contains(&entry.key)
-        }
+        Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
         None => true,
     }
 }
@@ -385,7 +384,7 @@ impl RuntimeConf {
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
     /// or `krishiv.sql.session.timeZone`) no zone database entry or offset names.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -435,7 +434,7 @@ impl RuntimeConf {
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -468,9 +467,15 @@ impl RuntimeConf {
     /// assert!(!session.conf().is_modifiable("krishiv.memory.limit"));
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
+    ///
+    /// In a session of a server runtime the catalog declaration keys
+    /// (`krishiv.catalog.<name>.*`, `spark.sql.catalog.*`) are startup only, for every role
+    /// (design P3-T067 §2.2: a session-declared catalog is a client-chosen URL the server
+    /// fetches); an embedded session is unchanged.
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
+            && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
     }
 }
 

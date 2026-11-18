@@ -174,6 +174,35 @@ pub const ERROR_CLASS_LABEL: LabelDef = LabelDef {
     values: &[],
 };
 
+/// `surface`: the server listener a request came in on (ADR 0046 §8).
+pub const SURFACE_LABEL: LabelDef = LabelDef {
+    name: "surface",
+    values: &["connect", "admin", "metrics", "ui"],
+};
+
+/// `method`: how a request tried to authenticate.
+pub const AUTH_METHOD_LABEL: LabelDef = LabelDef {
+    name: "method",
+    values: &["token", "oidc", "mtls", "throttle", "none"],
+};
+
+/// `privilege`: the privilege an access check asked for.
+pub const PRIVILEGE_LABEL: LabelDef = LabelDef {
+    name: "privilege",
+    values: &[
+        "SELECT",
+        "MODIFY",
+        "CREATE",
+        "DROP",
+        "MONITOR",
+        "USAGE",
+        "BROWSE",
+        "OPERATE",
+        "MANAGE",
+        "IMPERSONATE",
+    ],
+};
+
 /// `cache`: which cache.
 pub const CACHE_LABEL: LabelDef = LabelDef {
     name: "cache",
@@ -216,6 +245,9 @@ pub const LABEL_ALLOWLIST: &[&str] = &[
     "store_kind",
     "version",
     "git_sha",
+    "surface",
+    "method",
+    "privilege",
 ];
 
 /// The most distinct `error_class` label values kept per metric; further
@@ -332,6 +364,18 @@ pub const CATALOGUE: &[MetricDef] = &[
                       workers), in bytes.",
         since: "0.1.0",
         source: MetricSource::QueryFold,
+    },
+    MetricDef {
+        name: "krishiv.history.write_failures",
+        kind: MetricKind::Gauge,
+        unit: "{profile}",
+        labels: &[],
+        description: "Query profiles that did not reach the persisted history \
+                      (`krishiv.history.path`) since the engine started: a full write queue, a \
+                      profile that did not serialize, or a failed file write. Absent when no \
+                      history path is set.",
+        since: "0.3.0",
+        source: MetricSource::Scrape,
     },
     MetricDef {
         name: "krishiv.memory.reserved",
@@ -465,12 +509,68 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::QueryFold,
     },
     MetricDef {
+        name: "krishiv.delta.log_pool.wait_ms",
+        kind: MetricKind::Gauge,
+        unit: "ms",
+        labels: &[],
+        description: "Milliseconds Delta kernel calls have waited for a slot of the process's \
+                      log pool (`krishiv.delta.logThreads`), summed since the process started \
+                      (a running total); emitted by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.hits",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found the table's snapshot in the engine runtime's \
+                      cache (it is then brought up to date), since the runtime started (a \
+                      running total); emitted by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.misses",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found no cached snapshot and read the log from its \
+                      last checkpoint, since the runtime started (a running total); emitted by \
+                      builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
         name: "krishiv.build.info",
         kind: MetricKind::Gauge,
         unit: "1",
         labels: &[VERSION_LABEL, GIT_SHA_LABEL],
         description: "The build: always 1, labelled with its version and commit.",
         since: "0.1.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.auth.failed",
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
+        description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
+                      malformed, wrong or expired credential) or throttled, by listener and \
+                      the method tried. Served only by `krishiv server` with authentication \
+                      configured.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.auth.denied",
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
+        description: "Access checks of `krishiv server` callers refused with \
+                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
+                      for. Served only by `krishiv server` with authentication configured.",
+        since: "0.2.0",
         source: MetricSource::Scrape,
     },
 ];
@@ -897,7 +997,8 @@ impl MetricsRegistry {
     #[must_use]
     pub fn catalogue_markdown() -> String {
         let mut out = String::from(
-            "# Krishiv engine metrics (v1)\n\n\
+            "---\ndescription: \"Every engine metric: name, type, unit, labels and what it counts.\"\n---\n\n\
+             # Krishiv engine metrics (v1)\n\n\
              <!-- @generated by `cargo xtask docs-metrics`; do not edit. -->\n\n\
              Engine metrics, scraped per engine (`Session::metrics`, `krishiv.metrics()`): \
              OTel-style dotted names with the mechanical Prometheus rendering next to them \

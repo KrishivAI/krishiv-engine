@@ -53,11 +53,7 @@ fn files(col: &str) -> TempTable {
         known: false,
         permanent: false,
         partitions: Some(Default::default()),
-        source: ReadSource::Files {
-            format: "parquet".to_owned(),
-            paths: vec![],
-            options: Default::default(),
-        },
+        source: ReadSource::files("parquet".to_owned(), vec![], Default::default()),
         columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
     }
 }
@@ -66,6 +62,7 @@ fn first_column(t: &TempTable) -> &str {
     match t {
         TempTable::Files { columns, .. }
         | TempTable::Memory { columns, .. }
+        | TempTable::Provider { columns, .. }
         | TempTable::View { columns, .. } => &columns[0].name,
     }
 }
@@ -80,6 +77,7 @@ fn expanding_a_cycle_is_an_internal_error() {
         columns: Vec::new(),
         pins: Vec::new(),
         text: None,
+        keeps: ViewKeeps::default(),
     };
     session.put("a", view("b"));
     session.put("b", view("a"));
@@ -917,11 +915,11 @@ fn task_specs_rejects_what_it_cannot_split() {
     // A scan of files that were never opened.
     let e = catalog
         .task_specs(
-            &split_scan_plan(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: Vec::new(),
-                options: BTreeMap::new(),
-            }),
+            &split_scan_plan(ReadSource::files(
+                "parquet".to_owned(),
+                Vec::new(),
+                BTreeMap::new(),
+            )),
             2,
             2,
         )
@@ -1085,5 +1083,162 @@ fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
         }
         drop(fill);
         rt.block_on(cached.unpersist()).unwrap();
+    }
+}
+
+/// A DataFrame view's keeps are part of its entry: an expansion reports those of the entry it
+/// inlined, and replacing the view publishes the new plan and its keeps together, leaving an
+/// entry already read with its own (no lookup by name after the fact).
+#[test]
+fn a_view_expansion_carries_the_keeps_of_the_entry_it_inlined() {
+    let catalog = SessionCatalog::default();
+    let first: Keep = Arc::new(1_u8);
+    let second: Keep = Arc::new(2_u8);
+    let put = |keep: &Keep| {
+        catalog.put_view(
+            "v",
+            Arc::new(LogicalPlan::table(["base"])),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ViewKeeps(vec![Arc::clone(keep)]),
+        );
+    };
+    let read = Arc::new(LogicalPlan::table(["v"]));
+    let keeps_of = |e: &Expansion| -> Vec<u8> {
+        e.keeps
+            .iter()
+            .map(|k| *Arc::clone(k).downcast::<u8>().unwrap())
+            .collect()
+    };
+    put(&first);
+    let before = catalog.get("v", false).unwrap();
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [1]);
+    put(&second);
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [2]);
+    let TempTable::View { keeps, .. } = &*before else {
+        panic!("not a view: {before:?}");
+    };
+    assert!(Arc::ptr_eq(&keeps.0[0], &first));
+    assert!(catalog.drop_table("v"));
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert!(expanded.keeps.is_empty());
+}
+
+/// A read with a declared schema opens with the declared table, nothing
+/// inferred: a headerless CSV would be named `_c0`, `_c1` by inference. The
+/// declared nullability follows the inferred-read rule (golden-pending).
+#[test]
+fn a_file_read_with_a_declared_schema_uses_it() {
+    use krishiv_common::secret::OptionValue;
+    use krishiv_types::{StructField, StructType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,a\n2,b\n").unwrap();
+    let s = Session::new().unwrap();
+    let source = ReadSource::files(
+        "csv",
+        vec![OptionValue::from_user("path", path.to_string_lossy())],
+        Default::default(),
+    )
+    .with_schema(StructType::new([
+        StructField::new("k", DataType::Long, true),
+        StructField::new("v", DataType::String, true),
+    ]));
+    let df = crate::dataframe::DataFrame::new(
+        s,
+        Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::Read(source),
+        )),
+    );
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    assert_eq!(names, ["k", "v"]);
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    let mut got: Vec<(String, String)> = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let cell =
+                |c: usize| arrow_cast::display::array_value_to_string(b.column(c), i).unwrap();
+            got.push((cell(0), cell(1)));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("1".to_owned(), "a".to_owned()),
+            ("2".to_owned(), "b".to_owned())
+        ]
+    );
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn task_specs_refuse_a_delta_scan_anywhere_in_the_plan() {
+    // A worker cannot open the session's Delta snapshots, so a Delta scan
+    // outside the streaming pipeline (a subquery, a join's build side) is
+    // refused as the streaming one is, for one task as for several.
+    let session = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from((0..6).collect::<Vec<_>>()))],
+    )
+    .unwrap();
+    session
+        .register_batches("t", Arc::clone(&schema), vec![batch])
+        .unwrap();
+    let delta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/delta-4.4.1/session-appends");
+    let delta = delta.to_string_lossy();
+    let in_subquery = format!("SELECT id FROM t WHERE id > (SELECT max(id) FROM delta.`{delta}`)");
+    for (sql, delta_streams) in [
+        (in_subquery, Some(false)),
+        (
+            format!("SELECT t.id FROM t JOIN delta.`{delta}` d ON t.id = d.id"),
+            None,
+        ),
+        (
+            format!("SELECT t.id FROM delta.`{delta}` d JOIN t ON t.id = d.id"),
+            None,
+        ),
+    ] {
+        let df = block_on(session.sql(&sql)).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        if let Some(streams) = delta_streams {
+            let streaming = streaming_scans(physical.root());
+            assert_eq!(
+                streaming
+                    .iter()
+                    .any(|s| crate::delta::is_delta(&s.scan.source)),
+                streams,
+                "{sql}: {streaming:?}"
+            );
+        }
+        for tasks in [1_usize, 2] {
+            let e = analysis
+                .env
+                .catalog
+                .task_specs(&physical, tasks, 2)
+                .unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{sql}"
+            );
+            assert!(e.to_string().contains("a Delta scan"), "{sql}: {e}");
+        }
+        drop(analysis);
+        drop(df);
     }
 }

@@ -14,8 +14,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
 Build the runner first (the shipped build level, see bench/README.md):
-``RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner``
-(path override: ``--runner PATH`` on the CLI, which wins over ``$KRISHIV_BENCH_RUNNER``).
+``RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' cargo build --profile dist
+-p krishiv-bench-runner`` (path override: ``--runner PATH`` on the CLI, which wins over ``$KRISHIV_BENCH_RUNNER``).
 Extra session settings go through ``conf`` (``--conf key=value`` on the runner).
 """
 
@@ -125,7 +125,8 @@ class KrishivEngine(Engine):
         return {"allocator": "mimalloc", "runner": f"krishiv-bench-runner ({build['build_profile']})", **build}
 
     def _runner_build(self) -> dict[str, str]:
-        """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3``), so a result says what it measured.
+        """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3 branch-align=32B``), so a result says
+        what it measured. ``branch_align`` is present only when the runner reports it.
 
         ``unknown`` when the binary cannot say (missing, too old, or run on a CPU below its build level).
         """
@@ -140,6 +141,8 @@ class KrishivEngine(Engine):
                     "build_profile": fields.get("profile", "unknown"),
                     "target_cpu": fields.get("target-cpu", "unknown"),
                 }
+                if "branch-align" in fields:
+                    self._build["branch_align"] = fields["branch-align"]
             except (OSError, subprocess.SubprocessError):
                 pass
         return self._build
@@ -155,7 +158,8 @@ class KrishivEngine(Engine):
         if not self.binary.exists():
             raise FileNotFoundError(
                 f"{self.binary} missing: "
-                "RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner"
+                "RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' "
+                "cargo build --profile dist -p krishiv-bench-runner"
             )
         cmd = [
             *self.launcher,

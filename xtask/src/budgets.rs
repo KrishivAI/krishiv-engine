@@ -78,6 +78,51 @@ pub enum Mode {
     },
 }
 
+/// The static web UI assets may weigh at most 3 MB brotli-compressed (ADR 0024's "< 2-3 MB", P3-T050).
+pub const UI_ASSET_BUDGET_BYTES: u64 = 3_000_000;
+
+/// The bytes of the files under `dir`, summed. Raw size: brotli never makes the text and font files of the
+/// build larger, so a raw total within the budget proves the compressed one is.
+///
+/// # Errors
+/// A directory that cannot be read.
+pub fn ui_asset_bytes(dir: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Checks the UI assets of `root` against [`UI_ASSET_BUDGET_BYTES`].
+///
+/// # Errors
+/// Over the budget, or unreadable.
+pub fn check_ui_assets(root: &Path) -> Result<u64, String> {
+    let assets = root.join("crates/krishiv-ui-assets/assets");
+    // A tree without the UI crate (a `--repo` of another project) has nothing to weigh.
+    let bytes = if assets.is_dir() {
+        ui_asset_bytes(&assets)?
+    } else {
+        0
+    };
+    if bytes > UI_ASSET_BUDGET_BYTES {
+        return Err(format!(
+            "budgets: the UI assets weigh {bytes} bytes, over the {UI_ASSET_BUDGET_BYTES} byte budget"
+        ));
+    }
+    Ok(bytes)
+}
+
 /// What `--precheck` prints when no cached main measurement exists yet.
 pub const NO_MAIN_BASELINE: &str = "budgets: skipped (no main baseline; CI checks it)";
 
@@ -482,6 +527,48 @@ mod tests {
             unsafe_sites: None,
             wheel_bytes: None,
         }
+    }
+
+    #[test]
+    fn the_committed_ui_assets_are_within_the_budget() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let bytes = check_ui_assets(&root).unwrap();
+        assert!(bytes > 0);
+    }
+
+    #[test]
+    fn ui_assets_over_the_budget_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("crates/krishiv-ui-assets/assets/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let big = vec![0_u8; usize::try_from(UI_ASSET_BUDGET_BYTES).unwrap() + 1];
+        std::fs::write(assets.join("index.js"), big).unwrap();
+        let err = check_ui_assets(dir.path()).unwrap_err();
+        assert!(err.contains("over the"), "{err}");
+    }
+
+    fn assets_of(bytes: u64) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("crates/krishiv-ui-assets/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(
+            assets.join("index.js"),
+            vec![0_u8; usize::try_from(bytes).unwrap()],
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn ui_assets_of_exactly_the_budget_are_accepted_and_one_byte_more_is_not() {
+        let at = assets_of(UI_ASSET_BUDGET_BYTES);
+        assert_eq!(check_ui_assets(at.path()), Ok(3_000_000));
+        let over = assets_of(UI_ASSET_BUDGET_BYTES + 1);
+        let err = check_ui_assets(over.path()).unwrap_err();
+        assert!(
+            err.contains("3000001 bytes") && err.contains("over the 3000000 byte budget"),
+            "{err}"
+        );
     }
 
     #[test]

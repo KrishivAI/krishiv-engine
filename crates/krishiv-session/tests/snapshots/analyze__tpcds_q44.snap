@@ -1,0 +1,26 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","store_sales"],"display":"table `spark_catalog`.`default`.`store_sales`","privilege":"SELECT","columns":["ss_addr_sk","ss_item_sk","ss_net_profit","ss_store_sk"]},
+  {"kind":"table","name":["spark_catalog","default","item"],"display":"table `spark_catalog`.`default`.`item`","privilege":"SELECT","columns":["i_item_sk","i_product_name"]}],
+"output_schema":[{"ordinal":0,"name":"rnk","type":"int","type_json":"\"integer\"","nullable":false,"declared_type":null},
+  {"ordinal":1,"name":"best_performing","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"worst_performing","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"rnk","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_net_profit","via_view":null}],"transform":"aggregate"},
+  {"ordinal":1,"output":"best_performing","sources":[{"table":["spark_catalog","default","item"],"column":"i_product_name","via_view":null}],"transform":"identity"},
+  {"ordinal":2,"output":"worst_performing","sources":[{"table":["spark_catalog","default","item"],"column":"i_product_name","via_view":null}],"transform":"identity"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","item"],"column":"i_item_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_addr_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_item_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_net_profit"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_store_sk"},
+  {"kind":"group_by","table":["spark_catalog","default","store_sales"],"column":"ss_item_sk"},
+  {"kind":"group_by","table":["spark_catalog","default","store_sales"],"column":"ss_store_sk"},
+  {"kind":"sort","table":["spark_catalog","default","store_sales"],"column":"ss_net_profit"},
+  {"kind":"window","table":["spark_catalog","default","store_sales"],"column":"ss_net_profit"}],
+"warnings":[]}

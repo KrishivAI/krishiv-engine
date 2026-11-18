@@ -343,7 +343,7 @@ impl DataFrame {
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         // Snapshot who runs the query now: `set_trace_context` and `set_tag` apply to the
         // queries started after them, not to this one.
-        let who = crate::telemetry::Who::of(&self.session.state);
+        let who = crate::telemetry::Who::of(&self.session);
         let mut trace = serde_json::json!({ "session_id": who.session_id });
         if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
             o.insert("trace_id".to_owned(), t.clone().into());
@@ -469,6 +469,21 @@ impl DataFrame {
                 diff: String::new(),
             })
             .collect();
+        // The key counts taken before the last optimization (design P2b A5
+        // (d)): one step per count, with no plan change.
+        steps.extend(
+            a.env
+                .catalog
+                .key_notes(true)
+                .into_iter()
+                .map(|note| OptimizerStep {
+                    batch: "Statistics".to_owned(),
+                    round: 1,
+                    rule: format!("discoverKeys: {note}"),
+                    plan: analyzed_text.clone(),
+                    diff: String::new(),
+                }),
+        );
         for r in rules {
             let plan = r.plan.to_string();
             if plan == before && r.note.is_empty() {

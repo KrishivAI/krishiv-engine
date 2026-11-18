@@ -1419,3 +1419,106 @@ fn wait_for_polls_again_when_the_future_wakes_itself_during_a_poll() {
     }
     assert_eq!(query::wait_for(SelfWaking(0)), 2);
 }
+
+fn nul_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("\u{0}b\u{0}", DataType::Utf8, true),
+        Field::new("plain", DataType::Int64, false),
+        Field::new("\u{FFFD}a\u{0}", DataType::Utf8, true),
+    ]))
+}
+
+#[test]
+fn a_schema_without_nul_names_is_exported_as_it_is() {
+    assert!(ffi::nul_safe_schema(&schema(), true).unwrap().is_none());
+}
+
+#[test]
+fn top_level_names_with_a_nul_get_unique_placeholders() {
+    let safe = ffi::nul_safe_schema(&nul_schema(), true).unwrap().unwrap();
+    let names: Vec<&str> = safe.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names[1], "plain");
+    assert!(names.iter().all(|n| !n.contains('\u{0}')), "{names:?}");
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 3, "placeholders are unique: {names:?}");
+    // The types, nullability and order are the schema's own.
+    for (a, b) in safe.fields().iter().zip(nul_schema().fields()) {
+        assert_eq!(a.data_type(), b.data_type());
+        assert_eq!(a.is_nullable(), b.is_nullable());
+    }
+}
+
+#[test]
+fn a_placeholder_never_collides_with_a_column_of_that_name() {
+    let schema = Schema::new(vec![
+        Field::new("\u{0}", DataType::Int64, true),
+        Field::new("__krishiv_nul_name_0", DataType::Int64, true),
+    ]);
+    let safe = ffi::nul_safe_schema(&schema, true).unwrap().unwrap();
+    assert_ne!(safe.field(0).name(), safe.field(1).name());
+}
+
+#[test]
+fn a_stream_with_nul_names_crosses_the_c_interface_under_placeholders() {
+    let schema = nul_schema();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec![Some("x"), None])),
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(StringArray::from(vec![Some("y"), Some("z")])),
+        ],
+    )
+    .unwrap();
+    let safe = ffi::nul_safe_schema(&schema, true).unwrap().unwrap();
+    let reader = MemoryReader::new(Arc::clone(&schema), vec![batch.clone()]);
+    let mut imported = round_trip(Box::new(reader), Some(Requested::Use(safe))).unwrap();
+    let got = imported.next_batch().unwrap().unwrap();
+    assert_eq!(got.num_rows(), 2);
+    assert_eq!(got.columns(), batch.columns());
+    assert!(
+        got.schema()
+            .fields()
+            .iter()
+            .all(|f| !f.name().contains('\u{0}'))
+    );
+}
+
+#[test]
+fn a_nul_in_a_nested_field_name_is_a_krishiv_error_not_an_arrow_one() {
+    let inner = Field::new("k\u{0}", DataType::Int64, true);
+    for dt in [
+        DataType::Struct(vec![inner.clone()].into()),
+        DataType::List(Arc::new(inner.clone())),
+        DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(vec![inner].into()),
+            true,
+        ))),
+    ] {
+        let schema = Schema::new(vec![Field::new("c", dt, true)]);
+        let e = ffi::nul_safe_schema(&schema, true).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        );
+        let text = e.to_string();
+        assert!(
+            text.contains("k\\u0000") && !text.contains('\u{0}'),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_consumer_that_cannot_rename_gets_a_krishiv_error_for_a_nul_column_name() {
+    let e = ffi::nul_safe_schema(&nul_schema(), false).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(!e.to_string().contains('\u{0}'));
+    assert!(ffi::nul_safe_schema(&schema(), false).unwrap().is_none());
+}

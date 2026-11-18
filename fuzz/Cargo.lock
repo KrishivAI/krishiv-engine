@@ -1862,6 +1862,7 @@ dependencies = [
  "krishiv-types",
  "krishiv-udf-sdk",
  "thiserror",
+ "tracing",
  "twox-hash",
 ]
 
@@ -1981,11 +1982,13 @@ name = "krishiv-udf-pool"
 version = "0.2.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "futures",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-types",
  "krishiv-udf-sandbox",
  "rustix",
  "serde_json",

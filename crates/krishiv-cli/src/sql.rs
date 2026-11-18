@@ -301,7 +301,7 @@ pub(crate) fn run_one(
     } else if agent {
         print_agent_result(out, statement, &df, session, args).map(|()| Ran::Yes)
     } else {
-        print_result(out, &df, session, mode, args).map(|()| Ran::Yes)
+        print_result(out, statement, &df, session, mode, args).map(|()| Ran::Yes)
     }
 }
 
@@ -471,12 +471,20 @@ fn shift_header(line: &str, line_offset: usize) -> String {
 
 fn print_result(
     out: &mut dyn Write,
+    stmt: &AgentStatement<'_>,
     df: &DataFrame,
     session: &krishiv::Session,
     mode: OutputMode,
     args: &SqlArgs,
 ) -> Result<(), String> {
-    let c = collect_rows(df, session, args.max_rows.unwrap_or(usize::MAX))?;
+    // A run-time error shows the SQL span that raised it, as an analysis error does.
+    let fail = |e: &krishiv::Error| describe(stmt.text, stmt.line_offset, e);
+    let cap = args.max_rows.unwrap_or(usize::MAX);
+    let c = collect_rows(df, session, cap, &fail)?;
+    if c.names.is_empty() && c.rows.is_empty() && !c.truncated {
+        // A statement without a result (DDL, SET of nothing): no empty table and no `0 rows`.
+        return Ok(());
+    }
     write!(
         out,
         "{}",
@@ -484,7 +492,18 @@ fn print_result(
             mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
         )
     )
-    .map_err(|e| format!("cannot write output: {e}"))
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    if c.truncated {
+        // stdout keeps its shape for pipes; the cut is said on stderr (agent mode reports it in its footer). Flush
+        // first so the notice does not appear above the table it describes.
+        out.flush()
+            .map_err(|e| format!("cannot write output: {e}"))?;
+        let _ = writeln!(
+            io::stderr(),
+            "warning: output cut at --max-rows {cap}; more rows exist"
+        );
+    }
+    Ok(())
 }
 
 /// The statement an agent result is for.
@@ -634,6 +653,8 @@ struct Collected {
     bools: Vec<bool>,
     /// NULL cells.
     nulls: Vec<Vec<bool>>,
+    /// More rows existed than `max_rows`; the rest were not read.
+    truncated: bool,
 }
 
 /// Collects `df` into typed string rows, cut to `max_rows` for display.
@@ -641,20 +662,22 @@ fn collect_rows(
     df: &DataFrame,
     session: &krishiv::Session,
     max_rows: usize,
+    fail: &dyn Fn(&krishiv::Error) -> String,
 ) -> Result<Collected, String> {
     use futures::StreamExt as _;
 
     let zone = session_zone(session.conf().get("spark.sql.session.timeZone").as_deref())?;
-    let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
+    let schema = futures::executor::block_on(df.schema()).map_err(|e| fail(&e))?;
     // Streams and stops at the cap, so a huge result is never buffered: dropping the stream cancels the query.
-    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
+    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| fail(&e))?;
     let mut batches = Vec::new();
     let mut seen = 0usize;
-    while seen < max_rows {
+    // One row past the cap, so a result of exactly `max_rows` rows is not reported as cut.
+    while seen <= max_rows {
         let Some(next) = futures::executor::block_on(stream.next()) else {
             break;
         };
-        let batch = next.map_err(|e| e.to_string())?;
+        let batch = next.map_err(|e| fail(&e))?;
         seen = seen.saturating_add(batch.num_rows());
         batches.push(batch);
     }
@@ -698,6 +721,7 @@ fn collect_rows(
         }
     }
     Ok(Collected {
+        truncated: seen > max_rows,
         names,
         rows,
         numeric,
@@ -744,7 +768,7 @@ mod tests {
              cast(null as interval day) e",
         ))
         .expect("query");
-        let got = collect_rows(&df, &session, 10).expect("rows");
+        let got = collect_rows(&df, &session, 10, &|e| e.to_string()).expect("rows");
         assert_eq!(
             got.rows,
             [[
@@ -857,6 +881,7 @@ mod tests {
             float,
             bools,
             nulls,
+            truncated: false,
         }
     }
 

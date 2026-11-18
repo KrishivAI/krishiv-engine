@@ -52,6 +52,8 @@ struct Opts {
     detailed: bool,
     /// `krishiv.exec.agg.directKeys`.
     direct: bool,
+    /// `krishiv.deterministicOrder`.
+    deterministic: bool,
 }
 
 impl Default for Opts {
@@ -63,6 +65,7 @@ impl Default for Opts {
             seed: Some(7),
             detailed: false,
             direct: true,
+            deterministic: false,
         }
     }
 }
@@ -134,6 +137,7 @@ async fn exec_with(
         agg_row_layout: rows,
         detailed_metrics: o.detailed,
         agg_direct_keys: o.direct,
+        deterministic_order: o.deterministic,
         ..ExecConfig::default()
     };
     let q = QueryContext::new(
@@ -540,6 +544,7 @@ fn picks() -> Vec<(AggregateFunction, usize)> {
 }
 mod collect;
 mod disk;
+mod distinct_count;
 mod misc;
 mod simple;
 mod spill_writers;

@@ -1,0 +1,20 @@
+# Generates the `krishiv.admin.v1` Rust types and the gRPC server stub from proto/krishiv/admin/v1
+# (design P3-T066 §6.3). A workspace of its own, like plan-protogen: protox (a pure-Rust protobuf
+# compiler, so no protoc anywhere), prost-build and tonic-prost-build stay out of the product
+# dependency graph. Run from the repository root:
+#   cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --write
+#   cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --check
+[package]
+name = "admin-protogen"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+prost = "0.14.4"
+prost-build = "0.14.4"
+protox = "0.9"
+tonic-prost-build = "0.14"
+
+[workspace]

@@ -60,6 +60,10 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT id FROM range(3)", Role::Viewer),
     // Session class.
     ("SET spark.sql.shuffle.partitions = 4", Role::Viewer),
+    // A key settable by `admin` only (ADR 0046 §3): `Manage` on the cluster, for `SET` and
+    // `RESET key` alike.
+    ("SET krishiv.exec.targetPartitionBytes = 64m", Role::Admin),
+    ("RESET krishiv.exec.targetPartitionBytes", Role::Admin),
     ("USE default", Role::Viewer),
     // Metadata (Browse).
     ("SHOW TABLES", Role::Viewer),
@@ -72,6 +76,7 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT count(*) FROM system.queries", Role::Viewer),
     ("SELECT count(*) FROM SYSTEM.QUERIES", Role::Viewer),
     ("SELECT count(*) FROM system.capabilities", Role::Viewer),
+    ("SELECT count(*) FROM system.sessions", Role::Viewer),
     // A system table's schema is metadata, even where its rows are not (Browse, not Select).
     ("DESCRIBE system.memory", Role::Viewer),
     ("SHOW COLUMNS IN system.memory", Role::Viewer),
@@ -179,4 +184,49 @@ fn read_only_keeps_a_viewers_metadata_access() {
         let e = run(&s, sql).unwrap_err();
         assert!(e.contains(DENIED), "`{sql}`: {e}");
     }
+}
+
+/// The one string value `sql` returns (an `EXPLAIN`).
+fn text(s: &Session, sql: &str) -> String {
+    use arrow_array::cast::AsArray as _;
+    let batches = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let c = batches[0].column(0);
+    match c.as_string_view_opt() {
+        Some(v) => v.value(0).to_owned(),
+        None => c.as_string::<i32>().value(0).to_owned(),
+    }
+}
+
+/// `EXPLAIN` is `Browse` (ADR 0046 §3, update 2026-11-15): a viewer sees the plan with statistics
+/// withheld, an operator the ordinary text. `EXPLAIN COST` and a permanent view's body need
+/// `Select`. SQL `EXPLAIN` is lenient, so a refusal is the text, not an error.
+#[test]
+fn explain_per_role() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path());
+    let withheld = "Statistics withheld";
+    for role in [Role::Viewer, Role::Operator, Role::Admin] {
+        let s = session(&rt, Some(role));
+        let plain = text(&s, "EXPLAIN SELECT * FROM t");
+        let cost = text(&s, "EXPLAIN COST SELECT * FROM t");
+        let view = text(&s, "EXPLAIN EXTENDED SELECT * FROM v");
+        if role == Role::Viewer {
+            assert!(plain.contains(withheld), "{role:?}: {plain}");
+            assert!(cost.contains(DENIED), "{role:?}: {cost}");
+            assert!(
+                view.contains(DENIED) && !view.contains("literal"),
+                "{role:?}: {view}"
+            );
+        } else {
+            assert!(
+                !plain.contains(withheld) && !plain.contains(DENIED),
+                "{role:?}: {plain}"
+            );
+            assert!(cost.contains("Statistics("), "{role:?}: {cost}");
+            assert!(view.contains("literal"), "{role:?}: {view}");
+        }
+    }
+    let nobody = session(&rt, None);
+    assert!(text(&nobody, "EXPLAIN EXTENDED SELECT * FROM t").contains(DENIED));
 }

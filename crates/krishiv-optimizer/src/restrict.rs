@@ -584,6 +584,10 @@ fn key_ndv(est: &Arc<RelStats>, want: &Attrs) -> f64 {
 
 /// Whether `input` is already reduced by a semi join on `keys` (this
 /// pass's own, or one the query wrote): restricting again adds little.
+/// The walk passes the left input of anti and existence joins too: semi/anti
+/// ordering may sort this pass's semi join below one, and the reduction
+/// still holds there (an anti join only drops rows, an existence join only
+/// adds a column).
 /// Only the join's kind and condition count, never the shape of its
 /// right side, which pruning changes between optimizer runs (a `Shift`
 /// gains a projection above it), so the answer is the same on every run
@@ -593,6 +597,11 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
     loop {
         match &at.node {
             PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => at = input,
+            PlanNode::Join {
+                kind: JoinKind::LeftAnti | JoinKind::Existence(_),
+                left,
+                ..
+            } => at = left,
             PlanNode::Join {
                 kind: JoinKind::LeftSemi,
                 condition: JoinCondition::On(cond),
@@ -619,7 +628,7 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
 
 /// Whether evaluating `e` can never raise: a column, or a widening of an
 /// integral value to a wider integral type (deterministic by construction).
-fn cannot_raise(e: &Arc<Expr>) -> bool {
+pub(crate) fn cannot_raise(e: &Arc<Expr>) -> bool {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
         ExprNode::Cast { expr, to, .. } => {
@@ -639,7 +648,7 @@ fn cannot_raise(e: &Arc<Expr>) -> bool {
 }
 
 /// Types whose grouping and `=` agree value for value.
-fn key_type(t: &DataType) -> bool {
+pub(crate) fn key_type(t: &DataType) -> bool {
     matches!(
         t,
         DataType::Boolean
@@ -677,7 +686,7 @@ fn node_exprs_deterministic(p: &LogicalPlan) -> bool {
 /// function of their inputs (no limit or sample; no CTE reference, which a
 /// shift does not renumber), deterministic expressions (subquery plans
 /// included) and no outer references.
-fn repeatable(p: &Arc<LogicalPlan>) -> bool {
+pub(crate) fn repeatable(p: &Arc<LogicalPlan>) -> bool {
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(p)];
     while let Some(x) = stack.pop() {
@@ -704,7 +713,7 @@ fn repeatable(p: &Arc<LogicalPlan>) -> bool {
 
 /// `e` with every column id raised by `offset` (no subqueries inside: the
 /// restricting equalities never hold one).
-fn shift(e: &Arc<Expr>, offset: u64) -> Arc<Expr> {
+pub(crate) fn shift(e: &Arc<Expr>, offset: u64) -> Arc<Expr> {
     let out = Arc::clone(e).transform_up(&mut |x| {
         Ok::<_, std::convert::Infallible>(match &x.node {
             ExprNode::Resolved(ResolvedExpr::Column(c)) => {

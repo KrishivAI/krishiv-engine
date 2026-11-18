@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-optimizer/tests/it/payload_above.rs
+assertion_line: 693
+expression: text
+---
+Limit 100
++- Sort [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
+   +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum_51#51 AS sum(l_quantity)#50]
+      +- Join Inner, (c_custkey#0 == o_custkey#9)
+         :- Aggregate [o_orderkey#8, o_orderdate#12, o_totalprice#11, o_custkey#9], [o_orderkey#8, o_orderdate#12, o_totalprice#11, o_custkey#9, sum(l_quantity#21) AS sum_51#51]
+         :  +- Join LeftSemi, (o_orderkey#8 == l_orderkey#33)
+         :     :- Project [l_quantity#21, o_orderkey#8, o_totalprice#11, o_orderdate#12, o_custkey#9]
+         :     :  +- Join Inner, (o_orderkey#8 == l_orderkey#17)
+         :     :     :- Filter isnotnull(l_orderkey#17)
+         :     :     :  +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21] (shared #1)
+         :     :     +- Filter (isnotnull(o_custkey#9) and isnotnull(o_orderkey#8))
+         :     :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12]
+         :     +- Project [l_orderkey#33]
+         :        +- Filter (sum(l_quantity)#49 > 300.00)
+         :           +- Aggregate [l_orderkey#33], [l_orderkey#33, sum(l_quantity#37) AS sum(l_quantity)#49]
+         :              +- Shift +16
+         :                 +- Filter isnotnull(l_orderkey#17)
+         :                    +- Shared #1, printed above
+         +- Filter isnotnull(c_custkey#0)
+            +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1]

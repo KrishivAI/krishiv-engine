@@ -42,7 +42,7 @@ def _run_memcap(ap: argparse.ArgumentParser, a, engines: list[str]) -> None:
         ap.error(str(e))
 
 
-RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER)"
+RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER); for krishiv-connect, the `krishiv` binary"
 
 
 def _set_runner(path: str | None) -> None:
@@ -320,6 +320,12 @@ def main(argv=None) -> None:
         "--cgroup-gb", type=int, help="with --sequential: MemoryMax (GB, no swap) of each engine worker's cgroup scope"
     )
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
+    rr.add_argument(
+        "--krishiv-reference",
+        action="store_true",
+        help="with --sequential: when DuckDB gives no answer, time Krishiv unverified and check the other engines "
+        "against Krishiv's rows (e.g. TPC-H q18 at SF1000)",
+    )
     _add_memcap_args(rr)
     rf = sub.add_parser(
         "remote-filter",
@@ -483,6 +489,8 @@ def main(argv=None) -> None:
             ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
         if a.cgroup_gb is not None and not a.sequential:
             ap.error("--cgroup-gb needs --sequential (the cgroup scope is one engine worker's)")
+        if a.krishiv_reference and not a.sequential:
+            ap.error("--krishiv-reference needs --sequential")
         run_reproduce(
             a.suite,
             a.sf,
@@ -502,6 +510,7 @@ def main(argv=None) -> None:
             reference_cache=not a.no_reference_cache,
             refresh_reference=a.refresh_reference,
             cold=a.cold,
+            krishiv_reference=a.krishiv_reference,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -657,6 +666,8 @@ def main(argv=None) -> None:
             kw["container_data_root"] = a.spark_data_root or None
         if a.engine == "krishiv":
             kw["threads"] = a.duckdb_threads
+        if a.engine == "krishiv-connect" and a.runner:
+            kw["binary"] = a.runner  # the `krishiv` binary (it runs `krishiv server`)
         if a.engine == "duckdb":
             kw["memory_limit"] = a.duckdb_memory_limit
             if a.duckdb_threads:

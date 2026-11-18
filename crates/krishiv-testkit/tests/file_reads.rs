@@ -206,11 +206,11 @@ fn directories_list_like_spark() {
     let analyzed = env.block_on(DefaultAnalyzer.analyze(&plan, &ctx)).unwrap();
     assert_eq!(analyzed.output[0].name, "a");
     // An unknown `USING` format is Spark's DATA_SOURCE_NOT_FOUND (42K02).
-    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "delta".to_owned(),
-        paths: paths(&["/d"]),
-        options: BTreeMap::new(),
-    }));
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "delta".to_owned(),
+        paths(&["/d"]),
+        BTreeMap::new(),
+    )));
     let e = env
         .block_on(DefaultAnalyzer.analyze(&Plan::try_new(read).unwrap(), &ctx))
         .unwrap_err();
@@ -325,11 +325,11 @@ fn the_analyzer_reads_parquet_paths() {
     let analyze = |plan: LogicalPlan| {
         env.block_on(DefaultAnalyzer.analyze(&Plan::try_new(plan).unwrap(), &ctx))
     };
-    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: paths(&["/t"]),
-        options: BTreeMap::new(),
-    }));
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "parquet".to_owned(),
+        paths(&["/t"]),
+        BTreeMap::new(),
+    )));
     let analyzed = analyze(read).unwrap();
     assert_eq!(analyzed.output.len(), 1);
     // Non-null in the file, nullable as Spark reads it.
@@ -471,11 +471,11 @@ fn agrees_with_spark_on_the_file_read_probe() {
                 .map(|p| sub(p.as_str().unwrap()))
                 .collect();
             let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-            Plan::try_new(LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: self::paths(&refs),
-                options: BTreeMap::new(),
-            })))
+            Plan::try_new(LogicalPlan::new(PlanNode::Read(ReadSource::files(
+                "parquet".to_owned(),
+                self::paths(&refs),
+                BTreeMap::new(),
+            ))))
             .unwrap()
         } else {
             let sql = sub(case["input"].as_str().unwrap());
@@ -566,5 +566,74 @@ fn concurrent_reads_keep_one_listing() {
     assert!(
         shown.contains("FileReads") && shown.contains("MemPaths"),
         "{shown}"
+    );
+}
+
+/// Cloud paths (`s3a://bucket/a/b`) placed in the harness's in-memory store, displayed as the
+/// URL parser displays them (scheme and authority as written).
+#[derive(Debug, Default)]
+struct CloudPaths;
+
+impl PathLocator for CloudPaths {
+    fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
+        let url = krishiv_io::parse_object_url(path)?;
+        Ok(LocatedPath {
+            store: StoreId::new("memory://suite"),
+            path: url.key,
+            display: url.display,
+        })
+    }
+}
+
+#[test]
+fn a_listing_keeps_the_root_each_read_path_was_written_with() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let a = schema(&[("a", ArrowType::Int32)]);
+    env.write(&fx, "d/part-0", &a, &[ints(&a)], &[]).unwrap();
+    env.write(&fx, "e/part-0", &a, &[ints(&a)], &[]).unwrap();
+    let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(CloudPaths));
+    let none = BTreeMap::new();
+    let store = StoreId::new("memory://suite");
+    // Each file prints under the spelling of the read path that listed it: a Spark 4.2.0 run
+    // keeps the scheme written (`S3A://bucket/dir` prints `s3a://bucket/dir/...`; `s3://` with
+    // `fs.s3.impl` set prints `s3://`), and a glob's directory gives its files' root.
+    for (read, want) in [
+        (&["S3A://bucket/d"][..], &[("d/part-0", "s3a://bucket")][..]),
+        (
+            &["s3a://bucket/e*"][..],
+            &[("e/part-0", "s3a://bucket")][..],
+        ),
+        (
+            &["s3://bucket/d", "s3a://bucket/e"][..],
+            &[("d/part-0", "s3://bucket"), ("e/part-0", "s3a://bucket")][..],
+        ),
+    ] {
+        let listing = env
+            .block_on(r.listing("mock", &paths(read), &none))
+            .unwrap();
+        let got: Vec<(String, Option<&str>)> = listing
+            .files
+            .iter()
+            .map(|f| (f.path.to_string(), listing.path_roots.root(&store, &f.path)))
+            .collect();
+        let want: Vec<(String, Option<&str>)> = want
+            .iter()
+            .map(|(p, r)| ((*p).to_owned(), Some(*r)))
+            .collect();
+        assert_eq!(got, want, "{read:?}");
+    }
+    // A local read has no root: its files print under the store id (`file:`).
+    let local = reads(
+        &env,
+        vec![Arc::new(MockFormat)],
+        Arc::new(MemPaths::default()),
+    );
+    let listing = env
+        .block_on(local.listing("mock", &paths(&["/d"]), &none))
+        .unwrap();
+    assert_eq!(
+        listing.path_roots.root(&store, &Path::from("d/part-0")),
+        None
     );
 }
