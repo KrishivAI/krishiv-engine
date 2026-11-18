@@ -71,11 +71,19 @@ struct Harness {
     served: tokio::task::JoinHandle<Result<(), krishiv_common::error::KrishivError>>,
     /// The listener's `maxResponseBytes`, shared by Connect operations and Flight fetches.
     budget: krishiv_connect_server::execute::ResponseBudget,
+    /// The server's authenticator, for a test that builds a Connect session itself.
+    auth: Arc<ServerAuth>,
     _dir: tempfile::TempDir,
 }
 
 async fn start(config: FlightSqlConfig) -> Harness {
-    start_with(config, ConnectServerConfig::default(), None).await
+    start_with(
+        config,
+        ConnectServerConfig::default(),
+        None,
+        SessionLimits::default(),
+    )
+    .await
 }
 
 /// `stream_window`: the client's HTTP/2 stream window, so a test can keep a fetch's last pieces
@@ -84,6 +92,7 @@ async fn start_with(
     config: FlightSqlConfig,
     server_config: ConnectServerConfig,
     stream_window: Option<u32>,
+    limits: SessionLimits,
 ) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
@@ -94,7 +103,7 @@ async fn start_with(
         Arc::clone(&denials),
     )
     .expect("factory");
-    let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
+    let manager = Arc::new(SessionManager::new(factory, limits));
     let connect_auth = || {
         ConnectAuth::new(Arc::clone(&auth) as Arc<dyn Authenticator>)
             .with_denials(Arc::clone(&denials))
@@ -132,6 +141,7 @@ async fn start_with(
         stop: Some(stop),
         served,
         budget,
+        auth,
         _dir: dir,
     }
 }
@@ -1012,6 +1022,7 @@ async fn start_graceful() -> Harness {
             ..ConnectServerConfig::default()
         },
         Some(16 << 10),
+        SessionLimits::default(),
     )
     .await
 }
@@ -1166,4 +1177,175 @@ async fn stalled_readers_wait_at_the_response_budget() {
         assert!(Instant::now() < deadline, "the budget was not given back");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Calls that read no session state (`GetSqlInfo`, `Handshake`) create none and set no cookie
+/// (§3.2 "No session").
+#[tokio::test(flavor = "multi_thread")]
+async fn stateless_call_without_cookie_sets_no_cookie() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let cmd = CommandGetSqlInfo { info: vec![] };
+    let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = h
+        .client
+        .get_flight_info(authed(descriptor, OPS, None))
+        .await
+        .expect("info");
+    assert_eq!(set_cookie(response.metadata()), None);
+    let hello = HandshakeRequest {
+        protocol_version: 0,
+        payload: Default::default(),
+    };
+    let response = h
+        .client
+        .handshake(authed(futures::stream::iter([hello]), OPS, None))
+        .await
+        .expect("handshake");
+    assert_eq!(set_cookie(response.metadata()), None);
+    assert_eq!(h.flight.session_count(), 0);
+    assert_eq!(h.manager.counts().live, 0);
+}
+
+/// A `DoGet` runs in its handle's session whatever session its cookie names (two first calls
+/// in parallel), and that cookie still promotes its own session (§3.2, v3 review M4, m10).
+#[tokio::test(flavor = "multi_thread")]
+async fn doget_with_other_sessions_cookie_uses_handle_session() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (a, cookie_a) = info(&mut h, OPS, None, "SELECT current_database() AS db, 1 AS n")
+        .await
+        .expect("info a");
+    let (_, cookie_b) = info(&mut h, OPS, None, "USE default")
+        .await
+        .expect("info b");
+    let (cookie_a, cookie_b) = (cookie_a.expect("cookie a"), cookie_b.expect("cookie b"));
+    assert_ne!(cookie_a, cookie_b);
+    assert_eq!(h.flight.session_count(), 2);
+    let batches = fetch(&mut h, OPS, Some(&cookie_b), ticket(&a))
+        .await
+        .expect("served from the handle's session");
+    assert_eq!(rows(&batches), 1);
+    // b was promoted by its cookie: past `provisionalTtl` only a's provisional session goes
+    // (it was fetched with a cookie, so rule 1 did not release it at the stream's end).
+    wait_busy(&h, 0).await;
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(120));
+    assert_eq!(h.flight.session_count(), 1);
+    let (_, set) = info(&mut h, OPS, Some(&cookie_b), "SELECT 1")
+        .await
+        .expect("b is still a session");
+    assert_eq!(set, None, "b's cookie was accepted, not reset");
+    let (_, set) = info(&mut h, OPS, Some(&cookie_a), "SELECT 1")
+        .await
+        .expect("a reset");
+    assert!(set.is_some_and(|id| id != cookie_a), "a was released");
+}
+
+/// Cookie-less `GetFlightInfo` calls hold a provisional session each until fetched or past
+/// `provisionalTtl`, so a loop of them meets `maxSessionsPerPrincipal` (§3.2 "Caps", v2 review
+/// m7) and the sweep gives the slots back.
+#[tokio::test(flavor = "multi_thread")]
+async fn cookieless_get_flight_info_loop_hits_session_cap() {
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        ConnectServerConfig::default(),
+        None,
+        SessionLimits {
+            max_sessions_per_principal: 3,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    for _ in 0..3 {
+        info(&mut h, OPS, None, "SELECT 1")
+            .await
+            .expect("under the cap");
+    }
+    let e = info(&mut h, OPS, None, "SELECT 1")
+        .await
+        .expect_err("the fourth is over the cap");
+    assert_eq!(e.code(), Code::ResourceExhausted, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_SESSION_LIMIT")
+    );
+    assert_eq!(
+        h.flight.session_count(),
+        3,
+        "the refused call kept no session"
+    );
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(120));
+    wait_sessions(&h, 0).await;
+    info(&mut h, OPS, None, "SELECT 1")
+        .await
+        .expect("the swept slots are free");
+}
+
+/// A Connect session's id is not a Flight session: Flight resets the cookie to a new session
+/// and leaves the Connect session alone (§3.2 "Cross-protocol ids", v2 review m9, v3 review m3).
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_session_cookie_resets_on_flight() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let mut credentials = krishiv_session::auth::Credentials::new(
+        "127.0.0.1:1".parse().expect("addr"),
+        krishiv_session::auth::Surface::Connect,
+    );
+    credentials.bearer = Some(OPS);
+    let caller = h
+        .auth
+        .authenticate(&credentials)
+        .await
+        .expect("authenticated");
+    let connect_id = "00000000-0000-4000-8000-000000000001";
+    h.manager
+        .get_or_create(&caller, connect_id, None, "ops")
+        .expect("a Connect session");
+    let (_, set) = info(&mut h, OPS, Some(connect_id), "SELECT 1")
+        .await
+        .expect("served in a new session");
+    let set = set.expect("a new cookie");
+    assert_ne!(set, connect_id);
+    assert_eq!(h.flight.session_count(), 1);
+    assert_eq!(
+        h.manager.counts().live,
+        2,
+        "the Connect session is untouched"
+    );
+}
+
+/// The idle clock runs only while the stream owes the reader a piece: a query slow to its
+/// first batch is not an idle fetch, however many sweeps run meanwhile (§4.2).
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_first_batch_is_not_idle() {
+    let mut h = start(FlightSqlConfig {
+        fetch_idle_timeout: Duration::from_millis(100),
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (i, cookie) = info(
+        &mut h,
+        OPS,
+        None,
+        "SELECT count(*) AS n FROM range(0, 100000000) WHERE id % 7 = 3",
+    )
+    .await
+    .expect("info");
+    let cookie = cookie.expect("cookie");
+    let flight = h.flight.clone();
+    let sweeper = tokio::spawn(async move {
+        loop {
+            flight.sweep_at(Instant::now() + Duration::from_secs(1));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    let started = Instant::now();
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&i)).await;
+    let took = started.elapsed();
+    sweeper.abort();
+    let batches = batches.expect("the slow query is not cancelled as idle");
+    assert_eq!(rows(&batches), 1);
+    assert!(
+        took > Duration::from_millis(300),
+        "the first batch came in {took:?}: not slow enough to test the idle clock"
+    );
 }
