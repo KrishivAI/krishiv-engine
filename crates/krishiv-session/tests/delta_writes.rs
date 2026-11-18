@@ -574,3 +574,62 @@ fn an_insert_from_a_file_table_writes() {
         serde_json::json!([[1], [5], [6]])
     );
 }
+
+/// Writes of no rows, as delta-spark 4.4.1 records them (probe 2026-11-18, krishiv-internal
+/// `ops/reports/2026-11-18-o2-empty-append.md`): an append (SQL, reading its own target, or a
+/// DataFrame `save`) and a dynamic partition overwrite write no version; a static overwrite and
+/// a `replaceWhere` commit one version that removes the files.
+#[test]
+fn empty_writes_commit_as_delta_spark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("e");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (a INT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO e VALUES (1, 'x')").unwrap();
+    let base = versions(&dir);
+    run(&s, "INSERT INTO e SELECT a, p FROM e WHERE a > 100").unwrap();
+    assert_eq!(versions(&dir), base, "self-reading append");
+    let empty = block_on(s.sql("SELECT 1 AS a, 'x' AS p WHERE false")).unwrap();
+    block_on(empty.write().format("delta").mode("append").save(&path)).unwrap();
+    assert_eq!(versions(&dir), base, "DataFrame append");
+    run(&s, "SET spark.sql.sources.partitionOverwriteMode = dynamic").unwrap();
+    run(
+        &s,
+        "INSERT OVERWRITE TABLE e SELECT a, p FROM e WHERE a > 100",
+    )
+    .unwrap();
+    run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
+    assert_eq!(versions(&dir), base, "dynamic overwrite");
+    assert_eq!(query(&s, "SELECT a FROM e"), serde_json::json!([[1]]));
+    block_on(
+        empty
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "p = 'x'")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(versions(&dir), base + 1, "replaceWhere");
+    assert_eq!(count(&last_commit(&dir), "remove"), 1);
+    run(&s, "INSERT INTO e VALUES (2, 'y')").unwrap();
+    run(
+        &s,
+        "INSERT OVERWRITE TABLE e SELECT a, p FROM e WHERE a > 100",
+    )
+    .unwrap();
+    assert_eq!(versions(&dir), base + 3, "static overwrite");
+    assert_eq!(count(&last_commit(&dir), "remove"), 1);
+    assert_eq!(count(&last_commit(&dir), "add"), 0);
+    assert_eq!(
+        query(&s, "SELECT count(*) FROM e"),
+        serde_json::json!([[0]])
+    );
+}
