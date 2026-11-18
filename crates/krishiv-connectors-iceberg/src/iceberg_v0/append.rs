@@ -536,7 +536,8 @@ pub(crate) async fn prepare_attempt(
 /// The statistics file of an attempt (PR-54b, `statistics_file.rs`), written
 /// at `path` from `new`'s sketches; `None` when the write has none, no column
 /// describes the whole snapshot (rule 2), or writing failed (rule 3: counted,
-/// logged, and the path left in `new.statistics_files` for cleanup).
+/// logged, the statistics dropped for the later attempts too, and the path
+/// left in `new.statistics_files` for cleanup).
 async fn attempt_statistics_file(
     io: &FileIO,
     at: AttemptSnapshot<'_>,
@@ -553,6 +554,8 @@ async fn attempt_statistics_file(
             None
         }
         Err(e) => {
+            // Dropped for the rest of the write, counted once.
+            new.statistics = None;
             skipped(&format!("writing the statistics file {path}: {e}"));
             None
         }

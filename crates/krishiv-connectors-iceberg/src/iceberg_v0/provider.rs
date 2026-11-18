@@ -116,7 +116,13 @@ impl IcebergTableProvider {
             let statistics = config
                 .get(&ICEBERG_WRITE_STATISTICS_ENABLED)
                 .and_then(ConfigValue::as_bool)
-                .unwrap_or(true);
+                .or_else(|| {
+                    ICEBERG_WRITE_STATISTICS_ENABLED
+                        .default
+                        .as_ref()
+                        .and_then(ConfigValue::as_bool)
+                })
+                .unwrap_or(false);
             let base = table.table.metadata();
             provider.write = Some(Arc::new(WriteTarget {
                 committer: Arc::clone(committer),

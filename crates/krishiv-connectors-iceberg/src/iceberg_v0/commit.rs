@@ -75,8 +75,10 @@
 //! - **Statistics** (PR-54b, `statistics_file.rs`): an attempt's
 //!   `set-statistics` and its Puffin file are rebuilt with the attempt (a
 //!   resend repeats them); the statistics files are cleaned up as the lists
-//!   are (kept when the committed metadata names them). A known refusal
-//!   ([`CommitOutcome::Failed`] to an attempt's first request) of a request
+//!   are (kept when the committed metadata names them). Any known refusal
+//!   ([`CommitOutcome::Failed`] to an attempt's first request, a 403 or 404 as
+//!   well as a refused update: one extra request on a failure that was fatal
+//!   anyway) of a request
 //!   carrying `set-statistics` is resent once at once without it, the
 //!   statistics dropped for the rest of the write (counted as skipped), so a
 //!   catalog that does not take the update never fails the data commit.

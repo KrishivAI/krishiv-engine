@@ -28,7 +28,10 @@
 //!   property `ndv` the estimate truncated to an integer (Java's `(long) sketch.getEstimate()`).
 //! - **Memory**: each task's sketches are charged to a reservation of the write's consumer before the first
 //!   row ([`SKETCH_BYTES`] per column, the most a `k` = 4,096 update sketch holds), the write's unions to one
-//!   reservation of the finalize's consumer; a refusal drops the statistics, never the write.
+//!   reservation of the finalize's consumer; a refusal drops the statistics, never the write. Each attempt's
+//!   reads of the parent's blobs and its unions with them are not charged: one column at a time, about one
+//!   blob (up to 32 KiB) and one union table (up to 64 KiB) transiently, the outputs within the finalize's
+//!   charge.
 //!
 //! Deletes do not lower a unioned count (an upper bound; Java computes the snapshot's own count from a scan,
 //! review S5).
@@ -71,7 +74,8 @@ const NDV_PROPERTY: &str = "ndv";
 /// The summary key of a snapshot's live rows.
 const TOTAL_RECORDS: &str = "total-records";
 
-/// Writes that dropped their statistics on a failure (module docs).
+/// Writes that dropped their statistics on a failure (module docs): each write counts once, where it decides
+/// to go without them (`union_tasks`, an attempt's failure in `append.rs`, a refused update in `commit.rs`).
 static SKIPPED: AtomicU64 = AtomicU64::new(0);
 
 /// `krishiv_iceberg_write_statistics_skipped_total`: writes of this process that dropped their statistics on a
@@ -89,13 +93,18 @@ pub(crate) fn statistics_skipped_total() -> u64 {
     SKIPPED.load(Ordering::Relaxed)
 }
 
-/// Counts and logs one write's statistics dropped because of `why`.
+/// Counts and logs one write's statistics dropped because of `why` (once per write).
 pub(crate) fn skipped(why: &str) {
     SKIPPED.fetch_add(1, Ordering::Relaxed);
     tracing::warn!(
         target: "krishiv::iceberg::statistics",
         "an Iceberg write commits without statistics: {why}"
     );
+}
+
+/// Logs a task's sketches dropped because of `why`; the write counts it once in [`union_tasks`].
+pub(crate) fn task_dropped(why: &str) {
+    tracing::warn!(target: "krishiv::iceberg::statistics", "a write task drops its sketches: {why}");
 }
 
 /// Whether a write writes statistics: `config` (`krishiv.iceberg.write.statistics.enabled`) and the table's
@@ -163,7 +172,8 @@ impl TaskSketches {
             .try_grow(columns.len().saturating_mul(SKETCH_BYTES))
             .is_err()
         {
-            skipped("the memory for a task's sketches was refused");
+            // Counted once for the write, by `union_tasks`.
+            task_dropped("the memory for a task's sketches was refused");
             return None;
         }
         let sketches = columns

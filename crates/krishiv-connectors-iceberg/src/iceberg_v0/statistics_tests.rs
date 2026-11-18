@@ -6,8 +6,7 @@
 //! the update, a failed Puffin write, and the statistics files every outcome keeps or deletes.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use arrow_array::Int64Array;
 use datasketches::theta::CompactThetaSketch;
@@ -15,19 +14,18 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, StatisticsFile, TableMet
 use krishiv_common::config::Config;
 use krishiv_exec::planner::TableProvider;
 
-use super::append::{WriteIds, prepare_attempt, write_new_manifests};
-use super::append_tests::{MAX, create as create_partitioned, file};
-use super::commit::{CommitClock as _, CommitTable};
+use super::commit::CommitTable;
 use super::commit_tests::{
-    Case, Fault, Foreign, INIT, MINE, OUR_UUID, OURS, TestCatalog, TestClock, When, exists,
+    Case, Fault, Foreign, INIT, MINE, OUR_UUID, OURS, TestClock, When, case_on, exists,
+    foreign_full,
 };
 use super::provider::IcebergTableProvider;
 use super::provider_tests::{Env, env, ixn_schema};
 use super::puffin_stats::{ndv_by_field, read_sketch};
 use super::sink_tests::{Catalog, PerDriver, create, input_schema, range, request, run};
 use super::statistics_file::{
-    MAX_SKETCHED_COLUMNS, STATISTICS_PROPERTY, WriteSketches, enabled, sketch_columns,
-    statistics_skipped_total,
+    AttemptSnapshot, MAX_SKETCHED_COLUMNS, STATISTICS_PROPERTY, WriteSketches, attempt_statistics,
+    enabled, sketch_columns, statistics_skipped_total,
 };
 use super::table::IcebergTable;
 use crate::plan::VersionSpec;
@@ -245,7 +243,7 @@ fn sketch(values: impl Iterator<Item = i64>) -> CompactThetaSketch {
 }
 
 /// Sketches of `id` (field 1) for `values`.
-fn sketches(values: std::ops::Range<i64>) -> WriteSketches {
+pub(super) fn sketches(values: std::ops::Range<i64>) -> WriteSketches {
     WriteSketches::of(vec![(1, IcebergType::Long, sketch(values))])
 }
 
@@ -258,69 +256,19 @@ fn foreign_sketched(
     id: i64,
     values: Option<std::ops::Range<i64>>,
 ) -> Foreign {
-    let f = file(env, m, name, 1, &[(id, name)]);
-    let io = env.reg.file_io();
-    let clock = Arc::clone(clock);
-    Box::new(move |m: TableMetadata| {
-        Box::pin(async move {
-            let uuid = format!("uuid-{id}");
-            let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid, &mut Vec::new())
-                .await
-                .unwrap();
-            new.statistics = values.map(sketches);
-            let ts = clock.now_ms().max(m.last_updated_ms() + 1);
-            let key = format!("uuid-{id}");
-            let ids = WriteIds {
-                branch: "main",
-                write_id: &key,
-                query_id: None,
-            };
-            let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
-                .await
-                .unwrap();
-            (a.requirements, a.updates)
-        })
-    })
+    foreign_full(env, clock, m, name, id, "main", None, values)
 }
 
 /// `commit_tests`' case (row `1|1|init` committed, the write of `10|2|ours` pending) with the initial snapshot
 /// sketched over `init` (when given) and the write's sketch over `ours`.
 fn case(init: Option<std::ops::Range<i64>>, ours: std::ops::Range<i64>) -> Case {
-    let env = env();
-    let t = create_partitioned(&env, 2);
-    let m0 = t.metadata().clone();
-    let cat = TestCatalog::new(m0.clone(), t.metadata_location().unwrap().to_owned());
-    let clock = Arc::new(TestClock {
-        now: AtomicI64::new(m0.last_updated_ms() + 1_000),
-        waits: Mutex::new(Vec::new()),
-        max_jitter: AtomicBool::new(false),
-    });
-    let first = foreign_sketched(&env, &clock, &m0, "init.parquet", 1, init);
-    env.rt.block_on(async {
-        let request = first(m0.clone()).await;
-        cat.state.lock().unwrap().land(&request).ok().unwrap();
-    });
-    let base = cat.metadata().0;
-    let mine = file(&env, &base, "ours.parquet", 2, &[(10, "ours")]);
-    let io = env.reg.file_io();
-    let mut new = env
-        .rt
-        .block_on(write_new_manifests(
-            &io,
-            &base,
-            vec![mine],
-            OURS,
-            OUR_UUID,
-            &mut Vec::new(),
-        ))
-        .unwrap();
-    new.statistics = Some(sketches(ours));
-    Case {
-        env,
-        cat,
-        clock,
-        base,
-        new,
+    match init {
+        Some(init) => case_on(2, &[], Some((init, ours))),
+        None => {
+            let mut c = case_on(2, &[], None);
+            c.new.statistics = Some(sketches(ours));
+            c
+        }
     }
 }
 
@@ -481,12 +429,103 @@ fn sketch_memory_is_charged_and_a_refusal_drops_the_statistics() {
     assert_eq!(pool.reserved(), 3 * SKETCH_BYTES);
     assert!(task.update(&range(0, 10)));
     let before = statistics_skipped_total();
-    assert!(TaskSketches::new(Arc::clone(&columns), reservation()).is_none());
+    let refused = TaskSketches::new(Arc::clone(&columns), reservation());
+    assert!(refused.is_none());
+    // Counted once for the write, where the union finds the task without sketches.
+    assert!(union_tasks(&columns, vec![Some(task), refused], reservation()).is_none());
     assert!(statistics_skipped_total() > before);
-    assert!(union_tasks(&columns, vec![Some(task), None], reservation()).is_none());
     assert_eq!(pool.reserved(), 0);
     // No task (no rows): empty sketches of every column.
     let empty = union_tasks(&columns, Vec::new(), reservation()).unwrap();
     assert_eq!(empty.columns.len(), 3);
     assert!(empty.columns.iter().all(|(_, _, s)| s.is_empty()));
+}
+
+/// S2 of the review: the request carrying statistics lands but its answer is lost; the probe finds it, and the
+/// file the committed metadata names is kept.
+#[test]
+fn a_landed_request_with_a_lost_answer_keeps_its_statistics_file() {
+    let mut c = case(Some(0..100), 50..120);
+    c.cat.script(&[Fault::LostResponse]);
+    let m = c.run().unwrap();
+    assert_eq!(c.cat.requests(), 1);
+    let f = m.statistics_for_snapshot(OURS).unwrap();
+    assert_eq!(f.statistics_path, c.stats(1));
+    assert!(exists(&c.stats(1)));
+    check_file(&c.env, f);
+    c.check(&[INIT, MINE]);
+}
+
+/// S2 of the review: a failure answered to a resend after an unknown answer says nothing about the first
+/// request, so it does not take the resend without statistics: the same attempt, statistics and all, is resent
+/// after the probe.
+#[test]
+fn a_failure_after_an_unknown_answer_keeps_the_statistics_update() {
+    let mut c = case(Some(0..100), 50..120);
+    c.cat
+        .script(&[Fault::ServerErrorBeforeApply, Fault::Unauthorized401]);
+    let m = c.run().unwrap();
+    assert_eq!(c.cat.requests(), 3);
+    assert_eq!(our_ndv(&m), Some(120));
+    assert_eq!(
+        m.statistics_for_snapshot(OURS).unwrap().statistics_path,
+        c.stats(1)
+    );
+    c.check(&[INIT, MINE]);
+}
+
+/// S1 of the review (review N6): a column whose type is not the sketch's, in the current schema or in the
+/// parent's, is left out and never unioned; the same call with the types in line writes the blob.
+#[test]
+fn a_column_of_another_type_is_left_out() {
+    use iceberg::spec::TableMetadataBuilder;
+
+    let c = case(Some(0..100), 50..120);
+    let io = c.env.reg.file_io();
+    let with_id = |ty: PrimitiveType| {
+        let mut fields: Vec<_> = ixn_schema().as_struct().fields().to_vec();
+        fields[0] = NestedField::optional(1, "id", Type::Primitive(ty)).into();
+        Schema::builder().with_fields(fields).build().unwrap()
+    };
+    let evolved = |ty: PrimitiveType| {
+        TableMetadataBuilder::new_from_metadata(c.base.clone(), None)
+            .add_current_schema(with_id(ty))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata
+    };
+    let field_ids = |m: &TableMetadata, ty: IcebergType, path: &str| {
+        let parent = m.snapshot_by_id(1).unwrap();
+        let at = AttemptSnapshot {
+            metadata: m,
+            parent: Some(parent.as_ref()),
+            snapshot_id: OURS,
+            sequence_number: 2,
+        };
+        let s = WriteSketches::of(vec![(1, ty, sketch(50..120))]);
+        let path = format!("{}/metadata/{path}.stats", m.location());
+        c.env
+            .rt
+            .block_on(attempt_statistics(&io, at, &s, &path))
+            .unwrap()
+            .map(|f| {
+                f.blob_metadata
+                    .iter()
+                    .map(|b| b.fields[0])
+                    .collect::<Vec<_>>()
+            })
+    };
+    // In line: the parent's and the current schema say long.
+    assert_eq!(field_ids(&c.base, IcebergType::Long, "same"), Some(vec![1]));
+    // The sketch was built under `long`, the current schema says `int` (changed between open and rebase).
+    assert_eq!(
+        field_ids(&evolved(PrimitiveType::Int), IcebergType::Long, "current"),
+        None
+    );
+    // The current schema matches the sketch (`int`), the parent's blob was written under `long`.
+    assert_eq!(
+        field_ids(&evolved(PrimitiveType::Int), IcebergType::Int, "parent"),
+        None
+    );
 }

@@ -97,7 +97,7 @@ use krishiv_memory::Reservation;
 
 use super::data_file::{DataLocations, WrittenDataFile, file_name, partition_tuple};
 use super::scan::{iceberg_type, plan_transform, schema_fields};
-use super::statistics_file::{TaskSketches, skipped};
+use super::statistics_file::{TaskSketches, task_dropped};
 use super::storage::Registered;
 #[cfg(test)]
 use super::storage::StorageRegistration;
@@ -330,7 +330,7 @@ impl DataFileWriter {
             && !s.update(&batch)
         {
             self.sketches = None;
-            skipped("a column could not be sketched");
+            task_dropped("a column could not be sketched");
         }
         if self.fields.iter().all(|f| f.source.is_none()) {
             let values = vec![None; self.fields.len()];

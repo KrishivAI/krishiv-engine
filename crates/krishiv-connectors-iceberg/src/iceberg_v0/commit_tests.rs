@@ -32,6 +32,7 @@ use super::append_tests::{MAX, create, file, iceberg_rust_files, ids, rows};
 use super::commit::{CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append};
 use super::provider_tests::{Env, env};
 use super::scan::read_manifest_files;
+use super::statistics_tests::sketches;
 
 /// One commit request's body.
 pub(super) type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
@@ -460,6 +461,21 @@ fn foreign_keyed(
     branch: &str,
     key: Option<&str>,
 ) -> Foreign {
+    foreign_full(env, clock, m, name, id, branch, key, None)
+}
+
+/// [`foreign_keyed`] with statistics of `id` over `sketched` (PR-54b).
+#[expect(clippy::too_many_arguments, reason = "a test helper's knobs")]
+pub(super) fn foreign_full(
+    env: &Env,
+    clock: &Arc<TestClock>,
+    m: &TableMetadata,
+    name: &str,
+    id: i64,
+    branch: &str,
+    key: Option<&str>,
+    sketched: Option<std::ops::Range<i64>>,
+) -> Foreign {
     let f = file(env, m, name, 1, &[(id, name)]);
     let key = key.map_or_else(|| format!("uuid-{id}"), str::to_owned);
     let io = env.reg.file_io();
@@ -471,6 +487,7 @@ fn foreign_keyed(
             let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid, &mut Vec::new())
                 .await
                 .unwrap();
+            new.statistics = sketched.map(sketches);
             let ts = clock.now_ms().max(m.last_updated_ms() + 1);
             let ids = WriteIds {
                 branch: &branch,
@@ -540,6 +557,16 @@ pub(super) struct Case {
 }
 
 fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
+    case_on(version, properties, None)
+}
+
+/// [`case_with`] with the initial snapshot's statistics over `init` and the
+/// write's over `ours` (PR-54b), when given.
+pub(super) fn case_on(
+    version: u8,
+    properties: &[(&str, &str)],
+    stats: Option<(std::ops::Range<i64>, std::ops::Range<i64>)>,
+) -> Case {
     let env = env();
     let t = create(&env, version);
     let mut m0 = t.metadata().clone();
@@ -562,7 +589,17 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
         waits: Mutex::new(Vec::new()),
         max_jitter: AtomicBool::new(false),
     });
-    let init = foreign(&env, &clock, &m0, "init.parquet", 1, "main");
+    let (init_stats, our_stats) = stats.unzip();
+    let init = foreign_full(
+        &env,
+        &clock,
+        &m0,
+        "init.parquet",
+        1,
+        "main",
+        None,
+        init_stats,
+    );
     env.rt.block_on(async {
         let request = init(m0.clone()).await;
         cat.state.lock().unwrap().land(&request).ok().unwrap();
@@ -570,7 +607,7 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     let base = cat.metadata().0;
     let ours = file(&env, &base, "ours.parquet", 2, &[(10, "ours")]);
     let io = env.reg.file_io();
-    let new = env
+    let mut new = env
         .rt
         .block_on(write_new_manifests(
             &io,
@@ -581,6 +618,7 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
             &mut Vec::new(),
         ))
         .unwrap();
+    new.statistics = our_stats.map(sketches);
     Case {
         env,
         cat,
@@ -1644,12 +1682,20 @@ impl Seeded {
 /// One generated schedule: a fault per request, up to three foreign commits
 /// (on `main` or `dev`) at random points, failing loads, and held requests
 /// landed at a random point or after the run.
-fn sweep_one(seed: u64, version: u8) {
+/// Whether the run committed with statistics of this write.
+fn sweep_one(seed: u64, version: u8) -> bool {
     let mut g = Seeded(seed);
     // One schedule in three merges on the first attempt (from the seed, so
     // the other draws, and the schedules, stay as they were).
     let merging = seed.is_multiple_of(3);
-    let mut c = case_with(version, if merging { MERGE } else { &[] });
+    // Every other schedule carries statistics over a sketched base (PR-54b),
+    // and its foreign appends on `main` with an even id are sketched too.
+    let sketched = seed % 2 == 1;
+    let mut c = case_on(
+        version,
+        if merging { MERGE } else { &[] },
+        sketched.then_some((0..100, 50..120)),
+    );
     let mut faults: Vec<Fault> = (0..5)
         .map(|_| match g.below(11) {
             0 => Fault::LostResponse,
@@ -1677,7 +1723,17 @@ fn sweep_one(seed: u64, version: u8) {
         if branch == "main" {
             main_foreign.push((id, format!("{id}|1|{name}")));
         }
-        c.cat.on(g.when(), c.foreign(&name, id, branch));
+        let foreign = foreign_full(
+            &c.env,
+            &c.clock,
+            &c.base,
+            &name,
+            id,
+            branch,
+            None,
+            (sketched && id % 2 == 0).then_some(0..300),
+        );
+        c.cat.on(g.when(), foreign);
     }
     // One schedule in four fails 4-8 loads, enough to outlast a conflict's
     // refresh (B1's shape: a conflict, then no successful load).
@@ -1706,8 +1762,24 @@ fn sweep_one(seed: u64, version: u8) {
     if rolled && !roll_after {
         c.cat.on(g.when(), rollback(base));
     }
-    let schedule = format!("seed {seed}: {faults:?}, rollback {rolled}, merging {merging}");
+    let schedule = format!(
+        "seed {seed}: {faults:?}, rollback {rolled}, merging {merging}, sketched {sketched}"
+    );
     let out = c.run();
+    // PR-54b: a statistics file of this write survives the run only when the
+    // committed metadata names it, or the write kept its files (unresolved,
+    // or failed after an unknown answer).
+    for p in &c.new.statistics_files {
+        let named = |m: &TableMetadata| m.statistics_iter().any(|f| &f.statistics_path == p);
+        let may_stay = match &out {
+            Ok(m) => named(m),
+            Err(e) => !e.message().contains("removed where possible"),
+        };
+        assert!(
+            may_stay || !exists(p),
+            "{schedule}: an abandoned statistics file {p} was left"
+        );
+    }
     assert_eq!(
         c.new.merged.len(),
         usize::from(merging),
@@ -1799,6 +1871,15 @@ fn sweep_one(seed: u64, version: u8) {
     expected.sort_by_key(|r| r.split('|').next().unwrap().parse::<i64>().unwrap());
     let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
     c.check(&expected);
+    // PR-54b: every statistics file the table names exists.
+    for f in m.statistics_iter() {
+        assert!(
+            exists(&f.statistics_path),
+            "{schedule}: the table names a deleted statistics file {}",
+            f.statistics_path
+        );
+    }
+    m.statistics_for_snapshot(OURS).is_some()
 }
 
 /// R:S3: generated schedules (seeded, on virtual time). After each: the
@@ -1809,16 +1890,20 @@ fn sweep_one(seed: u64, version: u8) {
 /// in the table, read through SQL and iceberg-rust's planning.
 #[test]
 fn generated_schedules_keep_the_invariants() {
-    for seed in 0..300 {
-        sweep_one(seed, 2);
-    }
+    let with_statistics = (0..300).filter(|seed| sweep_one(*seed, 2)).count();
+    assert!(
+        with_statistics > 10,
+        "{with_statistics} runs committed statistics"
+    );
 }
 
 /// The sweep on a v1 table, where no sequence number stops a request settled
 /// as "not applied" from landing after a rollback (review-1 pass 2 P1).
 #[test]
 fn generated_schedules_on_v1_keep_the_invariants() {
-    for seed in 0..200 {
-        sweep_one(seed, 1);
-    }
+    let with_statistics = (0..200).filter(|seed| sweep_one(*seed, 1)).count();
+    assert!(
+        with_statistics > 10,
+        "{with_statistics} runs committed statistics"
+    );
 }
