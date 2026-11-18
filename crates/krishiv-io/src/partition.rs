@@ -30,6 +30,7 @@ pub const DEFAULT_PARTITION: &str = "__HIVE_DEFAULT_PARTITION__";
 
 pub mod discover;
 pub mod glob;
+pub mod user_value;
 
 #[cfg(test)]
 mod tests;
