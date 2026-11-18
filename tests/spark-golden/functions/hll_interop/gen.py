@@ -19,15 +19,22 @@ SRC = {
     "binary": "CAST(CONCAT('bin-', CAST(id AS STRING)) AS BINARY)",
 }
 
-spark = SparkSession.builder.master("local[2]").config("spark.ui.enabled", "false").getOrCreate()
+spark = (
+    SparkSession.builder.master("local[2]")
+    .config("spark.ui.enabled", "false")
+    .getOrCreate()
+)
 out = {"spark_version": spark.version, "distinct": N, "lg_k": 12, "sketches": {}}
 for name, expr in SRC.items():
     df = spark.range(N).selectExpr(f"{expr} AS v")
     df.createOrReplaceTempView("t")
-    row = spark.sql("SELECT hex(hll_sketch_agg(v)) h, hll_sketch_estimate(hll_sketch_agg(v)) e FROM t").first()
+    row = spark.sql(
+        "SELECT hex(hll_sketch_agg(v)) h, hll_sketch_estimate(hll_sketch_agg(v)) e FROM t"
+    ).first()
     out["sketches"][name] = {"hex": row["h"], "estimate": row["e"]}
 if len(sys.argv) > 2:
-    kr = json.load(open(sys.argv[2]))
+    with open(sys.argv[2]) as fh:
+        kr = json.load(fh)
     res = {}
     for name, h in kr.items():
         spark.sql(f"SELECT unhex('{h}') AS s").createOrReplaceTempView("k")
@@ -37,4 +44,5 @@ if len(sys.argv) > 2:
         ).first()
         res[name] = {"estimate": r["e"], "union_with_spark": r["u"]}
     out["krishiv_read_by_spark"] = res
-json.dump(out, open(sys.argv[1], "w"), indent=1)
+with open(sys.argv[1], "w") as fh:
+    json.dump(out, fh, indent=1)
