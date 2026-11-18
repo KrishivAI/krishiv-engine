@@ -99,3 +99,21 @@ pub static ICEBERG_WRITE_MAX_OPEN_FILES: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
 };
+
+/// How many snapshots an Iceberg commit validates between its start and the
+/// branch's head.
+pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.commit.maxIntervening",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(1000)),
+    doc: "Most snapshots committed to a branch between the snapshot an Iceberg write (an \
+          overwrite, delete, update or merge) started from and the branch's current head that \
+          its commit validates for conflicts. A commit that finds more fails with \
+          KRISHIV_ICEBERG_COMMIT_CONFLICT rather than validating part of the history; appends \
+          validate nothing and ignore it. Read when the write is planned. Krishiv does not run \
+          Iceberg overwrites, deletes, updates or merges yet, so until it does this has no effect.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
