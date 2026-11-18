@@ -139,8 +139,10 @@ def test_profiled_calls_from_many_threads_do_not_clash(spark: SparkSession) -> N
     assert errors == []
 
 
-def test_two_sessions_profiling_at_once_do_not_clash(spark: SparkSession) -> None:
+def test_two_sessions_profiling_at_once_do_not_raise(spark: SparkSession) -> None:
     # `cProfile` is one per process: sessions share one lock, so they take turns instead of failing.
+    # Known limit: a UDF reads the profiler setting of the builder's active session, not of the session
+    # that runs the query, so this checks only that nothing raises (per-session profiles are a follow-up).
     other = spark.newSession()
     plus_one = _plus_one()
     errors: list[BaseException] = []

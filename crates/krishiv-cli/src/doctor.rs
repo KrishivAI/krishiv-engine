@@ -162,13 +162,13 @@ pub(crate) fn diagnose(args: &ServerArgs) -> Vec<Check> {
     ));
     out.push(Check::skipped(
         "catalogs",
-        "no declared catalogs yet (krishiv.catalog.<name>.*, P3-T067)",
+        "declared catalogs (krishiv.catalog.<name>.*) are checked when the server starts, before either listener binds",
     ));
     out
 }
 
 /// The checks that need a parsed configuration.
-const DEPENDENT: [&str; 8] = [
+const DEPENDENT: [&str; 9] = [
     "listener",
     "authentication",
     "tls",
@@ -177,6 +177,7 @@ const DEPENDENT: [&str; 8] = [
     "directories",
     "paths",
     "object store",
+    "catalogs",
 ];
 
 fn listener(host: IpAddr, settings: &Settings) -> Check {
