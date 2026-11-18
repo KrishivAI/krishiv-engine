@@ -97,14 +97,38 @@ fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> Py
     })
 }
 
-/// Runs the engine future `work` to completion with the GIL released.
+/// How long an action waits before it looks at Python's signals again.
+const SIGNAL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Waits for `work` with the GIL released; every [`SIGNAL_POLL`] the thread attaches again and asks
+/// Python for its pending signals (`Python::check_signals`: a Ctrl-C, a Jupyter kernel interrupt,
+/// `_thread.interrupt_main`). On a signal that raises (`KeyboardInterrupt`) `work` is dropped, which
+/// cancels its query (an action's future ends its query when dropped), and the error is returned for
+/// Python to raise. Off the main thread `check_signals` never raises, so such a call waits as
+/// `stream::wait_for` does.
+fn wait_for_signals<F: std::future::Future + Send>(py: Python<'_>, work: F) -> PyResult<F::Output>
+where
+    F::Output: Send,
+{
+    let mut waiter = crate::stream::Waiter::new();
+    let mut work = std::pin::pin!(work);
+    loop {
+        if let Some(out) = py.detach(|| waiter.step(work.as_mut(), Some(SIGNAL_POLL))) {
+            return Ok(out);
+        }
+        py.check_signals()?;
+    }
+}
+
+/// Runs the engine future `work` to completion with the GIL released, looking at Python's signals
+/// meanwhile: a Ctrl-C or kernel interrupt drops `work`, which cancels its query, and raises
+/// `KeyboardInterrupt` (NB-1).
 pub(crate) fn block_on<T: Send>(
     py: Python<'_>,
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
     crate::udf::runtime::refuse_inside_udf(py)?;
-    py.detach(|| crate::stream::wait_for(work))
-        .map_err(|e| to_py(py, &e))
+    wait_for_signals(py, work)?.map_err(|e| to_py(py, &e))
 }
 
 /// [`block_on`] for the query `sql`, whose errors are converted by
@@ -115,6 +139,5 @@ pub(crate) fn block_on_sql<T: Send>(
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
     crate::udf::runtime::refuse_inside_udf(py)?;
-    py.detach(|| crate::stream::wait_for(work))
-        .map_err(|e| to_py_for_sql(py, &e, sql))
+    wait_for_signals(py, work)?.map_err(|e| to_py_for_sql(py, &e, sql))
 }

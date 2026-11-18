@@ -120,6 +120,8 @@ def test_interrupt_tag_cancels_a_long_query_and_spares_others(spark: krishiv.Spa
     worker = threading.Thread(target=run)
     worker.start()
     started.wait(5)
+    # Let the query reach execution: a cancel during analysis ends it too, but lists no id.
+    time.sleep(1.0)
     cancelled: list[str] = []
     deadline = time.monotonic() + 20
     while not cancelled and time.monotonic() < deadline:

@@ -94,42 +94,95 @@ impl QueryReader {
 /// ordinary memory, and each call makes fresh ones, so a child's first query
 /// runs as on Linux.
 pub(crate) fn wait_for<F: std::future::Future>(work: F) -> F::Output {
-    use std::sync::{Arc, Condvar, Mutex, PoisonError};
-    use std::task::{Context, Poll, Wake, Waker};
-
-    /// Set by a wake, cleared by the waiting thread before it polls again.
-    struct Signal {
-        woken: Mutex<bool>,
-        ready: Condvar,
-    }
-    impl Wake for Signal {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            *self.woken.lock().unwrap_or_else(PoisonError::into_inner) = true;
-            self.ready.notify_one();
-        }
-    }
-
-    let signal = Arc::new(Signal {
-        woken: Mutex::new(false),
-        ready: Condvar::new(),
-    });
-    let waker = Waker::from(Arc::clone(&signal));
-    let mut cx = Context::from_waker(&waker);
+    let mut waiter = Waiter::new();
     let mut work = std::pin::pin!(work);
     loop {
-        if let Poll::Ready(out) = work.as_mut().poll(&mut cx) {
+        if let Some(out) = waiter.step(work.as_mut(), None) {
             return out;
         }
-        let mut woken = signal.woken.lock().unwrap_or_else(PoisonError::into_inner);
+    }
+}
+
+/// Set by a wake, cleared by the waiting thread before it polls again.
+struct Signal {
+    woken: std::sync::Mutex<bool>,
+    ready: std::sync::Condvar,
+}
+
+impl std::task::Wake for Signal {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        *self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.ready.notify_one();
+    }
+}
+
+/// The waker and wake flag one wait uses.
+pub(crate) struct Waiter {
+    signal: std::sync::Arc<Signal>,
+    waker: std::task::Waker,
+}
+
+impl Waiter {
+    pub(crate) fn new() -> Self {
+        let signal = std::sync::Arc::new(Signal {
+            woken: std::sync::Mutex::new(false),
+            ready: std::sync::Condvar::new(),
+        });
+        let waker = std::task::Waker::from(std::sync::Arc::clone(&signal));
+        Self { signal, waker }
+    }
+
+    /// Polls `work` once; while it is pending, waits for a wake (at most `limit`, if given).
+    /// `Some` is its output. `None` means it is still pending: the wait ran out (`limit`), or a
+    /// wake came and the next call polls again.
+    pub(crate) fn step<F: std::future::Future>(
+        &mut self,
+        work: std::pin::Pin<&mut F>,
+        limit: Option<std::time::Duration>,
+    ) -> Option<F::Output> {
+        use std::sync::PoisonError;
+        use std::task::{Context, Poll};
+
+        let mut cx = Context::from_waker(&self.waker);
+        if let Poll::Ready(out) = work.poll(&mut cx) {
+            return Some(out);
+        }
+        let mut woken = self
+            .signal
+            .woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let deadline = limit.map(|l| std::time::Instant::now() + l);
         while !*woken {
-            woken = signal
-                .ready
-                .wait(woken)
-                .unwrap_or_else(PoisonError::into_inner);
+            match deadline {
+                None => {
+                    woken = self
+                        .signal
+                        .ready
+                        .wait(woken)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        return None;
+                    }
+                    woken = self
+                        .signal
+                        .ready
+                        .wait_timeout(woken, left)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0;
+                }
+            }
         }
         *woken = false;
+        None
     }
 }

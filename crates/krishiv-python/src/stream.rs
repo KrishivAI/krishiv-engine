@@ -11,7 +11,7 @@
 pub(crate) mod ffi;
 mod query;
 
-pub(crate) use self::query::{ErrorSlot, QueryReader, wait_for};
+pub(crate) use self::query::{ErrorSlot, QueryReader, Waiter};
 
 use std::ffi::CStr;
 use std::sync::Mutex;

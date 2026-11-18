@@ -1420,6 +1420,27 @@ fn wait_for_polls_again_when_the_future_wakes_itself_during_a_poll() {
     assert_eq!(query::wait_for(SelfWaking(0)), 2);
 }
 
+#[test]
+fn a_limited_step_gives_the_thread_back_while_the_future_is_pending() {
+    // The action wait of the Python API (NB-1) looks at Python's signals between steps: a step
+    // with a limit returns `None` when nothing woke the future in time, and `Some` once it is ready.
+    let (tx, rx) = futures::channel::oneshot::channel::<u32>();
+    let mut waiter = query::Waiter::new();
+    let mut work = std::pin::pin!(rx);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        waiter.step(work.as_mut(), Some(std::time::Duration::from_millis(30))),
+        None
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(30));
+    tx.send(5).unwrap();
+    let mut done = None;
+    while done.is_none() {
+        done = waiter.step(work.as_mut(), Some(std::time::Duration::from_millis(30)));
+    }
+    assert_eq!(done, Some(Ok(5)));
+}
+
 fn nul_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("\u{0}b\u{0}", DataType::Utf8, true),
