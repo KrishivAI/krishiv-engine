@@ -166,12 +166,12 @@ impl Graph {
             }
             PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
             // A Python UDF relation sees every column of its inputs
-            // (`group_ops.py` L305 at v4.2.0; design P3-T085 §3.1). The
-            // analyzer replaces the unresolved nodes before pruning runs;
-            // should one remain, it reads its input whole too (a demand of
-            // nothing would prune the columns it reads).
+            // (`group_ops.py` L305 at v4.2.0; design P3-T085 §3.1).
             PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. }
+            // The analyzer replaces these nodes before pruning runs; should
+            // one remain, it reads its input whole (a demand of nothing
+            // would prune the columns it reads).
             | PlanNode::Distinct { input }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Hint { input, .. }
