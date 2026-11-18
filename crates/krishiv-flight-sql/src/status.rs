@@ -3,7 +3,7 @@
 //! P3-T101 §6). Connect's `status_of` is Spark-specific (always `INTERNAL` plus Java class
 //! names) and stays Connect's; only the client-safe form of the error is shared.
 
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{Audience, KrishivError};
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Status};
 
@@ -29,10 +29,17 @@ pub fn flight_status(error: &KrishivError) -> Status {
     let safe = client.error();
     let class = safe.error_class().name();
     let state = safe.sql_state();
-    // The full error (cause chain, operator detail) is logged under the id the client gets.
-    tracing::warn!(error_id = client.error_id(), error = %error, "flight sql call refused");
+    let code = code_of(class, state);
+    // The full error (cause chain, operator detail) is logged under the id the client gets: at
+    // `warn` for an operator-audience or internal error, at `debug` for a user's own (an unknown
+    // table, a syntax error, an idle fetch), which BI tools probing metadata hit routinely.
+    if code == Code::Internal || error.audience() == Audience::Operator {
+        tracing::warn!(error_id = client.error_id(), error = %error, "flight sql call refused");
+    } else {
+        tracing::debug!(error_id = client.error_id(), error = %error, "flight sql call refused");
+    }
     let message = capped(safe.to_string(), client.error_id());
-    let mut status = Status::new(code_of(class, state), message);
+    let mut status = Status::new(code, message);
     let metadata = status.metadata_mut();
     if let Ok(v) = MetadataValue::try_from(class) {
         metadata.insert(ERROR_CLASS_KEY, v);

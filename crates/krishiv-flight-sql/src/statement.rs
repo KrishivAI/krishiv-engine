@@ -21,7 +21,7 @@ use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
     InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
     KrishivFlightSqlFetchIdle, KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
-    KrishivFlightSqlStatementTooLarge,
+    KrishivFlightSqlStatementTooLarge, OperationCanceled,
 };
 use krishiv_connect_server::execute::arrow::{empty_batch, spark_batch};
 use krishiv_connect_server::operation::{new_operation_id, plan_digest};
@@ -70,12 +70,18 @@ impl OpGuard {
             false,
         ));
         entry.operations().register(&op, max)?;
-        live.add(&op);
-        Ok(Self {
+        let joined = live.add(&op);
+        let guard = Self {
             entry: Arc::clone(entry),
             op,
             live: Arc::clone(live),
-        })
+        };
+        if !joined {
+            // The handle was cancelled since this call found it: the guard's drop cancels and
+            // removes the operation before anything ran.
+            return Err(OperationCanceled {}.into());
+        }
+        Ok(guard)
     }
 
     fn id(&self) -> &str {
@@ -675,7 +681,7 @@ impl FlightSqlServer {
         };
         // Only the operations live on this handle are cancelled (§4.5): another ticket's fetch or
         // a command running in the same session is left alone.
-        let live = payload.live.snapshot();
+        let live = payload.live.cancel();
         if !live.is_empty()
             && let Ok(entry) =
                 inner
@@ -760,6 +766,32 @@ fn client_reason(e: &KrishivError) -> String {
 mod tests {
     use super::*;
     use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
+
+    /// An operation that would join a handle after `CancelFlightInfo` took its live set is refused,
+    /// so a fetch between `begin` and its registration never streams (review of 15c4ffa75, 5).
+    #[test]
+    fn no_operation_joins_a_cancelled_handle() {
+        let op = || {
+            Arc::new(Operation::new(
+                new_operation_id().expect("id"),
+                plan_digest(b"SELECT 1"),
+                Arc::from([]),
+                false,
+            ))
+        };
+        let live = LiveOps::default();
+        let running = op();
+        assert!(live.add(&running));
+        let taken = live.cancel();
+        assert_eq!(taken.len(), 1);
+        assert!(Arc::ptr_eq(&taken[0], &running));
+        assert!(!live.add(&op()), "a cancelled handle takes no operation");
+        assert_eq!(
+            live.cancel().len(),
+            1,
+            "only the one that ran before the cancel"
+        );
+    }
 
     /// `RESULT_NOT_STORED` carries the inner error's client-safe text (review M2).
     #[test]

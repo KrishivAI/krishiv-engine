@@ -145,29 +145,45 @@ pub(crate) struct Payload {
 }
 
 /// The operations live on one handle (design §4.1, §4.5), shared by every copy of its payload.
+/// Once the handle is cancelled no operation joins it, so a fetch that began just before the
+/// cancel never streams (review of 15c4ffa75, finding 5).
 #[derive(Default)]
-pub(crate) struct LiveOps(Mutex<Vec<Arc<Operation>>>);
+pub(crate) struct LiveOps(Mutex<Live>);
+
+#[derive(Default)]
+struct Live {
+    ops: Vec<Arc<Operation>>,
+    cancelled: bool,
+}
 
 impl LiveOps {
-    fn ops(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Operation>>> {
+    fn live(&self) -> std::sync::MutexGuard<'_, Live> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Records `op` as running for the handle.
-    pub(crate) fn add(&self, op: &Arc<Operation>) {
-        self.ops().push(Arc::clone(op));
+    /// Records `op` as running for the handle; `false` (not recorded) once it is cancelled.
+    #[must_use]
+    pub(crate) fn add(&self, op: &Arc<Operation>) -> bool {
+        let mut live = self.live();
+        if live.cancelled {
+            return false;
+        }
+        live.ops.push(Arc::clone(op));
+        true
     }
 
     /// Forgets `op` (its run or fetch ended).
     pub(crate) fn remove(&self, op: &Arc<Operation>) {
-        self.ops().retain(|o| !Arc::ptr_eq(o, op));
+        self.live().ops.retain(|o| !Arc::ptr_eq(o, op));
     }
 
-    /// The operations running now, taken out of the lock.
-    pub(crate) fn snapshot(&self) -> Vec<Arc<Operation>> {
-        self.ops().clone()
+    /// Marks the handle cancelled and returns the operations running now, in one step.
+    pub(crate) fn cancel(&self) -> Vec<Arc<Operation>> {
+        let mut live = self.live();
+        live.cancelled = true;
+        live.ops.clone()
     }
 }
 
