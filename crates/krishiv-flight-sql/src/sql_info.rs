@@ -66,18 +66,42 @@ pub fn sql_info_data(info: &ServerInfo) -> Result<SqlInfoData, KrishivError> {
     b.append(SqlInfo::SqlIdentifierCase, insensitive);
     b.append(SqlInfo::SqlQuotedIdentifierCase, insensitive);
     b.append(SqlInfo::SqlKeywords, info.keywords.clone());
-    b.append(SqlInfo::SqlNumericFunctions, info.numeric_functions.clone());
-    b.append(SqlInfo::SqlStringFunctions, info.string_functions.clone());
-    b.append(SqlInfo::SqlSystemFunctions, info.system_functions.clone());
+    b.append(
+        SqlInfo::SqlNumericFunctions,
+        function_names(&info.numeric_functions),
+    );
+    b.append(
+        SqlInfo::SqlStringFunctions,
+        function_names(&info.string_functions),
+    );
+    b.append(
+        SqlInfo::SqlSystemFunctions,
+        function_names(&info.system_functions),
+    );
     b.append(
         SqlInfo::SqlDatetimeFunctions,
-        info.datetime_functions.clone(),
+        function_names(&info.datetime_functions),
     );
     b.build().map_err(|e| {
         KrishivError::from(InternalError {
             message: format!("Flight SQL GetSqlInfo table: {e}"),
         })
     })
+}
+
+/// The names of a function list JDBC's `getNumericFunctions` and its siblings can use: operators
+/// (`%`, `+`, `||`) are left out (review of 9b66ee1fc, nit).
+fn function_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| {
+            n.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,6 +135,15 @@ mod tests {
             .downcast_ref::<UnionArray>()
             .expect("union");
         values.type_id(row)
+    }
+
+    #[test]
+    fn function_lists_hold_names_only() {
+        let names: Vec<String> = ["abs", "%", "+", "||", "log10", "_x", "1x", ""]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(function_names(&names), ["abs", "log10", "_x"]);
     }
 
     #[test]

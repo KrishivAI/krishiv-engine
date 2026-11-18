@@ -102,6 +102,8 @@ impl OpGuard {
 impl Drop for OpGuard {
     fn drop(&mut self) {
         // Still running: the call was dropped (a client gone, a cancel), so its query is cancelled.
+        // An operation refused at `register` (its handle was cancelled) never ran: the cancel
+        // finds no query and its result is ignored.
         if self.op.cancel() {
             let _ = self.entry.session().cancel(self.op.id());
         }
@@ -660,7 +662,7 @@ impl FlightSqlServer {
     }
 
     /// `CancelFlightInfo` of a statement ticket (design §4.5): the handle's live fetches are
-    /// cancelled and the handle is released; `true` when it was the caller's.
+    /// cancelled and the handle is released.
     /// `CancelFlightInfo` / `CancelQuery` of one statement handle: `INVALID_HANDLE.FORMAT` for a
     /// malformed one, one not-found answer for another owner's and an unknown one.
     pub(crate) fn cancel_statement(
@@ -712,13 +714,39 @@ fn marks_changed(class: StatementClass, sql: &str) -> bool {
     if matches!(class, StatementClass::Session | StatementClass::Admin) {
         return true;
     }
-    let upper = sql.trim_start().to_ascii_uppercase();
-    upper.starts_with("BEGIN")
-        || upper
-            .split_ascii_whitespace()
-            .collect::<Vec<_>>()
-            .windows(2)
-            .any(|w| w == ["EXECUTE", "IMMEDIATE"])
+    // No copy of the text (up to 1 MiB) and no word list (review n2).
+    let head = skip_comments(sql);
+    let starts_begin = head
+        .get(..5)
+        .is_some_and(|w| w.eq_ignore_ascii_case("BEGIN"))
+        && !head[5..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let mut words = sql.split_ascii_whitespace().peekable();
+    let mut execute_immediate = false;
+    while let Some(w) = words.next() {
+        if w.eq_ignore_ascii_case("EXECUTE")
+            && words
+                .peek()
+                .is_some_and(|n| n.eq_ignore_ascii_case("IMMEDIATE"))
+        {
+            execute_immediate = true;
+            break;
+        }
+    }
+    starts_begin || execute_immediate
+}
+
+/// `sql` after its leading whitespace and comments (`-- ...` to the line's end, `/* ... */`).
+fn skip_comments(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(rest) = sql.strip_prefix("--") {
+            sql = rest.split_once('\n').map_or("", |(_, after)| after);
+        } else if let Some(rest) = sql.strip_prefix("/*") {
+            sql = rest.split_once("*/").map_or("", |(_, after)| after);
+        } else {
+            return sql;
+        }
+    }
 }
 
 /// What a schema costs a handle (its IPC message, roughly).
@@ -800,6 +828,30 @@ mod tests {
     }
 
     /// `RESULT_NOT_STORED` carries the inner error's client-safe text (review M2).
+    /// Scripts and `EXECUTE IMMEDIATE` mark a provisional session changed, a comment before them
+    /// included; a word that only starts with `BEGIN` does not (review n2).
+    #[test]
+    fn marks_changed_sees_scripts_behind_comments() {
+        let read = StatementClass::Read;
+        for sql in [
+            "BEGIN SELECT 1; END",
+            "  begin\nSELECT 1; END",
+            "-- a comment\nBEGIN SELECT 1; END",
+            "/* c */ -- d\n BEGIN SELECT 1; END",
+            "SELECT 1; execute   Immediate 'SET x = 1'",
+        ] {
+            assert!(marks_changed(read, sql), "{sql:?}");
+        }
+        for sql in [
+            "BEGINNING",
+            "SELECT 'begin'",
+            "-- BEGIN\nSELECT 1",
+            "EXECUTE x",
+        ] {
+            assert!(!marks_changed(read, sql), "{sql:?}");
+        }
+    }
+
     #[test]
     fn result_not_stored_reason_is_redacted() {
         let inner: KrishivError = KrishivSpillIoError {
