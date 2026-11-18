@@ -58,7 +58,7 @@ Paths are relative to this crate.
   the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is
   `FlightSql`, anything else `Connect`; P3-T101 §2 H2) and passes it to `ConnectAuth::authenticate` (credentials and failure counter,
   no-role record and denial, act-as records) and into the extensions (`request_surface`, read by `caller`'s refusal log);
-  `tests/flight_surface.rs` checks each site per surface. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under its transport's surface (`connect` or `flight-sql`), as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
+  `tests/flight_surface.rs` checks each site per surface. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under its transport's surface (`connect`, `flight-sql`, or `ui` for the UI editor's sessions, which `krishiv-cli` builds with `Transport::Ui`; they counted under `connect` before P3-T101), as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
   `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
   `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
   `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never

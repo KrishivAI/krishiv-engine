@@ -228,6 +228,8 @@ impl ConnectServer {
     /// the Flight SQL service; Connect itself never depends on Flight). They get the same HTTP/2
     /// limits, connection cap, TLS, [`AuthLayer`] and shutdown as the Connect service; each
     /// service keeps its own message-size limits. A later call replaces the earlier routes.
+    /// `routes` must not contain the Spark Connect service: `serve` adds it, and a second copy of
+    /// its path is an overlapping route.
     #[must_use]
     pub fn with_routes(mut self, routes: Routes) -> Self {
         self.routes = Some(routes);

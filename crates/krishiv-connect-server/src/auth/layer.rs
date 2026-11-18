@@ -27,7 +27,10 @@ const FLIGHT_SERVICE_PREFIX: &str = "/arrow.flight.protocol.FlightService/";
 
 /// The surface a request for `path` is for: `FlightSql` for the Arrow Flight service, `Connect`
 /// for anything else (Spark Connect, and paths no service answers, which tonic refuses as
-/// `UNIMPLEMENTED` after authentication).
+/// `UNIMPLEMENTED` after authentication). A Flight path counts as `FlightSql` even when the
+/// server serves no Flight service (`krishiv.flightSql.enabled=false`, or built without it): the
+/// client asked for Flight, so its authentication failures are counted under `flight-sql` before
+/// tonic answers `UNIMPLEMENTED`.
 #[must_use]
 pub fn surface_of_path(path: &str) -> Surface {
     if path.starts_with(FLIGHT_SERVICE_PREFIX) {
