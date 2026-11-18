@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stage 1, Bind: SQL text, functions, tables, pins and access decisions.
 
+mod descriptors;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -58,6 +60,9 @@ pub(super) struct Bindings {
     pub(super) files: Vec<BoundFiles>,
     /// Whether the plan reads files by path.
     pub(super) reads_files: bool,
+    /// The protobuf descriptor files the plan names, by path as written: their bytes, read after the access check, or why they
+    /// could not be read (`bind/descriptors.rs`).
+    pub(super) descriptors: HashMap<String, Result<Vec<u8>, krishiv_common::error::KrishivError>>,
     /// Securables of already-resolved scans, by name parts.
     pub(super) scans: HashMap<Vec<String>, usize>,
     /// The declared `CHAR`/`VARCHAR` types of the columns of already-resolved scans (a DataFrame's stored
@@ -162,6 +167,8 @@ enum Found<'a> {
     Secrets(Vec<String>, Origin),
     /// A table read whose options (`FROM t WITH (...)`) hold a server-scoped store key.
     StoreOptions(Origin),
+    /// The descriptor file path of a `from_protobuf` / `to_protobuf` call.
+    Descriptor(&'a str, Origin),
 }
 
 /// Whether read `options` hold a server-scoped store key (`krishiv_io::is_server_scoped_option`).
@@ -263,7 +270,12 @@ fn visit<'a>(
                         }
                         match node {
                             Node::Plan(q) => next.push((Node::Plan(q), Arc::clone(env))),
-                            Node::Expr(e) => walk::children(Node::Expr(e), &mut stack),
+                            Node::Expr(e) => {
+                                if let Some(path) = descriptors::descriptor_path(e) {
+                                    found.push(Found::Descriptor(path, e.origin));
+                                }
+                                walk::children(Node::Expr(e), &mut stack);
+                            }
                         }
                     }
                     return Ok(());
@@ -276,6 +288,9 @@ fn visit<'a>(
         Node::Expr(e) => {
             if let ExprNode::Function(f) = &e.node {
                 check_function(ctx, f, e.origin)?;
+            }
+            if let Some(path) = descriptors::descriptor_path(e) {
+                found.push(Found::Descriptor(path, e.origin));
             }
             if let ExprNode::Subquery { plan, .. } = &e.node {
                 next.push((Node::Plan(plan), Arc::clone(env)));
@@ -839,6 +854,10 @@ async fn load(
             }
             Found::StoreOptions(origin) => {
                 authorize_store_options(ctx, b, &mut checked, origin).await?;
+                continue;
+            }
+            Found::Descriptor(path, origin) => {
+                descriptors::bind_descriptor(ctx, b, &mut checked, path, origin).await?;
                 continue;
             }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),

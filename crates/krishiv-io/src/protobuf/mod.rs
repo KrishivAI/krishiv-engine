@@ -51,10 +51,15 @@ use crate::error::unsupported;
 pub enum DescriptorArg {
     /// None (a NULL, or a call with two arguments): the message name is a Java class name.
     None,
-    /// A path to a descriptor file.
+    /// A path to a descriptor file, not read: the analyzer reads a path under the session's access policy and passes
+    /// [`Self::File`]. An empty path is no descriptor for `from_protobuf` and unreadable for `to_protobuf`; any other path is refused
+    /// here, so no descriptor file is ever read outside that check.
     Path(String),
-    /// The bytes of a descriptor set.
+    /// The bytes of a descriptor set (a binary argument).
     Bytes(Vec<u8>),
+    /// The bytes of the descriptor file a path named, read by the analyzer after the access check
+    /// ([`DescriptorSet::read_file`]). Unlike [`Self::Bytes`], empty contents are still a descriptor set.
+    File(Vec<u8>),
 }
 
 /// The constant arguments of a `from_protobuf` or `to_protobuf` call, with the descriptor set read.
@@ -66,11 +71,12 @@ pub struct Call {
 }
 
 impl Call {
-    /// Reads the descriptor file of `descriptor`. `from_protobuf` takes an empty path or empty bytes as no descriptor;
-    /// `to_protobuf` (`to`) reads the empty path (and fails) and the empty bytes (an empty set).
+    /// The call of `descriptor`. `from_protobuf` takes an empty path or empty bytes as no descriptor; `to_protobuf` (`to`) fails on
+    /// the empty path and takes the empty bytes as an empty set.
     ///
     /// # Errors
-    /// `PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND`, and `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` for a path that is not a readable file.
+    /// `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` for `to_protobuf`'s empty path, and `KRISHIV_UNSUPPORTED_FEATURE` for a path the analyzer
+    /// did not read (a descriptor path that is not a string literal).
     pub fn new(
         message: &str,
         descriptor: DescriptorArg,
@@ -80,9 +86,17 @@ impl Call {
         let descriptor = match descriptor {
             DescriptorArg::None => None,
             DescriptorArg::Path(p) if p.is_empty() && !to => None,
-            DescriptorArg::Path(p) => Some(DescriptorSet::read_file(&p)?),
+            // Spark's Hadoop `Path` refuses the empty string.
+            DescriptorArg::Path(p) if p.is_empty() => {
+                return Err(CannotParseProtobufDescriptor {}.into());
+            }
+            DescriptorArg::Path(_) => {
+                return Err(unsupported(
+                    "a protobuf descriptor file path that is not a string literal",
+                ));
+            }
             DescriptorArg::Bytes(b) if b.is_empty() && !to => None,
-            DescriptorArg::Bytes(b) => Some(b),
+            DescriptorArg::Bytes(b) | DescriptorArg::File(b) => Some(b),
         };
         Ok(Self {
             message: message.to_owned(),
@@ -159,15 +173,17 @@ impl DescriptorSet {
         }
     }
 
-    /// Reads a descriptor file (a local path; a `file:` URI is accepted).
+    /// Reads the descriptor file `path` names, at `local` (a local path; a `file:` URI is accepted). Only the analyzer calls it,
+    /// after the access policy allowed the path; `path` is the path as the call wrote it, for the error.
     ///
     /// # Errors
-    /// `PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND` when the file cannot be read.
-    pub fn read_file(path: &str) -> Result<Vec<u8>, KrishivError> {
-        let local = path
+    /// `PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND` when the file does not exist, `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` when it cannot be
+    /// read (a directory, an empty path, a file past 64 MiB).
+    pub fn read_file(path: &str, local: &str) -> Result<Vec<u8>, KrishivError> {
+        let local = local
             .strip_prefix("file://")
-            .or_else(|| path.strip_prefix("file:"))
-            .unwrap_or(path);
+            .or_else(|| local.strip_prefix("file:"))
+            .unwrap_or(local);
         // A descriptor set is kilobytes; a file past the cap is not one (and is never read whole).
         const MAX_BYTES: u64 = 64 << 20;
         let too_big = std::fs::metadata(local).is_ok_and(|m| m.len() > MAX_BYTES);
@@ -176,7 +192,7 @@ impl DescriptorSet {
         }
         std::fs::read(local).map_err(|e| {
             // An empty path or a directory is a parse failure in Spark (a Hadoop `Path` error); a missing file is not found.
-            if path.is_empty() || e.kind() != std::io::ErrorKind::NotFound {
+            if local.is_empty() || e.kind() != std::io::ErrorKind::NotFound {
                 CannotParseProtobufDescriptor {}.into()
             } else {
                 ProtobufDescriptorFileNotFound {

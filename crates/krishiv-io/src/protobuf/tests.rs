@@ -229,6 +229,22 @@ fn a_call_without_a_descriptor_names_a_java_class() {
 }
 
 #[test]
+fn a_descriptor_path_is_never_read_by_the_call() {
+    // The analyzer reads a path after the access check and passes the bytes; a path reaching the call is refused, not read.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    for to in [false, true] {
+        let e = Call::new("M", DescriptorArg::Path(path.to_owned()), Vec::new(), to).unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    }
+    // File contents that are empty are an empty set (no message), not "no descriptor".
+    let call = Call::new("M", DescriptorArg::File(Vec::new()), Vec::new(), false).unwrap();
+    assert_eq!(
+        call.decoder().unwrap_err().error_class().name(),
+        "PROTOBUF_MESSAGE_NOT_FOUND"
+    );
+}
+
+#[test]
 fn descriptor_sets_find_top_level_messages_by_short_or_full_name() {
     let set = DescriptorSet::parse(GOLDEN).unwrap();
     assert!(set.message("Scalars").is_ok());
@@ -257,9 +273,10 @@ fn bytes_that_are_not_a_descriptor_set_do_not_parse() {
 
 #[test]
 fn a_missing_descriptor_file_is_not_found_and_a_directory_does_not_parse() {
-    let e = DescriptorSet::read_file("/no/such/dir/x.desc").unwrap_err();
+    let e = DescriptorSet::read_file("x.desc", "file:/no/such/dir/x.desc").unwrap_err();
     assert_eq!(e.error_class().name(), "PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND");
-    let e = DescriptorSet::read_file(env!("CARGO_MANIFEST_DIR")).unwrap_err();
+    assert!(e.to_string().contains("x.desc"), "{e}");
+    let e = DescriptorSet::read_file("d", env!("CARGO_MANIFEST_DIR")).unwrap_err();
     assert_eq!(e.error_class().name(), "CANNOT_PARSE_PROTOBUF_DESCRIPTOR");
 }
 

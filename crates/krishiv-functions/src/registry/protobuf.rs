@@ -49,7 +49,9 @@ fn mismatch(c: &CallTypes<'_>, name: &str, msg: String) -> KrishivError {
 /// The three constant arguments as Spark's constructors normalise them.
 struct Parts {
     message: String,
-    descriptor: DescriptorArg,
+    /// The descriptor, or the error reading its file: raised after every argument check, where Spark reads the file (its
+    /// `replacement`, after `checkInputDataTypes`).
+    descriptor: Result<DescriptorArg, KrishivError>,
     options: Vec<(String, String)>,
 }
 
@@ -103,19 +105,24 @@ fn parts(
         )),
     };
     let descriptor = match desc_index {
-        None => Ok(DescriptorArg::None),
+        None => Ok(Ok(DescriptorArg::None)),
         Some(i) => match (c.data_type(i), c.constant(i)) {
             (Some(DataType::String), Some(Constant::String(s))) => {
-                Ok(DescriptorArg::Path(s.clone()))
+                Ok(Ok(DescriptorArg::Path(s.clone())))
             }
+            // A literal path the analyzer read under the access policy: the file's bytes, or why it could not be read.
+            (Some(DataType::String), Some(Constant::Binary(b))) => {
+                Ok(Ok(DescriptorArg::File(b.clone())))
+            }
+            (Some(DataType::String), Some(Constant::Error(e))) => Ok(Err(e.clone())),
             (Some(DataType::Binary), Some(Constant::Binary(b))) => {
-                Ok(DescriptorArg::Bytes(b.clone()))
+                Ok(Ok(DescriptorArg::Bytes(b.clone())))
             }
             (Some(DataType::String | DataType::Binary) | None, Some(Constant::Null))
             | (None, None)
                 if c.foldable(i) =>
             {
-                Ok(DescriptorArg::None)
+                Ok(Ok(DescriptorArg::None))
             }
             _ => Err(mismatch(
                 c,
@@ -158,7 +165,7 @@ fn parts(
 /// `from_protobuf(binary, messageName[, descFilePath][, options])`.
 fn from_protobuf(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let p = parts(c, "from_protobuf", "FROM_PROTOBUF", "from")?;
-    let call = Call::new(&p.message, p.descriptor, p.options, false)?;
+    let call = Call::new(&p.message, p.descriptor?, p.options, false)?;
     // Spark never types the first argument (an INTERNAL_ERROR there), after it has read the descriptor file.
     if !matches!(c.data_type(0), Some(DataType::Binary)) {
         let input = c.data_type(0).cloned().unwrap_or(DataType::Null);
@@ -187,7 +194,7 @@ fn to_protobuf(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         .into());
     };
     let p = parts(c, "to_protobuf", "TO_PROTOBUF", "to")?;
-    let call = Call::new(&p.message, p.descriptor, p.options, true)?;
+    let call = Call::new(&p.message, p.descriptor?, p.options, true)?;
     if let Some(input) = c.data_type(0) {
         call.encoder(input)?;
     }

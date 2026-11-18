@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `from_protobuf` and `to_protobuf`: protobuf messages to and from a column (Spark's `ProtobufDataToCatalyst` and
 //! `CatalystDataToProtobuf`), on the codec of `krishiv-io`. The analyzer checks the arguments (see `registry/protobuf.rs`); the
-//! message name, descriptor and options are literals here.
+//! message name, descriptor and options are literals here. A descriptor path arrives as the binary literal of the file's bytes,
+//! which the analyzer read once under the access policy; a string path that reaches here is refused by `Call`, never read.
 
 use std::sync::Arc;
 
