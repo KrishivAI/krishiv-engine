@@ -28,6 +28,25 @@ fn readiness_keys_default_and_validate() {
         Some("")
     );
     let mut c = Config::new();
+    c.set("krishiv.server.readiness.interval", "5s").unwrap();
+    c.set("krishiv.server.readiness.timeout", "500ms").unwrap();
+    c.set("krishiv.server.readiness.required", "warehouse, catalogs")
+        .unwrap();
+    assert_eq!(
+        c.get(&SERVER_READINESS_INTERVAL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(
+        c.get(&SERVER_READINESS_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_millis(500))
+    );
+    assert_eq!(
+        c.get(&SERVER_READINESS_REQUIRED)
+            .and_then(ConfigValue::as_str),
+        Some("warehouse, catalogs")
+    );
     assert!(
         c.set("krishiv.server.readiness.failureThreshold", "0")
             .is_err()
