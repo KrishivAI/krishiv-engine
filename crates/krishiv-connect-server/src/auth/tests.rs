@@ -9,7 +9,7 @@ use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
 use krishiv_session::auth::Authenticated;
-use krishiv_session::auth::{AuthConfig, Method, Role, ServerAuth};
+use krishiv_session::auth::{AuthConfig, Method, Role, ServerAuth, Surface};
 use krishiv_session::{Privilege, Securable, StatementClass};
 use tonic::codegen::http::HeaderMap;
 use tonic::{Code, Request};
@@ -65,7 +65,7 @@ fn authenticate(
     peer: Option<SocketAddr>,
     values: &[&str],
 ) -> Result<Authenticated, tonic::Status> {
-    block_on(auth.authenticate(&headers(values), peer, None))
+    block_on(auth.authenticate(&headers(values), peer, None, Surface::Connect))
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
