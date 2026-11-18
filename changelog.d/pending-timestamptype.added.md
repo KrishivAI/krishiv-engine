@@ -1,1 +1,1 @@
-The Connect server and `spark.conf.get` now know `spark.sql.timestampType` (default `TIMESTAMP_LTZ`), so a PySpark client can read it; it was answered with SQL_CONF_NOT_FOUND.
+The Connect server answers the twelve Spark SQL settings a PySpark client reads when it starts a session or calls `createDataFrame` (`spark.sql.timestampType`, `spark.sql.session.localRelation*` and others) with Spark 4.3's defaults, instead of SQL_CONF_NOT_FOUND.
