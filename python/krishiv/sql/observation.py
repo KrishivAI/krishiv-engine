@@ -82,7 +82,10 @@ class Observation:
         except PySparkException as e:
             raise _pyspark_error(e) from e
         pa = _convert.require_pyarrow("Observation.get")
+        stream.use_placeholder_names()
         table = pa.table(stream)
+        if table.column_names != (names := stream.names()):
+            table = table.rename_columns(names)
         if table.num_columns == 0 or table.num_rows == 0:
             return {}
         return _convert.rows_of(table)[0].asDict()
