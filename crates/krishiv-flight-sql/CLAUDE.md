@@ -41,10 +41,11 @@ Paths are relative to this crate.
   schema, or a command's stored rows held as `flight_sql_handles` past 64 KiB)
 - `src/call.rs` the session of one call (design §3.2): the cookie's, else created once (provisional without a cookie,
   a cookie session for a refused one, "session reset" at info); `CallSession` is the drop guard that ends the call in
-  the table (and releases a provisional session a failed call created)
+  the table and releases a session the call created unless its answer went out (`kept`): an error or a dropped
+  future, whatever the row's state (review M4)
 - `src/statement.rs` `GetFlightInfo(CommandStatementQuery)` (slot, `Operation`, classify with `sql_query_with`, a
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
-  `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo`; marks are drop guards released in reverse
+  `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
   (operation, fetch, response budget, call; §16 M3)
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
   `GetSqlInfo` without a session; actions other than `CancelFlightInfo` `UNIMPLEMENTED`
@@ -54,7 +55,7 @@ Paths are relative to this crate.
   name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
   backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller
 - `src/status.rs` `flight_status` / `code_of` (design §6): a `KrishivError` as the Flight SQL gRPC status, from its
-  client-safe form (`KrishivError::for_client`); Spark's message text, trailing metadata `x-krishiv-error-class`,
+  client-safe form (`KrishivError::for_client`); Spark's message text capped at 2 KiB (`... [truncated; error id <id>]`), the full error logged under the id, trailing metadata `x-krishiv-error-class`,
   `x-krishiv-sqlstate`, `x-krishiv-error-id`. Connect's `status_of` is not used here.
 
 ## Invariants

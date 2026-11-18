@@ -326,21 +326,15 @@ impl FlightSqlServer {
                 .into(),
             ));
         }
+        // A session this call created is released when the call ends, by an error or a dropped
+        // future, unless the answer naming it goes out (`kept`, review M4).
         let mut call = self.call_session(metadata, caller)?;
-        match self.run_statement(&mut call, sql).await {
-            Ok((schema, slot)) => {
-                let mut response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
-                call.cookie_on(&mut response);
-                call.kept();
-                let mut slot = slot;
-                slot.answered = true;
-                Ok(response)
-            }
-            Err(e) => {
-                call.failed();
-                Err(e)
-            }
-        }
+        let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
+        let mut response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
+        call.cookie_on(&mut response);
+        call.kept();
+        slot.answered = true;
+        Ok(response)
     }
 
     /// Steps 1-3 of §4.1 in the call's session: the slot, the operation, the analysis or the run.

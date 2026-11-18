@@ -699,3 +699,44 @@ async fn cancel_flight_info_cancels_only_its_handle() {
     drop(sb);
     wait_busy(&h, 0).await;
 }
+
+/// A stale cookie, then a failing statement: the reset session the call created is released, so
+/// retries don't pile up to the session cap (review M4 b).
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_cookie_then_error_releases_the_reset_session() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    for _ in 0..3 {
+        let e = info(
+            &mut h,
+            OPS,
+            Some("stale-session"),
+            "SELECT * FROM no_such_table",
+        )
+        .await
+        .expect_err("unknown table");
+        assert_eq!(e.code(), Code::NotFound, "{e:?}");
+    }
+    wait_sessions(&h, 0).await;
+    assert_eq!(h.manager.counts().live, 0, "the manager released them too");
+}
+
+/// A `GetFlightInfo` dropped while its command runs (its session already marked changed) gives
+/// back the session and the slot it created: the client never saw either (§16 M3, review M4 a).
+#[tokio::test(flavor = "multi_thread")]
+async fn dropped_get_flight_info_returns_slot() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let r = tokio::time::timeout(
+        Duration::from_millis(300),
+        info(
+            &mut h,
+            OPS,
+            None,
+            "EXECUTE IMMEDIATE 'SELECT sum(id) FROM range(0, 50000000000)'",
+        ),
+    )
+    .await;
+    assert!(r.is_err(), "the command was still running: {r:?}");
+    wait_sessions(&h, 0).await;
+    assert_eq!(h.flight.handle_count(), 0);
+    wait_busy(&h, 0).await;
+}

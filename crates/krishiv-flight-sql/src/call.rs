@@ -33,9 +33,11 @@ pub(crate) struct CallSession {
     /// The session id the response's `set-cookie` carries (a session this call created).
     pub(crate) set_cookie: Option<String>,
     exit: Exit,
-    /// Release the session at the end if it is provisional and holds no handle: a call refused
-    /// before anything ran gives back the provisional session it created (§15 m3).
-    release_if_unused: bool,
+    /// Release the session this call created when the call ends, unless the answer carrying its
+    /// cookie or ticket went out ([`Self::kept`]): the client never learned its id, whatever its
+    /// state (provisional, changed, or a reset cookie session), and whatever ended the call (an
+    /// error, a dropped future; §15 m3, §16 M3, review M4).
+    release_unless_kept: bool,
 }
 
 impl CallSession {
@@ -44,23 +46,10 @@ impl CallSession {
         self.exit = Exit::CookielessFetch;
     }
 
-    /// Whether the call presented no cookie for this session (its response sets one, or it is
-    /// a handle's session reached without one).
-    pub(crate) fn created_here(&self) -> bool {
-        self.set_cookie.is_some()
-    }
-
-    /// The call failed before it left anything in its session: a provisional session it created
-    /// is released when the call ends.
-    pub(crate) fn failed(&mut self) {
-        if self.created_here() {
-            self.release_if_unused = true;
-        }
-    }
-
-    /// The call kept something in the session (a handle): no release at its end.
+    /// The answer naming the session (its cookie or a ticket) is going out: no release at the
+    /// end of the call.
     pub(crate) fn kept(&mut self) {
-        self.release_if_unused = false;
+        self.release_unless_kept = false;
     }
 
     /// Marks the session changed (design §3.2: a later call depends on its state).
@@ -94,12 +83,8 @@ impl Drop for CallSession {
             server.release(&r);
             return;
         }
-        if self.release_if_unused
-            && let Some(r) =
-                server
-                    .inner
-                    .sessions
-                    .release_if_handleless(&self.owner, &self.id, |s| server.holds(s))
+        if self.release_unless_kept
+            && let Some(r) = server.inner.sessions.close(&self.owner, &self.id)
         {
             server.release(&r);
         }
@@ -168,7 +153,7 @@ impl FlightSqlServer {
                 entry,
                 set_cookie: None,
                 exit: Exit::Call,
-                release_if_unused: false,
+                release_unless_kept: false,
             }),
             Err(e) => {
                 if let Some(r) = inner
@@ -222,7 +207,7 @@ impl FlightSqlServer {
             id,
             entry,
             exit: Exit::Call,
-            release_if_unused: false,
+            release_unless_kept: true,
         })
     }
 }
