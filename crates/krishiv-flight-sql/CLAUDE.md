@@ -13,6 +13,9 @@ Paths are relative to this crate.
 - `src/cookies.rs` `session_cookie` / `set_session_cookie` (design §3.2): the `arrow_flight_session_id` cookie over
   every `cookie` header; `Absent` (cookie-less client), `Present(id)` for the manager, `Malformed` (gets a new session
   and cookie, as a refused id); ids of 1-64 letters, digits, `-` only
+- `src/encode.rs` `encode_results` (design §4.2): the `DoGet` pull stream, arrow-flight `FlightDataEncoder` over the
+  query's batches; each batch reserved as consumer `flight_sql_responses` until the encoder asks for the next (so
+  only after tonic took its last piece); cut by rows past 4 MiB, pieces of 2 MiB; errors end it with `flight_status`
 - `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
   another owner's id answers as unknown; `HandleLimits` (TTL since last use, per session, per owner:
   `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`, expired handles dropped first); `remove_session`, `sweep(now, alive)`

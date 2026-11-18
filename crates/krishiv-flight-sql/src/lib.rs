@@ -6,11 +6,13 @@
 #![forbid(unsafe_code)]
 
 pub mod cookies;
+pub mod encode;
 pub mod handles;
 pub mod sql_info;
 pub mod status;
 
 pub use cookies::{SessionCookie, session_cookie, set_session_cookie};
+pub use encode::{EncodeLimits, encode_results};
 pub use handles::{HandleId, HandleLimits, Handles};
 pub use sql_info::{ServerInfo, sql_info_data};
 pub use status::{code_of, flight_status};
