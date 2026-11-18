@@ -663,13 +663,11 @@ impl Drainer {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.runtime.set_draining(true);
             self.drain.start(std::time::Instant::now(), grace, exit);
-        }
-        self.ensure_driver();
-    }
-
-    fn ensure_driver(self: &Arc<Self>) {
-        if !self.driving.swap(true, Ordering::AcqRel) {
-            tokio::spawn(Arc::clone(self).drive());
+            // Under the lock the driver retires with, so a driver that is just finishing and
+            // this call cannot both assume the other one handles the request.
+            if !self.driving.swap(true, Ordering::AcqRel) {
+                tokio::spawn(Arc::clone(self).drive());
+            }
         }
     }
 
@@ -718,40 +716,51 @@ impl Drainer {
         }
     }
 
-    #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-    async fn drive(self: Arc<Self>) {
+    /// One decision of the drain: the load sample, the controller's step and its effect (the
+    /// cancellation, the retirement of the driver) happen under `change`, so a `resume` or a
+    /// new `start` cannot slip between the sample and what it decides.
+    fn drive_once(&self) -> Option<krishiv_server::drain::DrainStep> {
         use krishiv_server::drain::{DrainState, DrainStep};
-        loop {
-            match self
-                .drain
-                .step(std::time::Instant::now(), self.manager.busy())
-            {
-                DrainStep::Wait => {
-                    if self.drain.status().state == DrainState::Serving {
-                        // Resumed. A drain that started right after this check sees the flag
-                        // cleared and spawns the next driver itself.
-                        self.driving.store(false, Ordering::Release);
-                        if self.drain.status().state == DrainState::Serving
-                            || self.driving.swap(true, Ordering::AcqRel)
-                        {
-                            return;
-                        }
-                    }
-                }
-                DrainStep::CancelRemaining => {
-                    let n = self
-                        .runtime
-                        .cancel_all(krishiv_session::CancelReason::Drain);
-                    eprintln!("krishiv server: drain deadline, cancelled {n} queries");
-                }
-                DrainStep::Drained { exit } => {
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let step = self
+            .drain
+            .step(std::time::Instant::now(), self.manager.busy());
+        match step {
+            DrainStep::Wait => {
+                if self.drain.status().state == DrainState::Serving {
+                    // Resumed: retire. A later `start` sees the flag cleared and spawns the
+                    // next driver itself.
                     self.driving.store(false, Ordering::Release);
-                    if exit {
-                        let _ = self.stop.send(true);
-                    }
-                    return;
+                    return None;
                 }
             }
+            DrainStep::CancelRemaining => {
+                let n = self
+                    .runtime
+                    .cancel_all(krishiv_session::CancelReason::Drain);
+                Self::report_cancelled(n);
+            }
+            DrainStep::Drained { exit } => {
+                self.driving.store(false, Ordering::Release);
+                if exit {
+                    let _ = self.stop.send(true);
+                }
+                return None;
+            }
+        }
+        Some(step)
+    }
+
+    #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+    fn report_cancelled(n: usize) {
+        eprintln!("krishiv server: drain deadline, cancelled {n} queries");
+    }
+
+    async fn drive(self: Arc<Self>) {
+        while self.drive_once().is_some() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -856,9 +865,21 @@ mod tests {
             .await
             .unwrap();
         let query = tokio::spawn(async move { df.collect().await });
-        while session.running_queries() == 0 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        let registered = tokio::time::timeout(Duration::from_secs(20), async {
+            while session.running_queries() == 0 {
+                if query.is_finished() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(registered.is_ok(), "the query never registered");
+        assert!(
+            !query.is_finished(),
+            "the query ended early: {:?}",
+            query.await
+        );
         let ready = Arc::new(AtomicBool::new(true));
         let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
             &ready,
