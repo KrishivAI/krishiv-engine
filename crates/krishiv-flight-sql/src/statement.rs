@@ -504,27 +504,27 @@ impl FlightSqlServer {
         // The reason is the inner error's client-safe text (review M2): an operator-audience
         // error (a spill path, a store address) is redacted as it would be on its own; the full
         // error stays the cause, for the log.
-        let not_stored = |bytes: usize, e: KrishivError| -> KrishivError {
+        let not_stored = |bytes: Option<usize>, e: KrishivError| -> KrishivError {
             KrishivError::from(KrishivFlightSqlResultNotStored {
-                bytes: bytes.to_string(),
+                size: stored_size(bytes),
                 reason: client_reason(&e),
             })
             .with_cause(e)
         };
         let tz = time_zone(session);
-        let schema = df.schema().await.map_err(|e| not_stored(0, e))?;
-        let rows = df.collect().await.map_err(|e| not_stored(0, e))?;
+        let schema = df.schema().await.map_err(|e| not_stored(None, e))?;
+        let rows = df.collect().await.map_err(|e| not_stored(None, e))?;
         let mut batches = Vec::with_capacity(rows.len());
         for b in &rows {
-            batches.push(spark_batch(b, tz.as_ref()).map_err(|e| not_stored(0, e))?);
+            batches.push(spark_batch(b, tz.as_ref()).map_err(|e| not_stored(None, e))?);
         }
         drop(rows);
-        let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| not_stored(0, e))?;
+        let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| not_stored(None, e))?;
         let bytes = rows_bytes(&batches);
         let max = self.inner.config.max_command_result_bytes;
         if bytes > max {
             return Err(KrishivFlightSqlResultNotStored {
-                bytes: bytes.to_string(),
+                size: stored_size(Some(bytes)),
                 reason: format!("over \"krishiv.flightSql.maxCommandResultBytes\" ({max})"),
             }
             .into());
@@ -534,7 +534,7 @@ impl FlightSqlServer {
                 ConsumerHandle::register(session.runtime().memory(), HANDLES_CONSUMER, None);
             let mut r = consumer.reservation();
             r.try_grow(bytes)
-                .map_err(|e| not_stored(bytes, KrishivError::from(e)))?;
+                .map_err(|e| not_stored(Some(bytes), KrishivError::from(e)))?;
             Some(r)
         } else {
             None
@@ -738,10 +738,16 @@ fn rows_bytes(batches: &[RecordBatch]) -> usize {
 /// with the refusal's client-safe text, never the refusal itself (§4.1, §15 m3).
 fn not_stored_after(bytes: usize, e: &KrishivError) -> KrishivError {
     KrishivError::from(KrishivFlightSqlResultNotStored {
-        bytes: bytes.to_string(),
+        size: stored_size(Some(bytes)),
         reason: client_reason(e),
     })
     .with_cause(e.clone())
+}
+
+/// The `<size>` of `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`: the bytes when the result was built,
+/// else "size unknown" (a failure before it was, review n3).
+fn stored_size(bytes: Option<usize>) -> String {
+    bytes.map_or_else(|| "size unknown".to_owned(), |b| format!("{b} bytes"))
 }
 
 /// An internal failure as a Flight status, with its class, SQLSTATE and error id (review n4).
@@ -818,5 +824,32 @@ mod tests {
         );
         let shown = flight_status(&wrapped);
         assert!(shown.message().contains("ran"), "{}", shown.message());
+    }
+
+    /// The size is said only when it is known (review n3): never "of 0 bytes".
+    #[test]
+    fn result_not_stored_says_the_size_only_when_known() {
+        let cause: KrishivError = InternalError {
+            message: "x".into(),
+        }
+        .into();
+        let known = flight_status(&not_stored_after(10, &cause));
+        assert!(
+            known.message().contains("(10 bytes)"),
+            "{}",
+            known.message()
+        );
+        let unknown: KrishivError = KrishivFlightSqlResultNotStored {
+            size: stored_size(None),
+            reason: "r".into(),
+        }
+        .into();
+        let unknown = flight_status(&unknown);
+        assert!(
+            unknown.message().contains("(size unknown)"),
+            "{}",
+            unknown.message()
+        );
+        assert!(!unknown.message().contains("0 bytes"));
     }
 }
