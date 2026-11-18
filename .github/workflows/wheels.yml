@@ -82,6 +82,7 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |
@@ -165,6 +166,7 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ env.ABI3_ARGS }} --out ../dist
       - name: The compat wheel has no CPU level marker
         run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
@@ -209,6 +211,7 @@ jobs:
           working-directory: python
           target: aarch64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |
