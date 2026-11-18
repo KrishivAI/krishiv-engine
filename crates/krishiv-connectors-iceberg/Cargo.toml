@@ -44,6 +44,7 @@ typetag = { workspace = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
+criterion.workspace = true
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 object_store = { workspace = true }
@@ -52,6 +53,10 @@ parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[[bench]]
+name = "theta_update"
+harness = false
 
 [features]
 # Cloud object stores through `krishiv-exec/cloud` (S3, GCS, Azure); the Azurite Iceberg scan test needs it.

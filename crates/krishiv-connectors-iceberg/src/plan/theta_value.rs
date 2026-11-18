@@ -45,6 +45,16 @@ pub(crate) fn new_sketch() -> Option<ThetaSketch> {
     ThetaSketchBuilder::default().build().ok()
 }
 
+/// The distinct-count estimate of `array` as a default sketch sees it; the `theta_update` bench's hook.
+///
+/// `None` when the type pair is not sketched.
+#[doc(hidden)]
+#[must_use]
+pub fn bench_estimate(array: &dyn Array, ty: &IcebergType) -> Option<f64> {
+    let mut sketch = new_sketch()?;
+    update_column(&mut sketch, array, ty).then(|| sketch.estimate())
+}
+
 /// Whether a column of Iceberg type `ty` is sketched at all (`uuid` and the nested types are not).
 #[must_use]
 pub(crate) fn sketched(ty: &IcebergType) -> bool {

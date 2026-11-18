@@ -43,6 +43,7 @@ pub use entry::{
 pub use metrics::{METRICS_COLUMN_PREFIX, METRICS_DEFAULT, MetricsMode, WriterMetrics};
 pub use prune::{DEFAULT_TRUNCATE_LENGTH, PruneMode, PruneOptions, Pruner};
 pub use snapshot::{RefInfo, RefKind, TableSnapshot, VersionSpec};
+pub use theta_value::bench_estimate;
 pub use transform::apply as apply_transform;
 pub use types::{
     IcebergType, PartitionFieldInfo, PartitionSpecInfo, PartitionSpecs, SchemaField, Transform,
