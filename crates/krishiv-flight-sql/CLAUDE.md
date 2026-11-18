@@ -15,7 +15,8 @@ Paths are relative to this crate.
   and cookie, as a refused id); ids of 1-64 letters, digits, `-` only
 - `src/encode.rs` `encode_results` (design §4.2): the `DoGet` pull stream, arrow-flight `FlightDataEncoder` over the
   query's batches; each batch reserved as consumer `flight_sql_responses` until the encoder asks for the next (so
-  only after tonic took its last piece); cut by rows past 4 MiB, pieces of 2 MiB; errors end it with `flight_status`
+  only after tonic took its last piece); cut by rows past 4 MiB, each row measured by what it covers (`row_sizes`:
+  offsets, list/map children, struct fields, dictionary values once per cut), a row over it alone `KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE`; pieces of 2 MiB; errors end it with `flight_status`
 - `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
   another owner's id answers as unknown; `HandleLimits` (TTL from the end of the last operation, never while
   `begin`..`end` holds one live; count per session and per owner, bytes per owner:
@@ -50,7 +51,7 @@ Paths are relative to this crate.
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   65a does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
-  session work, counted `unsupported`
+  session work, counted `unsupported`; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)

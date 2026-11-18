@@ -51,13 +51,15 @@ pub enum Command {
     SessionOptions,
     /// `CloseSession`.
     SessionClose,
+    /// `ListActions` (no session; the actions this server serves).
+    ListActions,
     /// Everything design §4.6 refuses.
     Unsupported,
 }
 
 impl Command {
     /// Every command, in label order.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Handshake,
         Self::StatementQuery,
         Self::StatementUpdate,
@@ -76,6 +78,7 @@ impl Command {
         Self::Cancel,
         Self::SessionOptions,
         Self::SessionClose,
+        Self::ListActions,
         Self::Unsupported,
     ];
 
@@ -101,6 +104,7 @@ impl Command {
             Self::Cancel => "cancel",
             Self::SessionOptions => "session_options",
             Self::SessionClose => "session_close",
+            Self::ListActions => "list_actions",
             Self::Unsupported => "unsupported",
         }
     }

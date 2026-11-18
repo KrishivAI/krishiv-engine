@@ -1677,3 +1677,23 @@ async fn flight_release_leaves_connect_tombstones() {
         "five Flight releases, no tombstone"
     );
 }
+
+/// `ListActions` lists the two actions served, with no session (§4.6, §9).
+#[tokio::test(flavor = "multi_thread")]
+async fn list_actions_names_the_served_actions() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let response = h
+        .client
+        .list_actions(authed(arrow_flight::Empty {}, OPS, None))
+        .await
+        .expect("list_actions");
+    assert_eq!(set_cookie(response.metadata()), None);
+    let actions: Vec<String> = response
+        .into_inner()
+        .map_ok(|a| a.r#type)
+        .try_collect()
+        .await
+        .expect("actions");
+    assert_eq!(actions, ["CancelFlightInfo", "CancelQuery"]);
+    assert_eq!(h.flight.session_count(), 0);
+}

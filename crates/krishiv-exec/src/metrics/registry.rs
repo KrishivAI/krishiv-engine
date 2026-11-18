@@ -226,6 +226,7 @@ pub const FLIGHT_SQL_COMMAND_LABEL: LabelDef = LabelDef {
         "cancel",
         "session_options",
         "session_close",
+        "list_actions",
         "unsupported",
     ],
 };

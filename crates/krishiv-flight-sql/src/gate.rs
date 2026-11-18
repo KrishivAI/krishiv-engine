@@ -10,8 +10,8 @@ use arrow_flight::sql::{
     Any, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
-    Action, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, PollInfo,
-    SchemaResult, Ticket,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, PollInfo, SchemaResult, Ticket,
 };
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
@@ -93,6 +93,21 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
             "{what} is not supported by this server"
         ))),
     }
+}
+
+/// What `ListActions` answers: the actions the gate lets through, no more (design §4.6, §9; review
+/// of 9b66ee1fc, finding 5). arrow-rs's fixed list would name actions 65a refuses.
+pub(crate) fn served_actions() -> Vec<ActionType> {
+    vec![
+        ActionType {
+            r#type: CANCEL_FLIGHT_INFO.to_owned(),
+            description: "Cancel the running fetches of a FlightInfo's ticket.".to_owned(),
+        },
+        ActionType {
+            r#type: CANCEL_QUERY.to_owned(),
+            description: "Cancel a query (deprecated; use CancelFlightInfo).".to_owned(),
+        },
+    ]
 }
 
 /// The tonic `FlightService` in front of [`FlightSqlServer`]'s arrow-rs dispatch.
@@ -205,11 +220,15 @@ impl FlightService for FlightGate {
         FlightService::do_action(&self.0, request).await
     }
 
+    /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either).
     async fn list_actions(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        self.refuse("ListActions")
+        let actions = futures::stream::iter(served_actions().into_iter().map(Ok));
+        let stream: Self::ListActionsStream = Box::pin(actions);
+        self.0
+            .counted(Command::ListActions, Ok(Response::new(stream)))
     }
 }
 
@@ -267,6 +286,17 @@ mod tests {
             FlightRpc::of_action(&Action::new(CANCEL_QUERY, Vec::new())),
             FlightRpc::CancelQuery
         );
+    }
+
+    /// Every action `ListActions` names passes the gate.
+    #[test]
+    fn listed_actions_are_the_served_ones() {
+        let listed: Vec<String> = served_actions().into_iter().map(|a| a.r#type).collect();
+        assert_eq!(listed, [CANCEL_FLIGHT_INFO, CANCEL_QUERY]);
+        for kind in &listed {
+            let rpc = FlightRpc::of_action(&Action::new(kind.clone(), Vec::new()));
+            assert!(check_flight(&rpc).is_ok(), "{kind}");
+        }
     }
 
     #[test]
