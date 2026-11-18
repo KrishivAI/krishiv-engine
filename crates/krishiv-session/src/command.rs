@@ -568,6 +568,8 @@ impl Session {
             RefreshKind::Function { .. } => {}
             RefreshKind::Path { .. } => {
                 self.refresh_files();
+                // As REFRESH TABLE: the key counts' answers are counted again.
+                self.state.io.key_facts().clear();
             }
             _ => {
                 return Err(crate::session::internal("unknown REFRESH form".to_owned()));

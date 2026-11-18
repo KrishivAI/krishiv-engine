@@ -12,6 +12,18 @@
 //! (an equality with a literal outside `[min, max]`, a constant `false`) sets
 //! [`View::empty`]: the estimate is zero rows, and nothing is removed from
 //! the plan.
+//!
+//! [`selectivity_is_guessed`] runs the same walk with no statistics and
+//! reports whether any part of the predicate reached a form [`apply`] does
+//! not model at all (the two `_ => DEFAULT_SELECTIVITY` arms: `LIKE`,
+//! `RLIKE`, string functions, UDFs, a bare boolean column, ...), so the two
+//! cannot drift apart. A modelled form answered without statistics (`=`
+//! against a literal with no distinct count, a range over a column with no
+//! bounds) is not counted: its fraction is the estimator's choice, and
+//! statistics would refine it. Not counted yet either, though statistics never
+//! refine it: a modelled comparison whose operand is an expression rather than
+//! a column (`substr(x, 1, 2) IN (..)`, `upper(x) = ..`, `year(d) < ..`) also
+//! answers a fixed fraction (a follow-up).
 
 use std::collections::HashSet;
 
@@ -32,6 +44,9 @@ pub(crate) struct View<'a> {
     /// Whether to record what the predicate leaves known (off: only the
     /// selectivity is read, as before statistics propagated).
     narrow: bool,
+    /// Some part of the predicate is a form [`apply`] does not model: its
+    /// fraction is [`DEFAULT_SELECTIVITY`], a guess.
+    pub(crate) guessed: bool,
 }
 
 impl<'a> View<'a> {
@@ -44,6 +59,7 @@ impl<'a> View<'a> {
             over: std::collections::HashMap::new(),
             empty: false,
             narrow,
+            guessed: false,
         }
     }
 
@@ -143,9 +159,17 @@ pub(crate) fn apply(pred: &Expr, v: &mut View<'_>) -> f64 {
             x * apply(b, v)
         }
         (Some((Builtin::Or, [a, b], _)), _) => or(a, b, v),
-        (Some((Builtin::Not, [a], _)), _) => 1.0 - apply(a, &mut v.clone()),
+        (Some((Builtin::Not, [a], _)), _) => {
+            let mut inner = v.clone();
+            let s = apply(a, &mut inner);
+            v.guessed |= inner.guessed;
+            1.0 - s
+        }
         (Some((op, args, _)), _) => leaf(op, args, v),
-        _ => DEFAULT_SELECTIVITY,
+        _ => {
+            v.guessed = true;
+            DEFAULT_SELECTIVITY
+        }
     };
     if s.is_finite() {
         s.clamp(0.0, 1.0)
@@ -159,6 +183,7 @@ pub(crate) fn apply(pred: &Expr, v: &mut View<'_>) -> f64 {
 fn or(a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
     let (mut x, mut y) = (v.clone(), v.clone());
     let (sx, sy) = (apply(a, &mut x), apply(b, &mut y));
+    v.guessed |= x.guessed || y.guessed;
     if v.narrow {
         v.empty |= x.empty && y.empty;
         let ids: HashSet<AttrId> = x.over.keys().chain(y.over.keys()).copied().collect();
@@ -203,8 +228,27 @@ fn leaf(op: Builtin, args: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
             }
             None => 1.0 - DEFAULT_SELECTIVITY,
         },
-        _ => DEFAULT_SELECTIVITY,
+        _ => {
+            v.guessed = true;
+            DEFAULT_SELECTIVITY
+        }
     }
+}
+
+/// Whether the estimator answers some part of `predicate` (a conjunct, a
+/// branch of an `OR`, the operand of a `NOT`) with a guess: a call it does
+/// not model at all, whose fraction is [`DEFAULT_SELECTIVITY`] whatever the
+/// statistics say (`LIKE`, `RLIKE`, string functions, UDFs, a boolean
+/// column). Modelled forms (comparisons, ranges, `IN` lists, null tests)
+/// are never guesses here, with or without statistics, even when an operand
+/// is an expression and the fraction is therefore fixed (not counted yet). The
+/// answer comes from the walk the estimator (`apply`) makes, so the two agree.
+#[must_use]
+pub fn selectivity_is_guessed(predicate: &Expr) -> bool {
+    let none = std::collections::HashMap::new();
+    let mut v = View::new(&none, false);
+    apply(predicate, &mut v);
+    v.guessed
 }
 
 /// `a = b` or `a <=> b`.

@@ -363,6 +363,14 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+## A declared schema on a Delta read
+
+`spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
+`KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
+asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
+the table, and the first action fails.
+
 ## `krishiv server` (Spark Connect)
 
 > The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API

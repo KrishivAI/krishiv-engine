@@ -61,6 +61,7 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+mod delta;
 pub mod egress;
 mod execute_immediate;
 mod explain;
@@ -83,6 +84,7 @@ mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_advice;
 mod partition_keys;
 mod partitions;
 mod plan_round_trip;

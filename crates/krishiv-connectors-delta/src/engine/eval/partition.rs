@@ -9,15 +9,18 @@
 //!   for every other type (Spark's non-ANSI cast of the map).
 //! - `date` is `YYYY-MM-DD`; `timestamp_ntz` is Arrow's timestamp grammar read without a zone;
 //!   `timestamp` honours an offset in the value, and an offset-less value is read in the reader
-//!   zone of `MapToStructOptions` (UTC by default). The reader zone may be `UTC` or a fixed
-//!   `+HH:MM`/`-HH:MM` offset; a named IANA zone is unsupported here (the kernel's scan code never
-//!   sets one, and chrono-tz is banned by ADR 0028).
-//! - **A difference from the kernel:** a `timestamp` value ending in an IANA zone name
-//!   (`2024-01-15 12:30:45 America/New_York`) is refused as the kernel's `Unsupported` (raised as
-//!   `UNSUPPORTED_FEATURE.TABLE_OPERATION`, naming the zone), where the kernel resolves the
-//!   name with chrono-tz. Spark and Delta writers do not write such values (they write no zone
-//!   or a `Z`/offset); Krishiv has no zone database (no chrono-tz, no jiff tz data). A trailing
-//!   `UTC` or `GMT` is read as UTC.
+//!   zone of `MapToStructOptions` (UTC by default): `UTC`, a fixed `+HH:MM`/`-HH:MM` offset, or
+//!   a zone database name (the kernel's `TimestampTimezone`). In a named reader zone, a local
+//!   time a backward clock change repeats is its earlier instant and one a forward change skips
+//!   takes the offset from before the change, as the kernel resolves them.
+//! - A `timestamp` value may end in a zone name, spaced or glued to the time, as the kernel's
+//!   Arrow grammar reads it (`12:30:45 UTC`, `12:30:45CET`); the name is then the value's zone
+//!   (over any reader zone), its local time must exist exactly once in that zone (Arrow's
+//!   `single()`), and a value with an offset as well (`12:30:45+02:00 UTC`) does not parse.
+//! - Zone names resolve through `jiff`'s bundled zone database (the one krishiv-kernels uses;
+//!   chrono-tz is banned by ADR 0028), matched exactly as chrono-tz matches them (`cet` is not
+//!   a zone). The kernel's chrono-tz and jiff may carry different tzdata releases: a zone whose
+//!   rules changed between them can differ in its newest transitions.
 //! - Other types use the kernel's `PrimitiveType::parse_scalar` (decimals with exponents,
 //!   booleans case-insensitively, intervals).
 //! - A value that does not parse is the kernel's `ParseError` (a broken table), not NULL.
@@ -42,15 +45,17 @@ use chrono::{FixedOffset, TimeZone, Utc};
 use delta_kernel::expressions::MapToStructOptions;
 use delta_kernel::schema::{DataType, PrimitiveType, StructType};
 use delta_kernel::{KernelError, KernelResult};
+use jiff::tz::{AmbiguousOffset, TimeZone as Zone};
 
 use super::arrow_err;
 use crate::engine::schema::{append_scalar, to_arrow_schema};
 
 /// The zone an offset-less `timestamp` partition value is read in.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum ReaderZone {
     Utc,
     Fixed(FixedOffset),
+    Named(Zone),
 }
 
 impl ReaderZone {
@@ -61,29 +66,76 @@ impl ReaderZone {
         if matches!(zone, "UTC" | "Etc/UTC" | "Z") {
             return Ok(Self::Utc);
         }
+        let invalid = || KernelError::generic(format!("Invalid timestamp timezone: {zone}"));
         if zone.starts_with(['+', '-']) {
-            return fixed_offset(zone).map(Self::Fixed).ok_or_else(|| {
-                KernelError::generic(format!("Invalid timestamp timezone: {zone}"))
-            });
+            return fixed_offset(zone).map(Self::Fixed).ok_or_else(invalid);
         }
-        Err(KernelError::unsupported(format!(
-            "the named reader time zone {zone} for partition timestamps"
-        )))
+        named(zone).map(Self::Named).ok_or_else(invalid)
     }
 
-    fn parse(self, raw: &str) -> Option<i64> {
-        // `UTC`/`GMT` suffixes need no zone database.
-        if let Some(local) = raw
-            .strip_suffix(" UTC")
-            .or_else(|| raw.strip_suffix(" GMT"))
-        {
-            return micros(&Utc, local.trim_end());
-        }
-        match self {
+    fn parse(&self, raw: &str) -> Option<i64> {
+        let parsed = match self {
             Self::Utc => micros(&Utc, raw),
-            Self::Fixed(z) => micros(&z, raw),
-        }
+            Self::Fixed(z) => micros(z, raw),
+            Self::Named(z) => in_named_reader_zone(raw, z),
+        };
+        // A value ending in a zone name: that zone, its local time existing exactly once.
+        parsed.or_else(|| {
+            let (local, zone) = zone_suffix(raw)?;
+            let wall = micros(&Utc, local)?;
+            match offset_at(&named(zone)?, wall)? {
+                AmbiguousOffset::Unambiguous { offset } => utc_of(wall, offset),
+                AmbiguousOffset::Gap { .. } | AmbiguousOffset::Fold { .. } => None,
+            }
+        })
     }
+}
+
+/// The zone database's zone `name`, matched exactly (chrono-tz's `Tz::from_str`; jiff's own
+/// lookup ignores case).
+fn named(name: &str) -> Option<Zone> {
+    Zone::get(name).ok().filter(|z| z.iana_name() == Some(name))
+}
+
+/// `raw` read in the named reader zone `zone`: a value with its own offset is that instant; an
+/// offset-less one is local time in `zone`, a repeated local time its earlier instant and a
+/// skipped one read with the offset from before the change (the kernel's
+/// `parse_timestamp_in_named_timezone`).
+fn in_named_reader_zone(raw: &str, zone: &Zone) -> Option<i64> {
+    let at_utc = micros(&Utc, raw)?;
+    let east = FixedOffset::east_opt(3_600)?;
+    if micros(&east, raw)? == at_utc {
+        // The reader zone did not matter: the value carries its own offset.
+        return Some(at_utc);
+    }
+    let offset = match offset_at(zone, at_utc)? {
+        AmbiguousOffset::Unambiguous { offset } | AmbiguousOffset::Gap { before: offset, .. } => {
+            offset
+        }
+        AmbiguousOffset::Fold { before, after } => {
+            if before.seconds() >= after.seconds() {
+                before
+            } else {
+                after
+            }
+        }
+    };
+    utc_of(at_utc, offset)
+}
+
+/// The offset(s) `zone` gives the local wall time `wall` (microseconds of the wall clock read
+/// as UTC).
+fn offset_at(zone: &Zone, wall: i64) -> Option<AmbiguousOffset> {
+    let civil = jiff::Timestamp::from_microsecond(wall)
+        .ok()?
+        .to_zoned(Zone::UTC)
+        .datetime();
+    Some(zone.to_ambiguous_timestamp(civil).offset())
+}
+
+/// The instant of the wall time `wall` at `offset`.
+fn utc_of(wall: i64, offset: jiff::tz::Offset) -> Option<i64> {
+    wall.checked_sub(i64::from(offset.seconds()).checked_mul(1_000_000)?)
 }
 
 fn micros<T: TimeZone>(zone: &T, raw: &str) -> Option<i64> {
@@ -112,30 +164,27 @@ fn fixed_offset(value: &str) -> Option<FixedOffset> {
     FixedOffset::east_opt(sign * (h * 3_600 + m * 60))
 }
 
-/// Why the `timestamp` partition value `raw` did not parse: a trailing IANA zone name on an
-/// offset-less local timestamp is `Unsupported` (see the module docs), anything else the
-/// kernel's `ParseError`. A trailing `UTC`/`GMT` is retried as UTC.
-fn named_zone_or_parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
-    let Some((local, zone)) = raw.trim_end().rsplit_once(char::is_whitespace) else {
-        return parse_error(raw, prim);
-    };
-    let local = local.trim_end();
-    // An offset in the value as well as a name conflict: the kernel rejects that too.
+/// The value `raw` split into its local timestamp and a trailing zone name, as Arrow's grammar
+/// reads a zone after the time (spaced or glued): `None` unless the local part is a timestamp
+/// with a time and no offset or `Z` of its own, and the rest is a name (letters first; letters,
+/// digits, `/`, `_`, `-`, `+`) of the zone database ([`named`]).
+fn zone_suffix(raw: &str) -> Option<(&str, &str)> {
+    let raw = raw.trim_end();
+    // The date is the first ten characters; the time starts after the separator.
+    let at = raw
+        .char_indices()
+        .skip(11)
+        .find(|(_, c)| c.is_ascii_alphabetic())
+        .map(|(i, _)| i)?;
+    let (local, zone) = (raw[..at].trim_end(), &raw[at..]);
     let has_offset = local
-        .get(10..)
+        .get(11..)
         .is_some_and(|time| time.contains(['+', '-', 'Z', 'z']));
-    let is_name = zone.starts_with(|c: char| c.is_ascii_alphabetic())
-        && zone.contains('/')
-        && zone
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
-    if is_name && !has_offset && micros(&Utc, local).is_some() {
-        return KernelError::unsupported(format!(
-            "the time zone name {zone} in the timestamp partition value '{raw}': Krishiv reads \
-             partition timestamps with no zone, `Z` or a numeric offset"
-        ));
-    }
-    parse_error(raw, prim)
+    let is_name = zone
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
+        && named(zone).is_some();
+    (is_name && !has_offset && micros(&Utc, local).is_some()).then_some((local, zone))
 }
 
 fn parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
@@ -159,7 +208,7 @@ fn append(
     b: &mut dyn ArrayBuilder,
     prim: &PrimitiveType,
     raw: Option<&str>,
-    zone: ReaderZone,
+    zone: &ReaderZone,
 ) -> KernelResult<()> {
     let data_type = DataType::Primitive(prim.clone());
     let Some(raw) = raw else {
@@ -177,7 +226,7 @@ fn append(
         }
         PrimitiveType::Timestamp => {
             let Some(v) = zone.parse(raw) else {
-                return Err(named_zone_or_parse_error(raw, prim));
+                return Err(parse_error(raw, prim));
             };
             builder!(b, TimestampMicrosecondBuilder, prim).append_value(v);
         }
@@ -250,7 +299,7 @@ pub(crate) fn map_to_struct(
             let raw = matched[i]
                 .filter(|e| *e >= start && *e < end && values.is_valid(*e))
                 .map(|e| values.value(e));
-            append(b.as_mut(), prims[i], raw, zone)?;
+            append(b.as_mut(), prims[i], raw, &zone)?;
         }
     }
     let columns: Vec<ArrayRef> = builders.iter_mut().map(ArrayBuilder::finish).collect();

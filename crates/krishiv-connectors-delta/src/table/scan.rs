@@ -17,6 +17,9 @@
 //!   or its path. A deletion vector is read through the kernel (`DvInfo::get_row_indexes`, on
 //!   the log pool), charged to the driver's memory reservation while the file is read, and
 //!   applied as the request's row selection. Kernel transforms are never evaluated on data.
+//! - **Cancellation.** Every kernel call of a run (the re-listing, the deletion-vector reads)
+//!   goes through the table's engine bound to the running query's cancellation
+//!   ([`DeltaEngine::for_query`]), never the planning engine's token.
 
 use std::any::Any;
 use std::future::Future;
@@ -29,8 +32,8 @@ use arrow_schema::{FieldRef, Schema, SchemaRef};
 use delta_kernel::expressions::{Predicate, PredicateRef};
 use krishiv_common::error::{FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::{
-    FilterPushdown, GlobalState, LocalState, PushedFilter, ScanPushdown, ScanPushdowns, Source,
-    TaskContext,
+    FilterPushdown, GlobalState, LocalState, PushedFilter, RuntimeFilters, ScanPushdown,
+    ScanPushdowns, Source, SourceRows, TaskContext,
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileRef, FormatOptions, MetadataCols, MetadataNeeds, RowLevel,
@@ -40,6 +43,7 @@ use krishiv_memory::Reservation;
 use krishiv_types::batch::Batch;
 
 use super::{Inner, ScanUnit, list_units, partition_array, predicate};
+use crate::engine::DeltaEngine;
 use crate::engine::columnar::{format, format_options};
 use crate::error::from_kernel;
 
@@ -165,6 +169,7 @@ impl DeltaScan {
             layout,
             output: Arc::new(Schema::new(fields)),
             pushed: self.kernel_predicate(&p.filters).map(Arc::new),
+            runtime: p.dynamic.clone(),
         })
     }
 }
@@ -220,6 +225,9 @@ pub struct DeltaScanSource {
     layout: Vec<Slot>,
     output: SchemaRef,
     pushed: Option<PredicateRef>,
+    /// The join's runtime filters, applied last to each batch (or by the probe above when the
+    /// planner handed the row stage to it).
+    runtime: RuntimeFilters,
 }
 
 impl DeltaScanSource {
@@ -231,15 +239,13 @@ impl DeltaScanSource {
 
     /// The files the scan reads: the table's listing, or with a pushed predicate the kernel's
     /// pruned listing (on the log pool).
-    async fn plan(&self) -> Result<Arc<[ScanUnit]>, KrishivError> {
+    async fn plan(&self, engine: &DeltaEngine) -> Result<Arc<[ScanUnit]>, KrishivError> {
         let Some(predicate) = self.pushed.clone() else {
             return Ok(Arc::clone(&self.inner.units));
         };
         let snapshot = Arc::clone(&self.inner.snapshot);
         let name = self.inner.name.clone();
-        let units = self
-            .inner
-            .engine
+        let units = engine
             .delta_blocking(move |e| {
                 list_units(e, &snapshot, Some(predicate)).map_err(|err| from_kernel(&err, &name))
             })
@@ -247,8 +253,12 @@ impl DeltaScanSource {
         Ok(units.into())
     }
 
-    async fn open(&self, local: &mut Local, unit: &ScanUnit) -> Result<(), KrishivError> {
-        let engine = &self.inner.engine;
+    async fn open(
+        &self,
+        engine: &DeltaEngine,
+        local: &mut Local,
+        unit: &ScanUnit,
+    ) -> Result<(), KrishivError> {
         let url = engine.table_root().join(&unit.path).map_err(|e| {
             KrishivError::from(FailedReadFileNoHint {
                 path: unit.path.clone(),
@@ -412,6 +422,8 @@ impl DeltaScanSource {
                 match cur.stream.next_batch().await? {
                     Some(b) => {
                         let b = self.assemble(&b, &cur.partitions)?;
+                        // After every other filter, as Spark evaluates a runtime filter last.
+                        let b = local.rows.apply(b)?;
                         return Ok(Some(Batch::new(b)));
                     }
                     None => {
@@ -420,18 +432,25 @@ impl DeltaScanSource {
                     }
                 }
             }
-            let units = global.units.get_or_try_init(|| self.plan()).await?;
+            let units = global
+                .units
+                .get_or_try_init(|| self.plan(&global.engine))
+                .await?;
             let i = global.next.fetch_add(1, Ordering::Relaxed);
             let Some(unit) = units.get(i) else {
                 return Ok(None);
             };
             local.claimed += 1;
-            self.open(local, unit).await?;
+            // Runtime filter decisions are per file.
+            local.rows.start_partition();
+            self.open(&global.engine, local, unit).await?;
         }
     }
 }
 
 struct Global {
+    /// The table's engine bound to the running query's cancellation.
+    engine: DeltaEngine,
     units: tokio::sync::OnceCell<Arc<[ScanUnit]>>,
     next: AtomicUsize,
 }
@@ -449,6 +468,7 @@ struct Local {
     gate: Arc<krishiv_io::ScanGate>,
     current: Option<Current>,
     claimed: u64,
+    rows: SourceRows,
 }
 
 fn state_error(what: &str) -> KrishivError {
@@ -470,8 +490,9 @@ impl Source for DeltaScanSource {
         Arc::clone(&self.output)
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> krishiv_exec::Result<GlobalState> {
+    fn global_state(&self, ctx: &TaskContext) -> krishiv_exec::Result<GlobalState> {
         Ok(Arc::new(Global {
+            engine: self.inner.engine.for_query(ctx.query()),
             units: tokio::sync::OnceCell::new(),
             next: AtomicUsize::new(0),
         }))
@@ -491,6 +512,7 @@ impl Source for DeltaScanSource {
             gate: Arc::clone(ctx.query().scan_gate()),
             current: None,
             claimed: 0,
+            rows: self.runtime.source_rows(&self.output, ctx.partition()),
         }))
     }
 

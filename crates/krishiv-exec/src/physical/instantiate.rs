@@ -1847,11 +1847,11 @@ pub(crate) fn scan_filter(
         env,
         subqueries: &[],
     };
-    let compiled = compile_one(predicate, layout, table, &v)?;
     Ok(PushedFilter {
-        predicate: Arc::new(Compiled(compiled)),
+        predicate: Arc::new(Compiled(compile_one(predicate, layout, table, &v)?)),
         expr: crate::planner::pushdown::translate(predicate, &scan.output),
         rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
+        partitions: crate::planner::pushdown::never_raising(predicate, &scan.output, env.ansi),
     })
 }
 
