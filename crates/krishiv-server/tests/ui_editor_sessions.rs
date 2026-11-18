@@ -18,7 +18,7 @@ use krishiv_server::internal::UiSource;
 use krishiv_server::session_source::SessionSource;
 use krishiv_session::auth::{Authenticated, Method, Role, RolePolicy};
 use krishiv_session::{EngineRuntime, PathPrefixPolicy, PolicyVersion, Session};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const SLOW: &str = "SELECT count(*) FROM range(0, 1000000000) a CROSS JOIN range(0, 1000000000) b";
 
@@ -172,4 +172,7 @@ async fn a_path_outside_the_allowed_roots_is_refused_through_the_editor() {
     )
     .await;
     assert_eq!(inside["state"], "finished", "{inside}");
+    // Spark's CSV reader without a header: one string column `_c0`, the file's lines in order.
+    assert_eq!(inside["columns"], json!(["_c0"]), "{inside}");
+    assert_eq!(inside["rows"], json!([["1"], ["2"]]), "{inside}");
 }

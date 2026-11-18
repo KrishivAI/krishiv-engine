@@ -252,15 +252,32 @@ async fn execute(
     }
     // One row past the cap tells `result_json` the result was cut; the rest is never materialised.
     let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
-    let columns: Vec<String> = capped
-        .schema()
-        .await?
-        .fields()
-        .iter()
-        .map(|f| f.name().clone())
-        .collect();
-    capped.collect().await.map(|b| Some((columns, b)))
+    let work = Box::pin(async {
+        let columns: Vec<String> = capped
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        capped.collect().await.map(|b| Some((columns, b)))
+    });
+    // A cancel that reached the run after the last check above may find no registered query to stop
+    // (`cancel_by_tag` sees only attached queries): watch the flag while the statement runs and drop the work when
+    // it is set, so an accepted cancel is never reported as a finished run.
+    let watch = Box::pin(async {
+        while !lock(&run).cancel_requested {
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+    });
+    match futures::future::select(work, watch).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(((), _)) => Ok(None),
+    }
 }
+
+/// How often a running editor statement looks for a cancel that found no registered query to stop.
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn finish(run: &Mutex<Run>, result: Result<Option<RunOutput>, KrishivError>) {
     let mut r = lock(run);

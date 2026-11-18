@@ -129,6 +129,8 @@ async fn an_operators_statement_runs_as_the_operator_and_is_recorded_under_them(
     let addr = start().await;
     let done = run(addr, ANN, "SELECT 41 + 1 AS answer").await;
     assert_eq!(done["state"], "finished", "{done}");
+    assert_eq!(done["columns"], json!(["answer"]), "{done}");
+    assert_eq!(done["rows"], json!([[42]]), "{done}");
     let (_, history) = call(addr, "GET", "/api/internal/history", ANN, "").await;
     let row = history["queries"]
         .as_array()
@@ -213,9 +215,21 @@ async fn an_operators_own_cancel_ends_their_query_as_a_user_cancel() {
     .await;
     assert_eq!(status, 202, "{body}");
     let id = body["run_id"].as_str().unwrap().to_owned();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    let (_, v) = call(addr, "GET", &format!("/api/internal/sql/{id}"), ANN, "").await;
-    assert_eq!(v["state"], "running", "{v}");
+    // Wait until the engine has registered the tagged query (a cancel earlier than that takes the editor's
+    // pre-execution path and would not test `cancel_by_tag`).
+    let registered = Instant::now();
+    loop {
+        let (_, q) = call(addr, "GET", "/api/internal/queries", ANN, "").await;
+        let live = q["queries"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|r| r["principal"] == "ann" && r["state"] == "running")
+        });
+        if live {
+            break;
+        }
+        assert!(registered.elapsed() < Duration::from_secs(20), "{q}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let (status, _) = call(
         addr,
         "POST",
