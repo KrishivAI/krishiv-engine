@@ -48,6 +48,7 @@ for f in $changed; do
 done
 
 # Warn only when code is more than 2 hours newer than every reference.
+case "$newest$ref" in *[!0-9]*) exit 0 ;; esac
 [ "$newest" -gt $((ref + 7200)) ] || exit 0
 
 # Active plan: the link after "active:" in STATUS.md, else the plans/ dir.

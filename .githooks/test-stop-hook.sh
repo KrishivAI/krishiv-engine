@@ -36,16 +36,34 @@ commit "$tmp/engine" 1
 out=$(run) || fail "hook exited non-zero"
 case "$out" in *systemMessage*"P3-implementation-plan.md"*) echo "ok: warns, links the plan" ;; *) fail "no warning: $out" ;; esac
 
-# A handoff 30 min ago: engine code is no longer 2 h newer -> silent.
-echo n > "$tmp/internal/handoffs/new.md"; touch_ago "$tmp/internal/handoffs/new.md" 0
+# A fresh handoff (written now): engine code is not 2 h newer -> silent.
+echo n > "$tmp/internal/handoffs/new.md"
 out=$(run) || fail "hook exited non-zero"
 [ -z "$out" ] || fail "warned despite a fresh handoff: $out"
 echo "ok: a fresh handoff silences it"
-
-# Engine code only 1 h newer than a 2 h-old handoff: inside the window -> silent.
 rm "$tmp/internal/handoffs/new.md"
-touch_ago "$tmp/internal/STATUS.md" 2; touch_ago "$tmp/internal/handoffs/old.md" 2
-git -C "$tmp/internal" -c commit.gpgsign=false commit -q --amend --no-edit --date="@$(( $(date +%s) - 7200 ))" 2>/dev/null || true
-out=$(run) || fail "hook exited non-zero"
-[ -z "$out" ] || fail "warned inside the 2 h window: $out"
-echo "ok: within 2 hours stays silent"
+
+# Window edges: STATUS.md and the handoff are committed and touched H hours ago
+# (engine code is 1 h old), so the code is (H-1) h newer... set engine instead:
+# reference 1 h old, engine code N hours after it.
+window() { # engine_hours_ago ref_hours_ago
+  rm -rf "$tmp/internal/.git" "$tmp/engine/.git"
+  git init -q -b main "$tmp/internal"; git init -q -b main "$tmp/engine"
+  touch_ago "$tmp/internal/STATUS.md" "$2"; touch_ago "$tmp/internal/handoffs/old.md" "$2"
+  commit "$tmp/internal" "$2"; commit "$tmp/engine" "$1"
+  touch_ago "$tmp/engine/crates/a.rs" "$1"
+  run
+}
+out=$(window 1 3) || fail "hook exited non-zero"   # code 2 h newer: not more than 2 h
+[ -z "$out" ] || fail "warned at exactly 2 h: $out"
+echo "ok: 2 h newer stays silent"
+out=$(window 1 4) || fail "hook exited non-zero"   # code 3 h newer
+case "$out" in *systemMessage*) echo "ok: 3 h newer warns" ;; *) fail "no warning 3 h newer" ;; esac
+out=$(window 4 1) || fail "hook exited non-zero"   # code older than the reference
+[ -z "$out" ] || fail "warned with code older than the reference: $out"
+echo "ok: code older than the reference stays silent"
+
+# No handoffs at all: STATUS.md alone is the reference.
+rm -f "$tmp"/internal/handoffs/*
+out=$(window 1 4) || fail "hook exited non-zero"
+case "$out" in *systemMessage*) echo "ok: empty handoffs dir, STATUS.md is the reference" ;; *) fail "no warning without handoffs" ;; esac
