@@ -1,34 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The arrow-rs `FlightSqlService` implementation (design P3-T101 §2, §4, §5): Handshake,
-//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `CancelFlightInfo`. Every RPC
+//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `CancelFlightInfo`, `CancelQuery`. Every RPC
 //! starts with the drain check and the caller `AuthLayer` attached (fail closed); what 65a does
-//! not serve answers `UNIMPLEMENTED` before any session work (arrow-rs's defaults, and
-//! `do_action_fallback` here, §16 m5).
+//! not serve never reaches it: [`crate::gate`] answers `UNIMPLEMENTED` first (§16 m5).
 
 use std::pin::Pin;
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
-    Any, Command as FlightCommand, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt,
-    TicketStatementQuery,
+    ActionCancelQueryRequest, ActionCancelQueryResult, Any, Command as FlightCommand,
+    CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightDescriptor,
     FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
+use krishiv_common::error::{InvalidHandleFormat, KrishivError};
 use krishiv_session::auth::Authenticated;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::call::shutting_down;
+use crate::gate::CANCEL_FLIGHT_INFO;
 use crate::metrics::Command;
 use crate::server::FlightSqlServer;
-use crate::statement::DoGetStream;
+use crate::statement::{DoGetStream, internal};
+use crate::status::flight_status;
 
-/// The `CancelFlightInfo` action type (Flight's, not Flight SQL's deprecated `CancelQuery`).
-const CANCEL_FLIGHT_INFO: &str = "CancelFlightInfo";
+/// `ActionCancelQueryResult.CancelResult.CANCEL_RESULT_CANCELLED` (Flight SQL's proto; arrow-rs
+/// does not export the enum).
+const CANCEL_RESULT_CANCELLED: i32 = 1;
 
 type ActionStream =
     Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
@@ -44,7 +47,11 @@ impl FlightSqlServer {
     }
 
     /// Counts `result` under `command` (`krishiv_flight_sql_requests_total`).
-    fn counted<T>(&self, command: Command, result: Result<T, Status>) -> Result<T, Status> {
+    pub(crate) fn counted<T>(
+        &self,
+        command: Command,
+        result: Result<T, Status>,
+    ) -> Result<T, Status> {
         let code = match &result {
             Ok(_) => tonic::Code::Ok,
             Err(s) => s.code(),
@@ -52,6 +59,32 @@ impl FlightSqlServer {
         self.inner.requests.record(command, code);
         result
     }
+
+    /// Cancels the statement whose ticket is `info`'s first endpoint's (design §4.5): a missing
+    /// or malformed ticket is `INVALID_HANDLE.FORMAT` (`INVALID_ARGUMENT`, §6); another
+    /// principal's handle and an unknown one get one `NOT_FOUND` answer.
+    fn cancel_info(&self, caller: &Authenticated, info: Option<&FlightInfo>) -> Result<(), Status> {
+        let handle = info
+            .and_then(|info| info.endpoint.first())
+            .and_then(|endpoint| endpoint.ticket.as_ref())
+            .and_then(|ticket| Any::decode(ticket.ticket.as_ref()).ok())
+            .and_then(|any| FlightCommand::try_from(any).ok())
+            .and_then(|command| match command {
+                FlightCommand::TicketStatementQuery(t) => Some(t.statement_handle),
+                _ => None,
+            })
+            .ok_or_else(|| flight_status(&malformed_ticket()))?;
+        self.cancel_statement(caller, &handle)
+            .map_err(|e| flight_status(&e))
+    }
+}
+
+/// A cancel whose ticket is not a statement ticket of this server.
+fn malformed_ticket() -> KrishivError {
+    InvalidHandleFormat {
+        handle: "<ticket>".to_owned(),
+    }
+    .into()
 }
 
 #[tonic::async_trait]
@@ -129,7 +162,7 @@ impl FlightSqlService for FlightSqlServer {
             let ticket = Ticket::new(query.as_any().encode_to_vec());
             FlightInfo::new()
                 .try_with_schema(&schema)
-                .map_err(|e| Status::internal(format!("encoding a schema: {e}")))
+                .map_err(|e| internal(format!("encoding a schema: {e}")))
                 .map(|info| {
                     Response::new(
                         info.with_endpoint(FlightEndpoint::new().with_ticket(ticket))
@@ -152,7 +185,7 @@ impl FlightSqlService for FlightSqlServer {
             let schema = builder.schema();
             let batch = builder
                 .build()
-                .map_err(|e| Status::internal(format!("the GetSqlInfo table: {e}")))?;
+                .map_err(|e| internal(format!("the GetSqlInfo table: {e}")))?;
             let out: DoGetStream = FlightDataEncoderBuilder::new()
                 .with_schema(schema)
                 .build(stream::iter([Ok(batch)]))
@@ -163,8 +196,7 @@ impl FlightSqlService for FlightSqlServer {
         self.counted(Command::SqlInfo, result)
     }
 
-    /// `CancelFlightInfo` (design §4.5); any other action 65a does not serve is `UNIMPLEMENTED`
-    /// before any session work (§16 m5).
+    /// `CancelFlightInfo` (design §4.5). [`crate::gate`] lets no other action reach here.
     async fn do_action_fallback(
         &self,
         request: Request<Action>,
@@ -180,28 +212,30 @@ impl FlightSqlService for FlightSqlServer {
         }
         let result = self.admit(&request).and_then(|caller| {
             let cancel = CancelFlightInfoRequest::decode(request.get_ref().body.as_ref())
-                .map_err(|e| Status::invalid_argument(format!("CancelFlightInfoRequest: {e}")))?;
-            let handle = cancel
-                .info
-                .as_ref()
-                .and_then(|info| info.endpoint.first())
-                .and_then(|endpoint| endpoint.ticket.as_ref())
-                .and_then(|ticket| Any::decode(ticket.ticket.as_ref()).ok())
-                .and_then(|any| FlightCommand::try_from(any).ok())
-                .and_then(|command| match command {
-                    FlightCommand::TicketStatementQuery(t) => Some(t.statement_handle),
-                    _ => None,
-                });
-            let cancelled = handle.is_some_and(|h| self.cancel_statement(&caller, &h));
-            if !cancelled {
-                // Another principal's handle and an unknown one get one answer (design §4.5).
-                return Err(Status::not_found("the ticket is unknown"));
-            }
+                .map_err(|_| flight_status(&malformed_ticket()))?;
+            self.cancel_info(&caller, cancel.info.as_ref())?;
             let body = CancelFlightInfoResult::new(CancelStatus::Cancelled).encode_to_vec();
             let out: ActionStream = Box::pin(stream::iter([Ok(arrow_flight::Result {
                 body: body.into(),
             })]));
             Ok(Response::new(out))
+        });
+        self.counted(Command::Cancel, result)
+    }
+
+    /// The deprecated `CancelQuery` (design §4.5): `CancelFlightInfo`'s rules, its own answer.
+    async fn do_action_cancel_query(
+        &self,
+        query: ActionCancelQueryRequest,
+        request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status> {
+        let result = self.admit(&request).and_then(|caller| {
+            let info = FlightInfo::decode(query.info.as_ref())
+                .map_err(|_| flight_status(&malformed_ticket()))?;
+            self.cancel_info(&caller, Some(&info))?;
+            Ok(ActionCancelQueryResult {
+                result: CANCEL_RESULT_CANCELLED,
+            })
         });
         self.counted(Command::Cancel, result)
     }

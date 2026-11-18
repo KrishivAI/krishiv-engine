@@ -25,6 +25,7 @@ use krishiv_connect_server::{ConnectAuth, ExecuteLimits, Operation, SessionManag
 use krishiv_memory::Reservation;
 
 use crate::encode::EncodeLimits;
+use crate::gate::FlightGate;
 use crate::handles::{HandleLimits, Handles};
 use crate::metrics::Requests;
 use crate::sessions::{Holds, Release, Sessions};
@@ -259,11 +260,12 @@ impl FlightSqlServer {
         })
     }
 
-    /// The tonic service to add to the Connect listener (`ConnectServer::with_routes`), with the
+    /// The tonic service to add to the Connect listener (`ConnectServer::with_routes`): the
+    /// fail-closed [`FlightGate`] in front of the arrow-rs dispatch (design §16 m5), with the
     /// inbound message limit of `spark.connect.grpc.maxInboundMessageSize`.
     #[must_use]
-    pub fn service(&self) -> FlightServiceServer<Self> {
-        FlightServiceServer::new(self.clone())
+    pub fn service(&self) -> FlightServiceServer<FlightGate> {
+        FlightServiceServer::new(FlightGate(self.clone()))
             .max_decoding_message_size(self.inner.config.max_inbound_message_size)
     }
 

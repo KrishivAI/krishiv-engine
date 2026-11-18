@@ -8,6 +8,7 @@
 mod call;
 pub mod cookies;
 pub mod encode;
+mod gate;
 pub mod handles;
 pub mod metrics;
 pub mod server;
@@ -19,6 +20,7 @@ pub mod status;
 
 pub use cookies::{SessionCookie, session_cookie, set_session_cookie};
 pub use encode::{EncodeLimits, encode_results};
+pub use gate::FlightGate;
 pub use handles::{HandleId, HandleLimits, Handles, Inserted};
 pub use metrics::{Command, Outcome, RequestCount, Requests};
 pub use server::{FlightSqlConfig, FlightSqlServer, HANDLES_CONSUMER, SweepGuard};

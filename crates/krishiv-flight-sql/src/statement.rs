@@ -3,8 +3,8 @@
 //! takes a handle slot, analyzes a query (nothing runs) or runs a command once and stores its
 //! rows; `DoGet(TicketStatementQuery)` re-analyzes a query with its pinned clock and streams it, or
 //! streams a command's stored rows; `CancelFlightInfo` cancels a handle's fetches and releases it.
-//! Every mark a call takes is a drop guard, released in reverse order whatever ends the call:
-//! the call in the session table, the slot, the fetch, the `Operation`.
+//! Every mark a call takes is a drop guard, released whatever ends the call, the `Operation`
+//! before the fetch, the slot and the call in the session table (see [`Marks`]).
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,8 +19,8 @@ use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::SchemaRef;
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
-    InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError, KrishivFlightSqlFetchIdle,
-    KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
+    InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
+    KrishivFlightSqlFetchIdle, KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
     KrishivFlightSqlStatementTooLarge,
 };
 use krishiv_connect_server::execute::arrow::{empty_batch, spark_batch};
@@ -138,8 +138,10 @@ impl Drop for SlotGuard {
     }
 }
 
-/// The marks of a `DoGet`, released in reverse order of taking: the operation, the fetch, the
-/// response budget, the call (struct fields drop in declaration order).
+/// The marks of a `DoGet`, taken in the order call, fetch, operation, response budget and
+/// released (struct fields drop in declaration order) operation, fetch, budget, call: the
+/// operation ends before the fetch and the call, which is what §16 M3 needs; the budget permit
+/// has no order with the others (review n1).
 pub(crate) struct Marks {
     op: OpGuard,
     _fetch: FetchGuard,
@@ -315,7 +317,7 @@ fn flight_info(
     };
     FlightInfo::new()
         .try_with_schema(schema)
-        .map_err(|e| Status::internal(format!("encoding a schema: {e}")))
+        .map_err(|e| internal(format!("encoding a schema: {e}")))
         .map(|info| {
             info.with_endpoint(
                 FlightEndpoint::new().with_ticket(Ticket::new(ticket.as_any().encode_to_vec())),
@@ -426,7 +428,7 @@ impl FlightSqlServer {
                     .await
                     .map_err(|e| op_failed(&op, &e))?
             }
-            _ => return Err(Status::internal("an unknown outcome of a SQL statement")),
+            _ => return Err(internal("an unknown outcome of a SQL statement".to_owned())),
         };
         let (schema, kind, bytes) = match outcome {
             SqlOutcome::Query(df) => {
@@ -457,7 +459,7 @@ impl FlightSqlServer {
                     bytes,
                 )
             }
-            _ => return Err(Status::internal("an unknown outcome of a SQL statement")),
+            _ => return Err(internal("an unknown outcome of a SQL statement".to_owned())),
         };
         // A command ran, so any refusal to keep its handle says so (§15 m3, review m1); a query
         // did not run and gets the refusal itself (review m2).
@@ -653,19 +655,23 @@ impl FlightSqlServer {
 
     /// `CancelFlightInfo` of a statement ticket (design §4.5): the handle's live fetches are
     /// cancelled and the handle is released; `true` when it was the caller's.
-    pub(crate) fn cancel_statement(&self, caller: &Authenticated, statement_handle: &[u8]) -> bool {
+    /// `CancelFlightInfo` / `CancelQuery` of one statement handle: `INVALID_HANDLE.FORMAT` for a
+    /// malformed one, one not-found answer for another owner's and an unknown one.
+    pub(crate) fn cancel_statement(
+        &self,
+        caller: &Authenticated,
+        statement_handle: &[u8],
+    ) -> Result<(), KrishivError> {
         let inner = &self.inner;
         let owner = SessionOwner::of(caller);
         let cap = owner.cap_key();
-        let Ok(id) = handle_of(statement_handle) else {
-            return false;
-        };
+        let id = handle_of(statement_handle)?;
         match inner.handles.get(&cap, &id, Instant::now()) {
             Some((_, p)) if p.owner == owner => {}
-            _ => return false,
+            _ => return Err(not_found()),
         }
         let Some((sid, payload)) = inner.handles.remove(&cap, &id) else {
-            return false;
+            return Err(not_found());
         };
         // Only the operations live on this handle are cancelled (§4.5): another ticket's fetch or
         // a command running in the same session is left alone.
@@ -688,7 +694,7 @@ impl FlightSqlServer {
         {
             self.release(&r);
         }
-        true
+        Ok(())
     }
 }
 
@@ -730,6 +736,11 @@ fn not_stored_after(bytes: usize, e: &KrishivError) -> KrishivError {
         reason: client_reason(e),
     })
     .with_cause(e.clone())
+}
+
+/// An internal failure as a Flight status, with its class, SQLSTATE and error id (review n4).
+pub(crate) fn internal(message: String) -> Status {
+    flight_status(&InternalError { message }.into())
 }
 
 /// A failure after `op` was registered: the operation ends failed, not cancelled (review m10),

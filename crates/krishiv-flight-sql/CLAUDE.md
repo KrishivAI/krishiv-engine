@@ -47,8 +47,13 @@ Paths are relative to this crate.
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
   `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
   (operation, fetch, response budget, call; §16 M3)
+- `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
+  is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
+  65a does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
+  session work, counted `unsupported`
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
-  `GetSqlInfo` without a session; actions other than `CancelFlightInfo` `UNIMPLEMENTED`
+  `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
+  `INVALID_HANDLE.FORMAT`)
 - `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,
   commands once, re-fetch clock, owner binding, cancel, limits, auth)
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
