@@ -134,8 +134,8 @@ class SparkSession:
 
     def interruptTag(self, tag: str) -> list[str]:
         """Cancels the running queries that carry ``tag`` (see :meth:`addTag`); their operation ids."""
-        self._check_tag(tag)
-        return self._base_native.interrupt_tag(tag)
+        # As Spark Connect: a tag no query carries (an invalid one included) cancels nothing.
+        return self._base_native.interrupt_tag(tag) if isinstance(tag, str) else []
 
     def interruptOperation(self, op_id: str) -> list[str]:
         """Cancels the running query with operation id ``op_id``; its id in a list, or an empty list."""

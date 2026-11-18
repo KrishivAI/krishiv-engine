@@ -1352,6 +1352,8 @@ pub fn krishiv_session::DataFrame::cache(&self) -> Self
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::create_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::create_or_replace_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::cube(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
@@ -1419,8 +1421,6 @@ impl krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::observe(&self, &krishiv_session::Observation, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::clone(&self) -> krishiv_session::DataFrame
-pub async fn krishiv_session::DataFrame::create_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub async fn krishiv_session::DataFrame::create_or_replace_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::DataFrameReader
@@ -1789,6 +1789,7 @@ pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transpo
 pub fn krishiv_session::Session::set_idle_timeout_ms(&self, core::option::Option<i64>)
 pub fn krishiv_session::Session::spark_profile(&self) -> krishiv_functions::signature::SparkProfile
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::with_request_tags<I, T>(&self, I) -> core::result::Result<krishiv_session::Session, krishiv_common::error::KrishivError> where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl krishiv_session::Session
 pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_catalog::Catalog<'_>
 impl krishiv_session::Session
@@ -1802,7 +1803,6 @@ impl core::clone::Clone for krishiv_session::Session
 pub fn krishiv_session::Session::clone(&self) -> krishiv_session::Session
 impl core::fmt::Debug for krishiv_session::Session
 pub fn krishiv_session::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn krishiv_session::Session::with_request_tags<I, T>(&self, I) -> core::result::Result<krishiv_session::Session, krishiv_common::error::KrishivError> where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 pub struct krishiv_session::SessionBuilder
 impl krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::access_policy(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self

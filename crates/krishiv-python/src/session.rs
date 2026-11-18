@@ -132,13 +132,12 @@ impl PySession {
     }
 
     /// Cancels the query with operation id `id`; its id in a list, or an empty list.
-    fn interrupt_operation(&self, py: Python<'_>, id: &str) -> PyResult<Vec<String>> {
-        let query = krishiv_session::QueryId::parse(id).map_err(|e| to_py(py, &e))?;
-        Ok(if self.inner.cancel(&query) {
-            vec![query.to_string()]
-        } else {
-            Vec::new()
-        })
+    fn interrupt_operation(&self, id: &str) -> Vec<String> {
+        // As Spark Connect: an id that is no operation's (malformed included) cancels nothing.
+        match krishiv_session::QueryId::parse(id) {
+            Ok(query) if self.inner.cancel(&query) => vec![query.to_string()],
+            _ => Vec::new(),
+        }
     }
 
     /// Runs the SQL query `query` through analysis; its DataFrame.

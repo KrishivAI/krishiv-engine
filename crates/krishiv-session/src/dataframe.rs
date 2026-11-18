@@ -1828,6 +1828,9 @@ impl DataFrame {
             view.to_owned()
         };
         let name = key.as_str();
+        // Spark analyzes the view's plan first: its errors come first.
+        let analysis = self.analysis().await?;
+        // After the analysis, as Spark: a bad query is reported before an existing name.
         if !replace
             && self
                 .session
@@ -1845,8 +1848,6 @@ impl DataFrame {
             }
             .into());
         }
-        // Spark analyzes the view's plan first: its errors come first.
-        let analysis = self.analysis().await?;
         let columns: Vec<TableColumn> =
             crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
                 .output
@@ -1866,7 +1867,7 @@ impl DataFrame {
                     partitions: Some(Default::default()),
                 },
             );
-            self.session.state.cache.forget_table(name);
+            self.session.state.cache.forget_table(view);
             return Ok(());
         }
         // Any other view snapshots its input: the analyzed plan is stored,
@@ -1889,7 +1890,7 @@ impl DataFrame {
             // observations. Published with the entry, under the same lock.
             crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
         );
-        self.session.state.cache.forget_table(name);
+        self.session.state.cache.forget_table(view);
         Ok(())
     }
 }

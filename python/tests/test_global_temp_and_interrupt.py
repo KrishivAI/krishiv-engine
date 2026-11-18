@@ -42,10 +42,26 @@ def test_creating_an_existing_global_view_fails_and_replace_replaces(spark: kris
 
 def test_a_global_view_belongs_to_its_session(spark: krishiv.SparkSession) -> None:
     # Spark shares `global_temp` across an application's sessions; Krishiv keeps it per session
-    # (docs/concepts/known-differences.md, `newSession`).
+    # (docs/concepts/known-differences.md, "Tags and global views").
     spark.range(2).createGlobalTempView("gv4")
     with pytest.raises(AnalysisException):
         spark.newSession().table("global_temp.gv4").count()
+
+
+def test_a_bad_query_is_reported_before_an_existing_name(spark: krishiv.SparkSession) -> None:
+    spark.range(1).createGlobalTempView("gv5")
+    bad = spark.sql("SELECT 1 AS x").selectExpr("nope")
+    with pytest.raises(AnalysisException) as info:
+        bad.createGlobalTempView("gv5")
+    assert info.value.getCondition() != "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS"
+
+
+def test_replacing_a_global_view_drops_its_cached_data(spark: krishiv.SparkSession) -> None:
+    spark.sql("SELECT 1 AS x").createGlobalTempView("gv6")
+    spark.sql("CACHE TABLE global_temp.gv6")
+    assert spark.catalog.isCached("global_temp.gv6")
+    spark.sql("SELECT 2 AS x").createOrReplaceGlobalTempView("gv6")
+    assert not spark.catalog.isCached("global_temp.gv6")
 
 
 def test_interrupt_with_nothing_running_returns_nothing(spark: krishiv.SparkSession) -> None:
@@ -54,9 +70,10 @@ def test_interrupt_with_nothing_running_returns_nothing(spark: krishiv.SparkSess
     assert spark.interruptOperation("00000000-0000-0000-0000-000000000000") == []
 
 
-def test_interrupt_operation_rejects_a_malformed_id(spark: krishiv.SparkSession) -> None:
-    with pytest.raises(Exception, match="INVALID_HANDLE"):
-        spark.interruptOperation("not-an-operation-id")
+def test_interrupt_of_an_id_or_tag_nothing_has_cancels_nothing(spark: krishiv.SparkSession) -> None:
+    assert spark.interruptOperation("not-an-operation-id") == []
+    assert spark.interruptTag("") == []
+    assert spark.interruptTag("a,b") == []
 
 
 def test_tags_are_per_thread_and_validated(spark: krishiv.SparkSession) -> None:
