@@ -488,7 +488,7 @@ fn profile_nodes_carry_the_planners_row_estimates() {
     let (got, profile) = block_on(df.collect_with_profile()).unwrap();
     assert_eq!(rows(&got), 2_000);
     let doc = profile.to_json_value();
-    assert_eq!(doc["minor"], 6);
+    assert_eq!(doc["minor"], 7);
     let plan = doc["plan"].as_array().cloned().unwrap_or_default();
     let estimated: Vec<_> = plan.iter().filter_map(|n| n.get("estimate")).collect();
     assert!(!estimated.is_empty(), "{doc}");

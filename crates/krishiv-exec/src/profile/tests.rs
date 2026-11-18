@@ -1167,7 +1167,7 @@ fn plan_estimates_round_trip_and_unknown_sources_are_kept() {
         })
     );
     let mut doc = profile.to_json_value();
-    assert_eq!(doc["minor"], 6);
+    assert_eq!(doc["minor"], 7);
     assert_eq!(doc["plan"][0]["estimate"]["rows"], 42);
     assert!(doc["plan"][1].get("estimate").is_none(), "{doc}");
     doc["plan"][0]["estimate"]["source"] = "analyze".into();
