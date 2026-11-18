@@ -153,6 +153,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
     ),
+    ("spark.sql.repl.eagerEval.enabled", &REPL_EAGER_EVAL_ENABLED),
     (
         "krishiv.cache.defaultStorageLevel",
         &CACHE_DEFAULT_STORAGE_LEVEL,
@@ -229,6 +230,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_TIME_PARSER_POLICY,
     ),
     (
+        "spark.sql.repl.eagerEval.truncate",
+        &REPL_EAGER_EVAL_TRUNCATE,
+    ),
+    (
         "spark.sql.unionOutputPartitioning",
         &UNION_OUTPUT_PARTITIONING,
     ),
@@ -273,6 +278,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CTE_RECURSION_LEVEL_LIMIT,
     ),
     (
+        "krishiv.sql.repl.eagerEval.enabled",
+        &REPL_EAGER_EVAL_ENABLED,
+    ),
+    (
         "krishiv.sql.shuffle.partitionsHint",
         &SHUFFLE_PARTITIONS_HINT,
     ),
@@ -311,8 +320,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_TIME_PARSER_POLICY,
     ),
     (
+        "krishiv.sql.repl.eagerEval.truncate",
+        &REPL_EAGER_EVAL_TRUNCATE,
+    ),
+    (
         "krishiv.sql.unionOutputPartitioning",
         &UNION_OUTPUT_PARTITIONING,
+    ),
+    (
+        "spark.sql.repl.eagerEval.maxNumRows",
+        &REPL_EAGER_EVAL_MAX_NUM_ROWS,
     ),
     (
         "krishiv.delta.snapshotCache.maxBytes",
@@ -377,6 +394,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.ndvSampling.timeout",
         &NDV_SAMPLING_TIMEOUT,
+    ),
+    (
+        "krishiv.sql.repl.eagerEval.maxNumRows",
+        &REPL_EAGER_EVAL_MAX_NUM_ROWS,
     ),
     (
         "spark.sql.legacy.statisticalAggregate",
@@ -607,6 +628,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_DETACHED_TIMEOUT,
     ),
     (
+        "spark.sql.execution.pandas.structHandlingMode",
+        &PANDAS_STRUCT_HANDLING_MODE,
+    ),
+    (
         "spark.sql.optimizer.windowGroupLimitThreshold",
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
@@ -633,6 +658,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.execute.senderMaxStreamDuration",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+    ),
+    (
+        "krishiv.sql.execution.pandas.structHandlingMode",
+        &PANDAS_STRUCT_HANDLING_MODE,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",

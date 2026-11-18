@@ -150,6 +150,54 @@ pub static ARROW_USE_LARGE_VAR_TYPES: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.execution.arrow.useLargeVarTypes"),
 };
 
+/// `spark.sql.execution.pandas.structHandlingMode`.
+pub static PANDAS_STRUCT_HANDLING_MODE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.pandas.structHandlingMode",
+    value_type: ValueType::Enum(&["legacy", "row", "dict"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("legacy"))),
+    doc: "How a client converts a struct column when it builds a pandas DataFrame: `legacy`, `row` (a Row object) or `dict` (a dict with suffixed names for repeated fields). Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.execution.pandas.structHandlingMode"),
+};
+
+/// `spark.sql.repl.eagerEval.enabled`.
+pub static REPL_EAGER_EVAL_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.repl.eagerEval.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, a notebook or REPL shows the top rows of a DataFrame without an explicit `show()`. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.repl.eagerEval.enabled"),
+};
+
+/// `spark.sql.repl.eagerEval.maxNumRows`.
+pub static REPL_EAGER_EVAL_MAX_NUM_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.repl.eagerEval.maxNumRows",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(20)),
+    doc: "The most rows eager evaluation shows. Only used when `krishiv.sql.repl.eagerEval.enabled` is true. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.repl.eagerEval.maxNumRows"),
+};
+
+/// `spark.sql.repl.eagerEval.truncate`.
+pub static REPL_EAGER_EVAL_TRUNCATE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.repl.eagerEval.truncate",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(20)),
+    doc: "The most characters eager evaluation shows for a cell. Only used when `krishiv.sql.repl.eagerEval.enabled` is true. Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.repl.eagerEval.truncate"),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +256,13 @@ mod tests {
                 "spark.sql.execution.arrow.useLargeVarTypes",
                 ConfigValue::Bool(false),
             ),
+            (
+                "spark.sql.execution.pandas.structHandlingMode",
+                ConfigValue::String("legacy".into()),
+            ),
+            ("spark.sql.repl.eagerEval.enabled", ConfigValue::Bool(false)),
+            ("spark.sql.repl.eagerEval.maxNumRows", ConfigValue::Int(20)),
+            ("spark.sql.repl.eagerEval.truncate", ConfigValue::Int(20)),
         ] {
             let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
             assert_eq!(c.get(entry), Some(&want), "{key}");
@@ -241,6 +296,10 @@ mod tests {
             "krishiv.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
             "krishiv.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
             "krishiv.sql.execution.arrow.useLargeVarTypes",
+            "krishiv.sql.execution.pandas.structHandlingMode",
+            "krishiv.sql.repl.eagerEval.enabled",
+            "krishiv.sql.repl.eagerEval.maxNumRows",
+            "krishiv.sql.repl.eagerEval.truncate",
         ] {
             let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
             assert_eq!(entry.key, key);
