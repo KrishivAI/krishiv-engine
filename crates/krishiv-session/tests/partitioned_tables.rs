@@ -2576,3 +2576,389 @@ fn partition_errors_list_a_spec_as_written() {
     assert_eq!(rows(&s, "show partitions c"), ["p=10/s=c", "p=9/s=b"]);
     assert!(dir.path().join("c").join("p=10").join("s=c").is_dir());
 }
+
+/// A filter that compares a partition column with a value reads only the files of the partitions it keeps (P3-T025:
+/// static partition pruning, so partitioning by an advised column cuts the bytes scanned).
+#[test]
+fn an_equality_on_a_partition_column_opens_only_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE pp USING parquet PARTITIONED BY (k) AS SELECT id, CAST(id % 4 AS INT) AS k FROM range(0, 400)",
+    );
+    let decoded = |sql: &str| -> String {
+        let plan = rows(&s, sql).join("\n");
+        let at = plan.find("scan_rows_decoded=").expect(&plan);
+        plan[at + "scan_rows_decoded=".len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect()
+    };
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k = 2"),
+        "100"
+    );
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k IN (1, 3)"),
+        "200"
+    );
+    assert_eq!(
+        decoded("EXPLAIN ANALYZE SELECT sum(id) FROM pp WHERE k > 5 OR id = 7"),
+        "400"
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(sum(id) AS STRING) FROM pp WHERE k = 2"),
+        ["20000"]
+    );
+}
+
+/// `scan_rows_decoded` of an `EXPLAIN ANALYZE`.
+fn decoded(s: &Session, sql: &str) -> String {
+    let plan = rows(s, sql).join("\n");
+    let at = plan.find("scan_rows_decoded=").expect(&plan);
+    plan[at + "scan_rows_decoded=".len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect()
+}
+
+/// `partitioned` and its unpartitioned copy `plain` (same rows, the partition columns as ordinary ones) give the same
+/// rows for every filter: static partition pruning removes only files whose rows the filter would drop.
+fn same_rows_as_unpruned(s: &Session, partitioned: &str, filters: &[&str]) {
+    let plain = format!("{partitioned}_plain");
+    run(
+        s,
+        &format!("CREATE TABLE {plain} USING parquet AS SELECT * FROM {partitioned}"),
+    );
+    for f in filters {
+        let select = |t: &str| format!("SELECT CAST(a AS STRING) FROM {t} WHERE {f} ORDER BY a");
+        assert_eq!(
+            rows(s, &select(partitioned)),
+            rows(s, &select(&plain)),
+            "WHERE {f}"
+        );
+    }
+}
+
+/// A partition that holds NULL (`__HIVE_DEFAULT_PARTITION__`) is never dropped by a filter that can be true or unknown
+/// for it, and is kept or dropped as the unpruned scan would.
+#[test]
+fn pruning_keeps_the_null_partition_whenever_the_filter_can_match_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE n (a INT, k INT) USING parquet PARTITIONED BY (k)",
+    );
+    for (a, k) in [(1, "1"), (2, "2"), (3, "3"), (4, "NULL"), (5, "NULL")] {
+        run(
+            &s,
+            &format!("INSERT INTO n PARTITION (k = {k}) VALUES ({a})"),
+        );
+    }
+    assert!(dir.path().join("n/k=__HIVE_DEFAULT_PARTITION__").is_dir());
+    same_rows_as_unpruned(
+        &s,
+        "n",
+        &[
+            "k IS NULL",
+            "k IS NOT NULL",
+            "k <> 2",
+            "NOT (k = 2)",
+            "k NOT IN (1, 2)",
+            "k IN (1, NULL)",
+            "NOT (k IN (1, NULL))",
+            "k NOT IN (1, NULL)",
+            "k = 2",
+            "k > 1",
+            "k <=> NULL",
+            "NOT (k <=> 2)",
+            "k IS NULL OR k = 1",
+            "k = 2 OR a = 4",
+            "NOT (k = 2 AND a = 2)",
+        ],
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(a AS STRING) FROM n WHERE k IS NULL ORDER BY a"
+        ),
+        ["4", "5"]
+    );
+    assert!(
+        rows(
+            &s,
+            "SELECT a FROM n WHERE k IN (1, NULL) AND k NOT IN (1, NULL)"
+        )
+        .is_empty()
+    );
+    // The partitions a filter rules out are not read; the NULL partition (two files) has no statistics, so it
+    // is always read.
+    assert_eq!(
+        decoded(&s, "EXPLAIN ANALYZE SELECT a FROM n WHERE k = 2"),
+        "3"
+    );
+}
+
+/// String partitions, among them an escaped and a non-ASCII value, with equality, a range and `LIKE`.
+#[test]
+fn pruning_string_partitions_matches_the_unpruned_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE sp (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    for (a, p) in [
+        (1, "'a/b=c%d'"),
+        (2, "'\u{e9}'"),
+        (3, "'\u{65e5}\u{672c}'"),
+        (4, "'x'"),
+        (5, "'xy'"),
+        (6, "'1'"),
+        (7, "'02'"),
+        (8, "NULL"),
+    ] {
+        run(
+            &s,
+            &format!("INSERT INTO sp PARTITION (p = {p}) VALUES ({a})"),
+        );
+    }
+    same_rows_as_unpruned(
+        &s,
+        "sp",
+        &[
+            "p = 'x'",
+            "p = '\u{e9}'",
+            "p = '\u{65e5}\u{672c}'",
+            "p = 'a/b=c%d'",
+            "p = '%2F'",
+            "p >= 'b'",
+            "p < 'x'",
+            "p LIKE 'x%'",
+            "p IN ('x', 'xy')",
+            "p NOT IN ('x', 'xy')",
+            "p IS NULL",
+            "p <> 'x'",
+        ],
+    );
+    // One file of the value, and the NULL partition's.
+    for p in ["'x'", "'\u{65e5}\u{672c}'", "'a/b=c%d'"] {
+        assert_eq!(
+            decoded(
+                &s,
+                &format!("EXPLAIN ANALYZE SELECT a FROM sp WHERE p = {p}")
+            ),
+            "2",
+            "{p}"
+        );
+    }
+}
+
+/// A string partition against an integer literal compares as numbers (the column is cast): `'02'` is 2, so no
+/// partition may be pruned by the literal's text.
+#[test]
+fn a_string_partition_against_an_integer_literal_is_not_pruned_by_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE sn (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    for (a, p) in [
+        (1, "'1'"),
+        (2, "'02'"),
+        (3, "'10'"),
+        (4, "' 2'"),
+        (5, "NULL"),
+    ] {
+        run(
+            &s,
+            &format!("INSERT INTO sn PARTITION (p = {p}) VALUES ({a})"),
+        );
+    }
+    same_rows_as_unpruned(
+        &s,
+        "sn",
+        &[
+            "p = 2",
+            "p = 1",
+            "p IN (1, 2)",
+            "p > 1",
+            "p <> 2",
+            "p = 2.0",
+        ],
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(a AS STRING) FROM sn WHERE p = 2 ORDER BY a"
+        ),
+        ["2", "4"]
+    );
+}
+
+#[test]
+fn pruning_date_partitions_with_a_boolean_column_matches_the_unpruned_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE dp (a INT, b BOOLEAN, d DATE) USING parquet PARTITIONED BY (d)",
+    );
+    // Spark reads a boolean partition column, Krishiv does not yet (UNSUPPORTED_FEATURE), so the
+    // boolean here is a data column next to the date partition.
+    for (a, b, d) in [
+        (1, "true", "'2024-01-01'"),
+        (2, "true", "'2024-01-02'"),
+        (3, "false", "'2024-01-02'"),
+        (4, "false", "'2024-02-29'"),
+        (5, "true", "NULL"),
+        (6, "NULL", "'2024-01-02'"),
+    ] {
+        run(
+            &s,
+            &format!("INSERT INTO dp PARTITION (d = {d}) VALUES ({a}, {b})"),
+        );
+    }
+    same_rows_as_unpruned(
+        &s,
+        "dp",
+        &[
+            "d = DATE '2024-01-02'",
+            "d = '2024-01-02'",
+            "d > DATE '2024-01-01'",
+            "d BETWEEN DATE '2024-01-02' AND DATE '2024-02-01'",
+            "d IN (DATE '2024-01-01', DATE '2024-02-29')",
+            "d <> DATE '2024-01-02'",
+            "d IS NULL",
+            "b",
+            "NOT b",
+            "b = false",
+            "b IS NULL",
+            "b <> true",
+            "d = DATE '2024-01-02' AND b",
+            "d = DATE '2024-01-02' AND NOT b",
+            "d = DATE '2024-01-01' OR b",
+            "CAST(d AS STRING) = '2024-01-02'",
+        ],
+    );
+    // The files of the date, and the NULL partition's.
+    assert_eq!(
+        decoded(
+            &s,
+            "EXPLAIN ANALYZE SELECT a FROM dp WHERE d = DATE '2024-02-29'"
+        ),
+        "2"
+    );
+    assert_eq!(
+        decoded(
+            &s,
+            "EXPLAIN ANALYZE SELECT a FROM dp WHERE d = DATE '2024-01-02' AND b"
+        ),
+        "4"
+    );
+}
+
+/// A partition filter next to a conjunct that raises under ANSI: the partitions it drops are never read (Spark splits
+/// the partition filters off at the listing), in either order of the conjuncts.
+#[test]
+fn a_partition_equality_next_to_a_raising_conjunct_prunes_in_both_orders() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE ar (a INT, s STRING, k INT) USING parquet PARTITIONED BY (k)",
+    );
+    run(
+        &s,
+        "INSERT INTO ar PARTITION (k = 1) VALUES (1, 'not a number')",
+    );
+    run(&s, "INSERT INTO ar PARTITION (k = 2) VALUES (2, '7')");
+    for filter in [
+        "k = 2 AND CAST(s AS INT) > 0",
+        "CAST(s AS INT) > 0 AND k = 2",
+    ] {
+        assert_eq!(
+            rows(
+                &s,
+                &format!("SELECT CAST(a AS STRING) FROM ar WHERE {filter}")
+            ),
+            ["2"],
+            "{filter}"
+        );
+        assert_eq!(
+            decoded(
+                &s,
+                &format!("EXPLAIN ANALYZE SELECT a FROM ar WHERE {filter}")
+            ),
+            "1",
+            "{filter}"
+        );
+    }
+    // A partition the filter keeps still raises.
+    assert_eq!(
+        class(&s, "SELECT a FROM ar WHERE k = 1 AND CAST(s AS INT) > 0"),
+        "CAST_INVALID_INPUT"
+    );
+}
+
+/// Under ANSI a conjunct on partition columns that may raise prunes no file: `(CAST(p AS INT) > 0 AND p LIKE '2%') OR
+/// p = 'zzz'` raises on `p = 'bad'` (Spark evaluates the whole filter on each partition value), so that partition is
+/// never pruned by the `LIKE` alone and the query raises as the unpruned rows do.
+#[test]
+fn a_partition_conjunct_that_may_raise_under_ansi_prunes_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled=true");
+    run(
+        &s,
+        "CREATE TABLE rp (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO rp PARTITION (p = 'bad') VALUES (1)");
+    run(&s, "INSERT INTO rp PARTITION (p = '2') VALUES (2)");
+    // The unpruned copy: the rows as a view over values, no file to skip.
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW rp_plain AS SELECT * FROM VALUES (1, 'bad'), (2, '2') AS t(a, p)",
+    );
+    let filter = "(CAST(p AS INT) > 0 AND p LIKE '2%') OR p = 'zzz'";
+    for t in ["rp", "rp_plain"] {
+        assert_eq!(
+            class(&s, &format!("SELECT a FROM {t} WHERE {filter}")),
+            "CAST_INVALID_INPUT",
+            "{t}"
+        );
+    }
+    // Without the raising conjunct the `LIKE` prunes `p = 'bad'`: one row decoded.
+    assert_eq!(
+        decoded(
+            &s,
+            "EXPLAIN ANALYZE SELECT a FROM rp WHERE p LIKE '2%' OR p = 'zzz'"
+        ),
+        "1"
+    );
+}
+
+/// A filter that rules out every partition opens no file, and `EXPLAIN ANALYZE` still shows the files it pruned.
+#[test]
+fn a_scan_that_prunes_every_partition_shows_its_pruned_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE ap USING parquet PARTITIONED BY (k) AS SELECT id, CAST(id % 2 AS INT) AS k FROM range(0, 10)",
+    );
+    let plan = rows(&s, "EXPLAIN ANALYZE SELECT id FROM ap WHERE k = 5").join("\n");
+    assert!(plan.contains("scan_splits=0"), "{plan}");
+    let pruned: String = plan
+        .split("scan_units_pruned=")
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    assert_eq!(pruned, "2", "{plan}");
+    assert!(plan.contains("scan_rows_decoded=0"), "{plan}");
+}

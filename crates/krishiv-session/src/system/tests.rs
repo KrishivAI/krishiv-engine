@@ -156,6 +156,11 @@ fn capabilities_has_one_row_per_fact() {
         )),
         sessions: Arc::default(),
         groups: None,
+        advice: Arc::new(crate::partition_advice::AdviceCell::new(
+            None,
+            krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig::default()).unwrap(),
+        )),
+        catalogs: Default::default(),
     };
     assert!(provider("capabilities", &sources).unwrap().is_some());
     assert!(provider("nope", &sources).unwrap().is_none());

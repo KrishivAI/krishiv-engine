@@ -50,6 +50,24 @@ pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// A group key computed from other group keys moves above the aggregate
+/// (`krishiv.optimizer.derivedKeysAbove`, P3-A part 2c).
+pub static DERIVED_KEYS_ABOVE: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.derivedKeysAbove",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal. Let an aggregate that groups by a column and by expressions of it only \
+          (ClickBench q36's `ClientIP, ClientIP - 1, ClientIP - 2`) group by the column alone and \
+          compute the expressions from it above the aggregate, so the hash table holds one narrow \
+          key instead of several. Applies only to deterministic built-in expressions that cannot \
+          raise (or whose range statistics prove no overflow) over keys whose equality is identity. \
+          Results are the same either way. On since its timed A/B (ClickBench q36: 0.82x).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// A dimension's payload joins above the semi and anti joins that never read it
 /// (`krishiv.optimizer.latePayloadJoin`).
 pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {

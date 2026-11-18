@@ -53,6 +53,123 @@ fn an_unsupported_spark_connect_setting_is_refused() {
     assert!(err.contains("krishiv.connect.session.idleTimeout"), "{err}");
 }
 
+/// `krishiv server` with `confs`, expected to refuse startup: its stderr.
+fn refused(confs: &[&str]) -> String {
+    let mut cmd = krishiv();
+    // `--allow-root`: CI containers may run as root, and the root refusal comes before the
+    // catalogs are built.
+    cmd.args([
+        "server",
+        "--port",
+        "0",
+        "--connect-port",
+        "0",
+        "--allow-root",
+    ]);
+    for c in confs {
+        cmd.args(["--conf", c]);
+    }
+    let out = cmd.output().expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1), "{confs:?}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Design P3-T067 §2.3: declarations are parsed and checked at startup, and a refusal stops it.
+#[test]
+fn catalog_declarations_are_checked_at_startup() {
+    // A type no factory of this build builds is refused by name, never skipped.
+    let err = refused(&[
+        "krishiv.catalog.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`") && err.contains("`h`"), "{err}");
+    // In any letter case (review 58a2 B1): never dropped, never a silently wider catalog.
+    let err = refused(&[
+        "KRISHIV.CATALOG.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "Krishiv.catalog.lake.tenants=",
+    ]);
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("empty tenant list"), "{err}");
+    }
+    let err = refused(&[
+        "Spark.SQL.Catalog.h=org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.h.type=hive",
+        "spark.sql.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    // Spark's default-catalog key in any letter case reaches the registry (review 58a2 N3): a
+    // default no declaration names stops startup.
+    let err = refused(&["SPARK.SQL.DEFAULTCATALOG=nosuch"]);
+    assert!(err.contains("names no declared catalog"), "{err}");
+    // One field under two spellings is refused, never merged (review 58a2 N4).
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.tenants=acme",
+        "KRISHIV.CATALOG.lake.tenants=globex",
+    ]);
+    assert!(err.contains("set twice"), "{err}");
+    assert!(!err.contains("globex"), "{err}");
+    // A literal secret is refused without being echoed.
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.auth=token",
+        "krishiv.catalog.lake.token=literal-catalog-secret",
+    ]);
+    assert!(!err.contains("literal-catalog-secret"), "{err}");
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("krishiv.catalog.lake.token"), "{err}");
+        // The egress rule checks a declared literal uri and token endpoint at startup, in any
+        // spelling, naming the key, never the address.
+        for (key, conf) in [
+            (
+                "krishiv.catalog.lake.uri",
+                "krishiv.catalog.lake.uri=https://2852039166/api",
+            ),
+            (
+                "krishiv.catalog.lake.tokenEndpoint",
+                "krishiv.catalog.lake.tokenEndpoint=https://169.254.169.254/token",
+            ),
+        ] {
+            // One value per key: the tested one replaces the accepted one.
+            let confs: Vec<&str> = [
+                "krishiv.catalog.lake.type=iceberg-rest",
+                "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+                "krishiv.catalog.lake.auth=client-credentials",
+                "krishiv.catalog.lake.clientId=krishiv",
+                "krishiv.catalog.lake.clientSecret=env:PATH",
+                "krishiv.catalog.lake.tokenEndpoint=https://idp.example.com/token",
+            ]
+            .into_iter()
+            .map(|c| {
+                if c.split_once('=').map(|(k, _)| k) == Some(key) {
+                    conf
+                } else {
+                    c
+                }
+            })
+            .collect();
+            let err = refused(&confs);
+            assert!(err.contains(key), "{err}");
+            assert!(!err.contains("set twice"), "{err}");
+            assert!(
+                !err.contains("169.254") && !err.contains("2852039166"),
+                "{err}"
+            );
+        }
+    } else {
+        assert!(err.contains("`iceberg-rest`"), "{err}");
+    }
+}
+
 #[test]
 fn non_loopback_requires_auth() {
     for host in ["0.0.0.0", "::"] {
@@ -197,7 +314,7 @@ fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -540,7 +657,7 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
         Some(token),
     );
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");
-    assert!(version.contains("\"adminV1Revision\":\"1\""), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"2\""), "{version}");
     let caps = http_get_host(
         &server.admin,
         "/api/admin/v1/capabilities",
@@ -642,7 +759,7 @@ fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpS
 fn tls_healthz_on(
     mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
 ) -> (Vec<u8>, String) {
-    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .expect("write");
     let mut out = Vec::new();
     // The server may close without `close_notify`; keep what came.
@@ -685,7 +802,7 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     plain
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
-    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut out = Vec::new();
     let _ = plain.read_to_end(&mut out);
     assert!(
@@ -723,4 +840,46 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     assert_eq!(leaf, first, "the old connection keeps its certificate");
     let _ = server.child.kill();
+}
+
+#[cfg(feature = "ui")]
+#[test]
+fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        dir.path(),
+        &["krishiv.ui.allowedHosts=ui.example.com".to_owned()],
+    );
+    let line = server
+        ._stdout
+        .next()
+        .expect("the open line")
+        .expect("utf-8");
+    let token = line
+        .split("?token=")
+        .nth(1)
+        .expect("token")
+        .trim()
+        .to_owned();
+    let named = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "ui.example.com",
+        Some(&token),
+    );
+    assert!(named.starts_with("HTTP/1.1 200"), "{named}");
+    let local = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "localhost",
+        Some(&token),
+    );
+    assert!(local.starts_with("HTTP/1.1 200"), "{local}");
+    let other = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "evil.example",
+        Some(&token),
+    );
+    assert!(other.starts_with("HTTP/1.1 403"), "{other}");
 }

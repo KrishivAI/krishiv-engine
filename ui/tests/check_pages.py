@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Snapshot check of the five UI pages at phone, tablet and desktop widths, dark and light.
+"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light.
 
     uv run --with playwright python ui/tests/check_pages.py [SHOT_DIR]
 
@@ -15,6 +15,7 @@ import sys
 import threading
 from pathlib import Path
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -38,7 +39,13 @@ PAGES = [
     ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
+    ("catalog", "#/catalog", ["Catalog", "spark_catalog", "Schemas", "Tables"]),
+    ("sql", "#/sql", ["SQL", "Run", "Cancel"]),
+    ("environment", "#/environment", ["Environment", "krishiv.auth.token", "***"]),
 ]
+# The four pages the axe check covers (the spec's "four pages": queries, catalog, SQL editor, environment).
+AXE_PAGES = ["#/queries", "#/catalog", "#/sql", "#/environment"]
+AXE = Path(__file__).parent.parent / "node_modules" / "axe-core" / "axe.min.js"
 SMALL_TARGETS = """
 () => [...document.querySelectorAll('button, a, input, select')]
   .filter(e => e.offsetParent !== null)
@@ -157,9 +164,132 @@ def check(shots: Path | None) -> list[str]:
     return problems
 
 
+def page_checks(origin: str) -> list[str]:
+    """XSS, session, cancel and accessibility checks on the desktop dark view of the fixture server."""
+    problems: list[str] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = ctx.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on(
+            "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
+        )
+        page.goto(f"{origin}/?token=fixture")
+        # Ready: the shell shows its navigation and the token has left the address.
+        page.wait_for_function("!location.search.includes('token')", timeout=10000)
+        page.get_by_role("navigation").first.wait_for(timeout=10000)
+        # Session: the token left the address and no script can read it.
+        if "token" in page.url:
+            problems.append(f"the token is still in the address: {page.url}")
+        cookies = [c for c in ctx.cookies() if c["name"] == "krishiv_ui_token"]
+        if len(cookies) != 1:
+            problems.append(f"expected one krishiv_ui_token cookie, got {cookies}")
+        else:
+            c = cookies[0]
+            if not c["httpOnly"]:
+                problems.append("the session cookie is not HttpOnly")
+            if c["sameSite"] != "Strict":
+                problems.append(f"the session cookie is SameSite={c['sameSite']}")
+            if c["path"] != "/api/internal":
+                problems.append(f"the session cookie path is {c['path']}")
+        if page.evaluate("document.cookie").find("fixture") >= 0:
+            problems.append("the session cookie is readable by script (not HttpOnly)")
+        if (
+            page.evaluate("JSON.stringify([sessionStorage, localStorage])").find(
+                "fixture"
+            )
+            >= 0
+        ):
+            problems.append("the token is kept in web storage")
+        # XSS: hostile text in query text, principals, catalog names, comments, results and errors renders as text.
+
+        def no_markup(view: str) -> None:
+            if page.evaluate("window.__xss") is not None:
+                problems.append(f"{view}: hostile text ran as script")
+            if page.locator('img[src="x"]').count() != 0:
+                problems.append(f"{view}: hostile text was rendered as an element")
+
+        page.evaluate("window.location.hash = '#/queries'")
+        page.get_by_text("<img src=x", exact=False).first.wait_for(timeout=10000)
+        no_markup("queries")
+        page.evaluate("window.location.hash = '#/catalog'")
+        page.get_by_role("button", name="spark_catalog").wait_for(timeout=10000)
+        no_markup("catalog")
+        page.get_by_role("button", name="spark_catalog").click()
+        page.get_by_role("button", name="default").click()
+        page.get_by_role("button", name="orders").click()
+        page.get_by_text("o_orderkey").wait_for(timeout=10000)
+        no_markup("catalog columns")
+        page.evaluate("window.location.hash = '#/sql'")
+        editor = page.locator(".cm-content")
+        editor.wait_for(timeout=10000)
+        for text, outcome in (("SELECT 1", "finished"), ("boom", "failed")):
+            editor.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.type(text)
+            page.get_by_role("button", name="Run").click()
+            page.get_by_text(outcome, exact=True).first.wait_for(timeout=10000)
+            no_markup(f"sql {text}")
+        # Cancel shows the cancelled state within 2 s.
+        editor.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("sleep")
+        page.get_by_role("button", name="Run").click()
+        page.get_by_text("running", exact=True).first.wait_for(timeout=10000)
+        page.get_by_role("button", name="Cancel").click()
+        try:
+            page.get_by_text("cancelled", exact=True).wait_for(timeout=2000)
+        except PlaywrightTimeout:
+            problems.append(
+                "the SQL editor did not show the cancelled state within 2 s"
+            )
+        # Redaction on the environment page.
+        page.evaluate("window.location.hash = '#/environment'")
+        page.get_by_text("spark.sql.shuffle.partitions", exact=True).first.wait_for(
+            timeout=10000
+        )
+        for key in (
+            "krishiv.auth.token",
+            "db.password",
+            "spark.hadoop.fs.s3a.secret.key",
+        ):
+            row = page.locator("tr", has=page.get_by_text(key, exact=True)).first
+            shown = row.locator("span.mono").nth(1).inner_text().strip()
+            if shown != "***":
+                problems.append(f"environment: {key} shows {shown!r}, not '***'")
+        # Accessibility: no serious or critical axe violation on the four pages.
+        if not AXE.exists():
+            problems.append(
+                f"axe-core is not installed ({AXE}); run pnpm install in ui/"
+            )
+        else:
+            axe_js = AXE.read_text()
+            for frag in AXE_PAGES:
+                page.evaluate(f"window.location.hash = {frag!r}")
+                # The event stream keeps the network busy, so "networkidle" never comes: wait for the page.
+                page.locator("h1").first.wait_for(timeout=10000)
+                page.wait_for_timeout(500)
+                page.evaluate(axe_js)
+                found = page.evaluate(
+                    "axe.run().then(r => r.violations.filter(v => ['serious','critical'].includes(v.impact))"
+                    ".map(v => v.id + ': ' + v.nodes.slice(0, 2).map(n => n.target.join(' ')).join(' | ')))"
+                )
+                problems += [f"axe {frag}: {v}" for v in found]
+        problems += [f"page checks: {e}" for e in errors]
+        browser.close()
+    return problems
+
+
 if __name__ == "__main__":
     found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
+    server = fixture_server.serve()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
     print(
-        "\n".join(found) if found else "ui pages: ok (5 pages x 4 widths x dark/light)"
+        "\n".join(found)
+        if found
+        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe)"
     )
     sys.exit(1 if found else 0)

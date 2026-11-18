@@ -68,7 +68,7 @@ impl super::Expander<'_> {
         namespace: &str,
         table: &str,
     ) -> Vec<String> {
-        if written.len() == 1 && self.view_namespace.is_none() && self.in_system() {
+        if written.len() == 1 && self.view_namespace.is_none() && self.outside_session() {
             vec![
                 super::CATALOG.to_owned(),
                 namespace.to_owned(),
@@ -79,11 +79,18 @@ impl super::Expander<'_> {
         }
     }
 
-    /// Whether `system` was current as the query snapshot saw it (the live catalog outside a query's expansion).
-    fn in_system(&self) -> bool {
+    /// Whether the current catalog was another than `spark_catalog` (`system` or a declared one) as
+    /// the query snapshot saw it (the live catalog outside a query's expansion): a two-part name is
+    /// then no stored namespace, and a stored view's names are `spark_catalog`'s.
+    fn outside_session(&self) -> bool {
         self.stored.map_or_else(
-            || crate::system::is_system(&self.catalog.current_catalog()),
-            |s| s.in_system,
+            || {
+                !self
+                    .catalog
+                    .current_catalog()
+                    .eq_ignore_ascii_case(super::CATALOG)
+            },
+            |s| s.outside_session,
         )
     }
 
@@ -104,27 +111,27 @@ impl super::Expander<'_> {
 
     /// Whether a two-part name is `namespace.table` of the session catalog's store: inside a
     /// stored view always, outside one only while the current catalog is the session catalog. A
-    /// two-part name is a namespace of the CURRENT catalog, and `system` has none, so there it is
-    /// no stored view (and it is authorized as `system.<ns>.<table>`, never as the store's).
+    /// two-part name is a namespace of the CURRENT catalog (`system` has none; a declared one's
+    /// are its own), so there it is no stored view (and it is authorized as `system.<ns>.<table>`, never as the store's).
     pub(super) fn names_a_stored_namespace(&self) -> bool {
-        self.view_namespace.is_some() || !self.in_system()
+        self.view_namespace.is_some() || !self.outside_session()
     }
 
-    /// The name of a table a stored view reads from `namespace`: `spark_catalog.namespace.table` while `system` is
-    /// current (the view's tables belong to the catalog that defines it), else `namespace.table` as ever.
+    /// The name of a table a stored view reads from `namespace`: `spark_catalog.namespace.table` while another
+    /// catalog than `spark_catalog` is current (the view's tables belong to the catalog that defines it), else `namespace.table` as ever.
     pub(super) fn view_read_name(&self, namespace: String, table: String) -> Vec<String> {
-        if self.in_system() {
+        if self.outside_session() {
             vec![super::CATALOG.to_owned(), namespace, table]
         } else {
             vec![namespace, table]
         }
     }
 
-    /// `plan`, a read of `namespace.table` inside a stored view, as `spark_catalog.namespace.table` while `system`
-    /// is current: a view's table belongs to the catalog that defines it.
+    /// `plan`, a read of `namespace.table` inside a stored view, as `spark_catalog.namespace.table` while another
+    /// catalog than `spark_catalog` is current: a view's table belongs to the catalog that defines it.
     pub(super) fn anchored(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         if self.view_namespace.is_some()
-            && self.in_system()
+            && self.outside_session()
             && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
             && let [namespace, table] = name.as_slice()
             && !crate::system::is_system(namespace)
@@ -145,6 +152,11 @@ impl super::QueryCatalog {
     /// Whether `system` is the current catalog of this query's snapshot.
     pub(crate) fn in_system(&self) -> bool {
         crate::system::is_system(&self.catalog)
+    }
+
+    /// Whether `spark_catalog` is the current catalog of this query's snapshot.
+    pub(crate) fn in_session_catalog(&self) -> bool {
+        self.catalog.eq_ignore_ascii_case(super::CATALOG)
     }
 
     /// The `system` catalog of this query, with the session's temporary relations in front of it.

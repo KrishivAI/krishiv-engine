@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::builder::make_view;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
+    ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
     StructArray, TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
@@ -66,6 +66,9 @@ use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
 use object_store::path::Path;
 
+use super::partition_prune::{
+    dropping_filter, reads_partition_column, static_partition_filters, statically_dropped,
+};
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
@@ -325,8 +328,21 @@ impl ScanPushdown for FileScan {
         Arc::clone(&self.table)
     }
 
+    /// Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN` rule: a JSON or CSV read whose referenced data
+    /// columns (partition columns left out; `_metadata` and the row index are not columns of the
+    /// table) are exactly the corrupt-record column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let Some(corrupt) = self.format.corrupt_record_column(&self.format_options) else {
+            return false;
+        };
+        let mut data = referenced
+            .iter()
+            .filter(|n| !self.partition_columns.iter().any(|p| p.name() == **n));
+        data.next().is_some_and(|n| *n == corrupt) && data.next().is_none()
+    }
+
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
-        if reads_partition_column(self, filter) {
+        if reads_partition_column(&self.partition_columns, filter) {
             return FilterPushdown::Unsupported;
         }
         // Pruning keeps a superset of the matching rows; the row evaluator
@@ -456,14 +472,15 @@ pub struct FileScanMetrics {
 }
 
 impl FileScanMetrics {
-    /// The `EXPLAIN ANALYZE` counters, once a split was read: units
+    /// The `EXPLAIN ANALYZE` counters, once a split was read or a unit pruned: units
     /// (row groups) decoded and skipped, rows and bytes decoded, and how
     /// the row filter ran (`row_filter_*` only where it did); the page
     /// index and stored Bloom filters' work where either pruned or was
     /// rejected; the decode over-commit when there was any.
     pub(super) fn extra(&self) -> crate::metrics::ExtraMetrics {
         let mut out = Vec::new();
-        if self.splits > 0 {
+        // Also when every file was pruned unopened (no split read).
+        if self.splits > 0 || self.units_pruned > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
                 ("scan_files", self.files),
@@ -569,6 +586,9 @@ pub struct FileScanSource {
     /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
     /// (of one split, or of splits that do not start at byte 0) are read.
     opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
+    /// The pushed filters that read a partition column, as the typed trees they are: a file whose partition
+    /// values none of them can match is never opened (static partition pruning, P3-T025).
+    static_partition: Vec<PushdownExpr>,
     /// Whether the row id ends the output.
     row_id: bool,
     /// One morsel per partition, its batches tagged with the partition's
@@ -690,31 +710,6 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
     Ok(())
 }
 
-/// Whether the typed tree of `filter` reads a partition column of `scan`
-/// (a filter without one prunes nothing).
-fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
-    if scan.partition_columns.is_empty() {
-        return false;
-    }
-    filter.expr.as_ref().is_some_and(|e| {
-        e.columns()
-            .iter()
-            .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
-    })
-}
-
-/// The runtime filter that no row of a file with these partition values
-/// passes, if any.
-fn dropping_filter<'a>(
-    filters: &'a [(usize, ScanFilter)],
-    values: &[ArrayRef],
-) -> Option<&'a ScanFilter> {
-    filters.iter().find_map(|(k, filter)| {
-        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
-        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
-    })
-}
-
 /// Where a column of a partitioned scan's output comes from.
 #[derive(Clone, Copy, Debug)]
 enum Slot {
@@ -789,7 +784,7 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     let usable: Vec<PushedFilter> = p
         .filters
         .iter()
-        .take_while(|f| !reads_partition_column(scan, f))
+        .take_while(|f| !reads_partition_column(&scan.partition_columns, f))
         .cloned()
         .collect();
     let exprs: Vec<PushdownExpr> = usable.iter().filter_map(|f| f.expr.clone()).collect();
@@ -911,6 +906,7 @@ impl FileScanSource {
             partition_fields,
             layout,
         } = table_request(scan, &p)?;
+        let static_partition = static_partition_filters(&scan.partition_columns, &p.filters);
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -929,6 +925,7 @@ impl FileScanSource {
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             opened_files: Arc::default(),
+            static_partition,
             row_id: p.row_id,
             partition_order: p.partition_order,
             roots: scan.roots.clone(),
@@ -1074,10 +1071,7 @@ impl FileScanSource {
                     return None;
                 }
                 let file = self.files.get(s.file)?;
-                let dropped = !partition_filters.is_empty()
-                    && self
-                        .partition_values(file)
-                        .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+                let dropped = self.drops_file(partition_filters, file);
                 if dropped {
                     splits.push(Vec::new());
                     continue;
@@ -1139,11 +1133,7 @@ impl FileScanSource {
         if let Some(file) = self.files.get(wanted) {
             // A file its partition's filter drops is never opened. (An error
             // reading its path is reported by the open.)
-            let dropped = !partition_filters.is_empty()
-                && self
-                    .partition_values(file)
-                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
-            if dropped {
+            if self.drops_file(partition_filters, file) {
                 return;
             }
             let fut = self.io.prefetch_metadata(
@@ -1174,6 +1164,18 @@ impl FileScanSource {
         // Dynamic partition pruning: no row of the file passes.
         if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
             filter.filter().stats().add_split(range.len());
+            return Ok(());
+        }
+        // Static partition pruning: the filters on partition columns rule the file out.
+        if statically_dropped(
+            &self.static_partition,
+            &self.partition_fields,
+            &partition_values,
+        ) {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .units_pruned += 1;
             return Ok(());
         }
         if let Some((f, _)) = &local.ahead
@@ -1318,6 +1320,15 @@ impl FileScanSource {
                 Some((k, ScanFilter::at(f, Some(column))))
             })
             .collect()
+    }
+
+    /// Whether a runtime filter or a filter on a partition column rules out the file: it is never opened.
+    fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
+        (!partition_filters.is_empty() || !self.static_partition.is_empty())
+            && self.partition_values(file).is_ok_and(|v| {
+                dropping_filter(partition_filters, &v).is_some()
+                    || statically_dropped(&self.static_partition, &self.partition_fields, &v)
+            })
     }
 
     /// The values of `file`'s partition columns, one row each.
@@ -1941,52 +1952,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod row_level_tests {
-    use arrow_array::BooleanArray;
-
-    use super::*;
-    use crate::operators::expr::FnPredicate;
-
-    fn filter(rows: RowLevel) -> PushedFilter {
-        let predicate: Arc<dyn super::super::expr::Predicate> =
-            Arc::new(FnPredicate(|b: &RecordBatch| {
-                Ok(BooleanArray::from(vec![true; b.num_rows()]))
-            }));
-        PushedFilter {
-            predicate,
-            expr: Some(PushdownExpr::Constant(true)),
-            rows,
-        }
-    }
-
-    #[test]
-    fn a_filter_left_out_that_may_raise_keeps_runtime_filters_off() {
-        let safe = filter(RowLevel::Full);
-        let raising = filter(RowLevel::Prefix(None));
-        // Nothing left out: as `row_level`.
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&safe), 1),
-            RowLevel::Full
-        ));
-        // A safe filter left out changes nothing.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe.clone()], 1),
-            RowLevel::Full
-        ));
-        // A raising filter left out: only the usable prefix may drop rows.
-        let level = scan_row_level(&[safe.clone(), raising.clone()], 1);
-        assert!(
-            matches!(&level, RowLevel::Prefix(Some(PushdownExpr::Constant(true)))),
-            "{level:?}"
-        );
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&raising), 0),
-            RowLevel::Prefix(None)
-        ));
-        // A later raising filter counts too.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe, raising], 1),
-            RowLevel::Prefix(Some(_))
-        ));
-    }
-}
+mod row_level_tests;

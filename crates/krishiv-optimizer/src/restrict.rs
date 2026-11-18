@@ -628,7 +628,7 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
 
 /// Whether evaluating `e` can never raise: a column, or a widening of an
 /// integral value to a wider integral type (deterministic by construction).
-fn cannot_raise(e: &Arc<Expr>) -> bool {
+pub(crate) fn cannot_raise(e: &Arc<Expr>) -> bool {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
         ExprNode::Cast { expr, to, .. } => {

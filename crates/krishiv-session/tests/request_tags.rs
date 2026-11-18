@@ -231,7 +231,7 @@ async fn cancel_by_tag_scopes_by_principal_and_picks_the_reason() {
     // Bob without `Operate` reaches only his own query with the tag, and cannot tell that
     // alice's carry it too.
     let ids: Vec<String> = rt
-        .cancel_by_tag("etl", "bob", false)
+        .cancel_by_tag("etl", &Principal::new("bob", PrincipalKind::User), false)
         .into_iter()
         .map(|i| i.as_str().to_owned())
         .collect();
@@ -242,9 +242,9 @@ async fn cancel_by_tag_scopes_by_principal_and_picks_the_reason() {
     // An admin (here bob with `Operate`) reaches the other principals' queries too, as a kill:
     // `k=v` matches alice's session tag, a bare `k` her request tag.
     let mut ids: Vec<String> = rt
-        .cancel_by_tag("job=42", "bob", true)
+        .cancel_by_tag("job=42", &Principal::new("bob", PrincipalKind::User), true)
         .into_iter()
-        .chain(rt.cancel_by_tag("etl", "bob", true))
+        .chain(rt.cancel_by_tag("etl", &Principal::new("bob", PrincipalKind::User), true))
         .map(|i| i.as_str().to_owned())
         .collect();
     ids.sort();
@@ -428,8 +428,19 @@ async fn a_set_tag_during_admission_does_not_change_the_tags_a_query_is_cancelle
     gate.queued(1).await;
     // The query waits in admission with team=a; a later tag change does not move it.
     s.set_tag("team", "b").unwrap_or_else(|e| panic!("{e}"));
-    assert!(rt.cancel_by_tag("team=b", "nobody", true).is_empty());
-    let ids = rt.cancel_by_tag("team=a", "nobody", true);
+    assert!(
+        rt.cancel_by_tag(
+            "team=b",
+            &Principal::new("nobody", PrincipalKind::User),
+            true
+        )
+        .is_empty()
+    );
+    let ids = rt.cancel_by_tag(
+        "team=a",
+        &Principal::new("nobody", PrincipalKind::User),
+        true,
+    );
     assert_eq!(ids.len(), 1, "cancelled by the tag it started with");
     let _ = task.await;
 }
@@ -497,4 +508,28 @@ async fn a_statements_own_trace_never_borrows_or_changes_the_sessions() {
         ],
         "its own trace, none without a valid traceparent, the session's only for a plain statement"
     );
+}
+
+#[tokio::test]
+async fn cancel_by_tag_decides_ownership_on_the_whole_principal_not_the_name() {
+    let rt = EngineRuntime::builder()
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let gate = Arc::new(Never::default());
+    let mut service = Principal::new("bob", PrincipalKind::Service);
+    service.tenant = Some("other".to_owned());
+    let s = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .admission_controller(Arc::clone(&gate) as Arc<dyn AdmissionController>)
+        .principal(service)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let task = start(&s, QueryOptions::new().operation_id(id(1)).tags(["etl"]));
+    gate.queued(1).await;
+    // A user named "bob" without `Operate` does not own a service principal's query of that name.
+    let bob = Principal::new("bob", PrincipalKind::User);
+    assert!(rt.cancel_by_tag("etl", &bob, false).is_empty());
+    assert!(!task.is_finished());
+    s.interrupt_all();
+    let _ = task.await;
 }
