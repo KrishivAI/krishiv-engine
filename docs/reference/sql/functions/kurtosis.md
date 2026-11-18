@@ -44,6 +44,8 @@ kurtosis(expr)
 -- Spark documents: 0.19432323191699075
 ```
 
+The last digits of a floating-point result can differ from the value Spark documents. Spark's documented value depends on how it splits the `VALUES` list across partitions; Krishiv prints the value for one partition.
+
 ## Version history
 
 - Added in Spark 1.6.0.

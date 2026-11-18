@@ -61,6 +61,8 @@ NULL
 1.0
 ```
 
+The last digits of a floating-point result can differ from the value Spark documents. Spark's documented value depends on how it splits the `VALUES` list across partitions; Krishiv prints the value for one partition.
+
 ## Version history
 
 - Added in Spark 3.4.0.

@@ -184,6 +184,11 @@ fn squash(text: &str) -> Vec<char> {
     v
 }
 
+/// Shown under the examples of a function whose printed answer differs from the one Spark documents.
+const DIFFERS_NOTE: &str = "The last digits of a floating-point result can differ from the value Spark documents. Spark's \
+documented value depends on how it splits the `VALUES` list across partitions; Krishiv prints the value for one \
+partition.\n\n";
+
 /// Whether the engine's captured answer differs from the result Spark documents for the example.
 /// Examples without a documented result, failed examples and volatile ones never differ.
 fn differs_from_spark(captured: Option<&serde_json::Value>, spark: &str) -> bool {
@@ -411,6 +416,13 @@ fn page(
                 let _ = writeln!(m, "-- Spark documents: {}", spark_result.replace('\n', " "));
             }
             m.push_str("```\n\n");
+        }
+        if examples
+            .iter()
+            .enumerate()
+            .any(|(n, (_, r))| differs_from_spark(captured.get(example_id(&doc.name, n)), r))
+        {
+            m.push_str(DIFFERS_NOTE);
         }
     }
     m.push_str("## Version history\n\n");
