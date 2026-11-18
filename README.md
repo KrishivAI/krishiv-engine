@@ -114,7 +114,7 @@ streaming, incremental views, Spark Connect and distributed execution are still 
 
 | Milestone | Focus | Status |
 |---|---|---|
-| 1. Embedded core alpha | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | 🚧 In progress |
+| 1. Embedded core | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | ✅ Released (0.2) |
 | 2. Single-node (0.3) | `krishiv server` with Spark Connect, authentication, Iceberg and Delta, Python UDFs | ⏳ Planned |
 | 3. Streaming | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
 | 4. Incremental views | Always-fresh materialized views and queryable state | ⏳ Planned |
