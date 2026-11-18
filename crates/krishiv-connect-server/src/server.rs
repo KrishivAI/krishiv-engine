@@ -192,6 +192,13 @@ impl ConnectServer {
     /// `krishiv server` refuses another address without it).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, config: ConnectServerConfig) -> Self {
+        // A Krishiv client learns the `krishiv.v1` extensions this server offers from the
+        // `surface` row of `system.capabilities` (or a `Config` read of the capabilities key).
+        krishiv_session::register_surface(
+            krishiv_connect::extension::PACKAGE,
+            "1",
+            &krishiv_connect::extension::capabilities_value(),
+        );
         Self {
             manager,
             draining: Arc::new(AtomicBool::new(false)),

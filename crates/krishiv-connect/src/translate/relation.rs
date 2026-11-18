@@ -24,6 +24,7 @@ use super::errors::{
 };
 use super::names::parse_multipart_identifier;
 use super::{Result, Translator};
+use crate::extension::{Extension, Slot, resolve};
 use crate::proto::v4_3::{self as pb, Expression};
 use crate::proto::v4_3::{
     Relation, aggregate::GroupType, join::JoinType, read::ReadType, relation::RelType,
@@ -111,6 +112,15 @@ impl Translator<'_> {
                 input: self.input("CollectMetrics", c.input.as_deref())?,
                 name: c.name.clone(),
                 metrics: self.expressions(&c.metrics)?,
+            },
+            RelType::Extension(any) => match resolve(any, Slot::Relation)? {
+                // One row, one string column: `SELECT '<message>' AS message`.
+                Extension::Echo(echo) => PlanNode::Project {
+                    input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                    exprs: vec![Arc::new(
+                        Expr::literal(Literal::String(echo.message)).alias("message"),
+                    )],
+                },
             },
             other => {
                 return Err(unsupported_variant(
