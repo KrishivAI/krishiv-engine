@@ -99,7 +99,7 @@ def schema_json(df):
     return [{"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in df.schema.fields]
 
 
-def outcome(fn, root, spark=None, conf=None):
+def outcome(fn, root, spark, conf=None):
     for key, value in (conf or {}).items():
         spark.conf.set(key, value)
     try:
