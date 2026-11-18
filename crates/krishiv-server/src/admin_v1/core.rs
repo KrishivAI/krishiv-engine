@@ -12,9 +12,11 @@ use super::action::{self, Action};
 use super::idempotency::{Idempotency, MAX_ID_LEN, Run};
 use super::{
     AdminApi, AdminError, AdminResult, Call, CancelQueriesByTagRequest, CancelQueryRequest,
-    DrainRequest, GetCapabilitiesRequest, GetDrainStatusRequest, GetReadinessRequest,
-    GetVersionRequest, KillSessionRequest, ListQueriesRequest, ListSessionsRequest,
-    ResumeServingRequest,
+    DrainRequest, GetCapabilitiesRequest, GetConfigRequest, GetDrainStatusRequest,
+    GetReadinessRequest, GetResourceGroupConfigRequest, GetVersionRequest, KillSessionRequest,
+    ListQueriesRequest, ListResourceGroupsRequest, ListSessionsRequest,
+    ReloadResourceGroupConfigRequest, ReplaceResourceGroupConfigRequest, ResumeServingRequest,
+    SetConfigDefaultsRequest, ValidateResourceGroupConfigRequest,
 };
 
 /// The RPCs that change something: they take a `request_id`, are remembered by the idempotency
@@ -25,6 +27,9 @@ const MUTATING: &[&str] = &[
     "CancelQueriesByTag",
     "Drain",
     "ResumeServing",
+    "ReplaceResourceGroupConfig",
+    "ReloadResourceGroupConfig",
+    "SetConfigDefaults",
 ];
 
 pub(super) struct Core {
@@ -177,6 +182,46 @@ impl Core {
                 let r = ResumeServingRequest::decode(request).map_err(bad)?;
                 Ok(api.resume_serving(call, r).await?.encode_to_vec())
             }
+            "ListResourceGroups" => {
+                let r = ListResourceGroupsRequest::decode(request).map_err(bad)?;
+                Ok(api.list_resource_groups(call, r).await?.encode_to_vec())
+            }
+            "GetResourceGroupConfig" => {
+                let r = GetResourceGroupConfigRequest::decode(request).map_err(bad)?;
+                Ok(api
+                    .get_resource_group_config(call, r)
+                    .await?
+                    .encode_to_vec())
+            }
+            "ValidateResourceGroupConfig" => {
+                let r = ValidateResourceGroupConfigRequest::decode(request).map_err(bad)?;
+                Ok(api
+                    .validate_resource_group_config(call, r)
+                    .await?
+                    .encode_to_vec())
+            }
+            "ReplaceResourceGroupConfig" => {
+                let r = ReplaceResourceGroupConfigRequest::decode(request).map_err(bad)?;
+                Ok(api
+                    .replace_resource_group_config(call, r)
+                    .await?
+                    .encode_to_vec())
+            }
+            "ReloadResourceGroupConfig" => {
+                let r = ReloadResourceGroupConfigRequest::decode(request).map_err(bad)?;
+                Ok(api
+                    .reload_resource_group_config(call, r)
+                    .await?
+                    .encode_to_vec())
+            }
+            "GetConfig" => {
+                let r = GetConfigRequest::decode(request).map_err(bad)?;
+                Ok(api.get_config(call, r).await?.encode_to_vec())
+            }
+            "SetConfigDefaults" => {
+                let r = SetConfigDefaultsRequest::decode(request).map_err(bad)?;
+                Ok(api.set_config_defaults(call, r).await?.encode_to_vec())
+            }
             other => Err(AdminError::internal(format!("no handler for {other}"))),
         }
     }
@@ -196,6 +241,21 @@ fn request_id_in(rpc: &str, request: &[u8]) -> AdminResult<String> {
         "Drain" => DrainRequest::decode(request).map_err(bad)?.request_id,
         "ResumeServing" => {
             ResumeServingRequest::decode(request)
+                .map_err(bad)?
+                .request_id
+        }
+        "ReplaceResourceGroupConfig" => {
+            ReplaceResourceGroupConfigRequest::decode(request)
+                .map_err(bad)?
+                .request_id
+        }
+        "ReloadResourceGroupConfig" => {
+            ReloadResourceGroupConfigRequest::decode(request)
+                .map_err(bad)?
+                .request_id
+        }
+        "SetConfigDefaults" => {
+            SetConfigDefaultsRequest::decode(request)
                 .map_err(bad)?
                 .request_id
         }
@@ -230,6 +290,21 @@ fn without_request_id(rpc: &str, request: &[u8]) -> AdminResult<Vec<u8>> {
         }
         "ResumeServing" => {
             let mut m = ResumeServingRequest::decode(request).map_err(bad)?;
+            m.request_id.clear();
+            m.encode_to_vec()
+        }
+        "ReplaceResourceGroupConfig" => {
+            let mut m = ReplaceResourceGroupConfigRequest::decode(request).map_err(bad)?;
+            m.request_id.clear();
+            m.encode_to_vec()
+        }
+        "ReloadResourceGroupConfig" => {
+            let mut m = ReloadResourceGroupConfigRequest::decode(request).map_err(bad)?;
+            m.request_id.clear();
+            m.encode_to_vec()
+        }
+        "SetConfigDefaults" => {
+            let mut m = SetConfigDefaultsRequest::decode(request).map_err(bad)?;
             m.request_id.clear();
             m.encode_to_vec()
         }

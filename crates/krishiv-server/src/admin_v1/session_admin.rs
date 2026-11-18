@@ -33,8 +33,13 @@ use super::{
     Query, Session,
 };
 use super::{
-    DrainRequest, DrainResponse, DrainStatus, GetDrainStatusResponse, GetReadinessResponse,
-    ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
+    DrainRequest, DrainResponse, DrainStatus, GetConfigRequest, GetConfigResponse,
+    GetDrainStatusResponse, GetReadinessResponse, GetResourceGroupConfigRequest,
+    GetResourceGroupConfigResponse, ListResourceGroupsRequest, ListResourceGroupsResponse,
+    ReadinessCheck, ReloadResourceGroupConfigRequest, ReloadResourceGroupConfigResponse,
+    ReplaceResourceGroupConfigRequest, ReplaceResourceGroupConfigResponse, ResumeServingRequest,
+    ResumeServingResponse, SetConfigDefaultsRequest, SetConfigDefaultsResponse,
+    ValidateResourceGroupConfigRequest, ValidateResourceGroupConfigResponse,
 };
 use crate::drain::{DrainController, DrainState, Exiting, MAX_GRACE, MIN_GRACE};
 use crate::readiness::{CheckState, Readiness};
@@ -81,6 +86,10 @@ impl std::fmt::Debug for SessionAdmin {
 }
 
 impl SessionAdmin {
+    pub(super) fn runtime(&self) -> &EngineRuntime {
+        &self.runtime
+    }
+
     /// The admin API over `runtime`; registers the `admin.v1` capability row.
     #[must_use]
     pub fn new(runtime: Arc<EngineRuntime>) -> Self {
@@ -115,16 +124,16 @@ impl SessionAdmin {
 const ANONYMOUS_OWNER: &str = "\u{0}anonymous";
 
 /// What a caller may do, resolved from what the guard authenticated.
-struct Who {
-    principal: Principal,
-    monitor: bool,
-    operate_sessions: bool,
-    operate_queries: bool,
-    manage: bool,
+pub(super) struct Who {
+    pub(super) principal: Principal,
+    pub(super) monitor: bool,
+    pub(super) operate_sessions: bool,
+    pub(super) operate_queries: bool,
+    pub(super) manage: bool,
 }
 
 impl Who {
-    fn of(call: &Call) -> Self {
+    pub(super) fn of(call: &Call) -> Self {
         let system = |n: &str| Securable::System(n.to_owned());
         let authenticated = call
             .caller
@@ -164,7 +173,7 @@ impl Who {
     }
 }
 
-fn timestamp(ms: i64) -> Timestamp {
+pub(super) fn timestamp(ms: i64) -> Timestamp {
     Timestamp {
         seconds: ms.div_euclid(1000),
         nanos: i32::try_from(ms.rem_euclid(1000) * 1_000_000).unwrap_or(0),
@@ -261,7 +270,15 @@ impl SessionAdmin {
         error.disguised_denial()
     }
 
-    fn log(&self, call: &Call, rpc: &str, target: &str, own: bool, result: &str, class: &str) {
+    pub(super) fn log(
+        &self,
+        call: &Call,
+        rpc: &str,
+        target: &str,
+        own: bool,
+        result: &str,
+        class: &str,
+    ) {
         action::record(&Action {
             principal: &call.caller.principal,
             role: call.caller.role.as_deref().unwrap_or("none"),
@@ -279,6 +296,69 @@ impl SessionAdmin {
 }
 
 impl AdminApi for SessionAdmin {
+    fn list_resource_groups(
+        &self,
+        call: &Call,
+        request: ListResourceGroupsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListResourceGroupsResponse>> {
+        let call = call.clone();
+        async move { self.do_list_resource_groups(&call, &request) }.boxed()
+    }
+
+    fn get_resource_group_config(
+        &self,
+        call: &Call,
+        _request: GetResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetResourceGroupConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_get_resource_group_config(&call) }.boxed()
+    }
+
+    fn validate_resource_group_config(
+        &self,
+        call: &Call,
+        request: ValidateResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ValidateResourceGroupConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_validate_resource_group_config(&call, &request) }.boxed()
+    }
+
+    fn replace_resource_group_config(
+        &self,
+        call: &Call,
+        request: ReplaceResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReplaceResourceGroupConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_replace_resource_group_config(&call, &request) }.boxed()
+    }
+
+    fn reload_resource_group_config(
+        &self,
+        call: &Call,
+        _request: ReloadResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReloadResourceGroupConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_reload_resource_group_config(&call) }.boxed()
+    }
+
+    fn get_config(
+        &self,
+        call: &Call,
+        request: GetConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_get_config(&call, &request) }.boxed()
+    }
+
+    fn set_config_defaults(
+        &self,
+        call: &Call,
+        request: SetConfigDefaultsRequest,
+    ) -> BoxFuture<'_, AdminResult<SetConfigDefaultsResponse>> {
+        let call = call.clone();
+        async move { self.do_set_config_defaults(&call, &request) }.boxed()
+    }
+
     fn idempotency_scope(&self, call: &Call) -> String {
         let p = Who::of(call).principal;
         format!(
@@ -683,7 +763,7 @@ impl SessionAdmin {
     }
 
     /// Fails with the denial (counted, audited, recorded) unless `allowed`.
-    fn require(
+    pub(super) fn require(
         &self,
         call: &Call,
         allowed: bool,

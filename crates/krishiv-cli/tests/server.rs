@@ -748,7 +748,7 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
         Some(token),
     );
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");
-    assert!(version.contains("\"adminV1Revision\":\"3\""), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"4\""), "{version}");
     let caps = http_get_host(
         &server.admin,
         "/api/admin/v1/capabilities",

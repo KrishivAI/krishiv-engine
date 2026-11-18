@@ -9,5 +9,12 @@
   {"rpc": "GetReadiness", "method": "GET", "path": "/readiness", "privilege": "authenticated"},
   {"rpc": "GetDrainStatus", "method": "GET", "path": "/drain", "privilege": "authenticated"},
   {"rpc": "Drain", "method": "POST", "path": "/drain", "privilege": "authenticated"},
-  {"rpc": "ResumeServing", "method": "DELETE", "path": "/drain", "privilege": "authenticated"}
+  {"rpc": "ResumeServing", "method": "DELETE", "path": "/drain", "privilege": "authenticated"},
+  {"rpc": "ListResourceGroups", "method": "GET", "path": "/resourceGroups", "privilege": "authenticated"},
+  {"rpc": "GetResourceGroupConfig", "method": "GET", "path": "/resourceGroups/config", "privilege": "authenticated"},
+  {"rpc": "ValidateResourceGroupConfig", "method": "POST", "path": "/resourceGroups/config:validate", "privilege": "authenticated"},
+  {"rpc": "ReplaceResourceGroupConfig", "method": "PUT", "path": "/resourceGroups/config", "privilege": "authenticated"},
+  {"rpc": "ReloadResourceGroupConfig", "method": "POST", "path": "/resourceGroups/config:reload", "privilege": "authenticated"},
+  {"rpc": "GetConfig", "method": "GET", "path": "/config", "privilege": "authenticated"},
+  {"rpc": "SetConfigDefaults", "method": "PATCH", "path": "/config/defaults", "privilege": "authenticated"}
 ]
