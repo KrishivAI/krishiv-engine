@@ -158,9 +158,9 @@ pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION
 pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
-#[cfg(feature = "unstable-ir")]
-pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::{SqlOutcome, SqlQuery};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
 pub use udfs::SessionFunctions;
