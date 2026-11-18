@@ -3219,6 +3219,7 @@ dependencies = [
 name = "krishiv-flight-sql"
 version = "0.2.1"
 dependencies = [
+ "getrandom 0.4.3",
  "krishiv-common",
  "tonic",
 ]

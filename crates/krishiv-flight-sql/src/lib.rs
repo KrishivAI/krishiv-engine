@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod handles;
 pub mod status;
 
+pub use handles::{HandleId, HandleLimits, Handles};
 pub use status::{code_of, flight_status};

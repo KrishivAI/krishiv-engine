@@ -13,4 +13,5 @@ workspace = true
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+getrandom.workspace = true
 tonic.workspace = true
