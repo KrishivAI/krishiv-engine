@@ -26,9 +26,10 @@
 //! build, never accepted and ignored.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature};
-use krishiv_io::egress::EgressScope;
+use krishiv_io::egress::EgressPolicy;
 
 use crate::auth::SecretRef;
 
@@ -39,12 +40,32 @@ pub const SPARK_CATALOG_PREFIX: &str = "spark.sql.catalog.";
 /// `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`).
 pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
 
-/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key. In
-/// server mode such keys are startup only, for every role (§2.2, decision 1).
+/// `key` after `prefix`, the prefix matched in any ASCII letter case: the one prefix match of
+/// [`is_catalog_key`] and [`CatalogDeclarations::parse`], so no key one routes to the
+/// declarations is missed by the other (review 58a2 B1).
+fn strip_prefix_ci<'a>(key: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = key.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| key.get(prefix.len()..))
+        .flatten()
+}
+
+/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key, the
+/// prefix in any letter case. In server mode such keys are startup only, for every role (§2.2,
+/// decision 1).
 #[must_use]
 pub fn is_catalog_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.starts_with(CATALOG_PREFIX) || lower.starts_with(SPARK_CATALOG_PREFIX)
+    strip_prefix_ci(key, CATALOG_PREFIX).is_some()
+        || strip_prefix_ci(key, SPARK_CATALOG_PREFIX).is_some()
+}
+
+/// Whether `key` is part of a catalog declaration: a catalog key ([`is_catalog_key`]) that is
+/// not a registered engine setting (`krishiv.catalog.requestTimeout`, `maxMetadataBytes`, ...
+/// configure every catalog client and stay engine configuration). The server reads these at
+/// startup and never stores them as configuration; a session in server mode cannot set them.
+#[must_use]
+pub fn is_declaration_key(key: &str) -> bool {
+    is_catalog_key(key) && krishiv_common::config::lookup(key).is_none()
 }
 
 /// Where the declarations come from.
@@ -311,6 +332,20 @@ fn invalid(key: &str, shown: &str, reason: &str) -> KrishivError {
     .into()
 }
 
+/// Refuses `key` when `earlier`, another spelling of the same field, already set it: the two
+/// would merge with the last one winning silently (review 58a2 N4). The same key given twice
+/// keeps its meaning, the last value.
+fn once(earlier: Option<&str>, key: &str) -> Result<(), KrishivError> {
+    match earlier {
+        Some(earlier) if earlier != key => Err(invalid(
+            key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
@@ -337,33 +372,41 @@ struct Raw {
 }
 
 impl CatalogDeclarations {
-    /// Parses every catalog key of `settings` (other keys are ignored). `compiled` lists the
-    /// catalog types this build carries; `glue_scope`, when given, checks a Glue `endpoint`
-    /// (N3: Glue's AWS SDK client is not a policy client, so its admin-set endpoint is checked
-    /// here, by the address rule with the by-name exemption).
+    /// Parses every catalog declaration key of `settings` (other keys, registered
+    /// `krishiv.catalog.*` settings included, are ignored). `compiled` lists the catalog types
+    /// this build carries; `egress`, when given, checks every declared endpoint whose host is an
+    /// address literal by the address rule, with the catalog's own by-name exemption: the `uri`,
+    /// the `tokenEndpoint` and a Glue `endpoint` (N3: Glue's AWS SDK client is not a policy
+    /// client, so its endpoint is checked only here). A name is checked when it resolves.
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for every startup refusal of §2.3 (unknown
     /// type, option or class, missing key, literal secret, reserved or malformed name, empty
-    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, a refused endpoint);
+    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, an endpoint the egress
+    /// rule refuses, named by its key and never by its address);
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a type compiled out, `delegated`, an S3 Tables warehouse
     /// or remote signing.
     pub fn parse<'a>(
         settings: impl IntoIterator<Item = (&'a str, &'a str)>,
         mode: DeclMode,
         compiled: &[CatalogType],
-        glue_scope: Option<&EgressScope>,
+        egress: Option<&Arc<EgressPolicy>>,
     ) -> Result<Self, KrishivError> {
         let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
-        let mut default = None;
+        let mut default: Option<(String, String)> = None;
         for (key, value) in settings {
-            if key == DEFAULT_CATALOG_KEY || key == "spark.sql.defaultCatalog" {
-                default = Some(value.trim().to_owned());
-            } else if let Some(rest) = key.strip_prefix(CATALOG_PREFIX) {
+            if key.eq_ignore_ascii_case(DEFAULT_CATALOG_KEY)
+                || key.eq_ignore_ascii_case("spark.sql.defaultCatalog")
+            {
+                once(default.as_ref().map(|(k, _)| k.as_str()), key)?;
+                default = Some((key.to_owned(), value.trim().to_owned()));
+            } else if !is_declaration_key(key) {
+                // A registered engine setting (`krishiv.catalog.requestTimeout`) or no catalog key.
+            } else if let Some(rest) = strip_prefix_ci(key, CATALOG_PREFIX) {
                 let Some((name, field)) = rest.split_once('.') else {
                     return Err(invalid(
                         key,
-                        value,
+                        krishiv_common::secret::REDACTED,
                         "expected krishiv.catalog.<name>.<setting>",
                     ));
                 };
@@ -377,41 +420,44 @@ impl CatalogDeclarations {
                     ));
                 }
                 let entry = raw.entry(name.to_owned()).or_default();
+                once(entry.fields.get(field).map(|(k, _)| k.as_str()), key)?;
                 entry
                     .fields
                     .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
-            } else if let Some(rest) = key.strip_prefix(SPARK_CATALOG_PREFIX) {
+            } else if let Some(rest) = strip_prefix_ci(key, SPARK_CATALOG_PREFIX) {
                 match rest.split_once('.') {
                     None => {
-                        raw.entry(rest.to_owned()).or_default().spark_class =
-                            Some((key.to_owned(), value.trim().to_owned()));
+                        let entry = raw.entry(rest.to_owned()).or_default();
+                        once(entry.spark_class.as_ref().map(|(k, _)| k.as_str()), key)?;
+                        entry.spark_class = Some((key.to_owned(), value.trim().to_owned()));
                     }
                     Some((name, opt)) => {
-                        raw.entry(name.to_owned())
-                            .or_default()
+                        let entry = raw.entry(name.to_owned()).or_default();
+                        let field = format!("spark:{opt}");
+                        once(entry.fields.get(&field).map(|(k, _)| k.as_str()), key)?;
+                        entry
                             .fields
-                            .insert(format!("spark:{opt}"), (key.to_owned(), value.to_owned()));
+                            .insert(field, (key.to_owned(), value.to_owned()));
                     }
                 }
+            } else {
+                // `is_declaration_key` routed it here, so it must not be dropped: a dropped
+                // `tenants` would widen the catalog (review 58a2 B1).
+                return Err(invalid(
+                    key,
+                    krishiv_common::secret::REDACTED,
+                    "not a catalog declaration key",
+                ));
             }
         }
         let mut out = Self {
-            default,
+            default: default.map(|(_, v)| v),
             ..Self::default()
         };
         for (name, entry) in raw {
             let decl = decl(&name, entry, mode, compiled, &mut out.warnings)?;
-            if decl.kind == CatalogType::Glue
-                && let (Some(scope), Some(endpoint)) = (glue_scope, decl.options.get("endpoint"))
-            {
-                let exempt = scope.clone();
-                if exempt.check_endpoint(endpoint).is_err() {
-                    return Err(invalid(
-                        &format!("{CATALOG_PREFIX}{name}.option.endpoint"),
-                        "<endpoint>",
-                        "the egress policy refuses this endpoint's address (private address)",
-                    ));
-                }
+            if let Some(policy) = egress {
+                check_endpoints(&decl, policy)?;
             }
             out.catalogs.push(decl);
         }
@@ -423,6 +469,37 @@ impl CatalogDeclarations {
         }
         Ok(out)
     }
+}
+
+/// The declared endpoints of `decl` checked by the address rule under the catalog's own scope
+/// (its declared hosts exempt by name, so an on-premises catalog at a private address passes;
+/// link-local and special-purpose addresses never do, in any spelling).
+fn check_endpoints(decl: &CatalogDecl, policy: &Arc<EgressPolicy>) -> Result<(), KrishivError> {
+    let scope = policy.scope(decl.declared_hosts());
+    let token_endpoint = match &decl.auth {
+        CatalogAuth::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
+        _ => None,
+    };
+    let glue_endpoint = (decl.kind == CatalogType::Glue)
+        .then(|| decl.options.get("endpoint"))
+        .flatten();
+    for (field, endpoint) in [
+        ("uri", decl.uri.as_ref()),
+        ("tokenEndpoint", token_endpoint),
+        ("option.endpoint", glue_endpoint),
+    ] {
+        if let Some(endpoint) = endpoint
+            && scope.check_endpoint(endpoint).is_err()
+        {
+            return Err(invalid(
+                &format!("{CATALOG_PREFIX}{}.{field}", decl.name),
+                "<endpoint>",
+                "the egress policy refuses this endpoint's address (private address); list its \
+                 network in krishiv.io.egress.allowedCidrs if it is meant",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn valid_name(name: &str) -> bool {
@@ -458,7 +535,17 @@ fn map_spark(
         ));
     };
     let mut auth_set = entry.fields.contains_key("auth");
+    // A field a `krishiv.catalog.` key also sets is one field under two spellings (review 58a2
+    // N4); the alias's own options may set one field together (`token` and `rest.auth.type` both
+    // set `auth`).
+    let mut clash = None;
     let mut put = |field: &str, key: &str, value: &str| {
+        if let Some((earlier, _)) = entry.fields.get(field)
+            && strip_prefix_ci(earlier, CATALOG_PREFIX).is_some()
+            && clash.is_none()
+        {
+            clash = Some((key.to_owned(), earlier.clone()));
+        }
         entry
             .fields
             .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
@@ -571,6 +658,13 @@ fn map_spark(
         if !auth_set {
             put("auth", &key, "client-credentials");
         }
+    }
+    if let Some((key, earlier)) = clash {
+        return Err(invalid(
+            &key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        ));
     }
     entry.fields.retain(|k, _| !k.starts_with("spark:"));
     Ok(())
@@ -726,8 +820,8 @@ fn decl(
             None => Ok(None),
             Some((k, v)) => {
                 // Spark's `token` option may be inline in embedded mode; Krishiv's keys never.
-                let spark_inline =
-                    mode == DeclMode::Embedded && k.starts_with(SPARK_CATALOG_PREFIX);
+                let spark_inline = mode == DeclMode::Embedded
+                    && strip_prefix_ci(k, SPARK_CATALOG_PREFIX).is_some();
                 SecretRef::parse(k, v, spark_inline).map(Some)
             }
         }

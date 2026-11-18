@@ -11,6 +11,7 @@ pub(crate) mod lazy;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
 pub(crate) mod provider;
+pub(crate) mod puffin_stats;
 pub(crate) mod rolling;
 pub(crate) mod scan;
 pub(crate) mod sink;
@@ -41,7 +42,11 @@ mod evolution_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
+mod oracle_tests;
+#[cfg(test)]
 mod provider_tests;
+#[cfg(test)]
+mod puffin_stats_tests;
 #[cfg(test)]
 mod rolling_tests;
 #[cfg(test)]

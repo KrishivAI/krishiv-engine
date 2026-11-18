@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use futures::future::{BoxFuture, FutureExt};
 use krishiv_server::admin_v1::{
-    ADMIN_V1_REVISION, AdminApi, AdminConfig, AdminResult, GetCapabilitiesResponse,
-    GetVersionRequest, GetVersionResponse, router,
+    ADMIN_V1_REVISION, AdminApi, AdminConfig, AdminResult, Call, CancelQueriesByTagRequest,
+    CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, GetCapabilitiesResponse,
+    GetVersionRequest, GetVersionResponse, KillSessionRequest, KillSessionResponse,
+    ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, router,
 };
 use krishiv_server::guard::{Guard, GuardRequest, Refusal};
 use tonic::transport::Channel;
@@ -16,7 +18,7 @@ use tonic::transport::Channel;
 struct Api;
 
 impl AdminApi for Api {
-    fn get_version(&self) -> BoxFuture<'_, AdminResult<GetVersionResponse>> {
+    fn get_version(&self, _: &Call) -> BoxFuture<'_, AdminResult<GetVersionResponse>> {
         async {
             Ok(GetVersionResponse {
                 version: "1.2.3".to_owned(),
@@ -27,8 +29,48 @@ impl AdminApi for Api {
         .boxed()
     }
 
-    fn get_capabilities(&self) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>> {
+    fn get_capabilities(&self, _: &Call) -> BoxFuture<'_, AdminResult<GetCapabilitiesResponse>> {
         async { Ok(GetCapabilitiesResponse::default()) }.boxed()
+    }
+
+    fn list_sessions(
+        &self,
+        _: &Call,
+        _: ListSessionsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListSessionsResponse>> {
+        async { Ok(ListSessionsResponse::default()) }.boxed()
+    }
+
+    fn kill_session(
+        &self,
+        _: &Call,
+        _: KillSessionRequest,
+    ) -> BoxFuture<'_, AdminResult<KillSessionResponse>> {
+        async { Ok(KillSessionResponse::default()) }.boxed()
+    }
+
+    fn list_queries(
+        &self,
+        _: &Call,
+        _: ListQueriesRequest,
+    ) -> BoxFuture<'_, AdminResult<ListQueriesResponse>> {
+        async { Ok(ListQueriesResponse::default()) }.boxed()
+    }
+
+    fn cancel_query(
+        &self,
+        _: &Call,
+        _: CancelQueryRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueryResponse>> {
+        async { Ok(CancelQueryResponse::default()) }.boxed()
+    }
+
+    fn cancel_queries_by_tag(
+        &self,
+        _: &Call,
+        _: CancelQueriesByTagRequest,
+    ) -> BoxFuture<'_, AdminResult<CancelQueriesByTagResponse>> {
+        async { Ok(CancelQueriesByTagResponse::default()) }.boxed()
     }
 }
 

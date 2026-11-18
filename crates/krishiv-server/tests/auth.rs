@@ -97,7 +97,7 @@ async fn call(addr: SocketAddr, method: &str, path: &str, token: Option<&str>) -
     let mut s = TcpStream::connect(addr).await.expect("connect");
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
     );
     s.write_all(request.as_bytes()).await.expect("write");
     let mut out = String::new();
