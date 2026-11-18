@@ -148,7 +148,7 @@ pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
           file, is left out. Statistics never fail a write: on any failure, or a catalog refusing \
           the update, the write commits without them. A table opts out with the table property \
           `krishiv.write.statistics.enabled=false`. Off by default until the write cost of the sketches \
-          is measured (P3-T024 U3). Read when the write is planned.",
+          is measured. Read when the write is planned.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",
