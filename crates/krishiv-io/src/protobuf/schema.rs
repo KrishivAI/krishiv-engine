@@ -23,6 +23,15 @@ use crate::error::unsupported;
 /// limit for the messages themselves, so no value nested deeper could be read anyway.
 pub(crate) const MAX_NESTING: usize = 100;
 
+/// The most message structs one schema may expand to, counted over every field path (a descriptor of 30 types whose fields
+/// each refer twice to the next would otherwise expand to about 2^30 leaves). Ordinary schemas are far below it.
+const MAX_EXPANDED_MESSAGES: usize = 100_000;
+
+std::thread_local! {
+    /// Message structs expanded so far by the schema derivation running on this thread.
+    static EXPANDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How a value of a field becomes a Spark value.
 #[derive(Debug, Clone)]
 pub(crate) enum Out {
@@ -86,6 +95,7 @@ pub(crate) fn build(
     opts: &ProtoOptions,
 ) -> Result<(DataType, StructPlan), KrishivError> {
     let existing = HashMap::from([(msg.full_name().to_owned(), 1)]);
+    EXPANDED.with(|c| c.set(0));
     let (fields, plan) = struct_of(msg, &existing, opts, 0)?;
     Ok((struct_type(&fields, plan.dummy), plan))
 }
@@ -112,6 +122,16 @@ fn struct_of(
     opts: &ProtoOptions,
     level: usize,
 ) -> Result<(Vec<StructField>, StructPlan), KrishivError> {
+    let expanded = EXPANDED.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    if expanded > MAX_EXPANDED_MESSAGES {
+        return Err(unsupported(format!(
+            "a protobuf schema that expands to more than {MAX_EXPANDED_MESSAGES} messages (at {})",
+            msg.full_name()
+        )));
+    }
     let mut fields = Vec::new();
     let mut plans = Vec::new();
     for fd in msg.fields() {
@@ -164,8 +184,14 @@ fn field(
         return Ok(None);
     };
     if fd.is_list() {
+        // An empty wrapper element (`0A00`) unwraps to NULL, which Spark keeps as a NULL element; the element type must allow it.
+        let contains_null = matches!(conv.out, Out::Unwrap(_));
         return Ok(Some((
-            StructField::new(fd.name(), DataType::from(ArrayType::new(dt, false)), true),
+            StructField::new(
+                fd.name(),
+                DataType::from(ArrayType::new(dt, contains_null)),
+                true,
+            ),
             PlanField {
                 fd: fd.clone(),
                 shape: Shape::List(conv),

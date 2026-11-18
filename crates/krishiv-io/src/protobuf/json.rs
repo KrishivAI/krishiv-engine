@@ -86,6 +86,13 @@ impl Printer<'_> {
         }
         out.push_str("{\"@type\":");
         string(&url, out);
+        if inner.full_name() == "google.protobuf.Any" {
+            // An Any holding an Any prints the inner one under "value" (protobuf-java's JsonFormat).
+            out.push_str(",\"value\":");
+            self.any(&inner, value, depth + 1, out)?;
+            out.push('}');
+            return Ok(());
+        }
         let parsed = collect(&inner, value, depth + 1)?;
         if WELL_KNOWN.contains(&inner.full_name()) {
             out.push_str(",\"value\":");

@@ -252,6 +252,11 @@ pub(crate) fn collect<'a>(
             {
                 return Err(Malformed);
             }
+            if let (Kind::Message(_), Raw::Len(b)) = (fd.kind(), value) {
+                // Spark parses each embedded message whole before projecting it: one that is not a well-formed message
+                // fails the row even when merging its pieces, or leaving its fields out, would hide it.
+                tagged_values(b)?;
+            }
             store(&mut out, &fd, value);
         } else {
             out.mismatch = true;

@@ -107,7 +107,9 @@ fn parts(
     let descriptor = match desc_index {
         None => Ok(Ok(DescriptorArg::None)),
         Some(i) => match (c.data_type(i), c.constant(i)) {
-            (Some(DataType::String), Some(Constant::String(s))) => {
+            (Some(DataType::String), Some(Constant::String(s)))
+                if c.is_literal(i) || c.is_plain_literal(i) =>
+            {
                 Ok(Ok(DescriptorArg::Path(s.clone())))
             }
             // A literal path the analyzer read under the access policy: the file's bytes, or why it could not be read.

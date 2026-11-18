@@ -429,6 +429,61 @@ fn a_chain_of_distinct_types_past_the_nesting_cap_is_refused_not_a_stack_overflo
 }
 
 #[test]
+fn a_descriptor_whose_fields_each_refer_twice_to_the_next_type_is_refused_by_the_expansion_budget()
+{
+    // 40 types, two fields each of the next one: about 2^40 expanded messages from a small descriptor.
+    let n = 40;
+    let messages: Vec<Vec<u8>> = (0..n)
+        .map(|i| {
+            let fields = if i + 1 == n {
+                vec![build::field("v", 1, 1, 5, "")]
+            } else {
+                let t = format!(".t.M{}", i + 1);
+                vec![
+                    build::field("f", 1, 1, 11, &t),
+                    build::field("g", 2, 1, 11, &t),
+                ]
+            };
+            build::message(&format!("M{i}"), &fields, &[], false)
+        })
+        .collect();
+    let set = DescriptorSet::parse(&build::file("a.proto", &[], &messages)).unwrap();
+    let err = super::Decoder::new(&set, "M0", std::iter::empty()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
+fn two_malformed_embedded_pieces_do_not_merge_into_a_valid_message() {
+    // Root { Child c = 1; } Child { int32 x = 1; }: `0A01 08` and `0A01 01` are truncated / tag-0 bodies whose concatenation is `0801`.
+    let child = build::message("Child", &[build::field("x", 1, 1, 5, "")], &[], false);
+    let root = build::message(
+        "Root",
+        &[build::field("c", 1, 1, 11, ".t.Child")],
+        &[],
+        false,
+    );
+    let set = build::file("a.proto", &[], &[child, root]);
+    let bad: &[Option<&[u8]>] = &[Some(&[0x0a, 0x01, 0x08, 0x0a, 0x01, 0x01])];
+    let err = decode(&set, "Root", &[], bad).unwrap_err();
+    assert_eq!(err.error_class().name(), "MALFORMED_PROTOBUF_MESSAGE");
+}
+
+#[test]
+fn a_descriptor_file_that_is_a_symbolic_link_is_not_read() {
+    let dir = std::env::temp_dir().join(format!("krishiv-pb-link-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let real = dir.join("real.desc");
+    std::fs::write(&real, GOLDEN).unwrap();
+    let link = dir.join("link.desc");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(DescriptorSet::read_file("real", real.to_str().unwrap()).is_ok());
+    let err = DescriptorSet::read_file("link", link.to_str().unwrap()).unwrap_err();
+    assert_eq!(err.error_class().name(), "CANNOT_PARSE_PROTOBUF_DESCRIPTOR");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_chain_of_distinct_types_within_the_cap_reads() {
     let set = DescriptorSet::parse(&chain(super::schema::MAX_NESTING)).unwrap();
     assert!(super::Decoder::new(&set, "M0", std::iter::empty()).is_ok());

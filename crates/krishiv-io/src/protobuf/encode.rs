@@ -643,7 +643,7 @@ fn write_struct(
             // A NULL required scalar writes the type's default; a NULL required message is left out (Spark fails to build it).
             if f.fd.is_required() && !f.fd.is_list() && !matches!(f.fd.kind(), Kind::Message(_)) {
                 let mut b = Vec::new();
-                default_scalar(&f.fd.kind()).write(f.fd.number(), &mut b);
+                default_scalar(&f.fd).write(f.fd.number(), &mut b);
                 written.insert(f.fd.number(), b);
             } else if f.fd.is_required() && matches!(f.fd.kind(), Kind::Message(_)) {
                 // `UninitializedMessageException` in Spark, without an error class.
@@ -686,12 +686,28 @@ fn write_struct(
     Ok(())
 }
 
-fn default_scalar(kind: &Kind) -> Scalar {
-    match kind {
+/// The value Spark writes for a NULL field: the descriptor's default (an explicit proto2 `[default = ..]`, else the first
+/// value of an enum, else the type's zero).
+fn default_scalar(fd: &FieldDescriptor) -> Scalar {
+    use super::desc::DefaultValue;
+    if let Some(d) = fd.explicit_default() {
+        return match d {
+            DefaultValue::Varint(v) => Scalar::Varint(v),
+            DefaultValue::Fixed32(v) => Scalar::Fixed32(v),
+            DefaultValue::Fixed64(v) => Scalar::Fixed64(v),
+            DefaultValue::Bytes(b) => Scalar::Len(b),
+        };
+    }
+    match fd.kind() {
         Kind::Float | Kind::Fixed32 | Kind::Sfixed32 => Scalar::Fixed32(0),
         Kind::Double | Kind::Fixed64 | Kind::Sfixed64 => Scalar::Fixed64(0),
         Kind::String | Kind::Bytes => Scalar::Len(Vec::new()),
         Kind::Message(_) => Scalar::Message(Vec::new()),
+        Kind::Enum(e) => Scalar::Varint(
+            e.values()
+                .first()
+                .map_or(0, |v| i64::from(v.number()) as u64),
+        ),
         _ => Scalar::Varint(0),
     }
 }
@@ -752,7 +768,7 @@ fn write_field(
                 let values = entries.column(1);
                 let value = if values.is_null(i) {
                     // A NULL value writes the field's default (nothing, for proto3 scalars).
-                    default_scalar(&vf.fd.kind())
+                    default_scalar(&vf.fd)
                 } else {
                     scalar(vf, &vf.conv, values.as_ref(), i)?
                 };

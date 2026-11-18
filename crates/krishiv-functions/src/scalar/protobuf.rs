@@ -7,12 +7,12 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, BinaryArray};
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::KrishivError;
 use krishiv_io::protobuf::{Call, DescriptorArg, spark_type_of};
 
-use super::args::{Inputs, to_binary, to_utf8, unsupported};
+use super::args::{Inputs, internal, to_binary, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -133,10 +133,29 @@ fn from(args: &[BindArg]) -> Result<Binding, KrishivError> {
     let target = decoder.arrow_type().clone();
     Ok(Binding::new(target, move |x: &Inputs<'_>| {
         let col = x.column(0)?;
-        let bin: BinaryArray = to_binary(col.as_ref())?;
-        let rows: Vec<Option<&[u8]>> = (0..bin.len())
-            .map(|i| bin.is_valid(i).then(|| bin.value(i)))
-            .collect();
+        // Borrow the payloads from whichever binary carrier the column has (no copy of the input).
+        let a = col.as_ref();
+        let rows: Vec<Option<&[u8]>> = match a.data_type() {
+            ArrowType::Binary => {
+                let b = a.as_binary::<i32>();
+                (0..b.len())
+                    .map(|i| b.is_valid(i).then(|| b.value(i)))
+                    .collect()
+            }
+            ArrowType::LargeBinary => {
+                let b = a.as_binary::<i64>();
+                (0..b.len())
+                    .map(|i| b.is_valid(i).then(|| b.value(i)))
+                    .collect()
+            }
+            ArrowType::BinaryView => {
+                let b = a.as_binary_view();
+                (0..b.len())
+                    .map(|i| b.is_valid(i).then(|| b.value(i)))
+                    .collect()
+            }
+            _ => return Err(internal("from_protobuf: a non-binary input".to_owned())),
+        };
         decoder.decode(&rows)
     }))
 }

@@ -186,11 +186,7 @@ impl DescriptorSet {
             .unwrap_or(local);
         // A descriptor set is kilobytes; a file past the cap is not one (and is never read whole).
         const MAX_BYTES: u64 = 64 << 20;
-        let too_big = std::fs::metadata(local).is_ok_and(|m| m.len() > MAX_BYTES);
-        if too_big {
-            return Err(CannotParseProtobufDescriptor {}.into());
-        }
-        std::fs::read(local).map_err(|e| {
+        let fail = |e: &std::io::Error| -> KrishivError {
             // An empty path or a directory is a parse failure in Spark (a Hadoop `Path` error); a missing file is not found.
             if local.is_empty() || e.kind() != std::io::ErrorKind::NotFound {
                 CannotParseProtobufDescriptor {}.into()
@@ -200,7 +196,28 @@ impl DescriptorSet {
                 }
                 .into()
             }
-        })
+        };
+        // The path as the policy saw it must not be a link at the last component, and the file read is the file opened
+        // (same device and inode), so a swap after the access check cannot redirect the read.
+        let before = std::fs::symlink_metadata(local).map_err(|e| fail(&e))?;
+        if before.file_type().is_symlink() {
+            return Err(CannotParseProtobufDescriptor {}.into());
+        }
+        let file = std::fs::File::open(local).map_err(|e| fail(&e))?;
+        let opened = file.metadata().map_err(|e| fail(&e))?;
+        {
+            use std::os::unix::fs::MetadataExt;
+            if opened.dev() != before.dev() || opened.ino() != before.ino() {
+                return Err(CannotParseProtobufDescriptor {}.into());
+            }
+        }
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_BYTES + 1), &mut bytes)
+            .map_err(|e| fail(&e))?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err(CannotParseProtobufDescriptor {}.into());
+        }
+        Ok(bytes)
     }
 
     /// The first top-level message whose short or full name is `name`, files in set order (Spark's lookup).

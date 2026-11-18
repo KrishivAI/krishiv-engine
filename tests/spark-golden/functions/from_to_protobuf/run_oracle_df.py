@@ -4,8 +4,8 @@
 
 Every `from_protobuf(...)` / `to_protobuf(...)` call in a statement is rebuilt through the DataFrame API
 (`pyspark.sql.protobuf.functions`, the only form 3.5 has), exposed as column `__pbN` of a one-row view `__pbv`,
-and the rest of the statement runs as SQL against that view. Calls the 3.5 API cannot express (a binary descriptor,
-which the API does not take) are reported as `UNSUPPORTED_ON_35`. Result column names differ from the SQL runs
+and the rest of the statement runs as SQL against that view. A constant binary descriptor goes through `binaryDescriptorSet`; a descriptor that is
+neither a path nor a binary literal is reported as `UNSUPPORTED_ON_35`. Result column names differ from the SQL runs
 (`__pbN`); values and errors are comparable.
 
 Usage: spark-submit --packages org.apache.spark:spark-protobuf_2.12:3.5.7 run_oracle_df.py <input.sql> <output.out>
@@ -156,20 +156,30 @@ def main(src, dst):
                     msg = unquote(args[1])
                     third = args[2] if len(args) > 2 else None
                     fourth = args[3] if len(args) > 3 else None
-                    path, opts = None, {}
+                    path, binary, opts = None, None, {}
                     if third is not None and third.lower().startswith("map("):
                         fourth, third = third, None
                     if third is not None:
                         path = unquote(third)
                         if path is None:
-                            raise NotImplementedError(
-                                "UNSUPPORTED_ON_35: descriptor argument is not a path literal"
-                            )
+                            # A constant binary descriptor goes through `binaryDescriptorSet`.
+                            value = spark.sql("select " + third).collect()[0][0]
+                            if not isinstance(value, (bytes, bytearray)):
+                                raise NotImplementedError(
+                                    "UNSUPPORTED_ON_35: descriptor argument is neither a path nor binary literal"
+                                )
+                            binary = bytes(value)
                     if fourth is not None:
                         opts = dict(spark.sql("select " + fourth).collect()[0][0] or {})
                     fn = from_protobuf if kind == "from" else to_protobuf
                     cols.append(
-                        fn(data, msg, descFilePath=path, options=opts).alias(
+                        fn(
+                            data,
+                            msg,
+                            descFilePath=path,
+                            options=opts,
+                            binaryDescriptorSet=binary,
+                        ).alias(
                             "__pb%d" % n
                         )
                     )
