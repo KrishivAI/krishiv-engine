@@ -341,13 +341,7 @@ pub(crate) async fn write_position_deletes(
     }
     let done = encoder.finish().map_err(|e| e.into_error(location))?;
     bytes.extend_from_slice(&done.tail);
-    let size = bytes.len() as u64;
-    t.file_io
-        .new_output(location)
-        .map_err(from_iceberg)?
-        .write(Bytes::from(bytes))
-        .await
-        .map_err(from_iceberg)?;
+    let size = put(t.file_io, location, bytes).await?;
     let bounds = |p: i64| {
         HashMap::from([
             (DELETE_FILE_PATH_ID, Datum::string(data)),
@@ -374,12 +368,60 @@ pub(crate) async fn write_position_deletes(
 /// The store's errors.
 pub(crate) async fn put(io: &FileIO, location: &str, bytes: Vec<u8>) -> Result<u64, KrishivError> {
     let size = bytes.len() as u64;
-    io.new_output(location)
-        .map_err(from_iceberg)?
-        .write(Bytes::from(bytes))
-        .await
-        .map_err(from_iceberg)?;
+    let write = {
+        let (io, location) = (io.clone(), location.to_owned());
+        async move {
+            io.new_output(&location)
+                .map_err(from_iceberg)?
+                .write(Bytes::from(bytes))
+                .await
+                .map_err(from_iceberg)
+        }
+    };
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        write.await?;
+        return Ok(size);
+    };
+    // The store may finish a request whose future was dropped (a local
+    // store's blocking rename, an HTTP request already sent), after the
+    // caller's guard deleted the path. So the write runs on a task of its
+    // own, and a `put` dropped midway deletes the file once it is done.
+    let mut pending = Pending {
+        task: Some(rt.spawn(write)),
+        io: io.clone(),
+        location: location.to_owned(),
+        rt,
+    };
+    let joined = match pending.task.as_mut() {
+        Some(task) => task.await,
+        None => return Err(internal(format!("no write of {location}"))),
+    };
+    pending.task = None;
+    joined.map_err(|e| internal(format!("the write of {location}: {e}")))??;
     Ok(size)
+}
+
+/// A [`put`] in flight: dropped before it is done, it deletes the file once
+/// the write ends.
+struct Pending {
+    task: Option<tokio::task::JoinHandle<Result<(), KrishivError>>>,
+    io: FileIO,
+    location: String,
+    rt: tokio::runtime::Handle,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        let (io, location) = (self.io.clone(), std::mem::take(&mut self.location));
+        self.rt.spawn(async move {
+            // Best effort: a file left behind is in no manifest.
+            let _ = task.await;
+            let _ = io.delete(&location).await;
+        });
+    }
 }
 
 fn internal(message: String) -> KrishivError {
