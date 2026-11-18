@@ -266,3 +266,120 @@ fn a_missing_descriptor_file_is_not_found_and_a_directory_does_not_parse() {
     let e = DescriptorSet::read_file(env!("CARGO_MANIFEST_DIR")).unwrap_err();
     assert_eq!(e.error_class().name(), "CANNOT_PARSE_PROTOBUF_DESCRIPTOR");
 }
+
+/// Hand-built `FileDescriptorSet` bytes for descriptors `protoc` would refuse to write.
+mod build {
+    pub(super) fn varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+
+    pub(super) fn len(number: u64, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        varint(&mut out, number << 3 | 2);
+        varint(&mut out, body.len() as u64);
+        out.extend_from_slice(body);
+        out
+    }
+
+    pub(super) fn int(number: u64, v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        varint(&mut out, number << 3);
+        varint(&mut out, v);
+        out
+    }
+
+    /// A field: `label` 1 optional / 3 repeated, `ty` 11 message or a scalar kind, `type_name` for messages.
+    pub(super) fn field(name: &str, number: u64, label: u64, ty: u64, type_name: &str) -> Vec<u8> {
+        let mut f = len(1, name.as_bytes());
+        f.extend(int(3, number));
+        f.extend(int(4, label));
+        f.extend(int(5, ty));
+        if !type_name.is_empty() {
+            f.extend(len(6, type_name.as_bytes()));
+        }
+        f
+    }
+
+    /// A message of `fields` and `nested` messages, a map entry when `map_entry`.
+    pub(super) fn message(
+        name: &str,
+        fields: &[Vec<u8>],
+        nested: &[Vec<u8>],
+        map_entry: bool,
+    ) -> Vec<u8> {
+        let mut m = len(1, name.as_bytes());
+        for f in fields {
+            m.extend(len(2, f));
+        }
+        for n in nested {
+            m.extend(len(3, n));
+        }
+        if map_entry {
+            m.extend(len(7, &int(7, 1)));
+        }
+        m
+    }
+
+    /// A proto3 file of package `t` holding `messages`, importing `deps`, as a one-file set.
+    pub(super) fn file(name: &str, deps: &[&str], messages: &[Vec<u8>]) -> Vec<u8> {
+        let mut f = len(1, name.as_bytes());
+        f.extend(len(2, b"t"));
+        for d in deps {
+            f.extend(len(3, d.as_bytes()));
+        }
+        for m in messages {
+            f.extend(len(4, m));
+        }
+        f.extend(len(12, b"proto3"));
+        len(1, &f)
+    }
+}
+
+#[test]
+fn a_map_entry_without_its_key_and_value_fields_does_not_parse() {
+    // `message M { repeated E m = 1; message E { option map_entry = true; } }`: no key, no value; then a key only.
+    for entry_fields in [
+        Vec::new(),
+        vec![build::field("key", 1, 1, 9, "")],
+        vec![build::field("value", 2, 1, 9, "")],
+    ] {
+        let entry = build::message("E", &entry_fields, &[], true);
+        let m = build::message(
+            "M",
+            &[build::field("m", 1, 3, 11, ".t.M.E")],
+            &[entry],
+            false,
+        );
+        let set = build::file("a.proto", &[], &[m]);
+        assert_eq!(
+            DescriptorSet::parse(&set).unwrap_err().error_class().name(),
+            "CANNOT_PARSE_PROTOBUF_DESCRIPTOR"
+        );
+    }
+}
+
+#[test]
+fn a_map_entry_with_key_and_value_reads_as_a_map() {
+    let entry = build::message(
+        "E",
+        &[
+            build::field("key", 1, 1, 9, ""),
+            build::field("value", 2, 1, 5, ""),
+        ],
+        &[],
+        true,
+    );
+    let m = build::message(
+        "M",
+        &[build::field("m", 1, 3, 11, ".t.M.E")],
+        &[entry],
+        false,
+    );
+    let set = DescriptorSet::parse(&build::file("a.proto", &[], &[m])).unwrap();
+    let d = super::Decoder::new(&set, "M", std::iter::empty()).unwrap();
+    assert_eq!(d.spark_type().simple_string(), "struct<m:map<string,int>>");
+}

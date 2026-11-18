@@ -169,7 +169,9 @@ impl Printer<'_> {
         let Kind::Message(entry) = fd.kind() else {
             return Err(Failure::Malformed);
         };
-        let (kf, vf) = (entry.map_entry_key_field(), entry.map_entry_value_field());
+        let Some((kf, vf)) = entry.map_entry_fields() else {
+            return Err(Failure::Malformed);
+        };
         out.push('{');
         for (i, raw) in items.iter().enumerate() {
             let Raw::Len(b) = raw else {

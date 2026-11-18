@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use super::desc::{FieldDescriptor, Kind, MessageDescriptor};
-use krishiv_common::error::{KrishivError, RecursiveProtobufSchema};
+use krishiv_common::error::{CannotParseProtobufDescriptor, KrishivError, RecursiveProtobufSchema};
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
 use super::options::ProtoOptions;
@@ -132,7 +132,9 @@ fn field(
         let Kind::Message(entry) = fd.kind() else {
             return Ok(None);
         };
-        let (kf, vf) = (entry.map_entry_key_field(), entry.map_entry_value_field());
+        let Some((kf, vf)) = entry.map_entry_fields() else {
+            return Err(CannotParseProtobufDescriptor {}.into());
+        };
         let Some((kt, kc)) = element(&kf, existing, opts)? else {
             return Ok(None);
         };

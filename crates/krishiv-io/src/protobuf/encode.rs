@@ -313,7 +313,9 @@ fn conv_for(
             match t {
                 DataType::Struct(st) => Conv::Struct(Box::new(struct_conv(st, m, path)?)),
                 DataType::Map(mt) if fd.is_map() => {
-                    let (kf, vf) = (m.map_entry_key_field(), m.map_entry_value_field());
+                    let (kf, vf) = m
+                        .map_entry_fields()
+                        .ok_or_else(|| internal("a map entry without its key and value"))?;
                     path.push("key".to_owned());
                     let k = conv_for(mt.key_type(), &kf, path)?;
                     path.pop();

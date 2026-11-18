@@ -176,12 +176,28 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Result<Arc<Pool>, String>, Malformed
             .enumerate()
             .map(|(i, f)| (f.number, i))
             .collect();
+        // A map entry is `key = 1` and `value = 2`, singular (what `protoc` writes for a `map<K, V>` field): anything else would
+        // leave a map field without its key or value.
+        if pool.messages[*id].map_entry && !is_map_entry_shape(&fields) {
+            return Err(Malformed);
+        }
         let data = &mut pool.messages[*id];
         data.fields = fields;
         data.oneofs = oneofs;
         data.by_number = by_number;
     }
     Ok(Ok(Arc::new(pool)))
+}
+
+fn is_map_entry_shape(fields: &[FieldData]) -> bool {
+    let singular = |number: u32| {
+        fields
+            .iter()
+            .filter(|f| f.number == number)
+            .map(|f| f.label != 3)
+            .eq([true])
+    };
+    fields.len() == 2 && singular(1) && singular(2)
 }
 
 fn declare<'a>(
@@ -473,21 +489,9 @@ impl MessageDescriptor {
             })
     }
 
-    /// The `key` field of a map entry message.
-    pub(crate) fn map_entry_key_field(&self) -> FieldDescriptor {
-        self.entry_field(1)
-    }
-
-    /// The `value` field of a map entry message.
-    pub(crate) fn map_entry_value_field(&self) -> FieldDescriptor {
-        self.entry_field(2)
-    }
-
-    fn entry_field(&self, number: u32) -> FieldDescriptor {
-        self.get_field(number).unwrap_or(FieldDescriptor {
-            msg: self.clone(),
-            index: 0,
-        })
+    /// The `key` and `value` fields of a map entry message (`parse` refuses a map entry without both).
+    pub(crate) fn map_entry_fields(&self) -> Option<(FieldDescriptor, FieldDescriptor)> {
+        Some((self.get_field(1)?, self.get_field(2)?))
     }
 
     fn is_map_entry(&self) -> bool {
