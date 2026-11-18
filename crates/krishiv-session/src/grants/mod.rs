@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The `grants` access-policy provider (P3-T062 unit G2; design `P3-T062-access-policy-providers.md`
-//! §2, ADR 0046 §7, ADR 0036 R2).
+//! The `grants` access-policy provider.
 //!
 //! [`Grants`] is the server-wide part: the [`GrantStore`] (roles, grant rows, owners, the epoch)
-//! and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as ADR 0046
-//! §7 says: data securables (tables, views, columns, namespaces, functions, paths, secrets,
+//! and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as follows:
+//! data securables (tables, views, columns, namespaces, functions, paths, secrets,
 //! connections) are decided by the grants alone; `System(..)` securables and the reserved
 //! `system` catalog's tables by the `system` policy (the role matrix in server mode); an admin
 //! passes every data check. Path confinement (`PathPrefixPolicy`) wraps the whole policy, so it

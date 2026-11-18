@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Declared catalogs (design P3-T067 §2; ADR 0036 R11, R14): the `krishiv.catalog.<name>.*` keys
+//! Declared catalogs: the `krishiv.catalog.<name>.*` keys
 //! and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
 //! same for the server at startup and for an embedded session builder (R11). Validation never
 //! connects: a catalog that is down does not stop the server.

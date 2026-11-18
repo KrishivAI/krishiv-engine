@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The catalog registry (design P3-T067 §2.3, §2.4; ADR 0036 R11, R14): the declared catalogs of
+//! The catalog registry: the declared catalogs of
 //! one engine runtime, each built by the [`CatalogFactory`] of its type on first use and then
 //! shared by every session of the process.
 //!
@@ -37,7 +37,7 @@ use crate::catalog_decl::{
     CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogType, DeclMode,
 };
 
-/// Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
+/// Builds the catalog of one declared type. Implemented by the connector
 /// crates (`krishiv-catalogs`: `iceberg-rest`), registered by the binary that compiles them in.
 pub trait CatalogFactory: fmt::Debug + Send + Sync {
     /// The type it builds.

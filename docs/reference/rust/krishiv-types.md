@@ -180,7 +180,7 @@ pub fn edge_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType
 - `MustUse { reason: None }`
 
 Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
-[`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+[`MAX_VECTOR_LENGTH`].
 
 ```rust
 pub fn is_vector_carrier(arrow: &arrow_schema::DataType) -> bool { /* ... */ }
@@ -308,7 +308,7 @@ pub const CALENDAR_MICROS_FIELD: &str = "microseconds";
 
 #### Constant `MAX_VECTOR_LENGTH`
 
-The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+The longest vector the engine carries as a `FixedSizeList`: the bound keeps `N` times a batch's rows
 far from the `i32` offsets of the plain list it becomes at an expression input.
 
 ```rust

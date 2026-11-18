@@ -1170,7 +1170,7 @@ pub use tokens::StaticTokens;
 
 ## Module `catalog_decl`
 
-Declared catalogs (design P3-T067 §2; ADR 0036 R11, R14): the `krishiv.catalog.<name>.*` keys
+Declared catalogs: the `krishiv.catalog.<name>.*` keys
 and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
 same for the server at startup and for an embedded session builder (R11). Validation never
 connects: a catalog that is down does not stop the server.
@@ -2059,7 +2059,7 @@ pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
 
 ## Module `catalog_registry`
 
-The catalog registry (design P3-T067 §2.3, §2.4; ADR 0036 R11, R14): the declared catalogs of
+The catalog registry: the declared catalogs of
 one engine runtime, each built by the [`CatalogFactory`] of its type on first use and then
 shared by every session of the process.
 
@@ -2421,7 +2421,7 @@ pub struct CatalogRegistry {
 
 #### Trait `CatalogFactory`
 
-Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
+Builds the catalog of one declared type. Implemented by the connector
 crates (`krishiv-catalogs`: `iceberg-rest`), registered by the binary that compiles them in.
 
 ```rust
@@ -2446,8 +2446,8 @@ pub trait CatalogFactory: fmt::Debug + Send + Sync {
 
 ## Module `egress`
 
-The server's egress policy from its startup configuration (design P3-T067 §5; threat model
-T-C2): `krishiv.io.egress.privateAddresses`, `allowedCidrs`, `proxy`, the credential-provider
+The server's egress policy from its startup configuration:
+`krishiv.io.egress.privateAddresses`, `allowedCidrs`, `proxy`, the credential-provider
 endpoints of the server's environment, and the admin-set store endpoints that object-store
 clients may reach at private addresses by name.
 
@@ -2862,12 +2862,11 @@ pub fn coalesce(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column 
 
 ## Module `grants`
 
-The `grants` access-policy provider (P3-T062 unit G2; design `P3-T062-access-policy-providers.md`
-§2, ADR 0046 §7, ADR 0036 R2).
+The `grants` access-policy provider.
 
 [`Grants`] is the server-wide part: the [`GrantStore`] (roles, grant rows, owners, the epoch)
-and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as ADR 0046
-§7 says: data securables (tables, views, columns, namespaces, functions, paths, secrets,
+and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as follows:
+data securables (tables, views, columns, namespaces, functions, paths, secrets,
 connections) are decided by the grants alone; `System(..)` securables and the reserved
 `system` catalog's tables by the `system` policy (the role matrix in server mode); an admin
 passes every data check. Path confinement (`PathPrefixPolicy`) wraps the whole policy, so it
@@ -3698,8 +3697,7 @@ pub use tree::GroupSlot;
 catalog API every surface shares. Listings and lookups read the session catalog and the permanent store
 directly and return Spark's structs (`Database`, `Table`, `Column`, `Function`); the mutating calls run
 the SQL statement Spark's `CatalogImpl` runs, so the access checks, errors and cache invalidation are
-those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions
-(`design/P3-connect-mapping.md` section 2.1).
+those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions.
 
 ```rust
 pub mod spark_catalog { /* ... */ }
@@ -4217,12 +4215,12 @@ pub struct Catalog<'a> {
 - ```rust
   pub async fn set_current_catalog(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
   ```
-  Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees (design P3-T067
+  Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
 
 - ```rust
   pub fn list_catalogs(self: &Self) -> Vec<String> { /* ... */ }
   ```
-  The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (design P3-T067 §2.4;
+  The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
 
 - ```rust
   pub fn current_database(self: &Self) -> String { /* ... */ }
