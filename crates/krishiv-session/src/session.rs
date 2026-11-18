@@ -1942,6 +1942,7 @@ mod spill;
 pub(crate) use spill::*;
 
 mod writes;
+pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 
 mod ops;
