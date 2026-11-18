@@ -159,7 +159,7 @@ def main() -> None:
     import pyspark
 
     committed = {
-        "python": "%d.%d" % sys.version_info[:2],
+        "python": f"{sys.version_info[0]}.{sys.version_info[1]}",
         "pyspark": pyspark.__version__,
         "arrow_default": os.environ.get("KRISHIV_UDTF_ARROW_DEFAULT", "true"),
         "sources": {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in ("cases.py", "export_cases.py")},
