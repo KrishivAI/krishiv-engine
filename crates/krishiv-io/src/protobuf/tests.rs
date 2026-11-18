@@ -425,3 +425,46 @@ fn a_missing_import_is_protobuf_dependency_not_found() {
     assert_eq!(err.error_class().name(), "PROTOBUF_DEPENDENCY_NOT_FOUND");
     assert!(err.to_string().contains("c.proto"), "{err}");
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+    /// Any bytes as a descriptor set: parsed or refused, never a panic.
+    #[test]
+    fn any_bytes_as_a_descriptor_set_never_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512)) {
+        if let Ok(set) = DescriptorSet::parse(&bytes) {
+            for m in set.pool.top_level() {
+                let _ = super::Decoder::new(&set, m.full_name(), std::iter::empty());
+            }
+        }
+    }
+
+    /// The golden descriptor set with a byte flipped: parsed or refused, and every message's reader built or refused.
+    #[test]
+    fn a_damaged_golden_descriptor_never_panics(at in 0usize..5638, to in proptest::prelude::any::<u8>()) {
+        let mut bytes = TYPES.to_vec();
+        let at = at % bytes.len();
+        bytes[at] = to;
+        if let Ok(set) = DescriptorSet::parse(&bytes) {
+            for m in set.pool.top_level() {
+                let _ = super::Decoder::new(&set, m.full_name(), [("recursive.fields.max.depth", "3")]);
+            }
+        }
+    }
+
+    /// Any bytes as a message of every golden message type, fail-fast and permissive: values or an error, never a panic.
+    #[test]
+    fn any_bytes_as_a_message_never_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256)) {
+        for desc in [GOLDEN, TYPES] {
+            let set = DescriptorSet::parse(desc).unwrap();
+            for m in set.pool.top_level() {
+                for mode in ["FAILFAST", "PERMISSIVE"] {
+                    let opts = [("mode", mode), ("recursive.fields.max.depth", "3"), ("convert.any.fields.to.json", "true")];
+                    if let Ok(d) = super::Decoder::new(&set, m.full_name(), opts) {
+                        let _ = d.decode(&[Some(&bytes)]);
+                    }
+                }
+            }
+        }
+    }
+}
