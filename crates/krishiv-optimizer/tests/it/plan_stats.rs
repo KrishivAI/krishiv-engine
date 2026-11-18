@@ -1117,3 +1117,43 @@ fn a_filter_narrows_every_rename_of_its_column() {
         "c0 = c1",
     );
 }
+
+/// `selectivity_is_guessed`: a predicate whose estimate comes from a call
+/// the estimator does not model (`LIKE`, `RLIKE`, a string function, a
+/// boolean column), in any conjunct or branch, is a guess; comparisons,
+/// ranges, `IN` lists and null tests are modelled, with or without
+/// statistics.
+#[test]
+fn a_predicate_the_estimator_cannot_model_is_a_guess() {
+    let guessed = |sql: &str| {
+        let plan = resolve(sql);
+        let node = find(plan.root(), |p| matches!(p.node, PlanNode::Filter { .. }));
+        let PlanNode::Filter { predicate, .. } = &node.node else {
+            unreachable!()
+        };
+        krishiv_optimizer::selectivity_is_guessed(predicate)
+    };
+    for sql in [
+        "SELECT * FROM t WHERE s LIKE 'forest%'",
+        "SELECT * FROM t WHERE a > 3 AND s LIKE 'forest%'",
+        "SELECT * FROM t WHERE s RLIKE 'f.*'",
+        "SELECT * FROM t WHERE startswith(s, 'f')",
+        "SELECT * FROM t WHERE upper(s) = 'F' OR s LIKE '%x'",
+        "SELECT * FROM t WHERE a = 1 OR s LIKE '%x'",
+        "SELECT * FROM t WHERE NOT (s LIKE '%x')",
+        "SELECT * FROM t WHERE contains(s, 'x') AND b < 4",
+    ] {
+        assert!(guessed(sql), "{sql}");
+    }
+    for sql in [
+        "SELECT * FROM t WHERE a = 1",
+        "SELECT * FROM t WHERE a > 3 AND b <= 7",
+        "SELECT * FROM t WHERE a BETWEEN 3 AND 9",
+        "SELECT * FROM t WHERE s IN ('x', 'y') AND s IS NOT NULL",
+        "SELECT * FROM t WHERE a IS NULL OR a = b",
+        "SELECT * FROM g WHERE ga = 4",
+        "SELECT * FROM t WHERE s = 'forest'",
+    ] {
+        assert!(!guessed(sql), "{sql}");
+    }
+}
