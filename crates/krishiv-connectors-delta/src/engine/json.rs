@@ -307,6 +307,22 @@ fn decode_lines(target: &Target, text: &[u8], file: &str) -> KernelResult<Vec<Re
     Ok(out)
 }
 
+/// A commit file that does not decode as Delta actions, as Spark reports it: the file's
+/// `FAILED_READ_FILE.NO_HINT` (KD001), with the decoder's message as the cause. A Krishiv error
+/// already named (a parse limit) passes through.
+fn corrupt_commit(file: &str, error: KernelError) -> KernelError {
+    let named = crate::error::from_kernel(&error, file);
+    if named.error_class() != krishiv_common::error::ErrorClass::InternalError {
+        return error;
+    }
+    to_kernel(
+        KrishivError::from(krishiv_common::error::FailedReadFileNoHint {
+            path: file.to_owned(),
+        })
+        .with_cause(named),
+    )
+}
+
 /// Decodes one JSON object per string (a null string is `{}`), one output row each.
 fn decode_rows<'s>(
     target: &Target,
@@ -424,7 +440,7 @@ impl KrishivJsonHandler {
             .ok_or_else(|| KernelError::file_not_found(name))?;
         check_size(limits, name, bytes.len() as u64).map_err(to_kernel)?;
         check_depth(limits, name, &bytes).map_err(to_kernel)?;
-        let batches = decode_lines(target, &bytes, name)?;
+        let batches = decode_lines(target, &bytes, name).map_err(|e| corrupt_commit(name, e))?;
         for b in &batches {
             check_batch(limits, name, b).map_err(to_kernel)?;
         }

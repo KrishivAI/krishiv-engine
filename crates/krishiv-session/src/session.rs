@@ -1294,17 +1294,26 @@ impl Session {
         // One I/O context for the query's reads, scans and writes: its
         // counters are the query's own bytes (`system.queries`).
         let io = self.scoped_io();
+        let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            Arc::clone(&stores),
+        ));
         let files = Arc::new(FileReads::new(
             io.clone(),
             Arc::clone(&self.state.runtime.formats),
-            Arc::new(ObjectPaths::new(
-                StoreId::new(LOCAL_STORE),
-                self.state.cwd.clone(),
-                Arc::clone(&self.state.io),
-                Arc::clone(&stores),
-            )),
+            Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
+            io: io.clone(),
+            paths,
+            runtime: self.state.runtime.executor.io_handle().clone(),
+            config: Arc::clone(&config),
+            cache: Arc::clone(&self.state.runtime.delta),
+            credential: self.state.principal.id(),
+        }));
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
@@ -1328,6 +1337,7 @@ impl Session {
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
             Arc::clone(&files),
+            Arc::clone(&delta),
             scans,
             &config
                 .get(&krishiv_common::config::SQL_DEFAULT_PATH)
@@ -1400,7 +1410,7 @@ impl Session {
             functions,
             table_functions: Arc::new(BuiltinTableFunctions::new()),
             sql: Some(Arc::new(Frontend { options: parser })),
-            files: Some(files),
+            files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
             // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
             // `Metadata`; every other analysis may run the plan.
@@ -1584,39 +1594,6 @@ impl Session {
                 None => Ok(views),
             }
         })
-    }
-
-    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
-    ///
-    /// # Errors
-    /// What [`crate::view_schema::check_read`] raises.
-    async fn check_stored_views(
-        &self,
-        reads: &[crate::view_schema::StoredRead],
-        env: &QueryEnv,
-    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
-        let compensation = crate::view_schema::compensation(&env.config);
-        let mut synced = Vec::new();
-        let mut renames = Vec::new();
-        for read in reads {
-            // A view whose query does not analyze alone is left to the outer query.
-            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
-            else {
-                continue;
-            };
-            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
-                continue;
-            };
-            let case_sensitive = env.analysis.conf.case_sensitive;
-            let check =
-                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
-            if let Some(changed) = check.changed {
-                synced.push((Arc::clone(&read.entry), changed));
-            }
-            renames.extend(check.rename);
-        }
-        Ok((synced, renames))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
