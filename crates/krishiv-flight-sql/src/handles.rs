@@ -500,7 +500,10 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         let ids: Vec<HandleId> = inner
             .entries
             .iter()
-            .filter(|(_, e)| e.is_expired(ttl, now) || !alive(&e.session_id))
+            // A handle with an operation live (a reserved slot whose `GetFlightInfo` runs, a
+            // fetch) stays even when its session is not in the caller's snapshot: the snapshot
+            // can predate the session's insert (review m1). Its call ends it with `end`/`remove`.
+            .filter(|(_, e)| e.live == 0 && (e.is_expired(ttl, now) || !alive(&e.session_id)))
             .map(|(id, _)| *id)
             .collect();
         for id in &ids {
@@ -868,5 +871,19 @@ mod tests {
         assert!(h.get(&"a", &old, at).is_none());
         assert!(h.get(&"a", &orphan, at).is_none());
         assert!(h.get(&"a", &fresh, at).is_some());
+    }
+
+    /// A reserved slot survives a sweep whose session snapshot predates it (review m1); once
+    /// its call ended, a session the sweep does not know takes it.
+    #[test]
+    fn sweep_keeps_a_live_slot() {
+        let h: Handles<&str, u32> = Handles::new(limits(4, 100));
+        let t0 = Instant::now();
+        let slot = h.reserve(&"a", "s", 0, 10, false, t0).unwrap().id;
+        assert_eq!(h.sweep(t0, |_| false), 0);
+        assert!(h.set_payload(&"a", &slot, 7, 10));
+        h.end(&slot, t0);
+        assert_eq!(h.sweep(t0, |_| false), 1);
+        assert!(h.is_empty());
     }
 }

@@ -389,7 +389,7 @@ impl FlightSqlServer {
         let classified = session
             .sql_query_with(&sql, QueryOptions::new().query_start(query_start))
             .await
-            .map_err(|e| flight_status(&e))?;
+            .map_err(|e| op_failed(&op, &e))?;
         let outcome = match classified {
             SqlQuery::Query(df) => SqlOutcome::Query(df),
             SqlQuery::NotAQuery(class) => {
@@ -404,16 +404,16 @@ impl FlightSqlServer {
                 session
                     .sql_command_with(&sql, options)
                     .await
-                    .map_err(|e| flight_status(&e))?
+                    .map_err(|e| op_failed(&op, &e))?
             }
             _ => return Err(Status::internal("an unknown outcome of a SQL statement")),
         };
         let (schema, kind, bytes) = match outcome {
             SqlOutcome::Query(df) => {
-                let schema = df.schema().await.map_err(|e| flight_status(&e))?;
+                let schema = df.schema().await.map_err(|e| op_failed(&op, &e))?;
                 drop(gate);
                 let tz = time_zone(session);
-                let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| flight_status(&e))?;
+                let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| op_failed(&op, &e))?;
                 let bytes = sql.len().saturating_add(schema_bytes(&schema));
                 (Arc::clone(&schema), Kind::Query(schema), bytes)
             }
@@ -426,7 +426,7 @@ impl FlightSqlServer {
                         "server shutting down; the statement ran, its result was not stored",
                     ));
                 }
-                let stored = stored.map_err(|e| flight_status(&e))?;
+                let stored = stored.map_err(|e| op_failed(&op, &e))?;
                 let bytes = sql
                     .len()
                     .saturating_add(schema_bytes(&stored.schema))
@@ -439,12 +439,19 @@ impl FlightSqlServer {
             }
             _ => return Err(Status::internal("an unknown outcome of a SQL statement")),
         };
+        // A command ran, so any refusal to keep its handle says so (§15 m3, review m1); a query
+        // did not run and gets the refusal itself (review m2).
+        let ran = matches!(kind, Kind::Command(_));
         let evicted = inner
             .handles
             .store(&cap, &slot.id, Payload { kind, ..pending }, bytes)
-            .map_err(|e| match bytes_of_command(bytes, &e) {
-                Some(not_stored) => flight_status(&not_stored),
-                None => flight_status(&e),
+            .map_err(|e| {
+                if ran {
+                    op.fail();
+                    flight_status(&not_stored_after(bytes, &e))
+                } else {
+                    op_failed(&op, &e)
+                }
             });
         let evicted = match evicted {
             Ok(evicted) => evicted,
@@ -580,15 +587,15 @@ impl FlightSqlServer {
                     .sql_query_with(&payload.sql, options)
                     .await
                     .and_then(SqlQuery::into_query)
-                    .map_err(|e| flight_status(&e))?;
-                let schema = df.schema().await.map_err(|e| flight_status(&e))?;
+                    .map_err(|e| op_failed(&op, &e))?;
+                let schema = df.schema().await.map_err(|e| op_failed(&op, &e))?;
                 drop(gate);
                 let tz = time_zone(session);
-                let shaped = spark_schema(&schema, tz.as_ref()).map_err(|e| flight_status(&e))?;
+                let shaped = spark_schema(&schema, tz.as_ref()).map_err(|e| op_failed(&op, &e))?;
                 if shaped != *announced {
-                    return Err(flight_status(&KrishivFlightSqlSchemaChanged {}.into()));
+                    return Err(op_failed(&op, &KrishivFlightSqlSchemaChanged {}.into()));
                 }
-                let rows = df.execute_stream().await.map_err(|e| flight_status(&e))?;
+                let rows = df.execute_stream().await.map_err(|e| op_failed(&op, &e))?;
                 let rows = rows
                     .map(move |b| b.and_then(|b| spark_batch(&b, tz.as_ref())))
                     .boxed();
@@ -693,16 +700,21 @@ fn rows_bytes(batches: &[RecordBatch]) -> usize {
     batches.iter().map(RecordBatch::get_array_memory_size).sum()
 }
 
-/// A command whose rows do not fit the owner's byte cap ran: `RESULT_NOT_STORED`, never the
-/// handle limit (§4.1).
-fn bytes_of_command(bytes: usize, e: &KrishivError) -> Option<KrishivError> {
-    (e.error_class() == krishiv_common::error::ErrorClass::KrishivFlightSqlHandleLimit).then(|| {
-        KrishivError::from(KrishivFlightSqlResultNotStored {
-            bytes: bytes.to_string(),
-            reason: client_reason(e),
-        })
-        .with_cause(e.clone())
+/// A command that ran but whose handle was not kept (the byte cap, a swept slot): `RESULT_NOT_STORED`
+/// with the refusal's client-safe text, never the refusal itself (§4.1, §15 m3).
+fn not_stored_after(bytes: usize, e: &KrishivError) -> KrishivError {
+    KrishivError::from(KrishivFlightSqlResultNotStored {
+        bytes: bytes.to_string(),
+        reason: client_reason(e),
     })
+    .with_cause(e.clone())
+}
+
+/// A failure after `op` was registered: the operation ends failed, not cancelled (review m10),
+/// and the error goes out as its Flight status.
+fn op_failed(op: &OpGuard, e: &KrishivError) -> Status {
+    op.fail();
+    flight_status(e)
 }
 
 /// An inner error's text as a client may see it ([`KrishivError::for_client`]), for the reason
@@ -734,7 +746,7 @@ mod tests {
             limit: "1".into(),
         }
         .into();
-        let wrapped = bytes_of_command(10, &limit).expect("a handle limit is not stored");
+        let wrapped = not_stored_after(10, &limit);
         assert_eq!(
             wrapped.error_class(),
             ErrorClass::KrishivFlightSqlResultNotStored
