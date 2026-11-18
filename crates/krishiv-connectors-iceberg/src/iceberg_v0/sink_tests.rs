@@ -60,6 +60,20 @@ impl Catalog {
         })
     }
 
+    /// A catalog over the metadata file at `location`.
+    pub(super) fn at(location: &str) -> Arc<Self> {
+        let bytes = std::fs::read(location.strip_prefix("file://").unwrap()).unwrap();
+        Arc::new(Self {
+            state: Mutex::new((
+                serde_json::from_slice(&bytes).unwrap(),
+                location.to_owned(),
+                0,
+            )),
+            hang: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
+        })
+    }
+
     pub(super) fn location(&self) -> String {
         self.state.lock().unwrap().1.clone()
     }

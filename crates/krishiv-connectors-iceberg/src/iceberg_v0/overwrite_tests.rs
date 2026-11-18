@@ -688,6 +688,41 @@ fn serializable_validation_from_the_read_snapshot() {
     }
 }
 
+/// An unpartitioned dynamic overwrite validates every row: a foreign append
+/// conflicts under `serializable`, the message printing Java's `true` for
+/// `alwaysTrue` (review 36b2b finding 5).
+#[test]
+fn an_unpartitioned_dynamic_overwrite_validates_with_the_true_filter() {
+    let env = env();
+    let t = create(&env, 2, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 3));
+    let s0 = catalog
+        .metadata()
+        .current_snapshot_id()
+        .unwrap()
+        .to_string();
+    let p = provider(&env, &catalog.location(), &catalog);
+    append(&env, &catalog, rows(&[Some(7)]));
+    let options = [
+        ("isolation-level", "serializable"),
+        ("validate-from-snapshot-id", s0.as_str()),
+    ];
+    let e = write_rows(
+        &env,
+        &p,
+        WriteMode::OverwriteDynamic,
+        &options,
+        input_schema(),
+        vec![rows(&[Some(40)])],
+    )
+    .unwrap_err();
+    conflict(
+        &e,
+        "Found conflicting files that can contain records matching true: [",
+    );
+}
+
 /// `isolation-level` without `validate-from-snapshot-id` validates the whole
 /// history (Java's null starting snapshot): the table's own earlier append
 /// into the partition conflicts, and the message names the option. A
@@ -749,4 +784,171 @@ fn isolation_without_a_starting_snapshot_names_the_option() {
         ErrorClass::KrishivUnsupportedFeature,
         "{e}"
     );
+}
+
+fn double(v: f64) -> Arc<Expr> {
+    Arc::new(Expr::literal(Literal::Double(v)))
+}
+
+/// A float file whose manifest has bounds and null counts but no NaN counts
+/// (older Java writers, other engines) and holds a NaN row: `f < 3.0`
+/// cannot be proven for every row (NaN < 3.0 is FALSE in Spark), so the
+/// overwrite fails with the partial-match error and the NaN row stays,
+/// never removed with the file (review 36b2b B2). `f < NaN` is refused up
+/// front (B1).
+#[test]
+fn nan_rows_of_a_file_without_nan_counts_survive_an_overwrite() {
+    use arrow_array::Float64Array;
+    use iceberg::spec::Datum;
+
+    use super::evolution_tests::{File, evolved_at, opt, schema};
+    use super::provider_tests::id_field;
+    let env = env();
+    let location = evolved_at(
+        &env,
+        &[schema(vec![opt(1, "f", PrimitiveType::Double)])],
+        vec![
+            File::new(
+                "old.parquet",
+                vec![id_field("f", A::Float64, 1)],
+                vec![Arc::new(Float64Array::from(vec![1.0, f64::NAN, 2.0]))],
+            )
+            .bounds(1, Datum::double(1.0), Datum::double(2.0))
+            .counts(1, 3, 0),
+        ],
+        None,
+    );
+    let catalog = Catalog::at(&location);
+    let input: SchemaRef = Arc::new(Schema::new(vec![Field::new("f", A::Float64, true)]));
+    let f = || column("f", 1, krishiv_types::DataType::Double);
+    let p = provider(&env, &location, &catalog);
+    let e = write_rows(
+        &env,
+        &p,
+        WriteMode::OverwriteByFilter(by(Builtin::Lt, f(), double(3.0))),
+        &[],
+        Arc::clone(&input),
+        vec![],
+    )
+    .unwrap_err();
+    partial(&e, "old.parquet");
+    let e = write_rows(
+        &env,
+        &p,
+        WriteMode::OverwriteByFilter(by(Builtin::Lt, f(), double(f64::NAN))),
+        &[],
+        input,
+        vec![],
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    let table = env
+        .rt
+        .block_on(super::table::IcebergTable::load(
+            &env.reg,
+            &catalog.location(),
+            "db",
+            "t",
+        ))
+        .unwrap();
+    let p = env
+        .provider(&table, &crate::plan::VersionSpec::Current)
+        .unwrap();
+    let mut got = provider_session(p).rows("SELECT f FROM t");
+    got.sort();
+    assert_eq!(got, ["1", "2", "NaN"]);
+}
+
+/// A dynamic overwrite after `int -> long` on the identity partition
+/// column: the old manifest's 4-byte tuple `v = 5` is the same partition as
+/// the new file's 8-byte one, so the old rows are replaced (review 36b2b
+/// M3), never kept beside the new ones.
+#[test]
+fn a_dynamic_overwrite_replaces_a_partition_of_a_promoted_column() {
+    use iceberg::spec::Datum;
+
+    use super::evolution_tests::{File, evolved_at, opt, schema};
+    use super::provider_tests::id_field;
+    let env = env();
+    let location = evolved_at(
+        &env,
+        &[
+            schema(vec![
+                opt(1, "v", PrimitiveType::Int),
+                opt(2, "id", PrimitiveType::Long),
+            ]),
+            schema(vec![
+                opt(1, "v", PrimitiveType::Long),
+                opt(2, "id", PrimitiveType::Long),
+            ]),
+        ],
+        vec![
+            File::new(
+                "old.parquet",
+                vec![id_field("v", A::Int32, 1), id_field("id", A::Int64, 2)],
+                vec![
+                    Arc::new(arrow_array::Int32Array::from(vec![5, 5])),
+                    Arc::new(Int64Array::from(vec![1, 2])),
+                ],
+            )
+            .bounds(1, Datum::int(5), Datum::int(5))
+            .in_partition(Struct::from_iter([Some(IcebergLiteral::int(5))])),
+            File::new(
+                "other.parquet",
+                vec![id_field("v", A::Int32, 1), id_field("id", A::Int64, 2)],
+                vec![
+                    Arc::new(arrow_array::Int32Array::from(vec![6])),
+                    Arc::new(Int64Array::from(vec![3])),
+                ],
+            )
+            .bounds(1, Datum::int(6), Datum::int(6))
+            .in_partition(Struct::from_iter([Some(IcebergLiteral::int(6))])),
+        ],
+        Some("v"),
+    );
+    let catalog = Catalog::at(&location);
+    let input: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("v", A::Int64, true),
+        Field::new("id", A::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&input),
+        vec![
+            Arc::new(Int64Array::from(vec![5])),
+            Arc::new(Int64Array::from(vec![10])),
+        ],
+    )
+    .unwrap();
+    let p = provider(&env, &location, &catalog);
+    write_rows(
+        &env,
+        &p,
+        WriteMode::OverwriteDynamic,
+        &[],
+        input,
+        vec![batch],
+    )
+    .unwrap();
+    let (op, s) = summary(&catalog.metadata());
+    assert_eq!(op, Operation::Overwrite);
+    assert_eq!(get(&s, "deleted-data-files"), Some("1"));
+    let table = env
+        .rt
+        .block_on(super::table::IcebergTable::load(
+            &env.reg,
+            &catalog.location(),
+            "db",
+            "t",
+        ))
+        .unwrap();
+    let p = env
+        .provider(&table, &crate::plan::VersionSpec::Current)
+        .unwrap();
+    let mut got = provider_session(p).rows("SELECT v, id FROM t");
+    got.sort();
+    assert_eq!(got, ["5|10", "6|3"]);
 }

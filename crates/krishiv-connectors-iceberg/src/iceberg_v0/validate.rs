@@ -98,7 +98,7 @@ use iceberg::spec::{FormatVersion, Operation, TableMetadata};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::PushdownExpr;
 
-use super::filter::PartitionKey;
+use super::filter::{PartitionKey, partition_key};
 use super::scan::{
     parse_manifest, partition_specs, read_capped, read_manifest_list, schema_fields,
 };
@@ -509,7 +509,8 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
     let always = PushdownExpr::Constant(true);
     let pruner = judge.pruner(v.filter.as_ref().unwrap_or(&always));
     let matches = |c: &Change, f: &ContentFile| match &v.partitions {
-        Some(set) => set.keys.contains(&(f.spec_id, f.partition.clone())),
+        Some(set) => partition_key(&judge.specs, f.spec_id, &f.partition)
+            .is_some_and(|k| set.keys.contains(&k)),
         None => pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f)),
     };
     if v.added_data() {

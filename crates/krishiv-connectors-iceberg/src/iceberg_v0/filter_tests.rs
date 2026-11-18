@@ -776,3 +776,52 @@ fn a_row_filter_removes_whole_files_and_refuses_partial_data_files() {
     let f = run(&env, &m, base, &with(both), &mut Vec::new()).unwrap();
     assert_eq!(f.replaced, 0);
 }
+
+/// Partition keys compare by value across a promotion (review 36b2b M3,
+/// the scope of both the dropped partitions and the validation): an old
+/// 4-byte `int` tuple equals a new 8-byte `long` one, whichever type the
+/// spec reads them with, `float` and `double` alike; an unreadable value
+/// never makes a key.
+#[test]
+fn partition_keys_compare_by_value_across_promotions() {
+    use crate::plan::PartitionValue as V;
+    use crate::plan::types::{IcebergType, PartitionFieldInfo, PartitionSpecInfo, Transform};
+
+    use super::filter::partition_key;
+    let specs = |ty: IcebergType| {
+        let field = PartitionFieldInfo::new(1000, 1, "v".to_owned(), Transform::Identity, Some(ty));
+        std::collections::BTreeMap::from([(
+            0,
+            PartitionSpecInfo {
+                spec_id: 0,
+                fields: vec![field],
+            },
+        )])
+    };
+    let int = V::Value(5_i32.to_le_bytes().to_vec());
+    let long = V::Value(5_i64.to_le_bytes().to_vec());
+    for ty in [IcebergType::Int, IcebergType::Long] {
+        let s = specs(ty);
+        assert_eq!(
+            partition_key(&s, 0, std::slice::from_ref(&int)),
+            partition_key(&s, 0, std::slice::from_ref(&long))
+        );
+        assert!(partition_key(&s, 0, std::slice::from_ref(&int)).is_some());
+    }
+    let float = V::Value(1.5_f32.to_le_bytes().to_vec());
+    let double = V::Value(1.5_f64.to_le_bytes().to_vec());
+    for ty in [IcebergType::Float, IcebergType::Double] {
+        let s = specs(ty);
+        assert_eq!(
+            partition_key(&s, 0, std::slice::from_ref(&float)),
+            partition_key(&s, 0, std::slice::from_ref(&double))
+        );
+    }
+    let s = specs(IcebergType::Long);
+    assert_ne!(
+        partition_key(&s, 0, std::slice::from_ref(&long)),
+        partition_key(&s, 0, &[V::Value(6_i64.to_le_bytes().to_vec())])
+    );
+    assert_eq!(partition_key(&s, 0, &[V::Null]), Some((0, vec![V::Null])));
+    assert_eq!(partition_key(&s, 0, &[V::Unreadable]), None);
+}

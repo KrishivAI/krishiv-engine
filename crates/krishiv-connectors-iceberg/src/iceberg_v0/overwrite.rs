@@ -52,7 +52,14 @@
 //! renderings (Java's `Expression` and `PartitionSet` `toString` were not
 //! read); the checks run in `validate.rs`'s fixed order (Java's
 //! `ReplacePartitions` checks removed files before added deletes); a spec of
-//! only `void` fields counts as partitioned, as `fields().size() <= 0` reads.
+//! only `void` fields counts as partitioned, as `fields().size() <= 0` reads
+//! (unverified: `BaseReplacePartitions.java` and `PartitionSpec.isUnpartitioned`
+//! at 1.12.0 were not read; if Java's `validate` asks the void-aware
+//! `isUnpartitioned`, it validates over `alwaysTrue`, wider than Krishiv's
+//! partition set; the removal is the null tuple either way). Partition
+//! tuples are compared by value at the spec's current type
+//! (`filter::partition_key`), so a promoted column's old 4-byte tuples match
+//! new 8-byte ones; a rewritten manifest writes them at the promoted type.
 
 use std::sync::Arc;
 

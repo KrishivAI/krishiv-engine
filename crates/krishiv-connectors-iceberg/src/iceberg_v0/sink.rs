@@ -94,7 +94,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::append::{WriteIds, write_new_manifests};
 use super::commit::{CommitClock, CommitContext, CommitTable, commit_append, commit_validated};
 use super::data_file::{WrittenDataFile, data_file};
-use super::filter::Removals;
+use super::filter::{Removals, partition_key};
 use super::storage::Registered;
 use super::types::arrow_schema;
 use super::validate::{PartitionSet, Validation};
@@ -417,7 +417,10 @@ impl IcebergWriteSink {
                 written.delete().await;
                 return Ok(());
             }
-            replaced_partitions(o, &t.base, &entries);
+            if let Err(e) = replaced_partitions(o, &t.base, &entries) {
+                written.delete().await;
+                return Err(e);
+            }
         }
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
@@ -475,12 +478,18 @@ impl IcebergWriteSink {
 
 /// A `ReplacePartitions`' removals and conflict scope from the files it
 /// writes (`BaseReplacePartitions.java:51-56`, `:113-117`): their partitions
-/// (spec id and tuple), or every row when their spec has no field.
+/// (spec id and tuple, compared by value: `filter::partition_key`), or
+/// every row when their spec has no field (validated over `true`, Java's
+/// `alwaysTrue`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a written partition value that cannot
+/// be read back (never matched, so never dropped: refused instead).
 fn replaced_partitions(
     o: &mut Overwrite,
     base: &TableMetadata,
     entries: &[(i32, iceberg::spec::DataFile)],
-) {
+) -> Result<(), KrishivError> {
     let schema = base.current_schema();
     let unpartitioned = entries.iter().all(|(spec_id, _)| {
         base.partition_spec_by_id(*spec_id)
@@ -488,11 +497,22 @@ fn replaced_partitions(
     });
     if unpartitioned {
         o.removals.row_filter = Some(krishiv_io::PushdownExpr::Constant(true));
-        return;
+        o.validation.filter = None;
+        "true".clone_into(&mut o.validation.filter_text);
+        return Ok(());
     }
+    let specs = super::scan::partition_specs(base, schema);
     let mut paths = std::collections::BTreeSet::new();
     for (spec_id, f) in entries {
-        let key = (*spec_id, super::scan::content_file(f, *spec_id).partition);
+        let tuple = super::scan::content_file(f, *spec_id).partition;
+        let key = partition_key(&specs, *spec_id, &tuple).ok_or_else(|| {
+            KrishivError::from(KrishivUnsupportedFeature {
+                feature: format!(
+                    "a dynamic overwrite writing a partition value Krishiv cannot read back ({})",
+                    f.file_path()
+                ),
+            })
+        })?;
         o.removals.drop_partitions.insert(key);
         if let Some(spec) = base.partition_spec_by_id(*spec_id) {
             paths.insert(spec.partition_to_path(f.partition(), Arc::clone(schema)));
@@ -502,6 +522,7 @@ fn replaced_partitions(
         keys: o.removals.drop_partitions.clone(),
         text: format!("[{}]", paths.into_iter().collect::<Vec<_>>().join(", ")),
     });
+    Ok(())
 }
 
 /// The files of a write not yet handed to the commit loop: deleted on
