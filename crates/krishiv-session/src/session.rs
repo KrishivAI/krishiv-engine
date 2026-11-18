@@ -1642,32 +1642,27 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        let stream = crate::run_site::resolve_sites(stream, env);
-        Ok((Self::name_spill_failure(stream, env), query))
+        Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
-    /// `stream` with a memory error reported as the query's own spill-directory failure, when the
-    /// query could not set its spill directory up: it needed to spill and could not (PY-078).
-    pub(crate) fn name_spill_failure(
-        stream: RecordBatchStream,
-        env: &QueryEnv,
-    ) -> RecordBatchStream {
-        let failure = Arc::clone(&env.spill_failure);
-        Box::pin(futures::StreamExt::map(stream, move |r| {
-            r.map_err(|e| {
-                if e.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
-                    return e;
-                }
-                let found = failure
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
-                match found {
-                    Some(f) => f.with_cause(e),
-                    None => e,
-                }
-            })
-        }))
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as
@@ -1932,6 +1927,7 @@ impl Session {
         };
         match submitted {
             Err(error) => {
+                let error = Self::name_spill_failure(error, &env.spill_failure);
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
@@ -1939,7 +1935,11 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let (inner, fold) = (stream, pending.0.take());
+                let failure = Arc::clone(&env.spill_failure);
+                let inner = Box::pin(
+                    stream.map(move |r| r.map_err(|e| Self::name_spill_failure(e, &failure))),
+                );
+                let fold = pending.0.take();
                 let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),

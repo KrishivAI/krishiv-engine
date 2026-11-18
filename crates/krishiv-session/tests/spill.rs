@@ -305,3 +305,71 @@ fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
     let df = block_on(s.sql("SELECT count(*) AS n FROM range(10)")).unwrap();
     assert_eq!(block_on(df.collect()).unwrap().len(), 1);
 }
+
+/// PY-078 (review): the error keeps the memory error as its cause, shows the OS error once, and
+/// is what `system.queries` records for the failed query.
+#[test]
+fn the_spill_failure_is_the_recorded_error_and_keeps_the_memory_error_as_its_cause() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("4MB"));
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await }).unwrap_err();
+    assert_eq!(
+        err.cause()
+            .map(krishiv_common::error::KrishivError::error_class),
+        Some(krishiv_common::error::ErrorClass::UnableToAcquireMemory),
+        "{err}"
+    );
+    assert_eq!(err.to_string().matches("os error").count(), 1, "{err}");
+    let rows = block_on(async {
+        s.sql("SELECT error_class FROM system.queries WHERE error_class IS NOT NULL")
+            .await
+            .unwrap()
+            .collect()
+            .await
+    })
+    .unwrap();
+    let classes: Vec<String> = rows
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_string::<i32>();
+            (0..b.num_rows())
+                .map(|i| a.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        classes.iter().any(|c| c == "KRISHIV_SPILL_IO_ERROR"),
+        "{classes:?}"
+    );
+}
+
+/// PY-078 (review): a spill set-up failure that is not an I/O failure keeps its own class.
+#[test]
+fn an_invalid_spill_setting_keeps_its_own_error_class() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            tmp.path().join("spill").to_str().unwrap(),
+        )
+        .config("krishiv.spill.compression", "zstd")
+        .config("krishiv.spill.zstd.level", "9999")
+        .config("krishiv.memory.limit", "4MB")
+        .build();
+    let s = s.expect("a level the registry accepts");
+    let err = block_on(async {
+        s.sql("SELECT count(*), max(s) FROM (SELECT sha2(cast(id AS string), 256) s FROM range(2000000) ORDER BY s)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_ne!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+}

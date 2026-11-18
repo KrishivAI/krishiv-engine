@@ -32,12 +32,21 @@ impl SpillScopes for QuerySpill {
         if slot.is_none() {
             let config = SpillConfig::from_config(&self.state.runtime.config);
             let manager = SpillManager::open(&config).map_err(|e| {
-                let failure: KrishivError = krishiv_common::error::KrishivSpillIoError {
-                    operation: "create the spill directory (`krishiv.spill.dir`)".to_owned(),
-                    path: config.dir.display().to_string(),
-                    reason: e.to_string(),
-                }
-                .into();
+                let failure: KrishivError = match &e {
+                    krishiv_memory::SpillError::Io {
+                        operation,
+                        path,
+                        source,
+                    } => krishiv_common::error::KrishivSpillIoError {
+                        operation: (*operation).to_owned(),
+                        path: path.display().to_string(),
+                        reason: format!(
+                            "{source}; set `krishiv.spill.dir` to a writable local directory"
+                        ),
+                    }
+                    .into(),
+                    other => KrishivError::from(other),
+                };
                 *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
                 internal(format!(
                     "cannot set up the spill directory (set `krishiv.spill.dir` to a writable local directory): {e}"

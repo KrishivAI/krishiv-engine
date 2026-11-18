@@ -426,7 +426,7 @@ impl Session {
             let (rows, _, row_id) = self
                 .run_on_query_logged(&plan, worker, &held_env, false, admitted.take())
                 .await?;
-            let mut rows = Self::name_spill_failure(crate::run_site::resolve_sites(rows, env), env);
+            let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
