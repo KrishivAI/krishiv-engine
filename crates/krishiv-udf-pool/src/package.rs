@@ -50,6 +50,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../worker/krishiv/_udf/types.py"),
     ),
     (
+        "krishiv/_udf/udtf.py",
+        include_str!("../worker/krishiv/_udf/udtf.py"),
+    ),
+    (
         "krishiv/_udf/unpack.py",
         include_str!("../worker/krishiv/_udf/unpack.py"),
     ),

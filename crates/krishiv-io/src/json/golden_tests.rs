@@ -37,7 +37,8 @@ const KNOWN: &[(&str, &str)] = &[
     (
         "depth 1001",
         "the inferred schema matches (`_corrupt_record` alone); Spark then refuses a query of only \
-         that column in its analysis (QUERY_ONLY_CORRUPT_RECORD_COLUMN), not in the reader",
+         that column when it plans the scan (QUERY_ONLY_CORRUPT_RECORD_COLUMN, not in the reader); \
+         the engine refuses it in the scan planning too (`krishiv-session` `corrupt_record_only`)",
     ),
     (
         "depth 1001 read",

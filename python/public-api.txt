@@ -13,6 +13,8 @@ ArrowStream.@staticmethod def from_arrow(data: object) -> ArrowStream
 ArrowStream.def __arrow_c_schema__(self) -> object
 ArrowStream.def __arrow_c_stream__(self, requested_schema: object | None=...) -> object
 ArrowStream.def check_error(self) -> None
+ArrowStream.def names(self) -> list[str]
+ArrowStream.def use_placeholder_names(self) -> None
 Column.def add(self, other: Column) -> Column
 Column.def alias(self, name: str) -> Column
 Column.def and_(self, other: Column) -> Column
@@ -126,7 +128,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
