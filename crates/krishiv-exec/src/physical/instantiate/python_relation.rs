@@ -24,6 +24,11 @@ use crate::python_relation::{
 /// set to other than Spark's default.
 const MAX_BYTES_PER_BATCH: &str = "spark.sql.execution.arrow.maxBytesPerBatch";
 
+/// Spark's runner conf entry naming each window UDF's frame kind,
+/// `bounded` or `unbounded` (`ArrowWindowPythonEvaluatorFactory.scala` L72
+/// at v4.2.0); the worker reads it (`worker.py` L877-879).
+const WINDOW_BOUND_TYPES: &str = "window_bound_types";
+
 impl Instantiation<'_> {
     /// A Python relation node: a breaker whose sink feeds the node's tasks
     /// and whose source yields what they returned.
@@ -45,7 +50,19 @@ impl Instantiation<'_> {
             PhysNode::PythonAggregate {
                 input,
                 keys,
+                window: Some(_),
+                ..
+            } => (
+                input,
+                RelationShape::Aligned {
+                    keys: Some(keys.clone()),
+                },
+            ),
+            PhysNode::PythonAggregate {
+                input,
+                keys,
                 key_values,
+                window: None,
                 ..
             } => (
                 input,
@@ -66,7 +83,9 @@ impl Instantiation<'_> {
                     RelationShape::Grouped { keys } | RelationShape::CoGrouped { keys, .. } => {
                         keys.len()
                     }
-                    RelationShape::Map | RelationShape::Aggregate { .. } => 0,
+                    RelationShape::Map
+                    | RelationShape::Aggregate { .. }
+                    | RelationShape::Aligned { .. } => 0,
                 };
                 self.relation_lane(&input.schema, udf, keys, &conf)?
             }
@@ -74,8 +93,26 @@ impl Instantiation<'_> {
                 layout,
                 key_values,
                 calls,
+                window: None,
                 ..
-            } => self.aggregate_lanes(&input.schema, layout, key_values, calls, &conf)?,
+            } => self.call_lanes(&input.schema, layout, key_values, calls, &conf, None, None)?,
+            PhysNode::PythonAggregate {
+                layout,
+                calls,
+                window: Some(bounded),
+                ..
+            } => {
+                let every: Vec<usize> = (0..input.schema.fields().len()).collect();
+                self.call_lanes(
+                    &input.schema,
+                    layout,
+                    &every,
+                    calls,
+                    &conf,
+                    None,
+                    Some(bounded),
+                )?
+            }
             _ => return Err(internal("not a Python relation node".to_owned())),
         };
         let sink = RelationSink::try_new(
@@ -204,6 +241,7 @@ impl Instantiation<'_> {
             output_types: plan.output.iter().map(|c| c.data_type.clone()).collect(),
             output_arrow: Arc::new(Schema::new(client_fields)),
             conf: conf.clone(),
+            udtf: None,
         };
         let udf = self.prepare_relation(&plan.udf, &spec)?;
         let lane = RelationLane {
@@ -216,16 +254,95 @@ impl Instantiation<'_> {
         Ok((vec![lane], Arc::new(Schema::new(canonical))))
     }
 
-    /// One lane per call of a Python aggregate, and the node's schema: the
-    /// key columns, then one column per call.
-    fn aggregate_lanes(
+    /// A `PythonEval` of scalar iterator calls (Spark's 204, 251): a breaker
+    /// whose sink sends each driver's rows to one task per call and joins
+    /// every row with the value its task yields for it, in order (Spark's
+    /// `ArrowEvalPythonExec` queue), whatever batches the values come in.
+    pub(super) fn python_scalar_iter(
+        &mut self,
+        node: &PhysNode,
+        ordered: bool,
+        range_ordered: bool,
+    ) -> Result<Built> {
+        let PhysNode::PythonEval {
+            input,
+            layout,
+            calls,
+        } = node
+        else {
+            return Err(internal("not a PythonEval node".to_owned()));
+        };
+        let mut input = self.node(input)?;
+        if range_ordered {
+            input.node = Arc::new(OrderedNode { inner: input.node });
+        }
+        let conf = self.runner_conf();
+        let leading: Vec<usize> = (0..input.schema.fields().len()).collect();
+        let (lanes, schema) = self.call_lanes(
+            &input.schema,
+            layout,
+            &leading,
+            calls,
+            &conf,
+            Some("pythonUDF"),
+            None,
+        )?;
+        // The input's metadata kept, as a scalar `PythonEval`'s output does.
+        let schema = Arc::new(Schema::new_with_metadata(
+            schema.fields().clone(),
+            input.schema.metadata().clone(),
+        ));
+        let sink = RelationSink::try_new(
+            Arc::clone(&input.schema),
+            RelationShape::Aligned { keys: None },
+            lanes,
+            schema,
+            RelationLimits {
+                max_rows: conf.max_records_per_batch,
+                max_bytes: conf.max_bytes_per_batch,
+                window: DEFAULT_WINDOW,
+            },
+            self.spill.clone(),
+        )?;
+        let source = SharedSource::new(sink.schema());
+        Ok(Built {
+            schema: sink.schema(),
+            node: Arc::new(BreakerNode {
+                input: input.node,
+                sink,
+                source,
+                ordered,
+            }),
+        })
+    }
+
+    /// One lane per call of a Python aggregate (or aligned node), and the
+    /// node's schema: the input columns `leading` (an aggregate's keys,
+    /// every column of an aligned node), then one column per call, named
+    /// `<prefix><i>` (`pythonUDAF<i>` by default). For a window aggregate,
+    /// `window` says per call whether its frame is bounded: Spark's runner
+    /// conf entry `window_bound_types` (`ArrowWindowPythonEvaluatorFactory`
+    /// L220-224 at v4.2.0), one UDF per lane here.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the node's parts, read off three node shapes"
+    )]
+    fn call_lanes(
         &self,
         input: &SchemaRef,
         layout: &[AttrId],
-        keys: &[usize],
+        leading: &[usize],
         calls: &[PythonCallPlan],
         conf: &RunnerConf,
+        prefix: Option<&str>,
+        window: Option<&[bool]>,
     ) -> Result<(Vec<RelationLane>, SchemaRef)> {
+        if window.is_some_and(|w| w.len() != calls.len()) {
+            return Err(internal(
+                "a Python window aggregate's bounds do not match its calls".to_owned(),
+            ));
+        }
+        let keys = leading;
         let values = Values {
             env: &self.env,
             subqueries: &[],
@@ -265,7 +382,7 @@ impl Instantiation<'_> {
                 .collect::<Result<Vec<_>>>()?;
             let canonical = f.data_type.to_arrow();
             let client = client_arrow_type(&canonical);
-            let name = format!("pythonUDAF{i}");
+            let name = format!("{}{i}", prefix.unwrap_or("pythonUDAF"));
             let arg_names: Vec<String> = (0..args.len()).map(|j| format!("_{j}")).collect();
             let spec = RelationCallSpec {
                 name: udf.name.clone(),
@@ -280,6 +397,18 @@ impl Instantiation<'_> {
                 output_types: vec![f.data_type.clone()],
                 output_arrow: Arc::new(Schema::new(vec![Field::new(&name, client.clone(), true)])),
                 conf: conf.clone(),
+                udtf: None,
+            };
+            let spec = match window.and_then(|w| w.get(i)) {
+                Some(&bounded) => {
+                    let mut spec = spec;
+                    spec.conf.settings.insert(
+                        WINDOW_BOUND_TYPES.to_owned(),
+                        if bounded { "bounded" } else { "unbounded" }.to_owned(),
+                    );
+                    spec
+                }
+                None => spec,
             };
             let prepared = self.prepare_relation(&udf, &spec)?;
             fields.push(Field::new(&name, canonical, true));

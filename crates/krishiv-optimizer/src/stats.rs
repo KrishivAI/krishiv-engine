@@ -144,6 +144,15 @@ pub trait Statistics: Send + Sync + fmt::Debug {
     /// The statistics of the table `scan` reads at its pinned version, when
     /// known.
     fn table(&self, scan: &Scan) -> Option<TableStats>;
+
+    /// Whether the table `scan` reads can be read with no column at all and
+    /// still return its rows: its reader takes each batch's row count from
+    /// the files' own metadata (Parquet row groups), so a `COUNT(*)` reads
+    /// only footers. The default says no, and pruning then keeps one column.
+    fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
+        let _ = scan;
+        false
+    }
 }
 
 /// No statistics: every table is estimated by default.

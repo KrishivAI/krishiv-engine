@@ -20,6 +20,7 @@ use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Schema, SchemaRef};
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerExited, OperationCanceled, PythonException,
+    TableValuedFunctionFailedToAnalyzeInPython,
 };
 use krishiv_exec::python_relation::Frame;
 use krishiv_udf_sandbox::{EXIT_SANDBOX_FAILED, SandboxError};
@@ -43,6 +44,8 @@ pub(crate) struct Started {
     pub(crate) private_dir: tempfile::TempDir,
     /// Started through the sandbox trampoline, whose reserved exit status means it could not enter the sandbox.
     pub(crate) sandboxed: bool,
+    /// The session's artifacts the worker reads, kept while it lives.
+    pub(crate) artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 /// A worker that greeted the server.
@@ -66,6 +69,9 @@ pub(crate) struct Worker {
     sandboxed: bool,
     /// True once the worker greeted the server: the trampoline is gone, so an exit status is the worker's own.
     greeted: bool,
+    /// The session's artifacts the worker reads (`Started::artifacts`): their directory is removed only once
+    /// no worker reads it.
+    _artifacts: Option<Arc<crate::artifacts::Prepared>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -110,6 +116,7 @@ impl Worker {
             control,
             private_dir,
             sandboxed,
+            artifacts,
         } = started;
         let pid = Pid::from_child(&child);
         // The child is not reaped yet, so `pid` is still its own.
@@ -141,6 +148,7 @@ impl Worker {
             healthy: false,
             sandboxed,
             greeted: false,
+            _artifacts: artifacts,
         };
         if !watch.starting(&worker.pidfd) {
             // Dropping the worker kills and reaps it.
@@ -270,26 +278,98 @@ impl Worker {
         decode_result(bytes, return_type, args.num_rows()).inspect_err(|_| self.healthy = false)
     }
 
-    /// Starts a relation task over loaded payload `id` (wire `task`): `key_count` key columns lead each frame,
-    /// `arity` data columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an
-    /// aggregate keeps before it sends them.
+    /// Starts a relation task over loaded payload `id` (wire `task`) run as `eval_type` (the payload's own, or
+    /// the window kind of a grouped-aggregate payload): `key_count` key columns lead each frame, `arity` data
+    /// columns follow (an aggregate's arguments); `max_rows` bounds the rows of the results an aggregate keeps
+    /// before it sends them; `udtf` is a UDTF call's part of the message (`relation.rs` `udtf_message`), passed
+    /// in a sealed memfd (`udtf_len` its length).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the task message's fields, each from the call site"
+    )]
     pub(crate) fn start_task(
         &mut self,
         id: u64,
+        eval_type: i32,
         key_count: usize,
         arity: usize,
         max_rows: usize,
         conf: &BTreeMap<String, String>,
+        udtf: Option<&Value>,
     ) -> Result<(), KrishivError> {
-        let header = json!({
+        let mut header = json!({
             "t": "task",
             "udf": id,
+            "eval_type": eval_type,
             "key_count": key_count,
             "arity": arity,
             "max_rows": max_rows,
             "conf": conf,
         });
-        self.send_message(&header, &[])
+        // A UDTF call's part goes in a sealed memfd: its declared struct and `analyze`'s pickled result have
+        // no bound a control message could keep.
+        let Some(udtf) = udtf else {
+            return self.send_message(&header, &[]);
+        };
+        let bytes = serde_json::to_vec(udtf)
+            .map_err(|e| self.server_failure(&format!("cannot encode a UDTF call: {e}")))?;
+        let file = wire::sealed_memfd("krishiv-udtf-call", &bytes)
+            .map_err(|e| self.server_failure(&format!("cannot pass a UDTF call: {e}")))?;
+        if let Some(map) = header.as_object_mut() {
+            map.insert("udtf_len".to_owned(), json!(bytes.len()));
+        }
+        self.send_message(&header, &[file.as_fd()])
+    }
+
+    /// Runs loaded UDTF payload `id`'s static `analyze` (wire `analyze`) over `input` (`udtf.rs`
+    /// `analyze_input`, passed in a sealed memfd) and returns its result: the JSON the worker wrote into the
+    /// memfd of its `analyzed` answer, at most `max` bytes. A Python failure, or a result over `max`, is
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`, a Python failure with Spark's message: the
+    /// traceback's text after its last `PySparkValueError:` (`UserDefinedPythonFunction.scala`
+    /// `receiveFromPython`, v4.2.0). The worker stays usable either way.
+    pub(crate) fn analyze(
+        &mut self,
+        id: u64,
+        input: &RecordBatch,
+        max: u64,
+    ) -> Result<Value, KrishivError> {
+        let (file, len) = write_input(input)
+            .map_err(|e| self.server_failure(&format!("cannot pass an analyze call: {e}")))?;
+        let header = json!({"t": "analyze", "udf": id, "len": len, "max": max});
+        let mut reply = self.exchange(&header, &file)?;
+        match reply.kind() {
+            "analyzed" => {}
+            "error" if reply.str_field("kind") == "python" => {
+                return Err(TableValuedFunctionFailedToAnalyzeInPython {
+                    msg: analyze_message(reply.str_field("message")),
+                }
+                .into());
+            }
+            "error" => return Err(self.python_error(&reply)),
+            other => {
+                return Err(self.protocol(&format!("unexpected answer {other:?} to analyze")));
+            }
+        }
+        let (Some(len), Some(fd), true) = (
+            reply.u64_field("len"),
+            reply.fds.pop(),
+            reply.fds.is_empty(),
+        ) else {
+            return Err(
+                self.protocol("an analyze answer without exactly one descriptor and a length")
+            );
+        };
+        if len > max {
+            // The worker refuses to send this; it answered in step all the same.
+            return Err(TableValuedFunctionFailedToAnalyzeInPython {
+                msg: format!("the analyze result of {len} bytes is over the limit of {max} bytes"),
+            }
+            .into());
+        }
+        let bytes =
+            wire::read_untrusted(fd, len, max).map_err(|e| self.protocol(&e.to_string()))?;
+        serde_json::from_slice(bytes.as_slice())
+            .map_err(|e| self.protocol(&format!("an analyze result that is not JSON: {e}")))
     }
 
     /// The next message of a running task: a request for a frame, a result batch (checked against
@@ -491,6 +571,18 @@ impl Drop for Worker {
         self.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Spark's message of a failed `analyze`: the worker's traceback text after its last `PySparkValueError:`
+/// (Java's `split(...).last` drops trailing empty parts), trimmed.
+pub(crate) fn analyze_message(traceback: &str) -> String {
+    traceback
+        .split("PySparkValueError:")
+        .filter(|part| !part.is_empty())
+        .last()
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
 }
 
 /// Sends `SIGKILL` to the process of `pidfd`; after that process exited (or was reaped) the call fails

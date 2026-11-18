@@ -51,6 +51,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.exec.coalesceInput", &EXEC_COALESCE_INPUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
@@ -236,6 +237,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
+        "krishiv.iceberg.write.maxOpenFiles",
+        &ICEBERG_WRITE_MAX_OPEN_FILES,
+    ),
+    (
         "krishiv.io.credentials.refreshSkew",
         &IO_CREDENTIALS_REFRESH_SKEW,
     ),
@@ -383,6 +388,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.memoryTier",
+        &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     ),
     (
         "krishiv.runtimeFilter.inList.maxValues",

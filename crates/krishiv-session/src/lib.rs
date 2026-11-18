@@ -43,6 +43,7 @@
 
 mod access;
 mod action;
+mod admin_view;
 mod admission;
 mod analyze;
 mod arrow_values;
@@ -52,6 +53,7 @@ mod cancel;
 mod carrier;
 mod catalog;
 pub mod catalog_decl;
+pub mod catalog_registry;
 mod char_write;
 mod collation_defaults;
 mod column;
@@ -102,6 +104,7 @@ mod sql_path;
 mod store;
 mod store_catalog;
 mod system;
+mod system_catalogs;
 mod system_groups;
 mod table_commands;
 mod telemetry;
@@ -113,6 +116,7 @@ mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;

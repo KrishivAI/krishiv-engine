@@ -46,8 +46,14 @@ pub(crate) struct ArtifactRoot {
 impl ArtifactRoot {
     /// Creates the directory `name` (mode 0700) under `parent` and checks
     /// it is a directory this user owns that group and others cannot use.
+    /// Its path is absolute with no link in it (`parent` canonicalized): the
+    /// paths handed to the UDF workers (`pyfiles/`, `archives/`) must be.
     pub(crate) fn create(parent: &Path, name: &str) -> io::Result<Self> {
-        let path = parent.join(name);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "runs on the blocking pool (`artifacts::blocking`), as the directory creation below"
+        )]
+        let path = std::fs::canonicalize(parent)?.join(name);
         let mut builder = std::fs::DirBuilder::new();
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder.create(&path)?;

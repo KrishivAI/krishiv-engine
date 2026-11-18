@@ -234,6 +234,28 @@ fn bloom_at_scale_is_on_by_default_and_parses() {
 }
 
 #[test]
+fn bloom_memory_tier_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let tier = |c: &Config| {
+        c.get(&RUNTIME_FILTER_BLOOM_MEMORY_TIER)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(tier(&c), Some(true));
+    c.set("krishiv.runtimeFilter.bloom.memoryTier", "false")
+        .unwrap();
+    assert_eq!(tier(&c), Some(false));
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.memoryTier", "maybe")
+            .is_err()
+    );
+    // Part A of Polars item 2 (the 8x ratio as a key) was killed: no key.
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.atScaleRatio", "8")
+            .is_err()
+    );
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -1536,6 +1558,14 @@ fn egress_entries_are_startup_only_and_parse() {
         assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
         assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
     }
+    // `deny` keeps certificate verification on, embedded too (review #803 n1).
+    assert!(
+        IO_EGRESS_PRIVATE_ADDRESSES
+            .doc
+            .contains("certificate verification stays on"),
+        "{}",
+        IO_EGRESS_PRIVATE_ADDRESSES.doc
+    );
     c.set("krishiv.io.egress.privateAddresses", "deny").unwrap();
     assert!(
         c.set("krishiv.io.egress.privateAddresses", "maybe")
@@ -1800,6 +1830,23 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     }
 }
 
+/// PR-36a: the open-file cap of an Iceberg write task.
+#[test]
+fn iceberg_write_max_open_files_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&ICEBERG_WRITE_MAX_OPEN_FILES)
+            .and_then(ConfigValue::as_int)
+    };
+    assert_eq!(get(&c), Some(100));
+    c.set("krishiv.iceberg.write.maxOpenFiles", "7").unwrap();
+    assert_eq!(get(&c), Some(7));
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "0").is_err());
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "-3").is_err());
+    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "many").is_err());
+    assert_eq!(ICEBERG_WRITE_MAX_OPEN_FILES.scope, Scope::Session);
+}
+
 #[test]
 fn connect_artifact_quotas_parse_and_default() {
     let d = Config::new();
@@ -1926,4 +1973,17 @@ fn arrow_validate_schema_defaults_off_and_takes_spark_s_key() {
         )
         .is_err()
     );
+}
+
+/// Polars item 2, J1: the driver's input coalescing is on by default and
+/// takes a boolean.
+#[test]
+fn exec_coalesce_input_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&EXEC_COALESCE_INPUT).and_then(ConfigValue::as_bool);
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.coalesceInput", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
+    assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
 }

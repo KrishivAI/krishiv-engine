@@ -128,15 +128,34 @@ impl SqliteCatalog {
         mut conn: Connection,
         case_sensitive: bool,
     ) -> Result<Self, KrishivError> {
-        let setup = |conn: &mut Connection| -> Result<(), Failure> {
-            conn.busy_timeout(BUSY_TIMEOUT)?;
+        let setup = |conn: &mut Connection, timeout: Duration| -> Result<(), Failure> {
+            conn.busy_timeout(timeout)?;
             conn.pragma_update(None, "foreign_keys", true)?;
             // WAL for a file (readers never block the writer); a memory database answers "memory", which is fine.
             conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
             conn.pragma_update(None, "synchronous", "FULL")?;
             store::migrate(conn, case_sensitive)
         };
-        setup(&mut conn).map_err(|f| self_fault(&name, "", f))?;
+        // SQLite does not run the busy handler for every lock conflict while a database is being set up: switching a
+        // new file to WAL, and the first schema transaction, answer "database is locked" at once when another
+        // connection is doing the same. Setup is idempotent (the migration is one transaction), so try again until
+        // the busy timeout is spent.
+        let started = std::time::Instant::now();
+        loop {
+            // Each attempt may wait only for what is left of the one budget, so the whole setup stays within it.
+            let left = BUSY_TIMEOUT.saturating_sub(started.elapsed());
+            match setup(&mut conn, left) {
+                Ok(()) => break,
+                Err(Failure::Sql(detail))
+                    if detail.contains("locked")
+                        && !left.is_zero()
+                        && started.elapsed() < BUSY_TIMEOUT =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(f) => return Err(self_fault(&name, "", f)),
+            }
+        }
         Ok(Self {
             name,
             case_sensitive,

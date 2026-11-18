@@ -633,7 +633,7 @@ impl Session {
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, query, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => {
@@ -1141,6 +1141,57 @@ impl Session {
         ))
     }
 
+    /// As [`Self::from_plan_with`], with each read of a table named in `frames` replaced by that
+    /// frame's plan (the read node's origin, so a client's plan id still names it): a DataFrame
+    /// the host holds under an id (Spark Connect's `CachedRemoteRelation`, the result of a
+    /// checkpoint). The new frame owns what the frames own, so a checkpoint's rows live as long
+    /// as it does even when the host lets go of the frame. A frame that is a lazy checkpoint takes
+    /// its rows here. A read inside a subquery expression is not replaced.
+    ///
+    /// # Errors
+    /// The errors of [`Self::from_plan_with`], and of taking a lazy checkpoint's rows.
+    #[cfg(feature = "unstable-ir")]
+    pub async fn from_plan_over(
+        &self,
+        plan: &Plan,
+        options: crate::QueryOptions,
+        frames: &[(Vec<String>, DataFrame)],
+    ) -> Result<DataFrame, KrishivError> {
+        let session = self.with_options(options)?;
+        if frames.is_empty() {
+            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+        }
+        let frames = frames.to_vec();
+        let root = Arc::clone(plan.root());
+        let (root, keep) = self
+            .on_executor(async move {
+                let mut keep: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
+                let mut plans = Vec::with_capacity(frames.len());
+                for (name, frame) in &frames {
+                    plans.push((name.clone(), frame.plan_with_checkpoints().await?));
+                    for k in &frame.keep {
+                        if !keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                            keep.push(Arc::clone(k));
+                        }
+                    }
+                }
+                let root = root.transform_down(&mut |node| {
+                    let PlanNode::Read(ReadSource::Table { name, .. }) = &node.node else {
+                        return Ok::<_, std::convert::Infallible>(node);
+                    };
+                    Ok(match plans.iter().find(|(n, _)| n == name) {
+                        Some((_, plan)) => {
+                            Arc::new(LogicalPlan::clone(plan).with_origin(node.origin))
+                        }
+                        None => node,
+                    })
+                });
+                Ok((root.unwrap_or_else(|e| match e {}), keep))
+            })
+            .await?;
+        Ok(DataFrame::over_plan(session, root, keep))
+    }
+
     /// Runs `work` on the session's executor, so that it finds the
     /// runtime its I/O needs whatever runtime (if any) polls the caller;
     /// dropping the returned future aborts the work.
@@ -1279,6 +1330,7 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1320,7 +1372,7 @@ impl Session {
                 }),
             )
             .with_path(catalog.sql_path_snapshot())
-            .in_system(catalog.in_system()),
+            .outside_session(!catalog.in_session_catalog()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1406,7 +1458,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
-                in_system: env.catalog.in_system(),
+                outside_session: !env.catalog.in_session_catalog(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
@@ -1645,7 +1697,7 @@ impl Session {
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
-            principal: Arc::from(self.state.principal.name.as_str()),
+            owner: Arc::from(crate::sessions::owner_key(&self.state.principal).as_str()),
             tags: self.effective_tags().into(),
             request_tags: Arc::clone(&self.request_tags),
         }

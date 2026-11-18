@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::fd::OwnedFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
@@ -21,13 +21,14 @@ use krishiv_common::error::{
 };
 use krishiv_udf_sandbox::{Capabilities, Limits, SandboxSpec, probe};
 use rustix::net::{AddressFamily, SocketFlags, SocketType};
-use rustix::process::{Resource, getrlimit};
+use rustix::process::{Pid, PidfdFlags, Resource, getrlimit};
 
 use crate::WORKER_SUBCOMMAND;
+use crate::artifacts::{self, ArtifactSet, Failure};
 use crate::calls::{CallThreads, Job, Refused};
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
-use crate::worker::{Started, Worker};
+use crate::worker::{Started, Worker, kill_via};
 
 /// How the pool starts the sandbox trampoline: `program` with `args`, then the sandbox spec's own
 /// arguments. The default re-runs the server's own executable with [`WORKER_SUBCOMMAND`], which the binary
@@ -73,7 +74,13 @@ pub struct PoolConfig {
     /// What the kernel can enforce; `None` probes it when the pool starts. Tests set it to check the
     /// refusal path.
     pub capabilities: Option<Capabilities>,
+    /// The most bytes one session's artifacts take once copied and unpacked (pyfiles and archives,
+    /// [`crate::SessionUdfs::set_artifacts`]); more is `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
+    pub artifact_limit: u64,
 }
+
+/// [`PoolConfig::artifact_limit`]'s default: 1 GiB.
+pub const DEFAULT_ARTIFACT_LIMIT: u64 = 1 << 30;
 
 impl Default for PoolConfig {
     fn default() -> Self {
@@ -122,6 +129,7 @@ impl PoolConfig {
                 .unwrap_or(false),
             launcher: Launcher::default(),
             capabilities: None,
+            artifact_limit: DEFAULT_ARTIFACT_LIMIT,
         }
     }
 }
@@ -140,6 +148,8 @@ pub struct Owner {
 struct Key {
     owner: Owner,
     interpreter: usize,
+    /// The session's artifact set the worker was started for (its read paths are fixed at start).
+    artifacts: u64,
 }
 
 struct Idle {
@@ -402,10 +412,14 @@ impl Pool {
         &self,
         owner: &Owner,
         python_ver: &str,
+        artifacts: &ArtifactSet,
         watch: &dyn CallWatch,
     ) -> Result<Lease, KrishivError> {
         if let Some(refusal) = &self.inner.refusal {
             return Err(refusal.clone());
+        }
+        if let Some(refused) = artifacts.refused() {
+            return Err(refused.clone());
         }
         let Some((index, interpreter)) = choose(&self.inner.interpreters, python_ver) else {
             return Err(internal(
@@ -415,6 +429,7 @@ impl Pool {
         let key = Key {
             owner: owner.clone(),
             interpreter: index,
+            artifacts: artifacts.id,
         };
         let mut state = self.inner.lock();
         loop {
@@ -430,7 +445,7 @@ impl Pool {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
                     drop(state);
-                    return match self.start(interpreter, watch) {
+                    return match self.start(interpreter, artifacts, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
                         Err(e) => {
                             self.inner.lock().forget(owner);
@@ -446,11 +461,11 @@ impl Pool {
                     state = self.inner.lock();
                     continue;
                 }
-            } else if let Some(victim) =
-                state.take_oldest_idle(|k| &k.owner == owner && k.interpreter != key.interpreter)
+            } else if let Some(victim) = state.take_oldest_idle(|k| &k.owner == owner && *k != key)
             {
-                // At the session's cap with idle workers of another interpreter: stop one of those rather than
-                // wait for the idle timeout (review 2026-11-13 m2).
+                // At the session's cap with idle workers of another interpreter (or of an artifact set the
+                // session replaced): stop one of those rather than wait for the idle timeout (review
+                // 2026-11-13 m2).
                 drop(state);
                 drop(victim);
                 state = self.inner.lock();
@@ -474,18 +489,32 @@ impl Pool {
         }
     }
 
-    /// Starts one worker of `interpreter` and waits for its greeting; `watch` gets its pidfd first, so a
-    /// cancel kills it rather than wait for the greeting.
+    /// Starts one worker of `interpreter` for the artifact set `artifacts` and waits for its greeting; `watch`
+    /// gets its pidfd first, so a cancel kills it rather than wait for the greeting.
     fn start(
         &self,
         interpreter: &Interpreter,
+        artifacts: &ArtifactSet,
         watch: &dyn CallWatch,
     ) -> Result<Worker, KrishivError> {
         let inner = &self.inner;
+        let prepared = if artifacts.is_empty() {
+            None
+        } else {
+            Some(artifacts.prepare(
+                inner.root.path(),
+                inner.config.artifact_limit,
+                &|archive, dest, budget| self.unpack(interpreter, archive, dest, budget, watch),
+                &|| watch.cancelled(),
+            )?)
+        };
         let private_dir = tempfile::Builder::new()
             .prefix("w")
             .tempdir_in(inner.root.path())
             .map_err(|e| internal(format!("cannot make a UDF worker directory: {e}")))?;
+        if let Some(p) = &prepared {
+            link_files(p, private_dir.path())?;
+        }
         let (server_end, worker_end) = rustix::net::socketpair(
             AddressFamily::UNIX,
             SocketType::SEQPACKET,
@@ -493,25 +522,68 @@ impl Pool {
             None,
         )
         .map_err(|e| internal(format!("cannot make a UDF worker socket: {e}")))?;
-        let dir = private_dir.path().to_path_buf();
+        let no_paths = Vec::new();
+        let (paths, read) = prepared
+            .as_ref()
+            .map_or((&no_paths, &no_paths), |p| (&p.sys_path, &p.read_paths));
+        let mut command = self.command(
+            interpreter,
+            private_dir.path(),
+            &package::Entry::Worker { paths },
+            read,
+            None,
+        );
+        command
+            .stdin(Stdio::from(worker_end))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let child = self.spawn(command, interpreter)?;
+        Worker::handshake(
+            Started {
+                child,
+                control: server_end,
+                private_dir,
+                sandboxed: inner.config.sandbox,
+                artifacts: prepared,
+            },
+            watch,
+        )
+    }
+
+    /// The command that runs `entry` with `interpreter` in the private directory `dir`: through the sandbox
+    /// trampoline (reading the system, the interpreter, the package and `read`; writing only `dir`) when it is
+    /// on, else directly with the limits applied by the bootstrap. `file_size` lowers `RLIMIT_FSIZE`.
+    fn command(
+        &self,
+        interpreter: &Interpreter,
+        dir: &Path,
+        entry: &package::Entry<'_>,
+        read: &[PathBuf],
+        file_size: Option<u64>,
+    ) -> Command {
+        let inner = &self.inner;
         let env: Vec<(OsString, OsString)> = vec![
-            ("HOME".into(), dir.clone().into_os_string()),
-            ("TMPDIR".into(), dir.clone().into_os_string()),
+            ("HOME".into(), dir.as_os_str().to_owned()),
+            ("TMPDIR".into(), dir.as_os_str().to_owned()),
             ("LC_ALL".into(), "C.UTF-8".into()),
         ];
         let config = &inner.config;
         let mut limits = Limits::default();
         limits.address_space = config.memory_limit;
+        if let Some(n) = file_size {
+            limits.file_size = Some(limits.file_size.map_or(n, |m| m.min(n)));
+        }
         let mut command = if config.sandbox {
-            let mut spec = SandboxSpec::new(&interpreter.path, &dir);
+            let mut spec = SandboxSpec::new(&interpreter.path, dir);
             spec.args = vec![
                 "-I".into(),
                 "-c".into(),
-                package::bootstrap(
+                package::bootstrap_for(
                     inner.package.path(),
                     inner.fd_limit,
                     None,
                     !config.allow_fork,
+                    entry,
                 )
                 .into(),
             ];
@@ -520,6 +592,7 @@ impl Pool {
             spec.read_paths
                 .extend(interpreter.read_paths.iter().cloned());
             spec.read_paths.push(inner.package.path().to_path_buf());
+            spec.read_paths.extend(read.iter().cloned());
             spec.limits = limits;
             spec.allow_fork = config.allow_fork;
             spec.parent_pid = Some(std::process::id());
@@ -531,7 +604,7 @@ impl Pool {
                 .env_clear();
             command
         } else {
-            let bootstrap = package::bootstrap(
+            let bootstrap = package::bootstrap_for(
                 inner.package.path(),
                 inner.fd_limit,
                 Some(&BootstrapLimits {
@@ -540,24 +613,26 @@ impl Pool {
                     open_files: limits.open_files,
                 }),
                 false,
+                entry,
             );
             let mut command = Command::new(&interpreter.path);
             command.args(["-I", "-c", &bootstrap]).env_clear().envs(env);
             command
         };
+        command.current_dir(dir);
         command
-            .current_dir(&dir)
-            .stdin(Stdio::from(worker_end))
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+    }
+
+    /// Starts `command` on the spawner thread (the parent-death signal follows the starting thread).
+    fn spawn(&self, command: Command, interpreter: &Interpreter) -> Result<Child, KrishivError> {
         let (reply, answer) = mpsc::sync_channel(1);
-        inner
+        self.inner
             .spawner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .send(SpawnRequest { command, reply })
             .map_err(|_| internal("the UDF worker spawner has stopped".to_owned()))?;
-        let child = answer
+        answer
             .recv()
             .map_err(|_| internal("the UDF worker spawner has stopped".to_owned()))?
             .map_err(|e| {
@@ -565,17 +640,176 @@ impl Pool {
                     "cannot start a Python UDF worker ({}): {e}",
                     interpreter.path.display()
                 ))
-            })?;
-        Worker::handshake(
-            Started {
-                child,
-                control: server_end,
-                private_dir,
-                sandboxed: config.sandbox,
-            },
-            watch,
-        )
+            })
     }
+
+    /// Unpacks the archive artifact `archive` (the pool's copy) into the empty directory `dest`, within `budget`
+    /// bytes, with `interpreter` (`unpack.py`; in the sandbox when it is on: it reads the archive and writes
+    /// only `dest`). The bytes unpacked. Runs on a call thread (it blocks until the program ends, at most
+    /// [`UNPACK_TIMEOUT`]); a cancel of `watch` kills the program through its pidfd. Only the program's own
+    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout (until the set's
+    /// [`artifacts::MAX_TIMEOUTS`]th) or a program that could not be started or waited for is not.
+    fn unpack(
+        &self,
+        interpreter: &Interpreter,
+        archive: &Path,
+        dest: &Path,
+        budget: u64,
+        watch: &dyn CallWatch,
+    ) -> Result<u64, Failure> {
+        let mut command = self.command(
+            interpreter,
+            dest,
+            &package::Entry::Unpack {
+                archive,
+                dest,
+                budget,
+            },
+            &[archive.to_path_buf()],
+            // No one file past the whole budget (at least one byte, so an empty file still opens).
+            Some(budget.max(1)),
+        );
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = self
+            .spawn(command, interpreter)
+            .map_err(Failure::transient)?;
+        let pid = Pid::from_child(&child);
+        // The child is not reaped yet, so `pid` is still its own.
+        let pidfd = match rustix::process::pidfd_open(pid, PidfdFlags::empty()) {
+            Ok(fd) => fd,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Failure::transient(internal(format!(
+                    "cannot open a pidfd for the UDF archive unpacker: {e}"
+                ))));
+            }
+        };
+        let output = match wait_capped(&mut child, &pidfd, UNPACK_TIMEOUT, &|| watch.cancelled()) {
+            Ok(Ended::Exited(output)) => output,
+            Ok(Ended::Cancelled) => return Err(Failure::transient(OperationCanceled {}.into())),
+            Ok(Ended::TimedOut) => {
+                return Err(Failure::timed_out(artifacts::refused(
+                    archive,
+                    &format!("it could not be unpacked in {} s", UNPACK_TIMEOUT.as_secs()),
+                )));
+            }
+            Err(e) => {
+                return Err(Failure::transient(artifacts::refused(
+                    archive,
+                    &format!("it could not be unpacked: {e}"),
+                )));
+            }
+        };
+        // The count is the program's last line (a launcher may print before it starts the interpreter).
+        if output.status.success()
+            && let Some(n) = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .and_then(|l| l.trim().parse::<u64>().ok())
+        {
+            return Ok(n);
+        }
+        let why = String::from_utf8_lossy(&output.stderr);
+        let why = why.trim();
+        Err(Failure::lasting(artifacts::refused(
+            archive,
+            if why.is_empty() {
+                "the unpacking program failed"
+            } else {
+                why
+            },
+        )))
+    }
+}
+
+/// Makes each entry of `prepared`'s files directory reachable from a worker's working directory `dir` (its
+/// own new directory): a symbolic link `dir/<name>` to it. Spark's worker runs in its files directory; this
+/// worker keeps its private directory as its (writable) working directory. Links are made by the server, in a
+/// directory only it has written, so a name cannot collide with or follow anything the client made.
+fn link_files(prepared: &artifacts::Prepared, dir: &Path) -> Result<(), KrishivError> {
+    for name in &prepared.entries {
+        std::os::unix::fs::symlink(prepared.files_dir.join(name), dir.join(name)).map_err(|e| {
+            internal(format!(
+                "cannot link the UDF artifact {name} into a worker directory: {e}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// The longest an archive artifact's unpacking may take.
+const UNPACK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The most bytes of the unpacking program's output kept (its reason, or its byte count).
+const UNPACK_OUTPUT: u64 = 16 * 1024;
+
+/// How often [`wait_capped`] looks at the program and the cancel.
+const UNPACK_TICK: Duration = Duration::from_millis(20);
+
+/// A thread reading `pipe` to its end, keeping the first [`UNPACK_OUTPUT`] bytes (the rest is read and
+/// dropped, so the writer never blocks on a full pipe).
+fn read_capped(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut out = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = (&mut p).take(UNPACK_OUTPUT).read_to_end(&mut out);
+            let _ = std::io::copy(&mut p, &mut std::io::sink());
+        }
+        out
+    })
+}
+
+/// How a program [`wait_capped`] waited for ended.
+#[derive(Debug)]
+enum Ended {
+    /// It exited: what it wrote, each stream cut to [`UNPACK_OUTPUT`] bytes.
+    Exited(std::process::Output),
+    /// It ran past the timeout and was killed.
+    TimedOut,
+    /// The call was cancelled and the program killed.
+    Cancelled,
+}
+
+/// Waits for `child` (whose pidfd is `pidfd`) to exit; killed, through the pidfd, past `timeout` or once
+/// `cancelled` says so (and reaped either way).
+fn wait_capped(
+    child: &mut Child,
+    pidfd: &OwnedFd,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Ended> {
+    let stdout = read_capped(child.stdout.take());
+    let stderr = read_capped(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let ended = if cancelled() {
+            Ended::Cancelled
+        } else if Instant::now() >= deadline {
+            Ended::TimedOut
+        } else {
+            std::thread::sleep(UNPACK_TICK);
+            continue;
+        };
+        kill_via(pidfd);
+        let _ = child.wait();
+        return Ok(ended);
+    };
+    Ok(Ended::Exited(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    }))
 }
 
 /// What a call tells the pool while it waits for a worker or starts one.
@@ -753,6 +987,46 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sleeper() -> (Child, OwnedFd) {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pidfd =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).unwrap();
+        (child, pidfd)
+    }
+
+    #[test]
+    fn a_cancel_or_the_timeout_kills_the_unpacker() {
+        let (mut child, pidfd) = sleeper();
+        let start = Instant::now();
+        let ended = wait_capped(&mut child, &pidfd, Duration::from_secs(60), &|| true).unwrap();
+        assert!(matches!(ended, Ended::Cancelled), "{ended:?}");
+        assert!(start.elapsed() < Duration::from_secs(20));
+        // Reaped: nothing is left to wait for.
+        assert!(child.try_wait().unwrap().is_some());
+
+        let (mut child, pidfd) = sleeper();
+        let ended = wait_capped(&mut child, &pidfd, Duration::ZERO, &|| false).unwrap();
+        assert!(matches!(ended, Ended::TimedOut), "{ended:?}");
+
+        let mut child = Command::new("echo")
+            .arg("7")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pidfd =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).unwrap();
+        match wait_capped(&mut child, &pidfd, Duration::from_secs(60), &|| false).unwrap() {
+            Ended::Exited(output) => assert_eq!(output.stdout, b"7\n"),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[test]
     fn dropping_the_pool_removes_its_directory_and_package() {

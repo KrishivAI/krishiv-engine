@@ -14,16 +14,22 @@
 //! one driver, which is what Spark's two co-partitioned sorted inputs and
 //! its `CoGroupedIterator` give the UDF.
 //!
-//! Barrier mode, window aggregates and UDTFs are refused here
-//! (`KRISHIV_UNSUPPORTED_FEATURE`): the window and table kinds run with
-//! PR-26c.
+//! A window's Python aggregate calls (Spark's `ArrowWindowPythonExec`,
+//! `WindowExecBase` at v4.2.0) run over the window's own placement and sort
+//! (`Planner::window_with`): one task per call and driver, each partition a
+//! group, one value per row. A bounded frame's rows come with each row's
+//! frame start and end, from two `count(*)` window columns below it.
+//!
+//! Barrier mode and UDTFs are refused here (`KRISHIV_UNSUPPORTED_FEATURE`):
+//! the table kinds run with PR-26c.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, LogicalPlan, PythonUdfKind, PythonUdfRef, ResolvedExpr,
+    AttrId, BoundColumn, Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, LogicalPlan,
+    PythonEvalType, PythonUdfKind, PythonUdfRef, ResolvedExpr, ResolvedFunction, SortOrder,
     is_python_udaf,
 };
 use krishiv_types::DataType;
@@ -42,7 +48,7 @@ use crate::physical::{
 /// The error of a Python UDF kind that runs only from PR-26c.
 pub(crate) fn later_kind(what: &str) -> krishiv_common::error::KrishivError {
     unsupported(&format!(
-        "{what} (Python window aggregate and table UDFs run from P3-T014 PR-26c)"
+        "{what} (Python table UDFs run from P3-T014 PR-26c)"
     ))
 }
 
@@ -460,6 +466,7 @@ impl Planner<'_> {
                 keys: compared,
                 key_values,
                 calls: plans,
+                window: None,
             },
             schema,
             layout.clone(),
@@ -499,6 +506,269 @@ impl Planner<'_> {
             &exprs,
         )?;
         let mut out = self.project(node, &exprs)?;
+        out.sites.clear();
+        Ok(out)
+    }
+
+    /// A window's Python aggregate calls `exprs` (aliases of windows over
+    /// grouped-aggregate or window Python UDFs; the caller planned the
+    /// window's other calls below) over `input`: the window's placement and
+    /// sort, each bounded frame's `count(*)` columns, then one
+    /// `PythonAggregate` node in window form whose output is every input
+    /// row with one value per call. Scalar Python calls in the partitioning,
+    /// ordering and arguments run below (Spark's `ExtractPythonUDFs`).
+    pub(crate) fn python_window(
+        &mut self,
+        input: Planned,
+        exprs: &[Arc<Expr>],
+        partition_by: &[Arc<Expr>],
+        order_by: &[SortOrder],
+    ) -> Result<Planned> {
+        let mut calls = Vec::with_capacity(exprs.len());
+        for e in exprs {
+            let c = super::window::call(e)?;
+            let FunctionId::PythonUdf { eval_type, .. } = &c.f.id else {
+                return Err(unsupported(
+                    "a Python aggregate UDF inside another expression over a window",
+                ));
+            };
+            // Spark runs a grouped-aggregate UDF over a window as its window
+            // kind (`ArrowWindowPythonExec`'s eval type, v4.2.0).
+            let window_type = match eval_type {
+                PythonEvalType::GroupedAggPandas | PythonEvalType::WindowAggPandas => {
+                    PythonEvalType::WindowAggPandas
+                }
+                PythonEvalType::GroupedAggArrow | PythonEvalType::WindowAggArrow => {
+                    PythonEvalType::WindowAggArrow
+                }
+                other => {
+                    return Err(unsupported(&format!(
+                        "a Python UDF of eval type {} over a window",
+                        other.code()
+                    )));
+                }
+            };
+            refuse_call_syntax(c.f)?;
+            if c.f.args.iter().any(|a| super::build::has_subquery(a)) {
+                return Err(unsupported("a subquery in the arguments of a Python UDF"));
+            }
+            calls.push((c, window_type));
+        }
+        // Scalar Python calls below; the window sorts by the columns of the
+        // partitioning and ordering.
+        let np = partition_by.len();
+        let no = order_by.len();
+        let mut wanted: Vec<Arc<Expr>> = partition_by.to_vec();
+        wanted.extend(order_by.iter().map(|o| Arc::clone(&o.expr)));
+        for (c, _) in &calls {
+            wanted.extend(c.f.args.iter().cloned());
+        }
+        let (planned, wanted) = self.extract_python(input, &wanted)?;
+        let (planned, columns) = self.with_columns(planned, &wanted[..np + no])?;
+        // A collated partitioning key is compared by its collation, as the
+        // window operator compares it.
+        let (planned, compared) = self.compared(planned, &wanted[..np], &columns[..np])?;
+        let column_expr = |planned: &Planned, at: usize| -> Result<Arc<Expr>> {
+            let field = planned.schema.field(at);
+            Ok(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Column(BoundColumn {
+                    id: planned.column_attr(at)?,
+                    name: field.name().clone(),
+                    data_type: krishiv_types::DataType::from_arrow_field(field)
+                        .map_err(|e| internal(&format!("a window key column: {e}")))?,
+                    nullable: field.is_nullable(),
+                }),
+            ))))
+        };
+        let partition: Vec<Arc<Expr>> = compared
+            .iter()
+            .map(|&at| column_expr(&planned, at))
+            .collect::<Result<_>>()?;
+        let order: Vec<SortOrder> = order_by
+            .iter()
+            .zip(&columns[np..np + no])
+            .map(|(o, &at)| {
+                Ok(SortOrder {
+                    expr: column_expr(&planned, at)?,
+                    direction: o.direction,
+                    nulls: o.nulls,
+                })
+            })
+            .collect::<Result<_>>()?;
+        let partition_attrs: Vec<AttrId> = compared
+            .iter()
+            .map(|&at| planned.column_attr(at))
+            .collect::<Result<_>>()?;
+        // Each bounded frame's end (`count(*)` from the partition's start to
+        // the frame's end) and width (`count(*)` over it): a frame is a run
+        // of rows in the window's order, so its start is the end less the
+        // width, for an empty frame too (Spark's frames give the same rows:
+        // `WindowFunctionFrame.currentLowerBound`/`currentUpperBound`).
+        let mut counts: Vec<(crate::window::WindowFrame, BoundColumn)> = Vec::new();
+        let mut bounds: Vec<Option<(BoundColumn, BoundColumn)>> = Vec::with_capacity(calls.len());
+        for (c, _) in &calls {
+            let frame = c.frame;
+            if frame.lower == crate::window::FrameBound::UnboundedPreceding
+                && frame.upper == crate::window::FrameBound::UnboundedFollowing
+            {
+                bounds.push(None);
+                continue;
+            }
+            // Pairs of (end, width): a frame's own entry is the width's.
+            let seen = counts
+                .chunks(2)
+                .find(|pair| pair.get(1).is_some_and(|(f, _)| *f == frame));
+            let (end, width) = match seen {
+                Some([(_, end), (_, width)]) => (end.clone(), width.clone()),
+                _ => {
+                    let n = counts.len() / 2;
+                    let end = BoundColumn {
+                        id: self.fresh_id(),
+                        name: format!("_frame_end{n}"),
+                        data_type: krishiv_types::DataType::Long,
+                        nullable: false,
+                    };
+                    let width = BoundColumn {
+                        id: self.fresh_id(),
+                        name: format!("_frame_rows{n}"),
+                        data_type: krishiv_types::DataType::Long,
+                        nullable: false,
+                    };
+                    counts.push((
+                        crate::window::WindowFrame {
+                            units: frame.units,
+                            lower: crate::window::FrameBound::UnboundedPreceding,
+                            upper: frame.upper,
+                        },
+                        end.clone(),
+                    ));
+                    counts.push((frame, width.clone()));
+                    (end, width)
+                }
+            };
+            bounds.push(Some((end, width)));
+        }
+        let sorted = self.window_with(planned, &[], &partition, &order, None, &counts)?;
+        let keys: Vec<usize> = partition_attrs
+            .iter()
+            .map(|&a| sorted.column(a))
+            .collect::<Result<_>>()?;
+        let prepared = self.prepare(&[])?;
+        let mut arg_exprs = &wanted[np + no..];
+        let mut layout = sorted.layout.clone();
+        let mut fields: Vec<Field> = sorted
+            .schema
+            .fields()
+            .iter()
+            .map(|f| (**f).clone())
+            .collect();
+        let mut plans = Vec::with_capacity(calls.len());
+        let mut details = Vec::with_capacity(calls.len());
+        for (i, ((c, window_type), bound)) in calls.iter().zip(&bounds).enumerate() {
+            let (args, rest) = arg_exprs
+                .split_at_checked(c.f.args.len())
+                .ok_or_else(|| internal("Python window argument arity"))?;
+            arg_exprs = rest;
+            let mut run_args = Vec::with_capacity(args.len() + 2);
+            if let Some((end, width)) = bound {
+                let read = |b: &BoundColumn| {
+                    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                        b.clone(),
+                    ))))
+                };
+                let start = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: FunctionId::Builtin(Builtin::Subtract),
+                        kind: FunctionKind::Scalar,
+                        args: vec![read(end), read(width)],
+                        distinct: false,
+                        filter: None,
+                        within_group: Vec::new(),
+                        data_type: krishiv_types::DataType::Long,
+                        nullable: false,
+                        deterministic: true,
+                    },
+                ))));
+                // Row indexes as Spark sends them: `INT` (a partition past
+                // 2^31 rows fails the cast rather than wrap).
+                for e in [start, read(end)] {
+                    run_args.push(Arc::new(Expr::new(ExprNode::Cast {
+                        expr: e,
+                        to: krishiv_types::DataType::Integer,
+                        mode: CastMode::Ansi,
+                    })));
+                }
+            }
+            run_args.extend(args.iter().cloned());
+            let FunctionId::PythonUdf {
+                name,
+                version,
+                thread_safe,
+                ..
+            } = &c.f.id
+            else {
+                return Err(internal("a Python window call is not a Python UDF"));
+            };
+            let run = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::PythonUdf {
+                        name: name.clone(),
+                        version: *version,
+                        eval_type: *window_type,
+                        thread_safe: *thread_safe,
+                    },
+                    args: run_args,
+                    ..c.f.clone()
+                },
+            ))));
+            let refs: Vec<&Expr> = match &run.node {
+                ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                    f.args.iter().map(AsRef::as_ref).collect()
+                }
+                _ => Vec::new(),
+            };
+            compile_all(
+                &refs,
+                &sorted.layout,
+                &sorted.schema,
+                &self.values(&prepared),
+            )?;
+            details.push(format!("{} AS {}", e_name(c.f), c.output.name));
+            // Named as the node's instantiation names it (the plan reads it
+            // by attribute).
+            fields.push(Field::new(
+                format!("pythonUDAF{i}"),
+                c.output.data_type.to_arrow(),
+                true,
+            ));
+            layout.push(c.output.id);
+            plans.push(PythonCallPlan {
+                call: run,
+                output: c.output.id,
+            });
+        }
+        let detail = format!(
+            "[{}], partition=[{}]",
+            details.join(", "),
+            key_names(&sorted, &keys)
+        );
+        let input_layout = sorted.layout.clone();
+        let bounded = bounds.iter().map(Option::is_some).collect();
+        let mut out = sorted.wrap(
+            |input| PhysNode::PythonAggregate {
+                input,
+                layout: input_layout,
+                keys,
+                key_values: Vec::new(),
+                calls: plans,
+                window: Some(bounded),
+            },
+            Arc::new(Schema::new(fields)),
+            layout,
+            ("PythonWindow", detail),
+        );
+        out.ordering = Vec::new();
+        out.placement = Placement::Unknown;
         out.sites.clear();
         Ok(out)
     }
@@ -606,6 +876,14 @@ fn key_names(input: &Planned, keys: &[usize]) -> String {
 
 fn literal(l: krishiv_plan::Literal) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Literal(l)))
+}
+
+/// `name#version` of a Python UDF call.
+fn e_name(f: &ResolvedFunction) -> String {
+    match &f.id {
+        FunctionId::PythonUdf { name, version, .. } => format!("{name}#{version}"),
+        other => other.name().to_owned(),
+    }
 }
 
 /// Refuses a Python UDAF call written with `DISTINCT`, `FILTER (WHERE ...)`

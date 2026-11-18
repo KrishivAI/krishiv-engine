@@ -27,10 +27,13 @@ use krishiv_connect::proto::v4_3::config_request::{self as creq, Operation};
 use krishiv_connect::proto::v4_3::fetch_error_details_response::query_context::ContextType;
 use krishiv_connect::proto::v4_3::plan::OpType as PlanOp;
 use krishiv_connect::proto::v4_3::relation::RelType;
+use krishiv_connect::translate::PythonUdf;
 use krishiv_connect_server::artifacts::{ARTIFACT_OVERHEAD, crc32};
 use krishiv_connect_server::{
-    ArtifactLimits, ConnectServer, ConnectServerConfig, SessionEntry, SessionLimits, SessionManager,
+    ArtifactLimits, ConnectServer, ConnectServerConfig, PythonArchive, RunnerConf, SessionEntry,
+    SessionLimits, SessionManager, SessionUdfRuntime, UdfHost,
 };
+use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_session::Session;
 use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
@@ -84,10 +87,17 @@ async fn start_with(max_session: u64, max_artifact: u64) -> Running {
 }
 
 async fn start_limits(limits: ArtifactLimits) -> Running {
-    let manager = Arc::new(SessionManager::from_base(
-        Session::new().expect("session"),
-        SessionLimits::default(),
-    ));
+    start_on(limits, None).await
+}
+
+/// A server whose sessions' Python UDFs live on `host` (none: no worker pool).
+async fn start_on(limits: ArtifactLimits, host: Option<Arc<dyn UdfHost>>) -> Running {
+    let mut manager =
+        SessionManager::from_base(Session::new().expect("session"), SessionLimits::default());
+    if let Some(host) = host {
+        manager = manager.with_udf_host(host);
+    }
+    let manager = Arc::new(manager);
     let parent = tempfile::tempdir().expect("tempdir");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -1271,4 +1281,189 @@ fn shutdown_then_dropping_the_runtime_leaves_no_artifacts() {
     drop(runtime);
     let left: Vec<_> = std::fs::read_dir(parent.path()).expect("parent").collect();
     assert!(left.is_empty(), "artifacts left: {left:?}");
+}
+
+// ------------------------------------------------------ Python artifacts
+
+/// Every artifact set handed to a session's UDF runtime: (session id, pyfiles, archives).
+type Sets = Arc<std::sync::Mutex<Vec<(String, Vec<PathBuf>, Vec<PythonArchive>)>>>;
+
+/// A UDF host that runs nothing and records the artifact sets its runtimes get.
+#[derive(Debug, Default)]
+struct ArtifactSpy(Sets);
+
+#[derive(Debug)]
+struct SpyRuntime(String, Sets);
+
+impl UdfRuntime for SpyRuntime {
+    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
+}
+
+impl SessionUdfRuntime for SpyRuntime {
+    fn register(&self, _: &str, _: u32, _: &PythonUdf) {}
+    fn release(&self) {}
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
+        self.1
+            .lock()
+            .expect("spy")
+            .push((self.0.clone(), pyfiles, archives));
+    }
+}
+
+impl UdfHost for ArtifactSpy {
+    fn session_runtime(&self, _: &str, session: &str, _: RunnerConf) -> Arc<dyn SessionUdfRuntime> {
+        Arc::new(SpyRuntime(session.to_owned(), Arc::clone(&self.0)))
+    }
+}
+
+fn archive(path: PathBuf, fragment: Option<&str>) -> PythonArchive {
+    PythonArchive {
+        path,
+        fragment: fragment.map(str::to_owned),
+    }
+}
+
+async fn start_spied() -> (Running, Sets) {
+    let spy = ArtifactSpy::default();
+    let sets = Arc::clone(&spy.0);
+    let run = start_on(
+        ArtifactLimits {
+            max_session_bytes: 1 << 30,
+            max_artifact_bytes: 256 << 20,
+            ..ArtifactLimits::default()
+        },
+        Some(Arc::new(spy)),
+    )
+    .await;
+    (run, sets)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transfer_that_fails_still_hands_over_what_it_installed() {
+    let (run, sets) = start_spied().await;
+    add(&run, vec![batch(vec![single("pyfiles/a.py", b"A = 1\n")])])
+        .await
+        .expect("add");
+    let dir = run.session_dir();
+    let id = run.entry().session().id().to_owned();
+    assert_eq!(
+        std::mem::take(&mut *sets.lock().expect("spy")),
+        [(id.clone(), vec![dir.join("pyfiles/a.py")], Vec::new())]
+    );
+    // Other bytes under a.py: ARTIFACT_ALREADY_EXISTS, but b.py and the archive are installed.
+    let status = add(
+        &run,
+        vec![batch(vec![
+            single("pyfiles/a.py", b"A = 2\n"),
+            single("pyfiles/b.py", b"B = 1\n"),
+            single("archives/deps.zip", b"PK\x03\x04"),
+        ])],
+    )
+    .await
+    .expect_err("a.py exists");
+    assert_eq!(error_class(&status), "ARTIFACT_ALREADY_EXISTS");
+    assert_eq!(
+        std::mem::take(&mut *sets.lock().expect("spy")),
+        [(
+            id,
+            vec![dir.join("pyfiles/a.py"), dir.join("pyfiles/b.py")],
+            vec![archive(dir.join("archives/deps.zip"), None)]
+        )]
+    );
+    // The same bytes again change nothing: no set is handed over.
+    add(&run, vec![batch(vec![single("pyfiles/b.py", b"B = 1\n")])])
+        .await
+        .expect("same bytes");
+    assert!(sets.lock().expect("spy").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn python_artifacts_reach_the_sessions_udf_runtime_and_its_clones() {
+    let (run, sets) = start_spied().await;
+    let taken = || std::mem::take(&mut *sets.lock().expect("spy"));
+    // Files and cached blobs alone hand nothing over.
+    add(&run, vec![batch(vec![single("files/a.txt", b"a")])])
+        .await
+        .expect("add");
+    assert!(taken().is_empty());
+    add(
+        &run,
+        vec![batch(vec![
+            single("pyfiles/util.py", b"X = 1\n"),
+            single("archives/env.zip#env", b"PK\x03\x04"),
+            single("files/b.txt", b"b"),
+        ])],
+    )
+    .await
+    .expect("add");
+    let dir = run.session_dir();
+    let server_side = run.entry().session().id().to_owned();
+    assert_eq!(
+        taken(),
+        [(
+            server_side.clone(),
+            vec![dir.join("pyfiles/util.py")],
+            vec![archive(dir.join("archives/env.zip"), Some("env"))]
+        )],
+        "absolute paths, the archive with its fragment, files/ not included"
+    );
+    // A later transfer hands over the whole set again, in the order installed.
+    add(
+        &run,
+        vec![batch(vec![single("pyfiles/pkg/mod.py", b"Y = 2\n")])],
+    )
+    .await
+    .expect("add");
+    assert_eq!(
+        taken(),
+        [(
+            server_side,
+            vec![dir.join("pyfiles/util.py"), dir.join("pyfiles/pkg/mod.py")],
+            vec![archive(dir.join("archives/env.zip"), Some("env"))]
+        )]
+    );
+    for p in [
+        dir.join("pyfiles/util.py"),
+        dir.join("pyfiles/pkg/mod.py"),
+        dir.join("archives/env.zip"),
+    ] {
+        assert!(p.is_absolute() && p.is_file(), "{}", p.display());
+    }
+    // A clone's own runtime gets the copied files, under the clone's directory.
+    let clone: pb::CloneSessionResponse = unary(
+        &run.channel,
+        "CloneSession",
+        pb::CloneSessionRequest {
+            session_id: SESSION.to_owned(),
+            new_session_id: Some(OTHER_SESSION.to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("clone");
+    let clone_entry = run
+        .manager
+        .get_or_create(&local_caller(), &clone.new_session_id, None, "u")
+        .expect("clone entry");
+    let clone_dir = clone_entry.artifacts().dir_path().expect("clone dir");
+    assert_ne!(clone_dir, dir);
+    let got = taken();
+    assert_eq!(
+        got,
+        [(
+            clone_entry.session().id().to_owned(),
+            vec![
+                clone_dir.join("pyfiles/util.py"),
+                clone_dir.join("pyfiles/pkg/mod.py")
+            ],
+            vec![archive(clone_dir.join("archives/env.zip"), Some("env"))]
+        )],
+        "the clone's set, on the clone's runtime"
+    );
 }
