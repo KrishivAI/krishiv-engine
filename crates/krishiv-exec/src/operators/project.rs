@@ -130,6 +130,10 @@ impl Project {
 }
 
 impl Operator for Project {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }
@@ -143,17 +147,28 @@ impl Operator for Project {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
-            partition: ctx.partition(),
-        }))
+        Ok(Box::new(PartitionState::of(ctx)))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
-        let rows = input.num_rows();
-        if rows == 0 {
+        if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Project")?.partition;
+        let partition = local_mut::<PartitionState>(local, "Project")?.index(input.split());
+        Ok(OperatorOutput::NeedMoreInput(Some(
+            self.project(input, partition)?,
+        )))
+    }
+}
+
+impl Project {
+    /// The projection of `input`, a batch read by `partition` (no state: for
+    /// callers that run a projection outside a driver).
+    ///
+    /// # Errors
+    /// An expression's error.
+    pub(crate) fn project(&self, input: &Batch, partition: u32) -> Result<Batch> {
+        let rows = input.num_rows();
         let data = input.data();
         let columns = self
             .items
@@ -165,16 +180,13 @@ impl Operator for Project {
                         .get(*index)
                         .map(Arc::clone)
                         .ok_or_else(|| internal(format!("project index {index} out of range"))),
-                    ProjectItem::Expr { expr, .. } => {
-                        expr.evaluate_in(data, input.split().unwrap_or(partition))
-                    }
+                    ProjectItem::Expr { expr, .. } => expr.evaluate_in(data, partition),
                 }
             })
             .collect::<Result<Vec<_>>>()?;
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
         let out = RecordBatch::try_new_with_options(Arc::clone(&self.schema), columns, &options)
             .map_err(|e| internal(format!("project produced an invalid batch: {e}")))?;
-        let out = Batch::with_weights(out, input.weights().clone())?.with_split(input.split());
-        Ok(OperatorOutput::NeedMoreInput(Some(out)))
+        Ok(Batch::with_weights(out, input.weights().clone())?.with_split(input.split()))
     }
 }

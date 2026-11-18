@@ -21,7 +21,10 @@ work=$(mktemp -d)
 "$python" -m venv "$work/venv"
 py="$work/venv/bin/python"
 "$py" -m pip install --quiet --upgrade pip
-"$py" -m pip install --quiet "$dist"/*.whl pytest
+# --no-deps: the wheel requires pyarrow, which has no musllinux wheel and would build from source (an hour);
+# pyarrow comes from the binary-only loop below, and the smoke falls back to count() without it.
+"$py" -m pip install --quiet --no-deps "$dist"/*.whl
+"$py" -m pip install --quiet pytest
 # Versions come from python/ci-interop-constraints.txt, the same pins ci.yml
 # and nightly.yml use, so every wheel leg tests against one known set.
 # pandas and numpy: the pandas_udf tests and the PySpark UDF conformance tests (T059 unit 3a); a missing wheel skips them.
@@ -33,12 +36,20 @@ for dep in pyarrow polars duckdb pandas numpy; do
 done
 cd "$work"
 "$py" - "$flavour" <<'PY'
+import os
 import sys
 
 import krishiv
 
 print(krishiv.build_info(), sys.version)
 assert krishiv.build_info()["allocator"] == "mimalloc"
+# The wheel workflow stamps the commit (KRISHIV_GIT_SHA at build time); a wheel built inside a
+# container that did not get the variable would report "unknown".
+expected = os.environ.get("KRISHIV_GIT_SHA")
+# In CI the variable must be present, or this check would pass by doing nothing.
+assert expected or not os.environ.get("GITHUB_ACTIONS"), "KRISHIV_GIT_SHA is not set in CI"
+if expected:
+    assert krishiv.build_info()["commit"] == expected, (krishiv.build_info(), expected)
 # The acceptance smoke: a session, a query, an Arrow table. `toArrow` needs
 # pyarrow; a target without a pyarrow wheel (noticed above) runs `count`,
 # which needs no Arrow library.

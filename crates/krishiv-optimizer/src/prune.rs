@@ -18,15 +18,18 @@ use krishiv_plan::{
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
+use crate::stats::Statistics;
 
-/// `root` with unused columns pruned.
-pub(crate) fn prune(root: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+/// `root` with unused columns pruned. `stats` says which table scans can be
+/// read with no column at all (see [`reads_rows_without_columns`]).
+pub(crate) fn prune(root: &Arc<LogicalPlan>, stats: Option<&dyn Statistics>) -> Arc<LogicalPlan> {
     let graph = Graph::new(root);
     let req = graph.requirements();
     let mut pass = Rewrite {
         graph: &graph,
         req: &req,
         done: HashMap::new(),
+        stats,
     };
     pass.node(0)
 }
@@ -125,7 +128,12 @@ impl Graph {
             // A repartition reads its expressions' columns whatever is
             // read above it: Spark evaluates them under `count(*)` too.
             | PlanNode::Repartition { input, .. }
+            // The metrics read their columns whatever is read above: a
+            // `count` action prunes everything else, not these.
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::Generate { input, .. }
+            // Spark prunes columns below a sample; its rows stay.
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
@@ -154,6 +162,18 @@ impl Graph {
                 child(recursive, None);
             }
             PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
+            // A Python UDF relation sees every column of its inputs
+            // (`group_ops.py` L305 at v4.2.0; design P3-T085 §3.1).
+            PlanNode::MapPartitions { input, .. } | PlanNode::GroupMap { input, .. } => {
+                child(input, None);
+            }
+            PlanNode::CoGroupMap { left, right, .. } => {
+                child(left, None);
+                child(right, None);
+            }
+            PlanNode::PythonTableFunction {
+                table_arg: Some(t), ..
+            } => child(&t.input, None),
             _ => {}
         }
         subqueries(p, &mut |kind, s| {
@@ -203,6 +223,8 @@ struct Rewrite<'a> {
     graph: &'a Graph,
     req: &'a [Attrs],
     done: HashMap<usize, Arc<LogicalPlan>>,
+    /// Which table scans can be read with no column.
+    stats: Option<&'a dyn Statistics>,
 }
 
 impl Rewrite<'_> {
@@ -227,12 +249,11 @@ impl Rewrite<'_> {
                     .filter(|c| req.contains(&c.id))
                     .cloned()
                     .collect();
-                // A file scan may read no column: its batches carry only a
-                // row count, as Spark's empty `requiredSchema` (a CSV reader
-                // then tokenizes no line for `count()`, a JSON reader converts
-                // no value). Other sources
-                // keep one column so the row count survives.
-                if output.is_empty() && !matches!(scan.source, ReadSource::Files { .. }) {
+                // A scan read for its rows alone (`COUNT(*)`, `count()`) keeps
+                // no column when its reader can count rows without decoding a
+                // value (Spark's empty `requiredSchema`). Other sources keep
+                // their first column.
+                if output.is_empty() && !reads_rows_without_columns(scan, self.stats) {
                     output.extend(scan.output.first().cloned());
                 }
                 replace(
@@ -580,5 +601,23 @@ fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a A
             f(kind, plan);
         }
         e.for_each_child(&mut |c| stack.push(c));
+    }
+}
+
+/// Whether `scan` can be read with no column at all: a read by path of
+/// Parquet (each batch's row count from its row groups), CSV (lines counted
+/// without tokenizing, as Spark's `UnivocityParser` with column pruning) or
+/// JSON (records parsed, no value converted: as Spark's `JacksonParser` with
+/// an empty schema, a `DROPMALFORMED` read drops only the records that are not
+/// JSON), or a table (a temporary view over files, a catalog table) whose
+/// provider says so through `stats` ([`Statistics::reads_rows_without_columns`]).
+/// Any other source, or one whose rows on disk are not its rows (deletion
+/// files), keeps one.
+fn reads_rows_without_columns(scan: &Scan, stats: Option<&dyn Statistics>) -> bool {
+    match &scan.source {
+        ReadSource::Files { format, .. } => ["parquet", "csv", "json"]
+            .iter()
+            .any(|f| format.eq_ignore_ascii_case(f)),
+        _ => stats.is_some_and(|s| s.reads_rows_without_columns(scan)),
     }
 }

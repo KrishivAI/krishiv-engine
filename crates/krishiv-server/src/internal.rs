@@ -25,7 +25,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Map, Value, json};
 
-use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_of};
+use crate::guard::{
+    Access, Caller, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_leaf_of, peer_of,
+};
 
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
@@ -56,6 +58,8 @@ pub struct UiError {
     pub error_class: Option<String>,
     /// The SQLSTATE of that class, when Spark defines one.
     pub sql_state: Option<String>,
+    /// The source has too much running to take more (HTTP 429).
+    pub busy: bool,
 }
 
 impl UiError {
@@ -66,6 +70,16 @@ impl UiError {
             message: message.into(),
             error_class: None,
             sql_state: None,
+            busy: false,
+        }
+    }
+
+    /// A refusal because too much is running already.
+    #[must_use]
+    pub fn busy(message: impl Into<String>) -> Self {
+        Self {
+            busy: true,
+            ..Self::new(message)
         }
     }
 
@@ -76,6 +90,7 @@ impl UiError {
             message: message.into(),
             error_class: Some(class.to_owned()),
             sql_state: sql_state.map(str::to_owned),
+            busy: false,
         }
     }
 }
@@ -98,12 +113,51 @@ pub trait UiSource: Send + Sync + 'static {
     /// Cancels the query as an operator's kill (the `admin` reason: the query fails with
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
+
+    /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
+    /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
+    /// (`name`, `data_type`, `comment`). A source with no catalog has none.
+    fn catalog<'a>(&'a self, path: &'a [String]) -> UiFuture<'a, Vec<Row>> {
+        let _ = path;
+        Box::pin(async { Err(UiError::new("this source has no catalog")) })
+    }
+
+    /// The engine's settings as key and value pairs, as they are: the page masks the secrets.
+    fn environment(&self) -> UiFuture<'_, Vec<(String, String)>> {
+        Box::pin(async { Err(UiError::new("this source has no environment")) })
+    }
+
+    /// Starts `sql` for the editor as `caller` (the authenticated principal, `None` when the guard knows only a
+    /// shared secret) and returns the run's id at once. A run belongs to its caller: another caller sees and
+    /// cancels nothing of it.
+    fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
+        let _ = (sql, caller);
+        Box::pin(async { Err(UiError::new("this source runs no SQL")) })
+    }
+
+    /// The state of an editor run (`state` is `running`, `finished`, `failed` or `cancelled`; a finished run
+    /// carries `columns` and `rows`, a failed one `error`); `None` for an id the source does not know.
+    fn sql_status<'a>(
+        &'a self,
+        run_id: &'a str,
+        caller: Option<&'a Caller>,
+    ) -> UiFuture<'a, Option<Value>> {
+        let _ = (run_id, caller);
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Cancels an editor run; `false` when it is not running.
+    fn sql_cancel<'a>(&'a self, run_id: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, bool> {
+        let _ = (run_id, caller);
+        Box::pin(async { Ok(false) })
+    }
 }
 
 #[derive(Clone)]
-struct UiState {
-    source: Arc<dyn UiSource>,
+pub(crate) struct UiState {
+    pub(crate) source: Arc<dyn UiSource>,
     guard: Arc<dyn Guard>,
+    pub(crate) policy: Arc<crate::pages::UiPolicy>,
     started: Instant,
     /// Event streams open now (capped at [`MAX_EVENT_CLIENTS`]).
     streams: Arc<AtomicUsize>,
@@ -157,9 +211,20 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 /// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
 /// token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
+    router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
+}
+
+/// [`router_with_ui_guard`] answering to the hosts `policy` names (the default is loopback only: DNS rebinding).
+pub fn router_with_ui_policy(
+    source: Arc<dyn UiSource>,
+    guard: Arc<dyn Guard>,
+    policy: crate::pages::UiPolicy,
+) -> Router {
+    use crate::pages;
     let state = UiState {
         source,
         guard,
+        policy: Arc::new(policy),
         started: Instant::now(),
         streams: Arc::new(AtomicUsize::new(0)),
         snapshot: Arc::new(tokio::sync::Mutex::new(None)),
@@ -173,14 +238,34 @@ pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) ->
         .route("/api/internal/compare", get(compare))
         .route("/api/internal/resources", get(resources))
         .route("/api/internal/events", get(events))
+        .route("/api/internal/catalog/catalogs", get(pages::catalogs))
+        .route(
+            "/api/internal/catalog/{catalog}/schemas",
+            get(pages::schemas),
+        )
+        .route(
+            "/api/internal/catalog/{catalog}/{schema}/tables",
+            get(pages::tables),
+        )
+        .route(
+            "/api/internal/catalog/{catalog}/{schema}/{table}/columns",
+            get(pages::columns),
+        )
+        .route("/api/internal/environment", get(pages::environment))
+        .route("/api/internal/sql", post(pages::sql_start))
+        .route("/api/internal/sql/{run}", get(pages::sql_status))
+        .route("/api/internal/sql/{run}/cancel", post(pages::sql_cancel))
+        .route("/api/internal/session", post(pages::create_session))
+        .route("/api/internal/openapi.json", get(pages::openapi_json))
         .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, require_token));
+        .layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .layer(middleware::from_fn_with_state(state, pages::host_guard));
     crate::router()
         .merge(internal)
         .layer(middleware::from_fn(security_headers))
 }
 
-fn json_response(status: StatusCode, body: &Value) -> Response {
+pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -189,13 +274,17 @@ fn json_response(status: StatusCode, body: &Value) -> Response {
         .into_response()
 }
 
-fn error(status: StatusCode, code: &str, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, code: &str, message: &str) -> Response {
     json_response(status, &json!({"error": code, "message": message}))
 }
 
-fn source_error(e: &UiError) -> Response {
+pub(crate) fn source_error(e: &UiError) -> Response {
     json_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
+        if e.busy {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
         &json!({
             "error": "source_failed",
             "message": e.message,
@@ -225,7 +314,9 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     {
         return Some(t.trim().to_owned());
     }
-    if method != Method::GET {
+    // A cookie carries a request that changes something only with the page's own header (a cross-site form or
+    // link cannot add it); a `?token=` is for reads only.
+    if method != Method::GET && !crate::pages::has_csrf_header(headers) {
         return None;
     }
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
@@ -235,6 +326,9 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
             .next()
     {
         return Some(t.to_owned());
+    }
+    if method != Method::GET {
+        return None;
     }
     param(uri, "token").and_then(percent_decode)
 }
@@ -269,7 +363,7 @@ async fn require_token(
     let token = presented(req.method(), req.headers(), req.uri());
     let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
     // Anything but a read changes something: a cancel acts on another principal's query.
-    let access = if req.method() == Method::GET {
+    let access = if req.method() == Method::GET || req.uri().path() == "/api/internal/session" {
         Access::Monitor
     } else {
         Access::Operate
@@ -277,9 +371,14 @@ async fn require_token(
     let request = GuardRequest::new(GuardSurface::Ui, access)
         .with_token(token.as_deref())
         .with_malformed(malformed)
-        .with_peer(peer_of(req.extensions()));
-    match s.guard.check(request).await {
-        Ok(()) => next.run(req).await,
+        .with_peer(peer_of(req.extensions()))
+        .with_peer_leaf(peer_leaf_of(req.extensions()));
+    match s.guard.authenticate(request).await {
+        Ok(caller) => {
+            let mut req = req;
+            req.extensions_mut().insert(caller);
+            next.run(req).await
+        }
         Err(Refusal::Unauthenticated) => {
             let mut res = error(
                 StatusCode::UNAUTHORIZED,
@@ -841,7 +940,15 @@ async fn events(State(s): State<UiState>) -> Response {
     }
     let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
-    let stream = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
+    // The stream opens with the environment (secrets masked), so a page can show it without a second request.
+    let first = match crate::pages::environment_json(&s).await {
+        Ok(v) => Event::default().event("environment").data(v.to_string()),
+        Err(e) => Event::default()
+            .event("environment")
+            .data(json!({"error": e.message}).to_string()),
+    };
+    let opening = futures::stream::once(async move { Ok::<_, std::convert::Infallible>(first) });
+    let ticks = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
         let body = shared_snapshot(&s).await;
         let event = Event::default().event("queries").data(body.to_string());
@@ -849,6 +956,7 @@ async fn events(State(s): State<UiState>) -> Response {
         ticker.reset();
         Some((Ok::<_, std::convert::Infallible>(event), (ticker, s, slot)))
     });
+    let stream = futures::StreamExt::chain(opening, ticks);
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()

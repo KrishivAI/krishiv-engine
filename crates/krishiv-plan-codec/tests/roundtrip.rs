@@ -45,6 +45,11 @@ variants!(
     ReplicateRows,
     Generate,
     PythonEval,
+    CollectMetrics,
+    PythonMap,
+    PythonGroupMap,
+    PythonCoGroupMap,
+    PythonAggregate,
     Expand,
     Sort,
     TopN,
@@ -62,6 +67,8 @@ variants!(
     LateFetch,
     UnionLoop,
     LoopRef,
+    Sample,
+    TableWrite,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -75,6 +82,11 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::PythonEval { .. } => Variant::PythonEval,
+        PhysNode::CollectMetrics { .. } => Variant::CollectMetrics,
+        PhysNode::PythonMap { .. } => Variant::PythonMap,
+        PhysNode::PythonGroupMap { .. } => Variant::PythonGroupMap,
+        PhysNode::PythonCoGroupMap { .. } => Variant::PythonCoGroupMap,
+        PhysNode::PythonAggregate { .. } => Variant::PythonAggregate,
         PhysNode::UnionLoop { .. } => Variant::UnionLoop,
         PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
@@ -92,6 +104,8 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
+        PhysNode::Sample { .. } => Variant::Sample,
+        PhysNode::TableWrite { .. } => Variant::TableWrite,
     }
 }
 
@@ -609,6 +623,17 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_source"
             | "rust_udf"
             | "python_udf"
+            | "sample"
+            | "python_map"
+            | "python_group_map"
+            | "python_cogroup_map"
+            | "python_aggregate"
+            | "python_window"
+            | "python_udtf_generate"
+            | "python_eval_types"
+            | "table_write"
+            | "table_write_by_filter"
+            | "table_write_row_level"
             | "rust_udaf"
             | "nested_types"
             | "struct_field"
@@ -620,6 +645,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
+            | "observe"
             | "aggregate_collects"
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
@@ -631,7 +657,11 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "write_files_partitioned"
             | "write_files_column_types"
             | "aggregate_percentiles"
-            | "options_map_literal" => 6,
+            | "aggregate_histogram_numeric"
+            | "options_map_literal"
+            | "nested_literals"
+            | "file_source_schema"
+            | "local_relation_source" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_")
@@ -639,7 +669,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
                 || n.starts_with("variant_")
-                || n.starts_with("calendar_") =>
+                || n.starts_with("calendar_")
+                || n.starts_with("vector_carrier") =>
             {
                 6
             }
@@ -799,6 +830,33 @@ fn a_corrupt_shared_plan_is_refused() {
         matches!(&err, CodecError::Corrupt(e) if e.contains("a shared plan read before it is listed")),
         "{err:?}"
     );
+}
+
+#[test]
+fn a_sample_survives_the_wire_and_corrupt_bounds_are_refused() {
+    use pb::node::Kind;
+    let (_, plan) = cases().into_iter().find(|(n, _)| n == "sample").unwrap();
+    assert_eq!(round_trip(&plan), plan);
+    let edit = |f: &dyn Fn(&mut pb::SampleNode)| {
+        let mut m = message("sample");
+        for node in &mut m.nodes {
+            if let Some(Kind::Sample(s)) = &mut node.kind {
+                f(s);
+            }
+        }
+        m
+    };
+    corrupt(&edit(&|s| s.lower = 0.5), "not a range of draws");
+    corrupt(&edit(&|s| s.lower = -0.1), "not a range of draws");
+    corrupt(&edit(&|s| s.upper = f64::NAN), "not a range of draws");
+    // `TABLESAMPLE (-0.00001 PERCENT)`: Spark keeps the negative fraction as
+    // the upper bound over a lower bound of zero, an empty range of draws.
+    let empty = edit(&|s| {
+        s.lower = 0.0;
+        s.upper = -1e-7;
+    });
+    let plan = decode(&empty.encode_to_vec()).unwrap();
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]
@@ -1479,5 +1537,104 @@ fn a_probe_selection_that_cannot_round_trip_is_refused() {
         }));
         let err = encode(&plan).unwrap_err();
         assert!(matches!(err, CodecError::Unsupported(_)), "{s:?}: {err:?}");
+    }
+}
+
+#[test]
+fn a_corrupt_table_write_is_refused() {
+    use pb::node::Kind;
+    use pb::table_write_node::Request;
+    let edit = |name: &str, f: &dyn Fn(&mut pb::TableWriteNode)| {
+        let mut m = message(name);
+        for node in &mut m.nodes {
+            if let Some(Kind::TableWrite(t)) = &mut node.kind {
+                f(t);
+            }
+        }
+        m
+    };
+    corrupt(&edit("table_write", &|t| t.table = None), "a written table");
+    corrupt(
+        &edit("table_write", &|t| t.request = None),
+        "a write request",
+    );
+    corrupt(
+        &edit("table_write", &|t| on_write(t, |w| w.mode = 0)),
+        "an unknown write mode",
+    );
+    // A filter belongs to an overwrite by filter only, and that mode needs one.
+    corrupt(
+        &edit("table_write_by_filter", &|t| {
+            on_write(t, |w| {
+                w.mode = pb::TableWriteMode::Append.into();
+            });
+        }),
+        "a write filter on a mode that takes none",
+    );
+    corrupt(
+        &edit("table_write_by_filter", &|t| {
+            on_write(t, |w| w.filter = None);
+        }),
+        "an overwrite by filter without its filter",
+    );
+    corrupt(
+        &edit("table_write_row_level", &|t| {
+            if let Some(Request::RowLevel(r)) = &mut t.request {
+                r.op = 0;
+            }
+        }),
+        "an unknown row-level operation",
+    );
+}
+
+fn on_write(t: &mut pb::TableWriteNode, f: impl Fn(&mut pb::TableWriteRequest)) {
+    if let Some(pb::table_write_node::Request::Write(w)) = &mut t.request {
+        f(w);
+    }
+}
+
+/// Every write mode and row-level operation a `TableWrite` carries comes back as it went.
+#[test]
+fn every_table_write_mode_and_operation_round_trips() {
+    use krishiv_exec::physical::TableWriteRequest;
+    use krishiv_exec::planner::{RowLevelOperation, WriteMode};
+    let mut plans = Vec::new();
+    for (name, plan) in cases() {
+        let PhysNode::TableWrite {
+            input,
+            table,
+            request,
+        } = plan.root().clone()
+        else {
+            continue;
+        };
+        let with = |request: TableWriteRequest| {
+            plan_of(PhysNode::TableWrite {
+                input: input.clone(),
+                table: table.clone(),
+                request,
+            })
+        };
+        match (name.as_str(), request) {
+            ("table_write", TableWriteRequest::Write(w)) => {
+                for mode in [WriteMode::Truncate, WriteMode::OverwriteDynamic] {
+                    let mut w = w.clone();
+                    w.mode = mode;
+                    plans.push(with(TableWriteRequest::Write(w)));
+                }
+            }
+            ("table_write_row_level", TableWriteRequest::RowLevel(r)) => {
+                for op in [RowLevelOperation::Update, RowLevelOperation::Merge] {
+                    let mut r = r.clone();
+                    r.op = op;
+                    plans.push(with(TableWriteRequest::RowLevel(r)));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(plans.len(), 4);
+    for plan in plans {
+        assert_eq!(format!("{:?}", round_trip(&plan)), format!("{plan:?}"));
     }
 }

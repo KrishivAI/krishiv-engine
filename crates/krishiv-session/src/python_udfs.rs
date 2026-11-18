@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::analyzer::{ArgType, Arity, CallTypes, FunctionEntry, Inputs};
-use krishiv_plan::{FunctionId, FunctionKind, PythonEvalType};
+use krishiv_plan::{FunctionId, FunctionKind, PythonEvalType, PythonUdfKind};
 use krishiv_types::DataType;
 
 /// What a Python UDF is registered with.
@@ -155,7 +155,11 @@ pub(crate) fn entry_of(def: &PythonUdfDef, version: u32) -> FunctionEntry {
             eval_type: def.eval_type,
             thread_safe: def.thread_safe,
         },
-        kind: FunctionKind::Scalar,
+        kind: if def.eval_type.kind() == PythonUdfKind::GroupedAgg {
+            FunctionKind::Aggregate
+        } else {
+            FunctionKind::Scalar
+        },
         arity: Arity::any(),
         inputs: Inputs::Any,
         result,
@@ -204,6 +208,20 @@ pub(crate) fn anonymous_call_name(
         def.return_type.sql(),
         def.name
     ))
+}
+
+/// The encoded name an unregistered UDF's call goes by under the `session`
+/// qualifier: `def` at `version` (whose [`ANONYMOUS_VERSION_BIT`] must be
+/// set), as [`functions::python_udf_call`](crate::functions::python_udf_call)
+/// names it. For servers that build the IR call themselves (Spark Connect's
+/// inline Python UDFs).
+///
+/// # Errors
+/// `KRISHIV_INTERNAL_ERROR` when `version` lacks the bit or the name holds
+/// a NUL.
+#[cfg(feature = "unstable-ir")]
+pub fn python_udf_call_name(def: &PythonUdfDef, version: u32) -> Result<String, KrishivError> {
+    anonymous_call_name(def, version)
 }
 
 /// The definition and version an encoded name ([`anonymous_call_name`])
@@ -355,5 +373,24 @@ mod tests {
         assert!(!entry.deterministic);
         assert_eq!(entry.kind, FunctionKind::Scalar);
         assert!(lib.entry("g").is_none());
+    }
+
+    /// A grouped-aggregate UDF (202, 217, 252, 254) is an aggregate to the analyzer, as Spark's
+    /// `PythonUDAF`: it may be grouped by, and it may run over a window (as 203, 253).
+    #[test]
+    fn a_grouped_aggregate_udf_is_an_aggregate() {
+        let lib = PythonUdfLibrary::default();
+        for (name, eval_type) in [
+            ("p", PythonEvalType::GroupedAggPandas),
+            ("pi", PythonEvalType::GroupedAggPandasIter),
+            ("a", PythonEvalType::GroupedAggArrow),
+            ("ai", PythonEvalType::GroupedAggArrowIter),
+        ] {
+            let mut d = def(name);
+            d.eval_type = eval_type;
+            let _ = lib.register(d);
+            let entry = lib.entry(name).map(|e| e.kind);
+            assert_eq!(entry, Some(FunctionKind::Aggregate), "{eval_type:?}");
+        }
     }
 }

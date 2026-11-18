@@ -38,6 +38,12 @@ def modules() -> list[tuple[str, Path]]:
     return out
 
 
+def front_matter(description: str) -> str:
+    """The page's `description:` front matter (one line, double-quoted)."""
+    text = description.strip().replace("\\", "\\\\").replace('"', '\\"')
+    return f'---\ndescription: "{text}"\n---\n'
+
+
 def md_doc(doc: str | None) -> str:
     if not doc:
         return ""
@@ -142,6 +148,13 @@ def render_class(cls: ast.ClassDef) -> str:
     return "\n".join(lines)
 
 
+def first_sentence(doc: str) -> str:
+    """The first sentence of the first paragraph, on one line."""
+    para = " ".join(doc.strip().split("\n\n")[0].split())
+    cut = para.find(". ")
+    return para if cut < 0 else para[: cut + 1]
+
+
 def render_module(name: str, path: Path) -> str:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     exported = exports(tree)
@@ -151,8 +164,9 @@ def render_module(name: str, path: Path) -> str:
         body += sub.body
         if exported is not None:
             exported |= exports(sub) or set()
-    lines = [f"# `{name}`", "", HEADER, ""]
     doc = md_doc(ast.get_docstring(tree))
+    summary = first_sentence(doc) if doc else f"The {name} module of the Krishiv Python API."
+    lines = [front_matter(summary), f"# `{name}`", "", HEADER, ""]
     if doc:
         lines += [doc, ""]
     classes = sorted(
@@ -168,7 +182,15 @@ def render_module(name: str, path: Path) -> str:
 
 def render() -> dict[Path, str]:
     pages: dict[Path, str] = {}
-    index = ["# Python API reference", "", HEADER, "", "| Module | Summary |", "|---|---|"]
+    index = [
+        front_matter("Every public module of the krishiv Python package: classes, functions and signatures."),
+        "# Python API reference",
+        "",
+        HEADER,
+        "",
+        "| Module | Summary |",
+        "|---|---|",
+    ]
     for name, path in modules():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         summary = md_doc(ast.get_docstring(tree)).strip().splitlines()[:1]

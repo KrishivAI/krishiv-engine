@@ -167,6 +167,19 @@ pub struct FormatOptions {
     values: BTreeMap<&'static str, Value>,
     ignored: Vec<String>,
     write_seed: Option<String>,
+    /// The per-read `ignoreCorruptFiles` and `ignoreMissingFiles` options,
+    /// when given: they take precedence over the session conf
+    /// ([`crate::ScanOptions::for_read`]), as Spark's `FileSourceOptions`.
+    file_source: FileSourceFlags,
+}
+
+/// The framework options of [`FILE_SOURCE_OPTIONS`] that change how a read
+/// treats a file it cannot read; `None` when the read leaves the session
+/// conf in charge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FileSourceFlags {
+    ignore_corrupt_files: Option<bool>,
+    ignore_missing_files: Option<bool>,
 }
 
 impl fmt::Debug for FormatOptions {
@@ -176,6 +189,7 @@ impl fmt::Debug for FormatOptions {
             .field("values", &self.values)
             .field("ignored", &self.ignored)
             .field("write_seed", &self.write_seed)
+            .field("file_source", &self.file_source)
             .finish()
     }
 }
@@ -187,6 +201,7 @@ impl FormatOptions {
         std::ptr::eq(self.schema, other.schema)
             && self.values == other.values
             && self.ignored == other.ignored
+            && self.file_source == other.file_source
     }
 }
 
@@ -217,9 +232,18 @@ impl OptionSchema {
         let mut values = BTreeMap::new();
         let mut ignored = Vec::new();
         let mut warnings = Vec::new();
+        let mut file_source = FileSourceFlags::default();
         for (key, value) in user {
             if let Some(spec) = self.spec(key) {
-                values.insert(spec.name, self.typed(spec, key, value)?);
+                // A format that declares a framework flag itself (CSV and
+                // JSON declare `ignoreCorruptFiles` for inference) reads it
+                // as the framework does and still gives the scan its
+                // per-read value.
+                let typed = match self.file_source_flag(&mut file_source, key, value)? {
+                    Some(b) => Value::Bool(b),
+                    None => self.typed(spec, key, value)?,
+                };
+                values.insert(spec.name, typed);
             } else if is_store_option(key) {
                 // Object-store configuration (`fs.s3a.*`, `fs.gs.*`,
                 // `fs.azure.*`): resolved by the store layer from the same
@@ -228,9 +252,12 @@ impl OptionSchema {
                 // `OptionValue`'s `Display` prints plain values as given
                 // and secrets redacted, so only non-secrets are visible.
                 ignored.push(format!("{key}={value}"));
-            } else if !FILE_SOURCE_OPTIONS
-                .iter()
-                .any(|o| o.eq_ignore_ascii_case(key))
+            } else if self
+                .file_source_flag(&mut file_source, key, value)?
+                .is_none()
+                && !FILE_SOURCE_OPTIONS
+                    .iter()
+                    .any(|o| o.eq_ignore_ascii_case(key))
             {
                 let suggestion = self.closest(key);
                 if strict {
@@ -270,6 +297,7 @@ impl OptionSchema {
                 values,
                 ignored,
                 write_seed: None,
+                file_source,
             },
             warnings,
         ))
@@ -305,6 +333,13 @@ impl OptionSchema {
                 continue;
             }
             if let Some(raw) = conf_value(session, conf) {
+                // Spark trims a boolean conf (`booleanConf`), but an option
+                // is not trimmed (`toBoolean`): carry the conf as it reads.
+                let raw = if spec.kind == OptionKind::Bool {
+                    raw.trim().to_owned()
+                } else {
+                    raw
+                };
                 out.insert(spec.name.to_owned(), OptionValue::from_user(spec.name, raw));
             }
         }
@@ -355,6 +390,45 @@ impl OptionSchema {
                     self.invalid(key, raw, &format!("expected one of {}", allowed.join(", ")))
                 }),
             OptionKind::Secret => Err(self.invalid(key, raw, "unreachable")),
+        }
+    }
+
+    /// Records `key` in `flags` when it is a per-read framework flag
+    /// (`ignoreCorruptFiles`, `ignoreMissingFiles`) and returns its value;
+    /// `None` for any other key.
+    fn file_source_flag(
+        &self,
+        flags: &mut FileSourceFlags,
+        key: &str,
+        value: &OptionValue,
+    ) -> Result<Option<bool>> {
+        let slot = if key.eq_ignore_ascii_case("ignoreCorruptFiles") {
+            &mut flags.ignore_corrupt_files
+        } else if key.eq_ignore_ascii_case("ignoreMissingFiles") {
+            &mut flags.ignore_missing_files
+        } else {
+            return Ok(None);
+        };
+        let b = self.flag(key, value)?;
+        *slot = Some(b);
+        Ok(Some(b))
+    }
+
+    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`),
+    /// read as Spark's `FileSourceOptions` does (Scala's `toBoolean`): any
+    /// case, but not trimmed, so `" true "` is refused (Spark 4.2.0:
+    /// `IllegalArgumentException: For input string: " true "`). The SQL conf
+    /// of the same name is trimmed, as Spark's `booleanConf` is: `parse`'s
+    /// own fallback reads it through `typed`, and `with_conf_fallbacks`
+    /// carries a boolean conf trimmed.
+    fn flag(&self, key: &str, value: &OptionValue) -> Result<bool> {
+        let Some(raw) = value.as_plain() else {
+            return Err(self.invalid(key, "<secret>", "a secret is not allowed here"));
+        };
+        match raw {
+            s if s.eq_ignore_ascii_case("true") => Ok(true),
+            s if s.eq_ignore_ascii_case("false") => Ok(false),
+            _ => Err(self.invalid(key, raw, "expected `true` or `false`")),
         }
     }
 
@@ -443,7 +517,20 @@ impl FormatOptions {
             values,
             ignored: Vec::new(),
             write_seed: None,
+            file_source: FileSourceFlags::default(),
         }
+    }
+
+    /// The per-read `ignoreCorruptFiles` option, when given.
+    #[must_use]
+    pub fn ignore_corrupt_files(&self) -> Option<bool> {
+        self.file_source.ignore_corrupt_files
+    }
+
+    /// The per-read `ignoreMissingFiles` option, when given.
+    #[must_use]
+    pub fn ignore_missing_files(&self) -> Option<bool> {
+        self.file_source.ignore_missing_files
     }
 
     /// These options for the write of one file, seeded with `seed`: text

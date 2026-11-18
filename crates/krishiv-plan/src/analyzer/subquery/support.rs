@@ -109,9 +109,13 @@ pub(super) fn one_row_select(p: &Arc<LogicalPlan>) -> Option<Vec<Arc<Expr>>> {
     }
 }
 
-/// Whether no expression of the plan `p` is nondeterministic.
+/// Whether no expression of the plan `p`, and no Python relation UDF it
+/// runs, is nondeterministic.
 pub(in crate::analyzer) fn plan_is_deterministic(p: &Arc<LogicalPlan>) -> bool {
     visit_distinct(Node::Plan(p), |n| match n {
+        Node::Plan(q) if !crate::python_relation_is_deterministic(&q.node) => {
+            ControlFlow::Break(())
+        }
         Node::Expr(e)
             if matches!(
                 &e.node,
@@ -378,6 +382,50 @@ pub(super) fn plan_outer_columns(plan: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
     out
 }
 
+/// Whether `plan` reads a collated-string outer column other than as one side of an equality
+/// whose other side has the same collated type. The domain (and `keyed_eq`) group and join the
+/// outer rows on the column's own collation key, so a read under any other collation (an
+/// explicit `COLLATE`, a cast, a function) would copy one case variant's answer to its
+/// equals-under-the-key twins: such plans stay refused.
+pub(super) fn collated_outer_misuse(plan: &Arc<LogicalPlan>) -> bool {
+    let mut allowed: HashSet<usize> = HashSet::new();
+    visit_distinct(Node::Plan(plan), |n| {
+        let Node::Expr(x) = n else {
+            return ControlFlow::Continue(());
+        };
+        match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.args.len() == 2
+                    && matches!(f.id, FunctionId::Builtin(Builtin::Eq | Builtin::EqNullSafe))
+                    && typed(&f.args[0]).0 == typed(&f.args[1]).0 =>
+            {
+                allowed.extend(f.args.iter().map(|a| addr(&**a)));
+            }
+            // The comparison keys the outer column under its own collation: `__collation_key(c,
+            // 'its collation')`.
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.args.len() == 2
+                    && matches!(&f.id, FunctionId::Registry { name, .. } if name == "__collation_key")
+                    && matches!(
+                        (&f.args[0].node, &f.args[1].node),
+                        (ExprNode::Resolved(ResolvedExpr::OuterColumn(c)), ExprNode::Literal(Literal::String(t)))
+                            if c.data_type.sql() == *t
+                    ) =>
+            {
+                allowed.insert(addr(&*f.args[0]));
+            }
+            ExprNode::Resolved(ResolvedExpr::OuterColumn(c))
+                if c.data_type.is_collated_string() && !allowed.contains(&addr(x)) =>
+            {
+                return ControlFlow::Break(());
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    })
+    .is_break()
+}
+
 /// The columns (not outer references) `e` reads.
 pub(in crate::analyzer) fn inner_columns(e: &Arc<Expr>) -> Vec<BoundColumn> {
     let mut out: Vec<BoundColumn> = Vec::new();
@@ -518,6 +566,19 @@ pub(super) fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
                 origin,
             ));
         };
+        // A collated key compares on its own collation key: an outer side under another
+        // collation (an explicit `COLLATE`, a cast) is refused, not keyed wrongly.
+        let (inner_t, outer_t) = (typed(i).0, typed(o).0);
+        if (inner_t.as_ref().is_some_and(DataType::is_collated_string)
+            || outer_t.as_ref().is_some_and(DataType::is_collated_string))
+            && (inner_t != outer_t
+                || !matches!(&o.node, ExprNode::Resolved(ResolvedExpr::OuterColumn(_))))
+        {
+            return Err(unsupported(
+                "a correlation over collated strings compared under another collation",
+                origin,
+            ));
+        }
         inner_keys.push(Arc::clone(i));
         outer_keys.push(Arc::clone(o));
     }

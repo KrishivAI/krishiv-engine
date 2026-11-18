@@ -9,4 +9,12 @@ def test_version_is_str():
 
 def test_build_info_reports_mimalloc():
     # Every shipped wheel (abi3 and free-threaded) links mimalloc.
-    assert krishiv.build_info() == {"version": krishiv.__version__, "allocator": "mimalloc"}
+    info = krishiv.build_info()
+    assert info["version"] == krishiv.__version__
+    assert info["allocator"] == "mimalloc"
+    assert set(info) == {"version", "allocator", "commit"}
+
+
+def test_build_info_commit_is_a_sha_or_unknown():
+    commit = krishiv.build_info()["commit"]
+    assert commit == "unknown" or (len(commit) >= 7 and all(c in "0123456789abcdef" for c in commit))

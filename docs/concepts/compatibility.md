@@ -18,6 +18,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | Text | supported |  |
 | Avro | supported |  |
 | ORC | not yet |  |
+| Writing ORC (`df.write.orc`, `format("orc").save`) | not yet | Fails with KRISHIV_UNSUPPORTED_FEATURE; `df.write.orc` does not exist. |
 
 ## Object stores
 
@@ -34,6 +35,9 @@ Status per surface. Anything not listed here is unknown and not supported.
 | Queries (SELECT, joins, aggregates, window functions, set operations, CTEs) | partial | Measured by the Spark golden suite below. |
 | Subqueries (scalar, IN, EXISTS, correlated) | partial | Common shapes are supported; remaining gaps appear as failures in the golden suite. |
 | DDL and DML (CREATE/INSERT/DELETE on file-backed tables and views) | partial | Statements the golden suite covers are counted in its pass rates. |
+| `bucketBy` on writes | not yet | Fails with a clear unsupported-feature error. |
+| DataFrameWriterV2 (`writeTo`) | partial | `create` and `append` work in a Python session. `createOrReplace` and `replace` fail as REPLACE TABLE AS SELECT does; `overwrite(condition)` and `overwritePartitions` always fail with KRISHIV_UNSUPPORTED_FEATURE; `partitionedBy` and `clusterBy` fail when the write runs. Spark Connect clients cannot use `writeTo` yet. |
+| Spark version | partial | Krishiv 0.2 runs as Spark 4.2 only; Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet. |
 
 ## Spark Connect
 
@@ -46,6 +50,20 @@ Status per surface. Anything not listed here is unknown and not supported.
 | Surface | Status | Notes |
 | --- | --- | --- |
 | Rust UDFs | supported |  |
+| Python `@udf` and scalar `pandas_udf` / `arrow_udf` | supported |  |
+| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`. |
+
+## Not covered
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| RDD API, `SparkContext`, `SparkConf` and broadcast variables | not yet | The Python package has no `sparkContext`, `rdd` or `SparkConf`; use DataFrames and SQL. |
+| `pyspark.pandas` (pandas API on Spark) | not yet | Not provided. `toPandas()` and scalar `pandas_udf` work. |
+| `pyspark.ml` and MLlib | not yet | Not provided. |
+| `spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys) | not yet | Not provided; a script runs in-process. |
+| Spark Streaming and Structured Streaming APIs in Python | not yet | Not available in 0.2. |
+| XML file source (`format('xml')`) | not yet | Fails with DATA_SOURCE_NOT_FOUND: xml. |
+| JDBC data source and Hive support | not yet | Not provided. |
 
 ## Spark golden suite
 

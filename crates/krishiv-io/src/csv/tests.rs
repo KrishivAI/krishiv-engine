@@ -28,7 +28,7 @@ use super::tokenizer::Tokenizer;
 use crate::format::{Decoder, Encoder, FileFormat, FileMetadata, Step};
 use crate::io::{ByteRange, FileRef, IoConfig, IoScheduler, StoreId};
 use crate::options::FormatOptions;
-use crate::request::{ColumnPath, ROW_INDEX_COLUMN, ScanRequest};
+use crate::request::{ColumnPath, FieldMapping, ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::{Datetimes, TextMetadata};
 
 const GOLDEN: &str = include_str!("../../../../tests/fixtures/spark-4.2.0/csv.json");
@@ -61,6 +61,21 @@ fn b64(s: &str) -> Vec<u8> {
 }
 
 fn options(map: &Value) -> FormatOptions {
+    options_under(map, &Value::Null)
+}
+
+/// Options `map` under the session settings `conf` (a golden case's `conf`).
+fn options_under(map: &Value, conf: &Value) -> FormatOptions {
+    let mut config = Config::new();
+    if let Some(c) = conf.as_object() {
+        for (k, v) in c {
+            if k != "spark.sql.caseSensitive" {
+                config
+                    .set(k, v.as_str().expect("conf value"))
+                    .expect("conf");
+            }
+        }
+    }
     let mut user = BTreeMap::new();
     if let Some(m) = map.as_object() {
         for (k, v) in m {
@@ -70,11 +85,23 @@ fn options(map: &Value) -> FormatOptions {
             );
         }
     }
-    CsvFormat
-        .options()
-        .parse(&user, &Config::new())
+    // As a worker parses them (the driver's conf fallbacks carried as
+    // options, parsed against an empty configuration); the driver, parsing
+    // against the session, must read the same CSV options.
+    let schema = CsvFormat.options();
+    let carried = schema.with_conf_fallbacks(&user, &config);
+    let worker = schema
+        .parse(&carried, &Config::new())
         .expect("options parse")
-        .0
+        .0;
+    let driver = schema.parse(&user, &config).expect("options parse").0;
+    let csv = |o: &FormatOptions| CsvOptions::new(o, false).map(|c| format!("{c:?}")).ok();
+    assert_eq!(
+        csv(&driver),
+        csv(&worker),
+        "driver and worker options differ"
+    );
+    worker
 }
 
 /// An arrow type from a Spark DDL type name.
@@ -124,6 +151,11 @@ fn ddl(s: &str) -> SchemaRef {
     parts.push(&s[start..]);
     for p in parts {
         let (n, t) = p.trim().split_once(' ').expect("name type");
+        // A quoted name (`é`, which Spark's DDL lexer needs quoted).
+        let n = n
+            .strip_prefix('`')
+            .and_then(|n| n.strip_suffix('`'))
+            .unwrap_or(n);
         fields.push(Field::new(n, ddl_type(t.trim()), true));
     }
     Arc::new(Schema::new(fields))
@@ -479,7 +511,9 @@ fn reads_match_spark() {
     for case in g["reads"].as_array().expect("reads") {
         let name = case["name"].as_str().expect("name");
         let bytes = b64(case["file"].as_str().expect("file"));
-        let o = options(&case["options"]);
+        let conf = case.get("conf").unwrap_or(&Value::Null);
+        let o = options_under(&case["options"], conf);
+        let case_sensitive = conf["spark.sql.caseSensitive"].as_str() == Some("true");
         let schema = match case["schema"].as_str() {
             Some(s) => ddl(s),
             None => match infer(&bytes, &o) {
@@ -510,7 +544,9 @@ fn reads_match_spark() {
                 .map(|f| ColumnPath::new(f.name()))
                 .collect(),
         };
-        let req = ScanRequest::new(Arc::clone(&schema), projection);
+        let mut req = ScanRequest::new(Arc::clone(&schema), projection);
+        // The session's case rule reaches a file read as the request's mapping.
+        req.mapping = FieldMapping::ByName { case_sensitive };
         let got = read(&bytes, &o, &req);
         match (got, case.get("error"), case.get("count"), case.get("rows")) {
             (Ok(b), None, Some(count), _) => {
@@ -1606,4 +1642,43 @@ fn a_read_of_no_columns_counts_lines_as_spark() {
             .sum();
         assert_eq!(rows, 5, "cut {cut}");
     }
+}
+
+/// The pruning conf on the driver (parsed against the session) and on a
+/// worker (carried as an option): combined with `!multiLine` by AND both ways, while
+/// the read option is taken as given (Spark 4.2 `CSVOptions`).
+#[test]
+fn column_pruning_conf_counts_only_without_multi_line() {
+    let session = Config::from_pairs([("spark.sql.csv.parser.columnPruning.enabled", "true")])
+        .expect("conf")
+        .0;
+    let pruning = |pairs: &[(&str, &str)], carried: bool| {
+        let user: BTreeMap<String, OptionValue> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), OptionValue::from_user(k, (*v).to_owned())))
+            .collect();
+        let schema = CsvFormat.options();
+        let (o, _) = if carried {
+            schema.parse(&schema.with_conf_fallbacks(&user, &session), &Config::new())
+        } else {
+            schema.parse(&user, &session)
+        }
+        .expect("parse");
+        CsvOptions::new(&o, false).expect("options").column_pruning
+    };
+    for carried in [false, true] {
+        assert!(pruning(&[], carried));
+        assert!(!pruning(&[("multiLine", "true")], carried));
+        assert!(pruning(
+            &[("multiLine", "true"), ("columnPruning", "true")],
+            carried
+        ));
+        assert!(!pruning(&[("columnPruning", "false")], carried));
+    }
+    // Known divergence: the conf key given as a read option is applied
+    // (Spark ignores a conf key among read options).
+    assert!(!pruning(
+        &[("spark.sql.csv.parser.columnPruning.enabled", "false")],
+        false
+    ));
 }

@@ -68,11 +68,13 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("allowNumericLeadingZeros", false, "Allow numbers like `007`.");
         flag("allowBackslashEscapingAnyCharacter", false, "Allow `\\` before any character.");
         flag("allowUnquotedControlChars", false, "Allow raw control characters in strings.");
+        flag("allowNonNumericNumbers", true, "Accept `NaN` and `Infinity` as numbers, and `NaN`, `Infinity`, `+INF`, `-INF` strings in float and double columns.");
         mode_spec();
         conf("columnNameOfCorruptRecord", OptionKind::String, OptionDefault::Str("_corrupt_record"), "spark.sql.columnNameOfCorruptRecord", "The column that receives malformed records in PERMISSIVE mode.");
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
         string("charset", "Alias of `encoding`.");
@@ -131,6 +133,8 @@ pub(crate) struct Syntax {
     pub backslash_any: bool,
     /// Raw bytes below `0x20` are accepted in strings.
     pub unquoted_controls: bool,
+    /// `NaN` and `Infinity` are numbers (`allowNonNumericNumbers`).
+    pub non_numeric: bool,
 }
 
 impl From<&JsonOptions> for Syntax {
@@ -142,6 +146,7 @@ impl From<&JsonOptions> for Syntax {
             leading_zeros: o.syntax.leading_zeros,
             backslash_any: o.syntax.backslash_any,
             unquoted_controls: o.syntax.unquoted_controls,
+            non_numeric: o.syntax.non_numeric,
         }
     }
 }
@@ -161,6 +166,9 @@ pub(crate) struct JsonOptions {
     pub line_sep: LineSep,
     pub drop_field_if_all_null: bool,
     pub ignore_null_fields: bool,
+    /// `ignoreCorruptFiles` (or `spark.sql.files.ignoreCorruptFiles`): inference keeps the lines of a broken
+    /// compressed file.
+    pub ignore_corrupt_files: bool,
 }
 
 impl JsonOptions {
@@ -194,6 +202,7 @@ impl JsonOptions {
                     .bool("allowBackslashEscapingAnyCharacter")
                     .unwrap_or(false),
                 unquoted_controls: o.bool("allowUnquotedControlChars").unwrap_or(false),
+                non_numeric: o.bool("allowNonNumericNumbers").unwrap_or(true),
             },
             mode,
             corrupt_column: o
@@ -204,6 +213,7 @@ impl JsonOptions {
             line_sep,
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
             ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
+            ignore_corrupt_files: o.bool("ignoreCorruptFiles").unwrap_or(false),
         })
     }
 }

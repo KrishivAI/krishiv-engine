@@ -84,11 +84,13 @@ mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
+mod input_coalesce;
 mod join;
 mod loops;
 mod map_keys;
 mod metrics;
 mod morsel;
+mod numbering;
 mod operator;
 mod operators;
 mod output_spill;
@@ -97,6 +99,8 @@ mod pipeline;
 pub mod planner;
 pub mod profile;
 pub mod python_eval;
+pub mod python_relation;
+pub mod python_udtf;
 // Row layout (P2-T157): the join's key index (P2-T158) and the aggregate's
 // row tables (P2-T159); the key-page prototypes inside stay behind the
 // `row-table-prototype` feature.
@@ -126,11 +130,12 @@ pub use join::{
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{
-    BUCKETS, CACHE_LABEL, CATALOGUE, CLASS_LABEL, CounterSample, ERROR_CLASS_LABEL, GIT_SHA_LABEL,
-    GaugeSample, HistogramBucket, HistogramSample, LABEL_ALLOWLIST, LabelDef,
-    MAX_ERROR_CLASS_VALUES, MetricDef, MetricDict, MetricKind, MetricSource, MetricsRegistry,
-    MetricsSnapshot, OP_LABEL, OTHER_ERROR_CLASS, QueryOutcome, STATUS_LABEL, STORE_KIND_LABEL,
-    Status, VERSION_LABEL, cpu_secs, output_rows, scan_rows, spill_bytes, spill_files,
+    AUTH_METHOD_LABEL, BUCKETS, CACHE_LABEL, CATALOGUE, CLASS_LABEL, CounterSample,
+    ERROR_CLASS_LABEL, GIT_SHA_LABEL, GaugeSample, HistogramBucket, HistogramSample,
+    LABEL_ALLOWLIST, LabelDef, MAX_ERROR_CLASS_VALUES, MetricDef, MetricDict, MetricKind,
+    MetricSource, MetricsRegistry, MetricsSnapshot, OP_LABEL, OTHER_ERROR_CLASS, PRIVILEGE_LABEL,
+    QueryOutcome, STATUS_LABEL, STORE_KIND_LABEL, SURFACE_LABEL, Status, VERSION_LABEL, cpu_secs,
+    output_rows, scan_rows, spill_bytes, spill_files,
 };
 pub use metrics::{
     DriverStats, ExtraMetrics, Metric, OperatorEntry, OperatorMetrics, OperatorRole,
@@ -143,10 +148,10 @@ pub use operator::{
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, Expand, FetchSlot, FileScan, FileScanMetrics, FileScanSource,
     FileSelections, FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate,
-    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem,
-    PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows, RowStageSettings,
-    RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics,
-    SpilledScan, TakeRows, TopN, UnionAlign,
+    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, PathRoots, Predicate, Project,
+    ProjectItem, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows,
+    RowStageSettings, RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, SortMetrics, SpilledScan, TakeRows, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

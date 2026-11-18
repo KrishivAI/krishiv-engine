@@ -397,6 +397,22 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
     ),
     (
+        // The NOT EXISTS twin of `restrict_below_semi`. Restriction does not
+        // fire here under `AllDistinct` (no restriction semi join in the
+        // plan), so this pins the plan and its fixed point only; the walk of
+        // `restrict::restricted` through anti joins is not reached.
+        "restrict_below_anti",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) AND NOT EXISTS (SELECT * FROM t t2 WHERE t2.c = u.d) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
+    ),
+    (
+        // A FROM subquery's projection between a semi and an anti join: the
+        // plan was not a fixed point before the stacks were sorted after the
+        // final pruning (a `Project` still stands between the two joins in
+        // the result, so no merged stack is sorted here).
+        "semi_order_through_subquery",
+        "SELECT s.a FROM (SELECT a, b FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)) s WHERE NOT EXISTS (SELECT * FROM u WHERE u.d = s.b)",
+    ),
+    (
         "restrict_not_global",
         "SELECT t.a FROM t JOIN (SELECT count(*) AS n FROM u) g ON t.c = g.n WHERE t.b = 'x'",
     ),
@@ -916,7 +932,8 @@ fn windows_are_pruned() {
 }
 
 /// Column pruning leaves a file scan no column when nothing above reads one
-/// (`count(*)`, Spark's empty `requiredSchema`); a table scan keeps one.
+/// (`count(*)`, Spark's empty `requiredSchema`) when it is Parquet, CSV or
+/// JSON; a table scan and a text read keep one.
 #[test]
 fn a_file_scan_may_read_no_column() {
     let ctx = support::ctx();
@@ -933,24 +950,30 @@ fn a_file_scan_may_read_no_column() {
         }
     };
     assert_eq!(scan_width(&optimize(&plan).unwrap()), 1, "table scan");
-    let files = Arc::clone(plan.root())
-        .transform_up(&mut |n: Arc<LogicalPlan>| {
-            Ok::<_, std::convert::Infallible>(match &n.node {
-                PlanNode::Scan(s) => Arc::new(LogicalPlan {
-                    node: PlanNode::Scan(Scan {
-                        source: krishiv_plan::ReadSource::Files {
-                            format: "csv".to_owned(),
-                            paths: Vec::new(),
-                            options: std::collections::BTreeMap::new(),
-                        },
-                        ..s.clone()
+    let read_as = |format: &str| {
+        let root = Arc::clone(plan.root())
+            .transform_up(&mut |n: Arc<LogicalPlan>| {
+                Ok::<_, std::convert::Infallible>(match &n.node {
+                    PlanNode::Scan(s) => Arc::new(LogicalPlan {
+                        node: PlanNode::Scan(Scan {
+                            source: krishiv_plan::ReadSource::files(
+                                format,
+                                Vec::new(),
+                                std::collections::BTreeMap::new(),
+                            ),
+                            ..s.clone()
+                        }),
+                        origin: n.origin,
                     }),
-                    origin: n.origin,
-                }),
-                _ => n,
+                    _ => n,
+                })
             })
-        })
-        .unwrap();
-    let files = Plan::try_new(files).unwrap();
-    assert_eq!(scan_width(&optimize(&files).unwrap()), 0, "file scan");
+            .unwrap();
+        scan_width(&optimize(&Plan::try_new(root).unwrap()).unwrap())
+    };
+    for format in ["parquet", "csv", "CSV", "json"] {
+        assert_eq!(read_as(format), 0, "{format}");
+    }
+    // A text read keeps its column.
+    assert_eq!(read_as("text"), 1, "text");
 }

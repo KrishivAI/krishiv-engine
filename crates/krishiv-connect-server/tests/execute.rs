@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, RecordBatch};
 use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::RequestOption as ReqOpt;
@@ -23,9 +24,11 @@ use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect_server::{
-    ConnectServer, ConnectServerConfig, ExecuteLimits, SessionLimits, SessionManager,
+    ConnectServer, ConnectServerConfig, ExecuteLimits, OperationState, SessionLimits,
+    SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -242,7 +245,7 @@ async fn execute_response_order() {
     // small engine batches are not merged (design P3-T011a §3.2), so the
     // engine's batch size decides how many come below the limits.
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -292,7 +295,7 @@ async fn execute_response_order() {
     ));
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let ids: HashSet<&str> = responses.iter().map(|r| r.response_id.as_str()).collect();
     assert_eq!(ids.len(), responses.len(), "fresh response ids");
@@ -359,7 +362,7 @@ async fn strings_are_utf8_and_chunks_reassemble() {
     });
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     entry
         .session()
@@ -402,7 +405,7 @@ async fn compressed_ipc_buffers_follow_the_session_codec() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     for (codec, expected) in [
         ("zstd", arrow_ipc::CompressionType::ZSTD),
@@ -529,7 +532,9 @@ async fn compressed_plans_decode_and_a_bomb_fails_before_it_expands() {
         e.message()
     );
     let command = pb::Command {
-        command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+        command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::new(
+            pb::GetResourcesCommand {},
+        ))),
     };
     let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
     let cmd = pb::plan::compressed_operation::OpType::Command as i32;
@@ -571,7 +576,9 @@ async fn invalid_requests_are_refused_with_sparks_classes() {
     );
     let command = request(pb::Plan {
         op_type: Some(OpType::Command(Box::new(pb::Command {
-            command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+            command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::new(
+                pb::GetResourcesCommand {},
+            ))),
         }))),
     });
     let e = collect(&run.channel, command).await.unwrap_err();
@@ -593,7 +600,7 @@ async fn invalid_requests_are_refused_with_sparks_classes() {
     );
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     assert!(
         entry.operations().is_empty(),
@@ -686,7 +693,7 @@ async fn live_operations_reattach_release_and_cap() {
     assert_eq!(error_class(&e), "INVALID_HANDLE.OPERATION_NOT_FOUND");
     // Another session never sees the operation (operation_bound_to_session).
     run.manager
-        .get_or_create(&Principal::local_user(), OTHER_SESSION, None, "u")
+        .get_or_create(&local_caller(), OTHER_SESSION, None, "u")
         .expect("other");
     let e = stream(&run.channel, "ReattachExecute", reattach(OTHER_SESSION, OP))
         .await
@@ -758,7 +765,7 @@ async fn live_operations_reattach_release_and_cap() {
     // (Spark's `ExecuteHolder.close` interrupts the attached sender).
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let session = entry.session().clone();
     let _: pb::ReleaseExecuteResponse = unary(
@@ -858,7 +865,7 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     session
@@ -899,7 +906,7 @@ async fn a_dropped_stream_cancels_a_query_that_has_not_produced_yet() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     // An aggregate sends nothing until it has read its whole input.
@@ -934,7 +941,7 @@ async fn a_released_operation_does_not_wait_for_a_client_that_reads_nothing() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     session
@@ -998,7 +1005,7 @@ async fn large_row_result() {
         assert_eq!(batch.num_chunks_in_batch, None);
     }
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -1031,4 +1038,1202 @@ async fn large_row_result() {
         .downcast_ref::<arrow_array::StringArray>()
         .expect("utf8");
     assert_eq!(s.value(0).len(), 65_536);
+}
+
+// ---- local relations, schemas, qualifiers and expression strings (P3-T012a part 2b) --------
+
+/// An Arrow IPC stream of `(id: Int64, name: Utf8)` rows, as PySpark's `createDataFrame` sends.
+fn people_ipc() -> Vec<u8> {
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])),
+        ],
+    )
+    .expect("batch");
+    let mut out = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut out, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    out
+}
+
+/// An Arrow IPC stream of `(id: Int64, name: Utf8)` rows other than [`people_ipc`]'s.
+fn others_ipc() -> Vec<u8> {
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![10, 20])),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y")])),
+        ],
+    )
+    .expect("batch");
+    let mut out = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut out, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    out
+}
+
+fn local(data: Option<Vec<u8>>, schema: Option<&str>) -> pb::Relation {
+    relation(RelType::LocalRelation(pb::LocalRelation {
+        data,
+        schema: schema.map(str::to_owned),
+    }))
+}
+
+/// The one Arrow batch of a small result.
+fn rows(responses: &[pb::ExecutePlanResponse]) -> RecordBatch {
+    let mut all: Vec<RecordBatch> = batches(responses)
+        .iter()
+        .flat_map(|b| read_ipc(&b.data))
+        .collect();
+    assert_eq!(all.len(), 1, "a small result is one batch");
+    all.remove(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_relation_is_collected() {
+    let run = start().await;
+    let r = collect(&run.channel, request(root(local(Some(people_ipc()), None))))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.num_rows(), 3);
+    assert_eq!(got.schema().field(0).name(), "id");
+    assert_eq!(got.schema().field(1).name(), "name");
+    // The batches live once, in the session's store, held by the plan's lease.
+    let again = collect(&run.channel, request(root(local(Some(people_ipc()), None))))
+        .await
+        .expect("runs again");
+    assert_eq!(rows(&again).num_rows(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_relation_applies_its_schema_eagerly() {
+    let run = start().await;
+    // The user schema renames by position and casts `id` to int.
+    let r = collect(
+        &run.channel,
+        request(root(local(Some(people_ipc()), Some("a INT, b STRING")))),
+    )
+    .await
+    .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "a");
+    assert_eq!(
+        got.schema().field(0).data_type(),
+        &arrow_schema::DataType::Int32
+    );
+    assert_eq!(got.num_rows(), 3);
+    // A schema of a different column count fails while the plan is built.
+    let e = collect(
+        &run.channel,
+        request(root(local(Some(people_ipc()), Some("a INT")))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "NUM_COLUMNS_MISMATCH");
+    // A schema alone is an empty relation; neither is invalid.
+    let empty = collect(
+        &run.channel,
+        request(root(local(None, Some("a INT, b STRING")))),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows(&empty).num_rows(), 0);
+    let e = collect(&run.channel, request(root(local(None, None))))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.SCHEMA_REQUIRED_FOR_LOCAL_RELATION"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cached_local_relation_without_its_artifact_is_not_found() {
+    let run = start().await;
+    let cached = relation(RelType::CachedLocalRelation(pb::CachedLocalRelation {
+        hash: "0123abcd".to_owned(),
+    }));
+    let e = collect(&run.channel, request(root(cached)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_local_relations_join_in_one_plan() {
+    let run = start().await;
+    let join = relation(RelType::Join(Box::new(pb::Join {
+        left: Some(Box::new(local(Some(people_ipc()), None))),
+        right: Some(Box::new(local(
+            Some(others_ipc()),
+            Some("id2 BIGINT, n2 STRING"),
+        ))),
+        join_type: pb::join::JoinType::Cross as i32,
+        ..Default::default()
+    })));
+    let r = collect(&run.channel, request(root(join)))
+        .await
+        .expect("runs");
+    let out = rows(&r);
+    // The two relations are bound to their own data: 3 left rows by 2 right rows, in the left's
+    // columns then the right's, with the right's names from its own schema text.
+    let names: Vec<_> = out
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["id", "name", "id2", "n2"]);
+    let left = out
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    let left_names = out.column(1).as_string::<i32>();
+    let right = out
+        .column(2)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    let right_names = out.column(3).as_string::<i32>();
+    let mut tuples: Vec<(i64, Option<String>, i64, String)> = (0..out.num_rows())
+        .map(|i| {
+            (
+                left.value(i),
+                (!left_names.is_null(i)).then(|| left_names.value(i).to_owned()),
+                right.value(i),
+                right_names.value(i).to_owned(),
+            )
+        })
+        .collect();
+    tuples.sort();
+    let expected: Vec<(i64, Option<String>, i64, String)> = [
+        (1, Some("a"), 10, "x"),
+        (1, Some("a"), 20, "y"),
+        (2, None, 10, "x"),
+        (2, None, 20, "y"),
+        (3, Some("c"), 10, "x"),
+        (3, Some("c"), 20, "y"),
+    ]
+    .into_iter()
+    .map(|(a, b, c, d)| (a, b.map(str::to_owned), c, d.to_owned()))
+    .collect();
+    assert_eq!(tuples, expected);
+}
+
+fn column(name: &str) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: name.to_owned(),
+                plan_id: None,
+                is_metadata_column: None,
+            },
+        )),
+    }
+}
+
+fn expression_string(text: &str) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::ExpressionString(
+            pb::expression::ExpressionString {
+                expression: text.to_owned(),
+            },
+        )),
+    }
+}
+
+fn project(input: pb::Relation, exprs: Vec<pb::Expression>) -> pb::Relation {
+    relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(input)),
+        expressions: exprs,
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expression_string_runs_as_select_expr() {
+    let run = start().await;
+    let plan = project(
+        local(Some(people_ipc()), None),
+        vec![expression_string("id * 10 AS tens")],
+    );
+    let r = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "tens");
+    let values = got
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .expect("longs");
+    assert_eq!(values.values().to_vec(), vec![10, 20, 30]);
+    let e = collect(
+        &run.channel,
+        request(root(project(
+            local(Some(people_ipc()), None),
+            vec![expression_string("id +")],
+        ))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "PARSE_SYNTAX_ERROR");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_subquery_alias_qualifier_qualifies_the_columns() {
+    let run = start().await;
+    let aliased = |qualifier: &[&str]| {
+        relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
+            input: Some(Box::new(local(Some(people_ipc()), None))),
+            alias: "t".to_owned(),
+            qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+        })))
+    };
+    // `db.t.id` and `t.id` both name the column of `db.t`.
+    for column_name in ["db.t.id", "t.id", "id"] {
+        let r = collect(
+            &run.channel,
+            request(root(project(aliased(&["db"]), vec![column(column_name)]))),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{column_name}: {e}"));
+        assert_eq!(rows(&r).num_rows(), 3, "{column_name}");
+    }
+    // The qualifier is not a prefix of another relation's name.
+    let e = collect(
+        &run.channel,
+        request(root(project(aliased(&["db"]), vec![column("other.t.id")]))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
+    // Without a qualifier `db.t.id` does not resolve.
+    let e = collect(
+        &run.channel,
+        request(root(project(aliased(&[]), vec![column("db.t.id")]))),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error_class(&e).starts_with("UNRESOLVED_COLUMN"),
+        "{}",
+        error_class(&e)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_data_source_schema_declares_the_columns() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,x\n2,y\n").expect("write");
+    let read = relation(RelType::Read(pb::Read {
+        is_streaming: false,
+        read_type: Some(pb::read::ReadType::DataSource(pb::read::DataSource {
+            format: Some("csv".to_owned()),
+            schema: Some("n INT, s STRING".to_owned()),
+            paths: vec![path.to_string_lossy().into_owned()],
+            ..Default::default()
+        })),
+    }));
+    let run = start().await;
+    let r = collect(&run.channel, request(root(read)))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "n");
+    assert_eq!(
+        got.schema().field(0).data_type(),
+        &arrow_schema::DataType::Int32
+    );
+    assert_eq!(got.num_rows(), 2);
+}
+
+fn sql_command(query: &str) -> pb::Plan {
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::SqlCommand {
+        sql: query.to_owned(),
+        ..Default::default()
+    };
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    }
+}
+
+/// The command PySpark 4.x sends for `spark.sql(query)`: the statement as `input`, a `SQL`
+/// relation (the deprecated fields unset).
+fn sql_command_input(query: &str, plan_id: i64) -> pb::Plan {
+    let command = pb::SqlCommand {
+        input: Some(pb::Relation {
+            common: Some(pb::RelationCommon {
+                plan_id: Some(plan_id),
+                ..Default::default()
+            }),
+            rel_type: Some(RelType::Sql(pb::Sql {
+                query: query.to_owned(),
+                ..Default::default()
+            })),
+        }),
+        ..Default::default()
+    };
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    }
+}
+
+/// The relation of the one `sql_command_result` response.
+fn sql_result(responses: &[pb::ExecutePlanResponse]) -> pb::Relation {
+    let results: Vec<_> = responses
+        .iter()
+        .filter_map(|r| match &r.response_type {
+            Some(ResponseType::SqlCommandResult(c)) => c.relation.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1, "one sql_command_result");
+    assert!(
+        batches(responses).is_empty(),
+        "a SQL command streams no batch"
+    );
+    results.into_iter().next().expect("one")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sql_query_answers_the_sql_relation_the_client_sends_again() {
+    let run = start().await;
+    let r = collect(
+        &run.channel,
+        reattachable(request(sql_command("SELECT 1 AS a, 'x' AS b"))),
+    )
+    .await
+    .expect("runs");
+    // Only the result and `result_complete`: no schema, batch or metrics.
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(matches!(
+        r[1].response_type,
+        Some(ResponseType::ResultComplete(_))
+    ));
+    let relation = sql_result(&r);
+    let Some(RelType::Sql(sql)) = &relation.rel_type else {
+        panic!("a query answers a SQL relation: {relation:?}");
+    };
+    assert_eq!(sql.query, "SELECT 1 AS a, 'x' AS b");
+    // The client sends it as a root relation.
+    let again = collect(&run.channel, request(root(relation)))
+        .await
+        .expect("runs");
+    let got = rows(&again);
+    assert_eq!(got.num_rows(), 1);
+    assert_eq!(got.schema().field(0).name(), "a");
+    // An analysis error is raised by `spark.sql` itself, as Spark does.
+    let e = collect(
+        &run.channel,
+        request(sql_command("SELECT * FROM no_such_table")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sql_command_runs_at_once_and_answers_its_rows_as_a_local_relation() {
+    let run = start().await;
+    let r = collect(
+        &run.channel,
+        request(sql_command("CREATE TEMPORARY VIEW v AS SELECT 7 AS n")),
+    )
+    .await
+    .expect("runs");
+    // Spark's order for a command: the result, then metrics (then `result_complete`).
+    assert!(
+        matches!(r[0].response_type, Some(ResponseType::SqlCommandResult(_))),
+        "{r:?}"
+    );
+    assert!(r[1].metrics.is_some(), "{r:?}");
+    let relation = sql_result(&r);
+    assert!(
+        matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
+        "{relation:?}"
+    );
+    // It ran: the view is there for the next request, and no later request creates it again.
+    let entry = run
+        .manager
+        .get(&local_caller(), SESSION, None)
+        .expect("session");
+    let df = entry
+        .session()
+        .sql("SELECT n FROM v")
+        .await
+        .expect("the view exists");
+    assert_eq!(df.collect().await.expect("rows").len(), 1);
+    // `SET key=value` returns its rows (key, value) as a local relation the client re-sends.
+    let r = collect(
+        &run.channel,
+        request(sql_command("SET spark.sql.shuffle.partitions=3")),
+    )
+    .await
+    .expect("runs");
+    let relation = sql_result(&r);
+    let again = collect(&run.channel, request(root(relation)))
+        .await
+        .expect("a command's relation runs");
+    let got = rows(&again);
+    assert_eq!(got.num_rows(), 1);
+    assert_eq!(got.num_columns(), 2);
+    assert_eq!(
+        entry.session().conf().get("spark.sql.shuffle.partitions"),
+        Some("3".to_owned())
+    );
+    // A failing command is a failed start.
+    let e = collect(&run.channel, request(sql_command("DROP VIEW nope_view")))
+        .await
+        .unwrap_err();
+    assert_eq!(error_class(&e), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_sql_command_runs_and_unsupported_forms_are_refused() {
+    let run = start().await;
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::Command {
+        command_type: Some(pb::command::CommandType::SqlCommand(Box::new(
+            pb::SqlCommand {
+                sql: "SELECT 2".to_owned(),
+                ..Default::default()
+            },
+        ))),
+    };
+    let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Command as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let r = collect(&run.channel, request(plan)).await.expect("runs");
+    assert!(matches!(sql_result(&r).rel_type, Some(RelType::Sql(_))));
+    // Parameters are refused up front (golden-pending: group 4).
+    let mut with_args = sql_command("SELECT ?");
+    if let Some(OpType::Command(c)) = &mut with_args.op_type
+        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
+    {
+        #[expect(deprecated, reason = "the field every client version sends")]
+        {
+            s.pos_arguments = vec![column("x")];
+        }
+    }
+    let e = collect(&run.channel, request(with_args)).await.unwrap_err();
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pyspark_4_sql_command_sends_its_statement_as_input() {
+    let run = start().await;
+    // A query: the `input` relation comes back as it was, plan id included.
+    let r = collect(
+        &run.channel,
+        reattachable(request(sql_command_input("SELECT 1 AS a", 41))),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(r.len(), 2, "{r:?}");
+    let relation = sql_result(&r);
+    assert_eq!(relation.common.as_ref().and_then(|c| c.plan_id), Some(41));
+    assert!(
+        matches!(&relation.rel_type, Some(RelType::Sql(s)) if s.query == "SELECT 1 AS a"),
+        "{relation:?}"
+    );
+    // A command through `input` runs at once.
+    let r = collect(
+        &run.channel,
+        request(sql_command_input(
+            "CREATE TEMPORARY VIEW iv AS SELECT 5 AS n",
+            42,
+        )),
+    )
+    .await
+    .expect("runs");
+    assert!(matches!(
+        sql_result(&r).rel_type,
+        Some(RelType::LocalRelation(_))
+    ));
+    let entry = run
+        .manager
+        .get(&local_caller(), SESSION, None)
+        .expect("session");
+    let df = entry
+        .session()
+        .sql("SELECT n FROM iv")
+        .await
+        .expect("the view exists");
+    assert_eq!(df.collect().await.expect("rows").len(), 1);
+    // Another input relation is refused with Spark's class; WithRelations is group 4.
+    let mut other = sql_command_input("x", 1);
+    if let Some(OpType::Command(c)) = &mut other.op_type
+        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
+    {
+        s.input = Some(range(1));
+    }
+    let e = collect(&run.channel, request(other)).await.unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_result_over_the_batch_cap_is_refused() {
+    let run = start_with(ExecuteLimits {
+        max_batch_size: 64,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    let e = collect(&run.channel, request(sql_command("SHOW TABLES")))
+        .await
+        .unwrap_err();
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+fn literal_long(v: i64) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::Literal(pb::expression::Literal {
+            literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+            data_type: None,
+        })),
+    }
+}
+
+fn aliased_count(alias: &str) -> pb::Expression {
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedFunction(
+            pb::expression::UnresolvedFunction {
+                function_name: "count".to_owned(),
+                arguments: vec![literal_long(1)],
+                ..Default::default()
+            },
+        )),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::Alias(Box::new(
+            pb::expression::Alias {
+                expr: Some(Box::new(call)),
+                name: vec![alias.to_owned()],
+                metadata: None,
+            },
+        ))),
+    }
+}
+
+fn observed(input: pb::Relation, plan_id: i64) -> pb::Relation {
+    pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(plan_id),
+            ..Default::default()
+        }),
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(input)),
+            name: "m".to_owned(),
+            metrics: vec![aliased_count("n")],
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_metrics_follow_the_result() {
+    let run = start().await;
+    let responses = collect(&run.channel, request(root(observed(range(10), 7))))
+        .await
+        .expect("execute");
+    let metrics: Vec<_> = responses.iter().flat_map(|r| &r.observed_metrics).collect();
+    assert_eq!(metrics.len(), 1, "{responses:?}");
+    let m = metrics[0];
+    assert_eq!((m.name.as_str(), m.plan_id), ("m", 7));
+    assert_eq!(m.keys, ["n"]);
+    assert_eq!(
+        m.values[0].literal_type,
+        Some(pb::expression::literal::LiteralType::Long(10))
+    );
+    // After the arrow batches and the metrics response.
+    let at =
+        |f: fn(&pb::ExecutePlanResponse) -> bool| responses.iter().position(f).expect("present");
+    assert!(at(|r| !r.observed_metrics.is_empty()) > at(|r| r.metrics.is_some()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_query_sends_no_observed_metrics() {
+    let run = start().await;
+    let failing = pb::Relation {
+        common: None,
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(sql("SELECT * FROM no_such_table"))),
+            name: "m".to_owned(),
+            metrics: vec![aliased_count("n")],
+        }))),
+    };
+    // Read the stream directly so responses sent before the error are kept and checked.
+    let mut retained = Vec::new();
+    let status = match stream(&run.channel, "ExecutePlan", request(root(failing))).await {
+        Err(status) => status,
+        Ok(mut s) => loop {
+            match s.message().await {
+                Ok(Some(r)) => retained.push(r),
+                Ok(None) => panic!("the table is missing, yet the stream ended: {retained:?}"),
+                Err(status) => break status,
+            }
+        },
+    };
+    assert_eq!(status.code(), Code::Internal);
+    assert!(
+        retained.iter().all(|r| r.observed_metrics.is_empty()),
+        "{retained:?}"
+    );
+}
+
+// ---- the Connect leg of tests/fixtures/spark-4.2.0/observe-goldens.json (P3-T084) ----
+//
+// Connect returns the metrics of the last action that ran the plan (no first-wins), all names
+// in one `ExecutePlanResponse`, and nothing for a query that failed. The cases below are the
+// fixture's Connect-only `flows_*` and the ones where the Connect leg differs from the classic
+// one; the classic leg (`krishiv-session/tests/observe_goldens.rs`) covers the rest. Cases the
+// engine does not match yet are asserted as what they give now (a gap), so a fix fails them.
+
+use pb::expression::literal::LiteralType;
+
+fn expression(e: pb::expression::ExprType) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(e),
+    }
+}
+
+fn attr(name: &str) -> pb::Expression {
+    expression(pb::expression::ExprType::UnresolvedAttribute(
+        pb::expression::UnresolvedAttribute {
+            unparsed_identifier: name.to_owned(),
+            ..Default::default()
+        },
+    ))
+}
+
+fn call(function: &str, arguments: Vec<pb::Expression>) -> pb::Expression {
+    expression(pb::expression::ExprType::UnresolvedFunction(
+        pb::expression::UnresolvedFunction {
+            function_name: function.to_owned(),
+            arguments,
+            ..Default::default()
+        },
+    ))
+}
+
+fn aliased(e: pb::Expression, name: &str) -> pb::Expression {
+    expression(pb::expression::ExprType::Alias(Box::new(
+        pb::expression::Alias {
+            expr: Some(Box::new(e)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        },
+    )))
+}
+
+fn base() -> pb::Relation {
+    sql(
+        "SELECT * FROM VALUES ('a', 1, 1.5D), ('b', 2, CAST(NULL AS DOUBLE)), \
+         ('c', CAST(NULL AS INT), 3.0D) AS t(k, v, x)",
+    )
+}
+
+fn observe_as(
+    input: pb::Relation,
+    name: &str,
+    metrics: Vec<pb::Expression>,
+    plan_id: i64,
+) -> pb::Relation {
+    pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(plan_id),
+            ..Default::default()
+        }),
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(input)),
+            name: name.to_owned(),
+            metrics,
+        }))),
+    }
+}
+
+fn count_n() -> pb::Expression {
+    aliased(call("count", vec![literal_long(1)]), "n")
+}
+
+fn limit_of(input: pb::Relation, limit: i32) -> pb::Relation {
+    relation(RelType::Limit(Box::new(pb::Limit {
+        input: Some(Box::new(input)),
+        limit,
+    })))
+}
+
+fn union_of(left: pb::Relation, right: pb::Relation) -> pb::Relation {
+    relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: Some(Box::new(left)),
+        right_input: Some(Box::new(right)),
+        set_op_type: pb::set_operation::SetOpType::Union as i32,
+        is_all: Some(true),
+        by_name: None,
+        allow_missing_columns: None,
+    })))
+}
+
+/// The observed metrics of a run: name -> (keys, values), and how many responses carried any.
+/// Metric name -> (key, value) cells, and how many responses carried metrics.
+type Observed = (BTreeMap<String, Vec<(String, Option<LiteralType>)>>, usize);
+
+fn observed_of(responses: &[pb::ExecutePlanResponse]) -> Observed {
+    let carrying = responses
+        .iter()
+        .filter(|r| !r.observed_metrics.is_empty())
+        .count();
+    let all = responses
+        .iter()
+        .flat_map(|r| &r.observed_metrics)
+        .map(|m| {
+            assert_eq!(m.keys.len(), m.values.len(), "{m:?}");
+            let cells = m
+                .keys
+                .iter()
+                .cloned()
+                .zip(m.values.iter().map(|v| v.literal_type.clone()))
+                .collect();
+            (m.name.clone(), cells)
+        })
+        .collect();
+    (all, carrying)
+}
+
+fn long(v: i64) -> Option<LiteralType> {
+    Some(LiteralType::Long(v))
+}
+
+async fn observed_run(plan: pb::Relation) -> Observed {
+    let run = start().await;
+    let responses = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("execute");
+    observed_of(&responses)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_flows_string_observe_and_no_alias() {
+    // flows_string_observe: an unaliased literal is named by its text.
+    let plan = observe_as(
+        base(),
+        "nm",
+        vec![
+            count_n(),
+            aliased(call("sum", vec![attr("v")]), "s"),
+            literal_long(7),
+        ],
+        1,
+    );
+    let (got, _) = observed_run(plan).await;
+    assert_eq!(
+        got["nm"],
+        vec![
+            ("n".to_owned(), long(3)),
+            ("s".to_owned(), long(3)),
+            ("7".to_owned(), long(7))
+        ]
+    );
+    // flows_no_alias: metrics named as Spark names them.
+    let plan = observe_as(
+        base(),
+        "x",
+        vec![
+            call("count", vec![literal_long(1)]),
+            call("max", vec![attr("v")]),
+        ],
+        2,
+    );
+    let (got, _) = observed_run(plan).await;
+    assert_eq!(
+        got["x"],
+        vec![
+            ("count(1)".to_owned(), long(3)),
+            ("max(v)".to_owned(), Some(LiteralType::Integer(2)))
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_flows_two_nested_in_one_response() {
+    let inner = observe_as(base(), "a", vec![count_n()], 1);
+    let outer = observe_as(
+        inner,
+        "b",
+        vec![aliased(call("sum", vec![attr("v")]), "s")],
+        2,
+    );
+    let (got, carrying) = observed_run(outer).await;
+    assert_eq!(got["a"], vec![("n".to_owned(), long(3))]);
+    assert_eq!(got["b"], vec![("s".to_owned(), long(3))]);
+    assert_eq!(carrying, 1, "Spark sends all the names in one response");
+}
+
+/// Connect has no first-wins: each run reports its own metrics (`first_then_second_action`:
+/// the count after a `limit(1)` run is 3), and the limit's run counts the rows it took.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_each_action_reports_its_own_metrics() {
+    let run = start().await;
+    let observed = observe_as(base(), "m", vec![count_n()], 1);
+    let first = collect(&run.channel, request(root(limit_of(observed.clone(), 1))))
+        .await
+        .expect("execute");
+    assert_eq!(observed_of(&first).0["m"], vec![("n".to_owned(), long(1))]);
+    let second = collect(&run.channel, request(root(observed)))
+        .await
+        .expect("execute");
+    assert_eq!(observed_of(&second).0["m"], vec![("n".to_owned(), long(3))]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_self_union_reports_one_instance_not_the_sum() {
+    let d = observe_as(base(), "m", vec![count_n()], 1);
+    let (got, _) = observed_run(union_of(d.clone(), d)).await;
+    assert_eq!(got["m"], vec![("n".to_owned(), long(3))]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_limit_zero_sends_no_metrics() {
+    let observed = observe_as(base(), "m", vec![count_n()], 1);
+    let (got, carrying) = observed_run(limit_of(observed, 0)).await;
+    assert!(got.is_empty(), "{got:?}");
+    assert_eq!(carrying, 0);
+}
+
+/// KNOWN GAP (docs/concepts/known-differences.md): Spark prunes an observe node under an empty
+/// relation (`flows_observe_pruned_by_empty_relation` gives `e: {}`); the engine runs it and
+/// reports the rows it read. When this fails the gap is closed: assert Spark's `{}`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_gap_where_false_above_observe_is_not_pruned() {
+    let observed = observe_as(base(), "e", vec![count_n()], 1);
+    let filtered = relation(RelType::Filter(Box::new(pb::Filter {
+        input: Some(Box::new(observed)),
+        condition: Some(call("==", vec![literal_long(1), literal_long(0)])),
+    })));
+    let (got, _) = observed_run(filtered).await;
+    assert_eq!(got["e"], vec![("n".to_owned(), long(3))]);
+}
+
+/// KNOWN GAP: Spark supports a struct-valued metric (`types`); the server refuses it when it
+/// builds the literal. The refusal names the feature, and the other values of the case work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_types_and_the_struct_metric_gap() {
+    let run = start().await;
+    let types = sql(
+        "SELECT CAST(1.10 AS DECIMAL(5,2)) d, CAST('NaN' AS DOUBLE) n, CAST(-0.0 AS DOUBLE) z, 1 i",
+    );
+    let plan = observe_as(
+        types.clone(),
+        "m",
+        vec![
+            aliased(call("sum", vec![attr("d")]), "sd"),
+            aliased(call("max", vec![attr("n")]), "mn"),
+            aliased(call("collect_list", vec![attr("i")]), "l"),
+        ],
+        1,
+    );
+    let responses = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("execute");
+    let (got, _) = observed_of(&responses);
+    let cells = &got["m"];
+    // Spark 4.2.0 (`types` golden): sd = Decimal('1.10'), mn = NaN, l = [1]. The type of
+    // sum(DECIMAL(5,2)) is DECIMAL(15,2) (Spark's `Sum.resultType`: bounded(p + 10, s)).
+    assert_eq!(cells[0].0, "sd");
+    assert_eq!(
+        cells[0].1,
+        Some(LiteralType::Decimal(pb::expression::literal::Decimal {
+            value: "1.10".to_owned(),
+            precision: Some(15),
+            scale: Some(2),
+        })),
+        "{cells:?}"
+    );
+    assert_eq!(cells[1].0, "mn");
+    assert!(
+        matches!(&cells[1].1, Some(LiteralType::Double(d)) if d.is_nan()),
+        "{cells:?}"
+    );
+    assert_eq!(cells[2].0, "l");
+    let Some(LiteralType::Array(array)) = &cells[2].1 else {
+        panic!("l is not an array: {cells:?}");
+    };
+    let elements: Vec<_> = array
+        .elements
+        .iter()
+        .map(|e| e.literal_type.clone())
+        .collect();
+    assert_eq!(elements, vec![Some(LiteralType::Integer(1))]);
+    let with_struct = observe_as(
+        types,
+        "m",
+        vec![aliased(
+            call(
+                "struct",
+                vec![call("max", vec![attr("i")]), call("min", vec![attr("i")])],
+            ),
+            "st",
+        )],
+        1,
+    );
+    let status = collect(&run.channel, request(root(with_struct)))
+        .await
+        .expect_err("a struct metric is not supported yet");
+    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// An observation whose metric has no literal yet fails the action, but only after the other
+/// observations' metrics were sent (as for a metric that failed to finalize).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_unconvertible_metric_still_sends_the_others() {
+    let run = start().await;
+    let inner = observe_as(base(), "a", vec![count_n()], 1);
+    let plan = observe_as(
+        inner,
+        "b",
+        vec![aliased(
+            call(
+                "struct",
+                vec![call("max", vec![attr("v")]), call("min", vec![attr("v")])],
+            ),
+            "st",
+        )],
+        2,
+    );
+    let mut s = stream(&run.channel, "ExecutePlan", request(root(plan)))
+        .await
+        .expect("stream");
+    let mut responses = Vec::new();
+    let status = loop {
+        match s.message().await {
+            Ok(Some(r)) => responses.push(r),
+            Ok(None) => panic!("the action did not fail ({} responses)", responses.len()),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+    let (got, carrying) = observed_of(&responses);
+    assert_eq!(carrying, 1);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got["a"], vec![("n".to_owned(), long(3))]);
+}
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_sql_command_runs_like_a_plain_one() {
+    let run = start().await;
+    let Some(OpType::Command(command)) =
+        sql_command("CREATE TEMPORARY VIEW zc AS SELECT 7 AS n").op_type
+    else {
+        panic!("not a command");
+    };
+    let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Command as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let r = collect(&run.channel, request(plan)).await.expect("runs");
+    // The command ran, and its answer is the one `sql_command_result`.
+    let relation = sql_result(&r);
+    assert!(
+        matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
+        "{relation:?}"
+    );
+    // The view exists afterwards: the compressed command ran, it was not only answered.
+    let entry = run
+        .manager
+        .get_or_create(&local_caller(), SESSION, None, "u")
+        .expect("session");
+    let batches = entry
+        .session()
+        .sql("SELECT n FROM zc")
+        .await
+        .expect("reads the view")
+        .collect()
+        .await
+        .expect("collects");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(0),
+        7
+    );
+}
+
+/// A plan of `Command{ml_command{..}}`.
+fn ml_command(command: pb::ml_command::Command) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::MlCommand(Box::new(
+                pb::MlCommand {
+                    command: Some(command),
+                },
+            ))),
+        }))),
+    }
+}
+
+fn clean_cache() -> pb::Plan {
+    ml_command(pb::ml_command::Command::CleanCache(
+        pb::ml_command::CleanCache {},
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
+    // PySpark 4.3.0's `atexit` cleanup (`_cleanup_ml_cache`) sends it before
+    // `release_session` (connect-mapping §4 row 17, decision 11).
+    let run = start().await;
+    let entry = run
+        .manager
+        .get_or_create(&local_caller(), SESSION, None, "u")
+        .expect("session");
+    // Not reattachable: no response, the stream ends OK.
+    let first = "00112233-4455-6677-8899-aabbccddee02";
+    let responses = collect(&run.channel, with_id(request(clean_cache()), first))
+        .await
+        .expect("clean_cache");
+    assert!(responses.is_empty(), "{} responses", responses.len());
+    eventually("the operation leaves", || entry.operations().is_empty()).await;
+    assert_eq!(
+        entry.operations().state_of(first),
+        Some(OperationState::Succeeded)
+    );
+
+    // Reattachable: only `ResultComplete`, then it reattaches and releases
+    // like any other operation.
+    let id = "00112233-4455-6677-8899-aabbccddee01";
+    let responses = collect(
+        &run.channel,
+        with_id(reattachable(request(clean_cache())), id),
+    )
+    .await
+    .expect("clean_cache");
+    assert_eq!(responses.len(), 1, "only ResultComplete");
+    assert!(matches!(
+        responses[0].response_type,
+        Some(ResponseType::ResultComplete(_))
+    ));
+    assert_eq!(responses[0].operation_id, id);
+    assert_eq!(responses[0].session_id, SESSION);
+    assert_eq!(entry.operations().len(), 1, "kept until released");
+    assert_eq!(
+        entry.operations().state_of(id),
+        Some(OperationState::Succeeded)
+    );
+    let mut again = stream(
+        &run.channel,
+        "ReattachExecute",
+        pb::ReattachExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: id.to_owned(),
+            last_response_id: Some(responses[0].response_id.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("reattach");
+    assert!(
+        again.message().await.expect("ok").is_none(),
+        "nothing after"
+    );
+    let released: pb::ReleaseExecuteResponse = unary(
+        &run.channel,
+        "ReleaseExecute",
+        pb::ReleaseExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: id.to_owned(),
+            release: Some(pb::release_execute_request::Release::ReleaseAll(
+                pb::release_execute_request::ReleaseAll {},
+            )),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("release all");
+    assert_eq!(released.operation_id.as_deref(), Some(id));
+    assert!(entry.operations().is_empty());
+    assert_eq!(
+        entry.operations().state_of(id),
+        Some(OperationState::Succeeded)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_ml_commands_stay_unsupported() {
+    let run = start().await;
+    let delete = ml_command(pb::ml_command::Command::Delete(
+        pb::ml_command::Delete::default(),
+    ));
+    let info_of = ml_command(pb::ml_command::Command::GetCacheInfo(
+        pb::ml_command::GetCacheInfo {},
+    ));
+    let empty = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::MlCommand(Box::default())),
+        }))),
+    };
+    for plan in [delete, info_of, empty] {
+        for r in [request(plan.clone()), reattachable(request(plan))] {
+            let e = collect(&run.channel, r).await.unwrap_err();
+            assert_eq!(info(&e)["sqlState"], "56K00", "{e:?}");
+        }
+    }
+    let entry = run
+        .manager
+        .get(&local_caller(), SESSION, None)
+        .expect("session");
+    assert!(entry.operations().is_empty());
 }

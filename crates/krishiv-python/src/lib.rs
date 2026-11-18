@@ -24,6 +24,13 @@ const ALLOCATOR: &str = "mimalloc";
 #[cfg(not(feature = "mimalloc"))]
 const ALLOCATOR: &str = "system";
 
+/// The commit this build was made from: `KRISHIV_GIT_SHA` at build time (the release
+/// workflows set it; a build from a source archive or a plain `cargo build` has none).
+const COMMIT: &str = match option_env!("KRISHIV_GIT_SHA") {
+    Some(sha) if !sha.is_empty() => sha,
+    _ => "unknown",
+};
+
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -31,6 +38,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // v3-compiled code on it. `krishiv/_cpu.py` checks first, in pure Python.
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
+    m.add("__commit__", COMMIT)?;
     m.add_class::<stream::ArrowStream>()?;
     m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
     m.add_function(wrap_pyfunction!(udf::runtime::_udf_runner_conf, m)?)?;
@@ -38,11 +46,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<session::PySession>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<dataframe::PyGroupedData>()?;
+    m.add_class::<dataframe::PyObservation>()?;
     m.add_class::<column::PyColumn>()?;
     m.add_class::<window::PyWindowSpec>()?;
     m.add_function(wrap_pyfunction!(column::column, m)?)?;
     m.add_function(wrap_pyfunction!(column::literal, m)?)?;
     m.add_function(wrap_pyfunction!(column::map_literal, m)?)?;
+    m.add_function(wrap_pyfunction!(column::lambda_function, m)?)?;
     m.add_function(wrap_pyfunction!(column::call, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_all, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_distinct_of, m)?)?;

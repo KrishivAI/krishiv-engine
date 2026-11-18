@@ -42,6 +42,7 @@ class Measure:
     rchar: int | None = None  # bytes requested by read syscalls, page-cache hits included
     read_bytes: int | None = None  # bytes fetched from the storage layer (0 for a fully cached run)
     syscr: int | None = None  # read syscalls
+    write_bytes: int | None = None  # bytes sent to the storage layer (the engine's spill)
 
 
 def check_query(query: Query) -> Query:
@@ -71,6 +72,9 @@ class Engine(ABC):
     last_peak_rss_bytes: int | None = None
     # User + system CPU seconds of the engine's process tree during the last ``timed_run``; ``None`` when not measured.
     last_cpu_seconds: float | None = None
+    # Bytes the engine's process tree wrote to storage during the last ``timed_run`` (its spill); ``None`` when not
+    # measured.
+    last_write_bytes: int | None = None
 
     @abstractmethod
     def version(self) -> str: ...

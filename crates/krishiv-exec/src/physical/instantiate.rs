@@ -57,8 +57,8 @@ use super::{
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
+    HashAggregate,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -71,8 +71,8 @@ use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
-    ScanPushdowns, Sort, SortKey, TopN,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, Sample,
+    ScanPushdown, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -89,11 +89,15 @@ mod detached;
 mod distributed;
 mod order;
 mod python_eval;
+mod python_relation;
+mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
+mod observe;
 use distributed::planned_schema_holds;
 pub(crate) use join::hash_join;
-use order::{range_ordered_evals, reads_range_in_order};
+pub(crate) use observe::collect_metrics_op;
+use order::{limit_reads_in_order, range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -329,6 +333,12 @@ impl WorkerContext {
         self
     }
 
+    /// `krishiv.exec.agg.distinctCountAtMerge` from this worker's configuration
+    /// (`aggregate/distinct.rs`); every path building a distinct plan reads it.
+    pub(crate) fn distinct_count_at_merge(&self) -> bool {
+        crate::aggregate::distinct_count_at_merge(self.config.as_deref())
+    }
+
     /// The fixed spill scope, if one is set ([`Self::with_spill`]).
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
@@ -345,6 +355,30 @@ impl WorkerContext {
             (Some(scope), _) => Ok(Some(scope.clone())),
             (None, Some(scopes)) => Ok(Some(scopes.scope()?)),
             (None, None) => Ok(None),
+        }
+    }
+
+    /// As [`Self::spill_scope`], for a query that does not need to spill to run: when the
+    /// factory cannot make the spill directory (a read-only root, no writable home, RS-29) the
+    /// query runs without spilling and the first such failure is logged with the error; an
+    /// operator that then needs to spill fails with its memory error. Every later failure is a
+    /// debug record, so a server does not log once per query.
+    pub fn spill_scope_if_available(&self) -> Option<SpillScope> {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        match self.spill_scope() {
+            Ok(scope) => scope,
+            Err(e) => {
+                if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::debug!(error = %e, "queries run without spilling");
+                } else {
+                    tracing::warn!(
+                        error = %e,
+                        "the spill directory cannot be used, so queries run without spilling; \
+                         set `krishiv.spill.dir` to a writable local directory"
+                    );
+                }
+                None
+            }
         }
     }
 
@@ -432,7 +466,7 @@ fn instantiate_with_schemas(
     task: &TaskSpec,
 ) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = worker.spill_scope()?;
+        let spill = worker.spill_scope_if_available();
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
@@ -454,6 +488,7 @@ fn instantiate_with_schemas(
             range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
             stages: HashMap::new(),
+            partition_ordered: HashSet::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -534,6 +569,9 @@ struct Instantiation<'a> {
     salts: HashMap<super::SharedId, u64>,
     /// Each scan's runtime filters, for the probe it may hand its row stage.
     stages: HashMap<ScanId, RuntimeFilters>,
+    /// The scans a `Sample` reads through split-keeping nodes: each reads
+    /// its partitions whole and tags them ([`ScanPushdowns::partition_order`]).
+    partition_ordered: HashSet<ScanId>,
 }
 
 /// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
@@ -652,13 +690,13 @@ pub(crate) fn fused_aggregate<'p>(
 
 /// The phases of `single`, an aggregation with `DISTINCT` aggregates over raw
 /// input, around an exchange (Spark's single-distinct plan, as
-/// [`distinct_plan`] runs it in one place): a partial phase grouped by the
+/// [`distinct_plan`](crate::aggregate::distinct_plan) runs it in one place): a partial phase grouped by the
 /// keys and the distinct arguments computing the other aggregates' states; a
 /// partial merge after the exchange on the same columns, which removes the
 /// pairs several tasks sent; and the final phase grouped by the keys, which
 /// aggregates each distinct value once (as plain aggregates over the now
 /// distinct argument columns) and merges the other states. `None` where
-/// [`distinct_plan`] has no such plan: no distinct aggregate, distinct
+/// [`distinct_plan`](crate::aggregate::distinct_plan) has no such plan: no distinct aggregate, distinct
 /// aggregates over different arguments or with a filter, or input that is not
 /// raw.
 pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 3]> {
@@ -923,6 +961,10 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::PythonEval { .. } => self.python_eval(n),
+            PhysNode::PythonMap { .. }
+            | PhysNode::PythonGroupMap { .. }
+            | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonAggregate { .. } => self.python_relation(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1035,6 +1077,15 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 Ok(project_op(input, layout, items, nullable.as_deref(), v)? as Arc<dyn Operator>)
             }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => self.with_subqueries(input, &[], |input, v| {
+                collect_metrics_op(name, *instance, *limit, measure, input, v)
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout,
@@ -1067,7 +1118,7 @@ impl Instantiation<'_> {
                 offset,
                 limit,
             } => {
-                let ordered = reads_range_in_order(input);
+                let ordered = limit_reads_in_order(input, *offset, *limit);
                 let input = self.node(input)?;
                 let op = crate::operators::Limit::with_offset(
                     Arc::clone(&input.schema),
@@ -1076,7 +1127,8 @@ impl Instantiation<'_> {
                 );
                 let built = operator(input, op);
                 // Which rows a parallel limit passes follows the batch
-                // order; a `range` has a defined order, so one driver keeps it.
+                // order; a `range` or a short read of a filterless scan has
+                // a defined order (Spark's take reads partitions in order).
                 Ok(if ordered {
                     Built {
                         schema: built.schema,
@@ -1085,6 +1137,17 @@ impl Instantiation<'_> {
                 } else {
                     built
                 })
+            }
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => {
+                sampled_scans(input, &mut self.partition_ordered);
+                let input = self.node(input)?;
+                let op = Sample::new(Arc::clone(&input.schema), *lower, *upper, *seed);
+                Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
                 let buckets = hash_buckets(input, keys);
@@ -1187,7 +1250,12 @@ impl Instantiation<'_> {
                         let spec =
                             aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
                         let schema = spec.output_schema()?;
-                        let node = aggregate_node(input.node, spec, &single.distinct)?;
+                        let node = crate::aggregate::distinct_plan_with(
+                            input.node,
+                            spec,
+                            &single.distinct,
+                            self.worker.distinct_count_at_merge(),
+                        )?;
                         return Ok(Built { node, schema });
                     }
                     // Written out, the partial phase is where a row's weight
@@ -1201,7 +1269,12 @@ impl Instantiation<'_> {
                     aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
-                let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
+                let node = aggregate_node(
+                    input.node,
+                    spec,
+                    &aggregate.distinct,
+                    self.worker.distinct_count_at_merge(),
+                )?;
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
@@ -1247,6 +1320,11 @@ impl Instantiation<'_> {
                 })
             }
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => self.table_write(input, table, request),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),
@@ -1302,6 +1380,7 @@ impl Instantiation<'_> {
             filters,
             dynamic,
             row_id: s.row_id,
+            partition_order: self.partition_ordered.contains(&s.id),
             metadata: crate::operators::scan_metadata(&s.scan),
             ..ScanPushdowns::default()
         })?;
@@ -1768,11 +1847,11 @@ pub(crate) fn scan_filter(
         env,
         subqueries: &[],
     };
-    let compiled = compile_one(predicate, layout, table, &v)?;
     Ok(PushedFilter {
-        predicate: Arc::new(Compiled(compiled)),
+        predicate: Arc::new(Compiled(compile_one(predicate, layout, table, &v)?)),
         expr: crate::planner::pushdown::translate(predicate, &scan.output),
         rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
+        partitions: crate::planner::pushdown::never_raising(predicate, &scan.output, env.ansi),
     })
 }
 
@@ -1795,14 +1874,17 @@ pub(crate) fn aggregate_spec(
     }
 }
 
-/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates).
+/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates, or
+/// one counting at the merge with `count_at_merge`: see
+/// [`crate::aggregate::distinct_plan_with`]).
 pub(crate) fn aggregate_node(
     input: Arc<dyn ExecNode>,
     spec: AggregateSpec,
     distinct: &[bool],
+    count_at_merge: bool,
 ) -> Result<Arc<dyn ExecNode>> {
     if distinct.iter().any(|d| *d) {
-        distinct_plan(input, spec, distinct)
+        crate::aggregate::distinct_plan_with(input, spec, distinct, count_at_merge)
     } else {
         Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
     }
@@ -1891,6 +1973,26 @@ pub(crate) struct Unbuilt;
 impl ExecNode for Unbuilt {
     fn build_pipelines(self: Arc<Self>, _b: &mut PipelineBuilder) -> Result<()> {
         Err(internal("a validation-only plan node was run".to_owned()))
+    }
+}
+
+/// The scans `input` (a sample's input) reads through nodes that keep each
+/// batch's split: a sample's draws follow those scans' partitions.
+fn sampled_scans(input: &PhysNode, out: &mut HashSet<ScanId>) {
+    match input {
+        PhysNode::Scan(s) => {
+            out.insert(s.id);
+        }
+        // The operators that tag their output with the input batch's split
+        // (`with_split(input.split())`); an `Expand` or anything past an
+        // exchange or a breaker numbers its own partitions.
+        PhysNode::Filter { input, .. }
+        | PhysNode::Project { input, .. }
+        | PhysNode::Generate { input, .. }
+        | PhysNode::ReplicateRows { input, .. }
+        | PhysNode::Sample { input, .. } => sampled_scans(input, out),
+        PhysNode::Union { inputs } => inputs.iter().for_each(|i| sampled_scans(i, out)),
+        _ => {}
     }
 }
 

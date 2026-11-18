@@ -16,6 +16,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::analyze::command_schema::{self as cols, CommandColumn};
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit};
 use crate::session::Session;
@@ -36,7 +37,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
-fn matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn matches(pattern: &str, name: &str) -> bool {
     // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
     // pattern like `*a*a*a*` cannot blow up.
     fn glob(p: &[char], n: &[char]) -> bool {
@@ -302,7 +303,7 @@ impl Session {
     /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
     async fn global_views_frame(
         &self,
-        columns: &[&str],
+        columns: &[CommandColumn],
         pattern: Option<&ShowPattern>,
     ) -> Result<DataFrame, KrishivError> {
         let mut names = self.state.catalog.global_names();
@@ -321,10 +322,11 @@ impl Session {
         self.ordered_frame(columns, &["isTemporary"], rows).await
     }
 
-    /// A frame of `columns` (string columns, except the names in `booleans`) with `rows`, in row order.
+    /// A frame of `columns` (string columns, except the names in `booleans`) with `rows`, in row order;
+    /// each column as nullable as its table in `analyze::command_schema` says.
     pub(crate) async fn ordered_frame(
         &self,
-        columns: &[&str],
+        columns: &[CommandColumn],
         booleans: &[&str],
         rows: Vec<Vec<Cell>>,
     ) -> Result<DataFrame, KrishivError> {
@@ -336,12 +338,12 @@ impl Session {
     /// golden results compare as a set; a sort node would compare them in order.
     async fn frame_with_order(
         &self,
-        columns: &[&str],
+        columns: &[CommandColumn],
         booleans: &[&str],
         rows: Vec<Vec<Cell>>,
         sorted: bool,
     ) -> Result<DataFrame, KrishivError> {
-        let mut all = vec!["__krishiv_row_order"];
+        let mut all = vec![CommandColumn::new("__krishiv_row_order")];
         all.extend_from_slice(columns);
         let keyed = rows
             .into_iter()
@@ -354,16 +356,16 @@ impl Session {
         let df = self.string_frame(&all, keyed).await?;
         // Rows with a `key` column come out sorted by it; the others keep
         // their order through the hidden column.
-        let df = if columns.contains(&"key") || !sorted {
+        let df = if columns.iter().any(|c| c.name == "key") || !sorted {
             df
         } else {
             df.order_by([col("__krishiv_row_order")])
         };
-        let df = df.select(columns.iter().map(|&c| {
-            if booleans.contains(&c) {
-                col(c).eq(lit("true")).alias(c)
+        let df = df.select(columns.iter().map(|c| {
+            if booleans.contains(&c.name) {
+                col(c.name).eq(lit("true")).alias(c.name)
             } else {
-                col(c)
+                col(c.name)
             }
         }));
         df.analyzed_in(self.query_env()).await?;
@@ -407,6 +409,7 @@ impl Session {
                     }
                     .into());
                 }
+                self.refuse_declared_current()?;
                 self.state.catalog.current_namespace()
             }
         };
@@ -449,20 +452,13 @@ impl Session {
                             .map(|n| vec![s(""), s(n), s("true")]),
                     );
                     return self
-                        .ordered_frame(
-                            &["namespace", "tableName", "isTemporary"],
-                            &["isTemporary"],
-                            rows,
-                        )
+                        .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
                 }
                 let ns = self.show_namespace(namespace.as_ref())?;
                 if is_global_namespace(&ns) {
                     return self
-                        .global_views_frame(
-                            &["namespace", "tableName", "isTemporary"],
-                            pattern.as_ref(),
-                        )
+                        .global_views_frame(cols::SHOW_TABLES, pattern.as_ref())
                         .await;
                 }
                 let mut rows: Vec<Vec<Cell>> = store
@@ -476,12 +472,8 @@ impl Session {
                         .into_iter()
                         .map(|n| vec![s(""), s(n), s("true")]),
                 );
-                self.ordered_frame(
-                    &["namespace", "tableName", "isTemporary"],
-                    &["isTemporary"],
-                    rows,
-                )
-                .await
+                self.ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
+                    .await
             }
             ShowKind::TableExtended {
                 namespace,
@@ -498,10 +490,7 @@ impl Session {
                 let ns = self.show_namespace(namespace.as_ref())?;
                 if is_global_namespace(&ns) {
                     return self
-                        .global_views_frame(
-                            &["namespace", "viewName", "isTemporary"],
-                            pattern.as_ref(),
-                        )
+                        .global_views_frame(cols::SHOW_VIEWS, pattern.as_ref())
                         .await;
                 }
                 let mut rows: Vec<Vec<Cell>> = store
@@ -515,12 +504,8 @@ impl Session {
                         .into_iter()
                         .map(|n| vec![s(""), s(n), s("true")]),
                 );
-                self.ordered_frame(
-                    &["namespace", "viewName", "isTemporary"],
-                    &["isTemporary"],
-                    rows,
-                )
-                .await
+                self.ordered_frame(cols::SHOW_VIEWS, &["isTemporary"], rows)
+                    .await
             }
             ShowKind::Columns {
                 table, namespace, ..
@@ -551,7 +536,7 @@ impl Session {
                         .map(|(name, _)| vec![s(name)])
                         .collect();
                     return self
-                        .frame_with_order(&["col_name"], &[], names, false)
+                        .frame_with_order(cols::SHOW_COLUMNS, &[], names, false)
                         .await;
                 }
                 // With `FROM ns` the table is named by that namespace: no guard on the bare name first.
@@ -575,25 +560,29 @@ impl Session {
                 }
                 let columns = self.columns_of_relation(&name, Privilege::Browse).await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
-                self.frame_with_order(&["col_name"], &[], rows, false).await
+                self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
+                    .await
             }
             ShowKind::Namespaces { pattern, .. } => {
                 // `system` has no namespaces; never list the session catalog's under it.
                 let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
+                self.refuse_declared_current()?;
                 let rows = store
                     .namespaces()
                     .into_iter()
                     .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
                     .map(|(n, _)| vec![s(n)])
                     .collect();
-                self.ordered_frame(&["namespace"], &[], rows).await
+                self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
                 if self.temp_entry_of(&name, &env) {
                     // A temporary view has no properties.
-                    return self.ordered_frame(&["key", "value"], &[], Vec::new()).await;
+                    return self
+                        .ordered_frame(cols::SHOW_TBLPROPERTIES, &[], Vec::new())
+                        .await;
                 }
                 let table = self.stored_relation(&name)?;
                 if table.view.is_some() {
@@ -619,7 +608,8 @@ impl Session {
                         .map(|(k, v)| vec![s(k), s(redact(k, v))])
                         .collect(),
                 };
-                self.ordered_frame(&["key", "value"], &[], rows).await
+                self.ordered_frame(cols::SHOW_TBLPROPERTIES, &[], rows)
+                    .await
             }
             ShowKind::CreateTable { name, serde, .. } => {
                 let env = self.query_env();
@@ -643,7 +633,7 @@ impl Session {
                         .await?;
                 }
                 self.ordered_frame(
-                    &["createtab_stmt"],
+                    cols::SHOW_CREATE_TABLE,
                     &[],
                     vec![vec![s(create_statement(
                         &table,
@@ -682,7 +672,6 @@ impl Session {
         partition: Option<&PartitionSpec>,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
-        const COLUMNS: [&str; 4] = ["namespace", "tableName", "isTemporary", "information"];
         self.require_current_profile("SHOW TABLE EXTENDED")?;
         let ns = self.show_namespace(namespace)?;
         if is_global_namespace(&ns) {
@@ -729,7 +718,9 @@ impl Session {
                 s("false"),
                 s(format!("{}\n", simple_string(&entries))),
             ]];
-            return self.ordered_frame(&COLUMNS, &["isTemporary"], rows).await;
+            return self
+                .ordered_frame(cols::SHOW_TABLE_EXTENDED, &["isTemporary"], rows)
+                .await;
         }
         let mut rows: Vec<Vec<Cell>> = Vec::new();
         for t in self.state.catalog.store.tables_in(&ns) {
@@ -837,7 +828,8 @@ impl Session {
                 s(format!("{}\n", simple_string(&entries))),
             ]);
         }
-        self.ordered_frame(&COLUMNS, &["isTemporary"], rows).await
+        self.ordered_frame(cols::SHOW_TABLE_EXTENDED, &["isTemporary"], rows)
+            .await
     }
 
     fn temp_view_names(&self, pattern: Option<&ShowPattern>) -> Vec<String> {
@@ -953,10 +945,10 @@ impl Session {
             .system_table_columns(table, env)
             .await?
             .iter()
-            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), s("")])
+            // No comments: NULL, as `describeSchema` appends `getComment().orNull`.
+            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), None])
             .collect();
-        self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
-            .await
+        self.ordered_frame(cols::DESCRIBE_TABLE, &[], rows).await
     }
 
     /// `DESCRIBE ...`.
@@ -1021,7 +1013,7 @@ impl Session {
                     let t = self.stored_relation(&name)?;
                     let json = describe_json(&t, described.as_ref())?;
                     return self
-                        .ordered_frame(&["json_metadata"], &[], vec![vec![s(json)]])
+                        .ordered_frame(cols::DESCRIBE_JSON, &[], vec![vec![s(json)]])
                         .await;
                 }
                 if !column.is_empty() {
@@ -1045,7 +1037,9 @@ impl Session {
                         vec![
                             s(n),
                             s(shown_type(&declared, n, t)),
-                            s(c.clone().unwrap_or_default()),
+                            // No comment is NULL, as in Spark (SQL-16; `describeSchema`, `tables.scala:615`:
+                            // `getComment().orNull`); a comment written as `''` stays `''`.
+                            c.clone(),
                         ]
                     })
                     .collect();
@@ -1064,7 +1058,7 @@ impl Session {
                             s(c.char_varchar
                                 .clone()
                                 .unwrap_or_else(|| c.data_type.catalog_string())),
-                            s(c.comment.clone().unwrap_or_default()),
+                            c.comment.clone(),
                         ]
                     }));
                 }
@@ -1099,8 +1093,7 @@ impl Session {
                         ])
                     }));
                 }
-                self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
-                    .await
+                self.ordered_frame(cols::DESCRIBE_TABLE, &[], rows).await
             }
             DescribeKind::Query { query, .. } => {
                 let plan = krishiv_sql::lower_identified(
@@ -1123,8 +1116,7 @@ impl Session {
                         vec![s(&c.name), s(c.data_type.catalog_string()), comment]
                     })
                     .collect();
-                self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
-                    .await
+                self.ordered_frame(cols::DESCRIBE_TABLE, &[], rows).await
             }
             DescribeKind::Namespace { extended, name, .. } => {
                 let ns = self.namespace_name(name, &env)?;
@@ -1158,7 +1150,7 @@ impl Session {
                     };
                     rows.push(vec![s("Properties"), s(shown)]);
                 }
-                self.ordered_frame(&["info_name", "info_value"], &[], rows)
+                self.ordered_frame(cols::DESCRIBE_NAMESPACE, &[], rows)
                     .await
             }
             _ => Err(unsupported("DESCRIBE FUNCTION")),
@@ -1253,8 +1245,7 @@ impl Session {
             rows.push(vec![s("max_col_len"), s(text(|c| &c.max_col_len))]);
             rows.push(vec![s("histogram"), s("NULL")]);
         }
-        self.ordered_frame(&["info_name", "info_value"], &[], rows)
-            .await
+        self.ordered_frame(cols::DESCRIBE_COLUMN, &[], rows).await
     }
 
     /// A stored `min` or `max` as `DESCRIBE` prints it (`NULL` when there is none): a timestamp in the session's time zone

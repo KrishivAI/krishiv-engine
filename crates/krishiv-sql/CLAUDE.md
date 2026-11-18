@@ -26,6 +26,7 @@ Paths are relative to this crate.
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan` (`lower/pipe.rs`: pipe operators; `DISTRIBUTE BY`/`CLUSTER BY` lower to `PlanNode::Repartition`, `CLUSTER BY` adds a local ascending sort); `src/redact.rs` `redact_sql` to `RedactedSql`
 - `src/lower/identified.rs` `lower_identified`: the session's substituted `IDENTIFIER(..)` names (by span) mark their columns `ColumnRef::by_identifier`, so a select item of one is named as Spark names the clause
 - `src/summary.rs` `sanitize_query_text` (every literal `?`, comments dropped) and `query_summary` (`SELECT orders customers`): the telemetry forms of query text, from lexer tokens
+- `src/parser/access.rs` (P3-T062 G1, a Krishiv extension: open Spark has no such grammar) `GRANT`, `REVOKE [GRANT OPTION FOR]`, `SHOW GRANTS [ON ..] [TO ..]`, `CREATE ROLE`, `DROP ROLE`, `GRANT ROLE .. TO`, `REVOKE ROLE .. FROM` into `Statement::AccessControl` holding `krishiv_plan::analyzer::access_control::AccessCommand`; taken only at a statement start no Spark statement has (`SHOW GRANTS` only before the end, `ON` or `TO`), never under `EXPLAIN`; classified `ADMIN`, `SHOW GRANTS` `READ`; `tests/access_control.rs`
 - `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
 
 ## Extension points
@@ -49,8 +50,9 @@ Paths are relative to this crate.
   type when the complex one fails later); optional type parts are taken only when complete.
 - Spark 4.2's query-syntax tail parses into the tree; their `AstBuilder` errors are in `validate/`. Pipe operators
   (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
-  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers for `n ROWS` and for fractions that keep every row or
-  none; other fractions and `SYSTEM` are `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
+  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers `n ROWS` to a limit and `PERCENT` / `BUCKET x OUT OF y` (with
+  `REPEATABLE`) to `PlanNode::Sample` (goldens `tests/fixtures/spark-4.2.0/tablesample.json`, `src/tests/sample.rs`);
+  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
   `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
   and `TRANSFORM`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
@@ -88,4 +90,4 @@ Paths are relative to this crate.
 
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
-- `ast/` `ddl_nodes.rs` (DDL, SHOW/DESCRIBE, cache and DML nodes, the `impl Expr` helpers), `query_nodes.rs` (query and expression nodes; scripting nodes stay in `ast.rs`), both re-exported from `ast.rs`; `parser/` `query.rs`, `create.rs`, `commands.rs`, `errors.rs` (`impl Parser` by topic), `ddl/data.rs` (INSERT, DELETE, UPDATE, MERGE); `lower/relations.rs` (select list, GROUP BY, FROM); `tests/partN.rs`.
+- `ast/` `ddl_nodes.rs` (DDL, SHOW/DESCRIBE, cache and DML nodes, the `impl Expr` helpers), `query_nodes.rs` (query and expression nodes; scripting nodes stay in `ast.rs`), both re-exported from `ast.rs`; `parser/` `query.rs`, `create.rs`, `commands.rs`, `errors.rs`, `case.rs` (keywords read as columns and the `CASE` expression with its memo) (`impl Parser` by topic), `ddl/data.rs` (INSERT, DELETE, UPDATE, MERGE); `lower/relations.rs` (select list, GROUP BY, FROM); `tests/partN.rs`.

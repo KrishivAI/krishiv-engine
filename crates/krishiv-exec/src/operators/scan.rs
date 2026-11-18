@@ -61,6 +61,11 @@ pub struct PushedFilter {
     /// filter may raise, only the conjuncts written before it
     /// ([`RowLevel::Prefix`]).
     pub rows: RowLevel,
+    /// The typed form of the filter's top-level conjuncts that cannot raise: what static partition pruning
+    /// drops a file by. Spark evaluates a filter on partition columns on each partition value before any other
+    /// conjunct runs, so the conjuncts that cannot raise prune whatever their order; one that may raise is
+    /// evaluated by the filter above on the rows of every file it could raise on (`None`: none prunes).
+    pub partitions: Option<PushdownExpr>,
 }
 
 impl PushedFilter {
@@ -71,14 +76,16 @@ impl PushedFilter {
             predicate,
             expr: None,
             rows: RowLevel::Full,
+            partitions: None,
         }
     }
 
-    /// A filter with its typed form.
+    /// A filter with its typed form, none of whose conjuncts may raise.
     #[must_use]
     pub fn typed(predicate: Arc<dyn Predicate>, expr: PushdownExpr) -> Self {
         Self {
             predicate,
+            partitions: Some(expr.clone()),
             expr: Some(expr),
             rows: RowLevel::Full,
         }
@@ -124,6 +131,12 @@ pub struct ScanPushdowns {
     /// [`ScanPushdown::take`] reads the row back by. Only for a scan that
     /// [`supports_take`](ScanPushdown::supports_take).
     pub row_id: bool,
+    /// Read each input partition whole, by one driver, in order, and tag
+    /// its batches with the partition's index ([`Batch::split`]): a
+    /// `TABLESAMPLE` above draws partition `i`'s rows from its own stream
+    /// in row order, however many drivers run. File scans honour it; an
+    /// in-memory scan's morsels are already read so.
+    pub partition_order: bool,
 }
 
 /// The rows of one file [`ScanPushdown::take`] reads.
@@ -151,6 +164,14 @@ pub trait ScanPushdown: Send + Sync {
     /// How far a scan built with `filter` honours it. The planner keeps the
     /// `Filter` above the scan unless this is [`FilterPushdown::Exact`].
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown;
+    /// Whether a query that references exactly the table columns `referenced` (the columns the plan
+    /// above the scan reads, not the one a scan keeps only to count rows) reads nothing but the
+    /// JSON/CSV corrupt-record column, which Spark refuses (`QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+    /// The default is false: only JSON and CSV file scans have such a column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let _ = referenced;
+        false
+    }
     /// Whether [`ScanPushdowns::selection`] is honoured.
     fn supports_selection(&self) -> bool {
         false
@@ -206,6 +227,13 @@ pub trait ScanPushdown: Send + Sync {
         Box::pin(std::future::ready(Err(internal(
             "this scan can't read rows by position".to_owned(),
         ))))
+    }
+    /// What `EXPLAIN` adds to the scan's line for a scan built with
+    /// `pushdowns` (for example a table format's snapshot and file counts),
+    /// after its columns and pushed filters. The default adds nothing.
+    fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
+        let _ = pushdowns;
+        None
     }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the
@@ -385,7 +413,9 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate_in(piece.data(), partition)?;
+            // Spark's index of the morsel's partition: a `UNION ALL` branch
+            // numbers its own from 0, as a `Filter` above the scan does.
+            let mask = filter.evaluate_in(piece.data(), partition.wrapping_sub(local.base))?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter

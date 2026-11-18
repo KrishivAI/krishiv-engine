@@ -1,0 +1,1833 @@
+{
+ "classic": {
+  "aggregate_with_alias_inside_nested_alias": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "b": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "b": "int"
+   }
+  },
+  "anonymous_observation": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "name_is_str": false,
+   "name_len": null,
+   "types": {
+    "n": "int"
+   }
+  },
+  "ansi_off_overflow_sum": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "p1": -9223372036854775808,
+    "s": -9223372036854775808
+   },
+   "obs_name_given": true,
+   "types": {
+    "p1": "int",
+    "s": "int"
+   }
+  },
+  "ansi_on_cast_error_inside_metric": {
+   "errorClass": "CAST_INVALID_INPUT",
+   "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
+   "messageParameters": {
+    "ansiConfig": "\"spark.sql.ansi.enabled\"",
+    "expression": "'a'",
+    "sourceType": "\"STRING\"",
+    "targetType": "\"INT\""
+   },
+   "outcome": "error",
+   "python_class": "NumberFormatException",
+   "sqlState": "22018"
+  },
+  "ansi_on_overflow_sum": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "s": 9223372036854775807
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "int"
+   }
+  },
+  "basic_alias": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "mk": "c",
+    "rows": 3,
+    "sv": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "mk": "str",
+    "rows": "int",
+    "sv": "int"
+   }
+  },
+  "cache": {
+   "after_first": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "after_second": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "counts": [
+    3,
+    3
+   ]
+  },
+  "cache_then_new_observe_on_cached": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "composite_expr": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "e": "4.25",
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "e": "float",
+    "n": "int"
+   }
+  },
+  "conditional_metric_no_raise_unselected": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "s": "5.0"
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "float"
+   }
+  },
+  "count_action_prunes_columns": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "s": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "int"
+   }
+  },
+  "empty_input": {
+   "action_result": 0,
+   "get": "ok",
+   "metrics": {
+    "a": null,
+    "c": 0,
+    "l": [],
+    "mx": null,
+    "s": null
+   },
+   "obs_name_given": true,
+   "types": {
+    "a": "NoneType",
+    "c": "int",
+    "l": "list",
+    "mx": "NoneType",
+    "s": "NoneType"
+   }
+  },
+  "empty_input_no_rows_collected": {
+   "action_result": [],
+   "get": "ok",
+   "metrics": {
+    "c": 0
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int"
+   }
+  },
+  "err_attribute": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"v\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"v\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_attribute_alias_mixed": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"v AS raw\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"v AS raw\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_distinct": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED] Invalid observed metrics. Aggregate expressions with DISTINCT are not allowed in observed metrics, but found: \"count(DISTINCT v) AS d\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"count(DISTINCT v) AS d\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_distinct_sum": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED] Invalid observed metrics. Aggregate expressions with DISTINCT are not allowed in observed metrics, but found: \"sum(DISTINCT v) AS d\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(DISTINCT v) AS d\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_empty_name_string_api": {
+   "errorClass": "INVALID_OBSERVED_METRICS.MISSING_NAME",
+   "message": "[INVALID_OBSERVED_METRICS.MISSING_NAME] Invalid observed metrics. The observed metrics should be named: 'CollectMetrics , [count(1) AS n#<id>], <dataframe-id>\n+- LogicalRDD [k#<id>, v#<id>, x#<id>], false\n. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "operator": "'CollectMetrics , [count(1) AS n#<id>], <dataframe-id>\n+- LogicalRDD [k#<id>, v#<id>, x#<id>], false\n"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_empty_observation_name": {
+   "errorClass": "VALUE_NOT_NON_EMPTY_STR",
+   "message": "[VALUE_NOT_NON_EMPTY_STR] Value for `name` must be a non-empty string, got ''.",
+   "messageParameters": {
+    "arg_name": "name",
+    "arg_value": ""
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_filter": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_FILTER_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_FILTER_UNSUPPORTED] Invalid observed metrics. Aggregate expression with FILTER predicate are not allowed in observed metrics, but found: \"count(v) FILTER (WHERE (v > 1)) AS f\". SQLSTATE: 42K0E; line 1 pos 0",
+   "messageParameters": {
+    "expr": "\"count(v) FILTER (WHERE (v > 1)) AS f\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_first_ignorenulls_ok": {
+   "get": "ok",
+   "metrics": {
+    "f": 1
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "f": "int"
+   }
+  },
+  "err_generator": {
+   "errorClass": "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+   "message": "[UNSUPPORTED_GENERATOR.OUTSIDE_SELECT] The generator is not supported: outside the SELECT clause, found: 'CollectMetrics m, [explode(array(1, 2)) AS g#<id>], <dataframe-id>. SQLSTATE: 42K0E",
+   "messageParameters": {},
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_get_before_observe": {
+   "errorClass": "NO_OBSERVE_BEFORE_GET",
+   "get": "error",
+   "message": "[NO_OBSERVE_BEFORE_GET] Should observe by calling `DataFrame.observe` before `get`.",
+   "messageParameters": {},
+   "python_class": "PySparkAssertionError",
+   "sqlState": null
+  },
+  "err_nested_aggregate": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NESTED_AGGREGATES_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.NESTED_AGGREGATES_UNSUPPORTED] Invalid observed metrics. Nested aggregates are not allowed in observed metrics, but found: \"sum(max(v)) AS n\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(max(v)) AS n\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_no_exprs": {
+   "errorClass": "CANNOT_BE_EMPTY",
+   "message": "[CANNOT_BE_EMPTY] At least one exprs must be specified.",
+   "messageParameters": {
+    "item": "exprs"
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_no_exprs_string": {
+   "errorClass": "CANNOT_BE_EMPTY",
+   "message": "[CANNOT_BE_EMPTY] At least one exprs must be specified.",
+   "messageParameters": {
+    "item": "exprs"
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_nondeterministic_plus_agg": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC] Invalid observed metrics. Non-deterministic expression \"(count(1) + rand(<seed>)) AS r\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"(count(1) + rand(<seed>)) AS r\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_nondeterministic_rand": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC] Invalid observed metrics. Non-deterministic expression \"rand(<seed>) AS r\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"rand(<seed>) AS r\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_observation_name_type": {
+   "errorClass": "NOT_EXPECTED_TYPE",
+   "message": "[NOT_EXPECTED_TYPE] Argument `name` should be str, got int.",
+   "messageParameters": {
+    "arg_name": "name",
+    "arg_type": "int",
+    "expected_type": "str"
+   },
+   "outcome": "error",
+   "python_class": "PySparkTypeError",
+   "sqlState": "42K09"
+  },
+  "err_reuse": {
+   "errorClass": "REUSE_OBSERVATION",
+   "message": "[REUSE_OBSERVATION] An Observation can be used with a DataFrame only once.",
+   "messageParameters": {},
+   "outcome": "error",
+   "python_class": "PySparkAssertionError",
+   "sqlState": null
+  },
+  "err_scalar_subquery": {
+   "get": "ok",
+   "metrics": {
+    "s": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "s": "int"
+   }
+  },
+  "err_unresolved_column": {
+   "errorClass": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`k`, `v`, `x`]. SQLSTATE: 42703",
+   "messageParameters": {
+    "objectName": "`nope`",
+    "proposal": "`k`, `v`, `x`"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42703"
+  },
+  "err_unresolved_star": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"k\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"k\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_window": {
+   "errorClass": "INVALID_OBSERVED_METRICS.WINDOW_EXPRESSIONS_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.WINDOW_EXPRESSIONS_UNSUPPORTED] Invalid observed metrics. Window expressions are not allowed in observed metrics, but found: \"sum(v) OVER (ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(v) OVER (ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "exact_under_parallelism": {
+   "action_result": 100000,
+   "get": "ok",
+   "metrics": {
+    "mx": 99999,
+    "n": 100000,
+    "s": 4999950000
+   },
+   "obs_name_given": true,
+   "types": {
+    "mx": "int",
+    "n": "int",
+    "s": "int"
+   }
+  },
+  "explain_does_not_trigger": {
+   "get": "blocked"
+  },
+  "failed_query": {
+   "action": {
+    "errorClass": "DIVIDE_BY_ZERO",
+    "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22012",
+    "messageParameters": {
+     "config": "\"spark.sql.ansi.enabled\""
+    },
+    "python_class": "ArithmeticException",
+    "sqlState": "22012"
+   },
+   "get": "ok",
+   "metrics": "<nondeterministic>",
+   "types": "<nondeterministic>"
+  },
+  "failed_query_then_reuse_df_succeeds": {
+   "after_fail": {
+    "get": "ok",
+    "metrics": "<nondeterministic>",
+    "types": "<nondeterministic>"
+   },
+   "after_success": {
+    "get": "ok",
+    "metrics": "<nondeterministic>",
+    "types": "<nondeterministic>"
+   }
+  },
+  "filter_after_observe": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "filter_before_observe": {
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "first_then_second_action": {
+   "after_count": {
+    "n": 1
+   },
+   "after_limit1": {
+    "n": 1
+   }
+  },
+  "get_after_transformation_only_no_action_then_action": {
+   "after_action": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "before_action": {
+    "get": "blocked"
+   }
+  },
+  "get_blocks_without_action": {
+   "get": "blocked"
+  },
+  "join_two_observed": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "s": 3
+    },
+    "types": {
+     "s": "int"
+    }
+   },
+   "count": 3
+  },
+  "limit_after_observe": {
+   "action_result": [
+    [
+     "a",
+     1,
+     "1.5"
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "limit_big_range": {
+   "action_result": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 3,
+    "s": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int",
+    "s": "int"
+   }
+  },
+  "limit_zero": {
+   "action_result": [],
+   "get": "error",
+   "message": "java.lang.AssertionError in PythonSQLUtils.toPyRow",
+   "obs_name_given": true,
+   "python_class": "Py4JJavaError"
+  },
+  "literal_only": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "c": 42,
+    "s": "s"
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int",
+    "s": "str"
+   }
+  },
+  "multiple_actions_first_wins": {
+   "after_first": {
+    "get": "ok",
+    "metrics": {
+     "n": 3,
+     "s": 3
+    },
+    "types": {
+     "n": "int",
+     "s": "int"
+    }
+   },
+   "after_more": {
+    "get": "ok",
+    "metrics": {
+     "n": 3,
+     "s": 3
+    },
+    "types": {
+     "n": "int",
+     "s": "int"
+    }
+   },
+   "counts": [
+    3,
+    2,
+    3
+   ]
+  },
+  "nested_observe_different_names": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "m": 1
+    },
+    "types": {
+     "m": "int"
+    }
+   },
+   "count": 1
+  },
+  "nested_observe_same_name_diff_df": {
+   "errorClass": "DUPLICATED_METRICS_NAME",
+   "message": "[DUPLICATED_METRICS_NAME] The metric name is not unique: dup. The same name cannot be used for metrics with different results.\nHowever multiple instances of metrics with with same result and name are allowed (e.g. self-joins). SQLSTATE: 42710",
+   "messageParameters": {
+    "metricName": "dup"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42710"
+  },
+  "no_alias_names": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "42": 42,
+    "count(1)": 3,
+    "max(v)": 2,
+    "sum((v + 1))": 5
+   },
+   "obs_name_given": true,
+   "types": {
+    "42": "int",
+    "count(1)": "int",
+    "max(v)": "int",
+    "sum((v + 1))": "int"
+   }
+  },
+  "nulls_all": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "c": 0,
+    "m": null,
+    "s": null
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int",
+    "m": "NoneType",
+    "s": "NoneType"
+   }
+  },
+  "observation_in_groupby_downstream": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "rows": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     1
+    ],
+    [
+     "c",
+     1
+    ]
+   ],
+   "types": {
+    "n": "int"
+   }
+  },
+  "observation_on_action_collect_schema_only": {
+   "columns": [
+    "k",
+    "v",
+    "x"
+   ],
+   "get_after_schema": {
+    "get": "blocked"
+   },
+   "schema": "struct<k:string,v:int,x:double>"
+  },
+  "observation_through_sort_limit_topn": {
+   "action_result": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 20
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "observed_metric_column_name_collision": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "ok_aggregate_over_subquery_free_udf_like": {
+   "get": "ok",
+   "metrics": {
+    "s": 3
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "s": "int"
+   }
+  },
+  "ok_approx_count_distinct": {
+   "get": "ok",
+   "metrics": {
+    "a": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "a": "int"
+   }
+  },
+  "ok_count_if": {
+   "get": "ok",
+   "metrics": {
+    "c": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "c": "int"
+   }
+  },
+  "ok_nondeterministic_inside_agg": {
+   "get": "ok",
+   "metrics": "<nondeterministic>",
+   "outcome": "ok_unexpected",
+   "types": "<nondeterministic>"
+  },
+  "python_attrs": {
+   "has_future": false,
+   "has_get_async": false,
+   "has_name": false,
+   "public": [
+    "_jo",
+    "_jvm",
+    "_name",
+    "_on",
+    "get"
+   ]
+  },
+  "same_name_string_same_df_in_both_branches": {
+   "count": 6
+  },
+  "self_join_same_df": {
+   "count": 3,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "self_union_same_df": {
+   "count": 6,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "show_action_limit20": {
+   "action_result": 0,
+   "get": "ok",
+   "metrics": {
+    "n": 4
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "string_observe_returns_df_only": {
+   "count": 3,
+   "type": "DataFrame"
+  },
+  "take_after_observe": {
+   "action_result": [
+    [
+     "a",
+     1,
+     "1.5"
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "types": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "ai": "1.0",
+    "l": [
+     1
+    ],
+    "mn": "nan",
+    "mz": "0.0",
+    "sd": {
+     "py_type": "Decimal",
+     "repr": "1.10"
+    },
+    "si": 1,
+    "st": [
+     1,
+     1
+    ]
+   },
+   "obs_name_given": true,
+   "types": {
+    "ai": "float",
+    "l": "list",
+    "mn": "float",
+    "mz": "float",
+    "sd": "Decimal",
+    "si": "int",
+    "st": "Row"
+   }
+  },
+  "union_two_branches_distinct_names": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "n": 1
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "count": 4
+  },
+  "union_two_branches_same_name_diff_df": {
+   "errorClass": "DUPLICATED_METRICS_NAME",
+   "message": "[DUPLICATED_METRICS_NAME] The metric name is not unique: dup. The same name cannot be used for metrics with different results.\nHowever multiple instances of metrics with with same result and name are allowed (e.g. self-joins). SQLSTATE: 42710",
+   "messageParameters": {
+    "metricName": "dup"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42710"
+  },
+  "write_action": {
+   "get": "ok",
+   "metrics": {
+    "n": 3,
+    "s": 3
+   },
+   "types": {
+    "n": "int",
+    "s": "int"
+   }
+  }
+ },
+ "connect": {
+  "aggregate_with_alias_inside_nested_alias": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "b": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "b": "int"
+   }
+  },
+  "anonymous_observation": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "name_is_str": true,
+   "name_len": 36,
+   "types": {
+    "n": "int"
+   }
+  },
+  "ansi_off_overflow_sum": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "p1": -9223372036854775808,
+    "s": -9223372036854775808
+   },
+   "obs_name_given": true,
+   "types": {
+    "p1": "int",
+    "s": "int"
+   }
+  },
+  "ansi_on_cast_error_inside_metric": {
+   "errorClass": "CAST_INVALID_INPUT",
+   "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
+   "messageParameters": {
+    "ansiConfig": "\"spark.sql.ansi.enabled\"",
+    "expression": "'a'",
+    "sourceType": "\"STRING\"",
+    "targetType": "\"INT\""
+   },
+   "outcome": "error",
+   "python_class": "NumberFormatException",
+   "sqlState": "22018"
+  },
+  "ansi_on_overflow_sum": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "s": 9223372036854775807
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "int"
+   }
+  },
+  "basic_alias": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "mk": "c",
+    "rows": 3,
+    "sv": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "mk": "str",
+    "rows": "int",
+    "sv": "int"
+   }
+  },
+  "cache": {
+   "after_first": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "after_second": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "counts": [
+    3,
+    3
+   ]
+  },
+  "cache_then_new_observe_on_cached": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "composite_expr": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "e": "4.25",
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "e": "float",
+    "n": "int"
+   }
+  },
+  "conditional_metric_no_raise_unselected": {
+   "action_result": 2,
+   "get": "ok",
+   "metrics": {
+    "s": "5.0"
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "float"
+   }
+  },
+  "count_action_prunes_columns": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "s": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "s": "int"
+   }
+  },
+  "empty_input": {
+   "action_result": 0,
+   "get": "ok",
+   "metrics": {
+    "a": null,
+    "c": 0,
+    "l": [],
+    "mx": null,
+    "s": null
+   },
+   "obs_name_given": true,
+   "types": {
+    "a": "NoneType",
+    "c": "int",
+    "l": "list",
+    "mx": "NoneType",
+    "s": "NoneType"
+   }
+  },
+  "empty_input_no_rows_collected": {
+   "action_result": [],
+   "get": "ok",
+   "metrics": {
+    "c": 0
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int"
+   }
+  },
+  "err_attribute": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"v\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"v\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_attribute_alias_mixed": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"v AS raw\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"v AS raw\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_distinct": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED] Invalid observed metrics. Aggregate expressions with DISTINCT are not allowed in observed metrics, but found: \"count(DISTINCT v) AS d\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"count(DISTINCT v) AS d\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_distinct_sum": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_DISTINCT_UNSUPPORTED] Invalid observed metrics. Aggregate expressions with DISTINCT are not allowed in observed metrics, but found: \"sum(DISTINCT v) AS d\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(DISTINCT v) AS d\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_empty_name_string_api": {
+   "errorClass": null,
+   "message": "requirement failed: Name must not be empty",
+   "messageParameters": {},
+   "outcome": "error",
+   "python_class": "IllegalArgumentException",
+   "sqlState": null
+  },
+  "err_empty_observation_name": {
+   "errorClass": "VALUE_NOT_NON_EMPTY_STR",
+   "message": "[VALUE_NOT_NON_EMPTY_STR] Value for `name` must be a non-empty string, got ''.",
+   "messageParameters": {
+    "arg_name": "name",
+    "arg_value": ""
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_filter": {
+   "errorClass": "INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_FILTER_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.AGGREGATE_EXPRESSION_WITH_FILTER_UNSUPPORTED] Invalid observed metrics. Aggregate expression with FILTER predicate are not allowed in observed metrics, but found: \"count(v) FILTER (WHERE (v > 1)) AS f\". SQLSTATE: 42K0E; line 1 pos 0",
+   "messageParameters": {
+    "expr": "\"count(v) FILTER (WHERE (v > 1)) AS f\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_first_ignorenulls_ok": {
+   "get": "ok",
+   "metrics": {
+    "f": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "f": "int"
+   }
+  },
+  "err_generator": {
+   "errorClass": "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+   "message": "[UNSUPPORTED_GENERATOR.OUTSIDE_SELECT] The generator is not supported: outside the SELECT clause, found: 'CollectMetrics m, [explode(array(1, 2)) AS g#<id>], <dataframe-id>. SQLSTATE: 42K0E",
+   "messageParameters": {},
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_get_before_observe": {
+   "errorClass": "NO_OBSERVE_BEFORE_GET",
+   "get": "error",
+   "message": "[NO_OBSERVE_BEFORE_GET] Should observe by calling `DataFrame.observe` before `get`.",
+   "messageParameters": {},
+   "python_class": "PySparkAssertionError",
+   "sqlState": null
+  },
+  "err_nested_aggregate": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NESTED_AGGREGATES_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.NESTED_AGGREGATES_UNSUPPORTED] Invalid observed metrics. Nested aggregates are not allowed in observed metrics, but found: \"sum(max(v)) AS n\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(max(v)) AS n\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_no_exprs": {
+   "errorClass": "CANNOT_BE_EMPTY",
+   "message": "[CANNOT_BE_EMPTY] At least one exprs must be specified.",
+   "messageParameters": {
+    "item": "exprs"
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_no_exprs_string": {
+   "errorClass": "CANNOT_BE_EMPTY",
+   "message": "[CANNOT_BE_EMPTY] At least one exprs must be specified.",
+   "messageParameters": {
+    "item": "exprs"
+   },
+   "outcome": "error",
+   "python_class": "PySparkValueError",
+   "sqlState": null
+  },
+  "err_nondeterministic_plus_agg": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC] Invalid observed metrics. Non-deterministic expression \"(count(1) + rand(<seed>)) AS r\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"(count(1) + rand(<seed>)) AS r\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_nondeterministic_rand": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_NON_DETERMINISTIC] Invalid observed metrics. Non-deterministic expression \"rand(<seed>) AS r\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"rand(<seed>) AS r\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_observation_name_type": {
+   "errorClass": "NOT_EXPECTED_TYPE",
+   "message": "[NOT_EXPECTED_TYPE] Argument `name` should be str, got int.",
+   "messageParameters": {
+    "arg_name": "name",
+    "arg_type": "int",
+    "expected_type": "str"
+   },
+   "outcome": "error",
+   "python_class": "PySparkTypeError",
+   "sqlState": "42K09"
+  },
+  "err_reuse": {
+   "errorClass": "REUSE_OBSERVATION",
+   "message": "[REUSE_OBSERVATION] An Observation can be used with a DataFrame only once.",
+   "messageParameters": {},
+   "outcome": "error",
+   "python_class": "PySparkAssertionError",
+   "sqlState": null
+  },
+  "err_scalar_subquery": {
+   "get": "ok",
+   "metrics": {
+    "s": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "s": "int"
+   }
+  },
+  "err_unresolved_column": {
+   "errorClass": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`k`, `v`, `x`]. SQLSTATE: 42703",
+   "messageParameters": {
+    "objectName": "`nope`",
+    "proposal": "`k`, `v`, `x`"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42703"
+  },
+  "err_unresolved_star": {
+   "errorClass": "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE",
+   "message": "[INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE] Invalid observed metrics. Attribute \"k\" can only be used as an argument to an aggregate function. SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"k\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "err_window": {
+   "errorClass": "INVALID_OBSERVED_METRICS.WINDOW_EXPRESSIONS_UNSUPPORTED",
+   "message": "[INVALID_OBSERVED_METRICS.WINDOW_EXPRESSIONS_UNSUPPORTED] Invalid observed metrics. Window expressions are not allowed in observed metrics, but found: \"sum(v) OVER (ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w\". SQLSTATE: 42K0E",
+   "messageParameters": {
+    "expr": "\"sum(v) OVER (ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w\""
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42K0E"
+  },
+  "exact_under_parallelism": {
+   "action_result": 100000,
+   "get": "ok",
+   "metrics": {
+    "mx": 99999,
+    "n": 100000,
+    "s": 4999950000
+   },
+   "obs_name_given": true,
+   "types": {
+    "mx": "int",
+    "n": "int",
+    "s": "int"
+   }
+  },
+  "explain_does_not_trigger": {
+   "get": "ok",
+   "metrics": {},
+   "types": {}
+  },
+  "failed_query": {
+   "action": {
+    "errorClass": "DIVIDE_BY_ZERO",
+    "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22012",
+    "messageParameters": {
+     "config": "\"spark.sql.ansi.enabled\""
+    },
+    "python_class": "ArithmeticException",
+    "sqlState": "22012"
+   },
+   "get": "ok",
+   "metrics": "<nondeterministic>",
+   "types": "<nondeterministic>"
+  },
+  "failed_query_then_reuse_df_succeeds": {
+   "after_fail": {
+    "get": "ok",
+    "metrics": "<nondeterministic>",
+    "types": "<nondeterministic>"
+   },
+   "after_success": {
+    "get": "ok",
+    "metrics": "<nondeterministic>",
+    "types": "<nondeterministic>"
+   }
+  },
+  "filter_after_observe": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "filter_before_observe": {
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "first_then_second_action": {
+   "after_count": {
+    "n": 3
+   },
+   "after_limit1": "<unstable>"
+  },
+  "flows_no_alias": [
+   [
+    "x",
+    {
+     "count(1)": 3,
+     "max(v)": 2
+    }
+   ]
+  ],
+  "flows_observe_pruned_by_empty_relation": [
+   [
+    "e",
+    {}
+   ]
+  ],
+  "flows_string_observe": [
+   [
+    "nm",
+    {
+     "7": 7,
+     "n": 3,
+     "s": 3
+    }
+   ]
+  ],
+  "flows_two_nested": [
+   [
+    "a",
+    {
+     "n": 3
+    }
+   ],
+   [
+    "b",
+    {
+     "s": 3
+    }
+   ]
+  ],
+  "get_after_transformation_only_no_action_then_action": {
+   "after_action": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "before_action": {
+    "get": "ok",
+    "metrics": {},
+    "types": {}
+   }
+  },
+  "get_blocks_without_action": {
+   "get": "ok",
+   "metrics": {},
+   "types": {}
+  },
+  "join_two_observed": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "s": 3
+    },
+    "types": {
+     "s": "int"
+    }
+   },
+   "count": 3
+  },
+  "limit_after_observe": {
+   "action_result": [
+    [
+     "a",
+     1,
+     "1.5"
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "limit_big_range": {
+   "action_result": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 3,
+    "s": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int",
+    "s": "int"
+   }
+  },
+  "limit_zero": {
+   "action_result": [],
+   "get": "ok",
+   "metrics": {},
+   "obs_name_given": true,
+   "types": {}
+  },
+  "literal_only": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "c": 42,
+    "s": "s"
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int",
+    "s": "str"
+   }
+  },
+  "multiple_actions_first_wins": {
+   "after_first": {
+    "get": "ok",
+    "metrics": {
+     "n": 3,
+     "s": 3
+    },
+    "types": {
+     "n": "int",
+     "s": "int"
+    }
+   },
+   "after_more": {
+    "get": "ok",
+    "metrics": {
+     "n": 3,
+     "s": 3
+    },
+    "types": {
+     "n": "int",
+     "s": "int"
+    }
+   },
+   "counts": [
+    3,
+    2,
+    3
+   ]
+  },
+  "nested_observe_different_names": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "m": 1
+    },
+    "types": {
+     "m": "int"
+    }
+   },
+   "count": 1
+  },
+  "nested_observe_same_name_diff_df": {
+   "errorClass": "DUPLICATED_METRICS_NAME",
+   "message": "[DUPLICATED_METRICS_NAME] The metric name is not unique: dup. The same name cannot be used for metrics with different results.\nHowever multiple instances of metrics with with same result and name are allowed (e.g. self-joins). SQLSTATE: 42710",
+   "messageParameters": {
+    "metricName": "dup"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42710"
+  },
+  "no_alias_names": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "42": 42,
+    "count(1)": 3,
+    "max(v)": 2,
+    "sum((v + 1))": 5
+   },
+   "obs_name_given": true,
+   "types": {
+    "42": "int",
+    "count(1)": "int",
+    "max(v)": "int",
+    "sum((v + 1))": "int"
+   }
+  },
+  "nulls_all": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "c": 0,
+    "m": null,
+    "s": null
+   },
+   "obs_name_given": true,
+   "types": {
+    "c": "int",
+    "m": "NoneType",
+    "s": "NoneType"
+   }
+  },
+  "observation_in_groupby_downstream": {
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "rows": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     1
+    ],
+    [
+     "c",
+     1
+    ]
+   ],
+   "types": {
+    "n": "int"
+   }
+  },
+  "observation_on_action_collect_schema_only": {
+   "columns": [
+    "k",
+    "v",
+    "x"
+   ],
+   "get_after_schema": {
+    "get": "ok",
+    "metrics": {},
+    "types": {}
+   },
+   "schema": "struct<k:string,v:int,x:double>"
+  },
+  "observation_through_sort_limit_topn": {
+   "action_result": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 20
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "observed_metric_column_name_collision": {
+   "action_result": 3,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "ok_aggregate_over_subquery_free_udf_like": {
+   "get": "ok",
+   "metrics": {
+    "s": 3
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "s": "int"
+   }
+  },
+  "ok_approx_count_distinct": {
+   "get": "ok",
+   "metrics": {
+    "a": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "a": "int"
+   }
+  },
+  "ok_count_if": {
+   "get": "ok",
+   "metrics": {
+    "c": 2
+   },
+   "outcome": "ok_unexpected",
+   "types": {
+    "c": "int"
+   }
+  },
+  "ok_nondeterministic_inside_agg": {
+   "get": "ok",
+   "metrics": "<nondeterministic>",
+   "outcome": "ok_unexpected",
+   "types": "<nondeterministic>"
+  },
+  "python_attrs": {
+   "has_future": false,
+   "has_get_async": false,
+   "has_name": false,
+   "public": [
+    "_error",
+    "_name",
+    "_on",
+    "_result",
+    "_set_error",
+    "get"
+   ]
+  },
+  "same_name_string_same_df_in_both_branches": {
+   "count": 6
+  },
+  "self_join_same_df": {
+   "count": 3,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "self_union_same_df": {
+   "count": 6,
+   "get": "ok",
+   "metrics": {
+    "n": 3
+   },
+   "types": {
+    "n": "int"
+   }
+  },
+  "show_action_limit20": {
+   "action_result": 0,
+   "get": "ok",
+   "metrics": {
+    "n": 4
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "string_observe_returns_df_only": {
+   "count": 3,
+   "type": "DataFrame"
+  },
+  "take_after_observe": {
+   "action_result": [
+    [
+     "a",
+     1,
+     "1.5"
+    ]
+   ],
+   "get": "ok",
+   "metrics": {
+    "n": 1
+   },
+   "obs_name_given": true,
+   "types": {
+    "n": "int"
+   }
+  },
+  "types": {
+   "action_result": 1,
+   "get": "ok",
+   "metrics": {
+    "ai": "1.0",
+    "l": [
+     1
+    ],
+    "mn": "nan",
+    "mz": "0.0",
+    "sd": {
+     "py_type": "Decimal",
+     "repr": "1.10"
+    },
+    "si": 1,
+    "st": [
+     1,
+     1
+    ]
+   },
+   "obs_name_given": true,
+   "types": {
+    "ai": "float",
+    "l": "list",
+    "mn": "float",
+    "mz": "float",
+    "sd": "Decimal",
+    "si": "int",
+    "st": "Row"
+   }
+  },
+  "union_two_branches_distinct_names": {
+   "a": {
+    "get": "ok",
+    "metrics": {
+     "n": 3
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "b": {
+    "get": "ok",
+    "metrics": {
+     "n": 1
+    },
+    "types": {
+     "n": "int"
+    }
+   },
+   "count": 4
+  },
+  "union_two_branches_same_name_diff_df": {
+   "errorClass": "DUPLICATED_METRICS_NAME",
+   "message": "[DUPLICATED_METRICS_NAME] The metric name is not unique: dup. The same name cannot be used for metrics with different results.\nHowever multiple instances of metrics with with same result and name are allowed (e.g. self-joins). SQLSTATE: 42710",
+   "messageParameters": {
+    "metricName": "dup"
+   },
+   "outcome": "error",
+   "python_class": "AnalysisException",
+   "sqlState": "42710"
+  },
+  "write_action": {
+   "get": "ok",
+   "metrics": {
+    "n": 3,
+    "s": 3
+   },
+   "types": {
+    "n": "int",
+    "s": "int"
+   }
+  }
+ },
+ "format_version": 1,
+ "generator": "tests/scripts/gen_observe_goldens.py",
+ "spark_version": "4.2.0"
+}

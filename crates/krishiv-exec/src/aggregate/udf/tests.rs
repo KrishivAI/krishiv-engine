@@ -326,3 +326,11 @@ fn the_projection_reserves_the_last_folds_growth() {
     assert_eq!(a.size(), 80);
     assert_eq!(a.projected(), 144);
 }
+
+/// Nothing says a UDAF's merge commutes: its states merge in driver-partition
+/// order, as the disk phase merges them, whether or not the aggregate spilled.
+#[test]
+fn udaf_states_merge_in_partition_order() {
+    let f = crate::aggregate::AggregateFunction::Udf(Box::new(call(krishiv_types::DataType::Long)));
+    assert!(crate::aggregate::is_order_sensitive(&f));
+}

@@ -31,6 +31,11 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod observe;
+pub use observe::ObservedSink;
+pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod count;
+mod metadata;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -162,6 +167,16 @@ pub(crate) struct Analysis {
     pub(crate) analyzed: Arc<AnalyzedPlan>,
 }
 
+/// The schema a client sees of `analyzed`'s output: names, Arrow types and nullability.
+fn client_schema_of(analyzed: &AnalyzedPlan) -> SchemaRef {
+    let fields: Vec<_> = analyzed
+        .output
+        .iter()
+        .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
+        .collect();
+    crate::carrier::client_schema(&Schema::new(fields))
+}
+
 /// A lazy query: its rows are computed by actions (`collect`,
 /// `execute_stream`, ...). Cheap to clone.
 ///
@@ -193,6 +208,10 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
+    /// The statement this frame runs as when it has no analysis of its own yet: set for the
+    /// `count(*)` frame [`Self::count`] builds over a `Session::sql` frame, so its analysis keeps
+    /// the statement's text, class, `system.queries` row and sample salt.
+    statement: Option<Arc<QueryEnv>>,
     /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
     pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -222,6 +241,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: None,
             trace: None,
+            statement: None,
             keep: Vec::new(),
         }
     }
@@ -262,6 +282,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
+            statement: None,
             keep: self.keep.clone(),
         }
     }
@@ -572,7 +593,12 @@ impl DataFrame {
         if out.invalid.is_none() {
             out.invalid.clone_from(&other.invalid);
         }
-        out.keep.extend(other.keep.iter().cloned());
+        // A handle both frames hold (a join of a frame with one derived from it) is kept once.
+        for k in &other.keep {
+            if !out.keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                out.keep.push(Arc::clone(k));
+            }
+        }
         out
     }
 
@@ -976,6 +1002,17 @@ impl DataFrame {
     /// invalidation ran since and no files are read (by path or through a file view), else a fresh one,
     /// which lists them again.
     pub(crate) async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        self.analysis_with(false).await
+    }
+
+    /// [`Self::analysis`] whose read denials write no audit record (P3 PR-14d): the
+    /// caller answers a denial with an analysis of its own, which is audited. A success is
+    /// the frame's ordinary analysis and is kept as one.
+    pub(crate) async fn trial_analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        self.analysis_with(true).await
+    }
+
+    async fn analysis_with(&self, quiet_denials: bool) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
             .analysis
             .lock()
@@ -984,11 +1021,18 @@ impl DataFrame {
         let mut env = self.session.query_env();
         // A fresh analysis is still the same statement: keep what
         // `system.queries` shows of it.
-        if let Some(a) = &cached {
-            env.copy_text_from(&a.env);
-            env.statement_class = a.env.statement_class;
-            env.row = Arc::clone(&a.env.row);
+        if let Some(statement) = cached.as_ref().map(|a| &a.env).or(self.statement.as_ref()) {
+            env.copy_text_from(statement);
+            env.statement_class = statement.statement_class;
+            env.row = Arc::clone(&statement.row);
+            env.sample_salt = statement.sample_salt;
         }
+        // A first analysis as another frame's statement: its errors carry
+        // that statement's SQL span.
+        let text = match (&cached, &self.statement) {
+            (None, Some(statement)) => statement.redacted.clone(),
+            _ => None,
+        };
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
@@ -998,10 +1042,12 @@ impl DataFrame {
             && a.env.cache_generation == env.cache_generation
             && a.env.functions_version == env.functions_version
             && a.env.policy_version == env.policy_version
+            && env.catalogs_at(&a.analyzed.context.catalog_epochs)
         {
             return Ok(a);
         }
-        self.analyzed_in(env).await
+        env.quiet_denials = quiet_denials;
+        self.analyzed_in_with_text(env, text.as_deref()).await
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -1019,12 +1065,17 @@ impl DataFrame {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(a) = cached {
-            let id =
-                self.session
-                    .record_refused(a.env.text.as_deref(), a.env.statement_class, &error);
+        if let Some(statement) = cached
+            .map(|a| Arc::clone(&a.env))
+            .or_else(|| self.statement.clone())
+        {
+            let id = self.session.record_refused(
+                statement.text.as_deref(),
+                statement.statement_class,
+                &error,
+            );
             // Shared with the statement's marker, so `sql` adds no second row.
-            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+            *statement.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
         }
         Err(error)
     }
@@ -1047,9 +1098,18 @@ impl DataFrame {
         let plan = self.plan_with_checkpoints().await?;
         let analyzed = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
+        // A trial's analysis is kept as an ordinary one: later checks are audited.
+        env.quiet_denials = false;
         if let Some(t) = text {
             env.set_text(t);
         }
+        let through_views = std::mem::take(
+            &mut *env
+                .view_keeps
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
@@ -1105,14 +1165,7 @@ impl DataFrame {
     }
 
     async fn schema_here(&self) -> Result<SchemaRef, KrishivError> {
-        let a = self.analysis().await?;
-        let fields: Vec<_> = a
-            .analyzed
-            .output
-            .iter()
-            .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
-            .collect();
-        Ok(crate::carrier::client_schema(&Schema::new(fields)))
+        Ok(client_schema_of(&self.analysis().await?.analyzed))
     }
 
     /// Runs the query; its result rows, in batches. Dropping the stream
@@ -1280,39 +1333,6 @@ impl DataFrame {
             out.push(batch?);
         }
         Ok(out)
-    }
-
-    /// The number of result rows.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![3, 1, 2]))]).unwrap();
-    /// # s.register_batches("t", schema, vec![batch])?;
-    /// assert_eq!(futures::executor::block_on(s.table("t").count())?, 3);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// As [`Self::collect`].
-    pub async fn count(&self) -> Result<u64, KrishivError> {
-        // Spark's `Dataset.count` is `groupBy().count()`: an aggregate over
-        // the plan, so the optimizer prunes the columns no row needs (a CSV
-        // scan then tokenizes no line, a JSON scan converts no value).
-        let batches = self.agg([crate::functions::count_star()]).collect().await?;
-        let rows = batches
-            .iter()
-            .filter(|b| b.num_rows() > 0)
-            .find_map(|b| {
-                b.column(0)
-                    .as_any()
-                    .downcast_ref::<arrow_array::Int64Array>()
-                    .map(|a| a.value(0))
-            })
-            .ok_or_else(|| {
-                crate::session::internal("count(*) returned no BIGINT row".to_owned())
-            })?;
-        u64::try_from(rows).map_err(|_| crate::session::internal("negative count(*)".to_owned()))
     }
 
     /// Caches this frame's rows (PySpark's `cache`, at
@@ -1784,10 +1804,7 @@ impl DataFrame {
                 .collect();
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
-        // (Not a lazy checkpoint of one: its rows were taken at the analysis above.)
-        if let (PlanNode::Read(source @ ReadSource::Files { .. }), false) =
-            (&self.plan.node, checkpoint::has_lazy_checkpoint(&self.keep))
-        {
+        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
             self.session.state.catalog.put(
                 name,
                 TempTable::Files {
@@ -1811,10 +1828,16 @@ impl DataFrame {
             analysis.analyzed.plan.root(),
             analysis.env.analysis.conf.case_sensitive,
         )?;
-        self.session
-            .state
-            .catalog
-            .put_view(name, expanded, columns, pins, new_pins);
+        self.session.state.catalog.put_view(
+            name,
+            expanded,
+            columns,
+            pins,
+            new_pins,
+            // A query that reads the view runs its observed nodes: it completes the same
+            // observations. Published with the entry, under the same lock.
+            crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
+        );
         self.session.state.cache.forget_table(name);
         Ok(())
     }
@@ -1858,14 +1881,11 @@ impl GroupedData {
         // The output keeps `expr AS name`; the grouping expressions are the bare
         // `expr`, as `GROUP BY expr` in SQL: an alias is not an input column.
         let mut output: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
-        let keys: Vec<Arc<Expr>> = self
-            .keys
-            .iter()
-            .map(|k| match &k.node {
-                ExprNode::Alias { expr, .. } => Arc::clone(expr),
-                _ => Arc::new(k.clone()),
-            })
-            .collect();
+        let bare = |k: &Expr| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::new(k.clone()),
+        };
+        let keys: Vec<Arc<Expr>> = self.keys.iter().map(bare).collect();
         output.extend(aggregates.into_iter().map(|c| Arc::new(c.expr)));
         let grouping = match &self.sets {
             Sets::GroupBy => Grouping::GroupBy(keys),
@@ -1875,7 +1895,7 @@ impl GroupedData {
                 exprs: keys,
                 sets: sets
                     .iter()
-                    .map(|set| set.iter().cloned().map(Arc::new).collect())
+                    .map(|set| set.iter().map(bare).collect())
                     .collect(),
             },
         };
