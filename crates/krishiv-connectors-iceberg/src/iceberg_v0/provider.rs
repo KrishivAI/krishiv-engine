@@ -161,6 +161,9 @@ impl IcebergTableProvider {
             })
         });
         let metrics = table.writer_metrics(&snapshot);
+        let ndv = snapshot.snapshot_id.map_or_else(HashMap::new, |id| {
+            super::puffin_stats::ndv_by_field(table.table.metadata(), id)
+        });
         let scan = IcebergScan::new(
             snapshot,
             plan,
@@ -172,6 +175,7 @@ impl IcebergTableProvider {
             config,
             worker_slots,
             metrics,
+            ndv,
         )?;
         Ok(Self {
             scan: Arc::new(scan),
@@ -268,7 +272,13 @@ impl TableProvider for IcebergTableProvider {
         Some(
             s.stats
                 .get_or_init(|| {
-                    super::stats::table_stats(&s.entries, &s.index, &s.snapshot.fields, &s.metrics)
+                    super::stats::table_stats(
+                        &s.entries,
+                        &s.index,
+                        &s.snapshot.fields,
+                        &s.metrics,
+                        &s.ndv,
+                    )
                 })
                 .clone(),
         )
@@ -324,6 +334,8 @@ struct IcebergScan {
     base: FileScan,
     /// Whether `build` prunes files (not for given splits).
     prune: bool,
+    /// The distinct count of each column with a Theta blob in the pinned snapshot's statistics file.
+    ndv: Arc<HashMap<i32, u64>>,
     /// The table's statistics, once asked for.
     stats: Arc<OnceLock<TableStats>>,
     /// The last filter list planned and its plan ([`Planned`]): `explain`
@@ -378,6 +390,7 @@ impl IcebergScan {
         config: &Config,
         worker_slots: u64,
         metrics: WriterMetrics,
+        ndv: HashMap<i32, u64>,
     ) -> Result<Self, KrishivError> {
         let any_equality = index.has_equality_deletes();
         let entries: Vec<Arc<DataFileEntry>> = plan.tasks.into_iter().map(|t| t.file).collect();
@@ -457,6 +470,7 @@ impl IcebergScan {
             metrics: Arc::new(metrics),
             parts,
             prune: true,
+            ndv: Arc::new(ndv),
             stats: Arc::default(),
             planned: Arc::default(),
         })

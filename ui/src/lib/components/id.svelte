@@ -8,7 +8,6 @@
 <button
   class="mono inline-flex min-h-6 items-center bg-transparent px-0.5 text-left text-muted-foreground wrap-anywhere hover:text-foreground pointer-coarse:min-h-10 pointer-coarse:min-w-10"
   title={id}
-  aria-label={`Query id ${id}`}
   onclick={() => (open = !open)}
 >
   {open ? id : `…${id.slice(-8)}`}

@@ -7,7 +7,7 @@
 //! Only the columns a page can show are converted: text, integers, floats, booleans and timestamps (as
 //! microseconds since the epoch); maps and lists become `null`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
@@ -17,15 +17,55 @@ use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_session::{CancelReason, EngineRuntime, QueryId, Session};
 use serde_json::{Number, Value};
 
+use krishiv_session::auth::{Authenticated, Role};
+
+use crate::guard::Caller;
 use crate::internal::{Row, SystemTable, UiError, UiFuture, UiSource};
 
 /// The principal of the UI's own session; its queries are hidden from the UI.
 pub const UI_PRINCIPAL: &str = "krishiv-ui";
 
+/// Builds the session a statement of an authenticated caller runs in: the caller's principal and policy, as a
+/// Spark Connect session of that caller gets (`krishiv_connect_server::role_sessions`).
+pub type CallerSessions = dyn Fn(&Authenticated) -> Result<Session, KrishivError> + Send + Sync;
+
 /// The UI's data source over one engine runtime.
 pub struct SessionSource {
     session: Session,
+    /// Where the editor's statements of a caller the guard did not identify run (a server with no
+    /// authentication, whose start-up token is all-powerful): an ordinary session of the runtime.
+    anonymous: Session,
     runtime: Arc<EngineRuntime>,
+    runs: Arc<Mutex<Runs>>,
+    /// How an identified caller's session is built; without it such a caller's statement is refused.
+    caller_sessions: Option<Arc<CallerSessions>>,
+    /// One session per caller, so `SET` and `USE` of one user never reach another.
+    sessions: Mutex<std::collections::HashMap<String, (Option<Role>, Session)>>,
+}
+
+/// Rows an editor result keeps.
+const MAX_RESULT_ROWS: usize = 1000;
+/// Editor runs remembered (the oldest finished one is forgotten first; a run still running is never).
+const MAX_RUNS: usize = 32;
+/// Statements one caller may have running in the editor at once.
+const MAX_RUNNING_PER_CALLER: usize = 4;
+
+/// The editor's runs, oldest first.
+#[derive(Default)]
+struct Runs {
+    order: std::collections::VecDeque<String>,
+    by_id: std::collections::HashMap<String, Arc<Mutex<Run>>>,
+}
+
+struct Run {
+    tag: String,
+    /// The caller the run belongs to (`None` for an unidentified one).
+    owner: Option<String>,
+    /// The principal the statement's query is recorded under.
+    principal: Option<Principal>,
+    cancel_requested: bool,
+    state: &'static str,
+    outcome: Option<Value>,
 }
 
 impl std::fmt::Debug for SessionSource {
@@ -45,7 +85,223 @@ impl SessionSource {
             .principal(Principal::new(UI_PRINCIPAL, PrincipalKind::Service))
             .build()
             .map_err(ui_error)?;
-        Ok(Self { session, runtime })
+        let anonymous = Session::builder()
+            .runtime(Arc::clone(&runtime))
+            .build()
+            .map_err(ui_error)?;
+        Ok(Self {
+            session,
+            anonymous,
+            runtime,
+            runs: Arc::new(Mutex::new(Runs::default())),
+            caller_sessions: None,
+            sessions: Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    /// The same, running the editor's statements of an identified caller in the session `factory` builds for it
+    /// (its principal and its policy: what a Spark Connect session of the caller gets).
+    #[must_use]
+    pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
+        self.caller_sessions = Some(factory);
+        self
+    }
+
+    /// The session `caller` runs statements in, built on first use.
+    fn session_of(&self, caller: &Caller) -> Result<(String, Session), UiError> {
+        let Some(who) = authenticated(caller) else {
+            return Err(UiError::new(
+                "the caller's identity is not one this source knows",
+            ));
+        };
+        let Some(factory) = &self.caller_sessions else {
+            return Err(UiError::new(
+                "no session policy is configured for the editor",
+            ));
+        };
+        let key = self.owner_key(caller).unwrap_or_default();
+        let mut sessions = lock(&self.sessions);
+        // A session's policy is fixed for its life: a caller whose role differs from the one its session was built
+        // with (a group claim that moved) gets a new session, as the Connect session manager gives.
+        if let Some((role, s)) = sessions.get(&key)
+            && *role == who.role
+        {
+            return Ok((key, s.clone()));
+        }
+        let session = factory(who).map_err(ui_error)?;
+        sessions.insert(key.clone(), (who.role, session.clone()));
+        Ok((key, session))
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Largest magnitude a JavaScript number holds exactly.
+const JS_SAFE_INT: u64 = 9_007_199_254_740_992;
+
+/// A cell of an editor result: the system-table conversion, with timestamps as text (the system tables keep
+/// epoch microseconds, an editor shows a time), integers a browser cannot hold exactly as their decimal text,
+/// and the display text for the types the conversion leaves null.
+fn result_cell(column: &dyn Array, row: usize) -> Value {
+    if column.is_null(row) {
+        return Value::Null;
+    }
+    let text = |c: &dyn Array| {
+        arrow_cast::display::array_value_to_string(c, row).map_or(Value::Null, Value::String)
+    };
+    match column.data_type() {
+        DataType::Timestamp(..) | DataType::Date32 | DataType::Date64 => text(column),
+        DataType::Int64
+            if column
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(row)
+                .unsigned_abs()
+                > JS_SAFE_INT =>
+        {
+            text(column)
+        }
+        _ => match cell(column, row) {
+            Value::Null => text(column),
+            v => v,
+        },
+    }
+}
+
+/// The editor's result: `columns` come from the result's schema, so an empty result keeps them.
+fn result_json(columns: &[String], batches: &[RecordBatch]) -> Value {
+    let mut rows = Vec::new();
+    let mut truncated = false;
+    'outer: for b in batches {
+        for r in 0..b.num_rows() {
+            if rows.len() >= MAX_RESULT_ROWS {
+                truncated = true;
+                break 'outer;
+            }
+            rows.push(Value::Array(
+                (0..b.num_columns())
+                    .map(|c| result_cell(b.column(c).as_ref(), r))
+                    .collect(),
+            ));
+        }
+    }
+    serde_json::json!({"columns": columns, "rows": rows, "truncated": truncated})
+}
+
+/// An identifier as a quoted SQL name.
+fn quote(n: &str) -> String {
+    format!("`{}`", n.replace('`', "``"))
+}
+
+/// A result the editor shows: its column names and the (capped) batches.
+type RunOutput = (Vec<String>, Vec<RecordBatch>);
+
+/// Runs one statement on a task of its own, so a panic ends the run as `failed` instead of leaving it running
+/// (and counted against its caller's cap) for ever.
+async fn run_to_end(
+    editor: Session,
+    runtime: Arc<EngineRuntime>,
+    run: Arc<Mutex<Run>>,
+    sql: String,
+    tag: String,
+) {
+    supervise(&run, execute(editor, Arc::clone(&run), sql, tag)).await;
+    drop(runtime);
+}
+
+/// Awaits `statement` on a task of its own and records its end in `run`; a panic is a failed run.
+async fn supervise(
+    run: &Mutex<Run>,
+    statement: impl std::future::Future<Output = Result<Option<RunOutput>, KrishivError>>
+    + Send
+    + 'static,
+) {
+    let Ok(result) = tokio::spawn(statement).await else {
+        let mut r = lock(run);
+        r.state = "failed";
+        r.outcome = Some(serde_json::json!({
+            "error": "the statement stopped unexpectedly",
+            "error_class": "INTERNAL_ERROR",
+            "sql_state": "XX000",
+        }));
+        return;
+    };
+    finish(run, result);
+}
+
+async fn execute(
+    editor: Session,
+    run: Arc<Mutex<Run>>,
+    sql: String,
+    tag: String,
+) -> Result<Option<RunOutput>, KrishivError> {
+    // A cancel that came before the statement started: do not run it at all (a write would otherwise commit).
+    if lock(&run).cancel_requested {
+        return Ok(None);
+    }
+    let df = editor
+        .sql_with(
+            &sql,
+            krishiv_session::QueryOptions::new().tags([tag.as_str()]),
+        )
+        .await?;
+    // A cancel that came before the query was registered has nothing to stop yet: honour it now.
+    if lock(&run).cancel_requested {
+        return Ok(None);
+    }
+    // One row past the cap tells `result_json` the result was cut; the rest is never materialised.
+    let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
+    let work = Box::pin(async {
+        let columns: Vec<String> = capped
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        capped.collect().await.map(|b| Some((columns, b)))
+    });
+    // A cancel that reached the run after the last check above may find no registered query to stop
+    // (`cancel_by_tag` sees only attached queries): watch the flag while the statement runs and drop the work when
+    // it is set, so an accepted cancel is never reported as a finished run.
+    let watch = Box::pin(async {
+        while !lock(&run).cancel_requested {
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+    });
+    match futures::future::select(work, watch).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(((), _)) => Ok(None),
+    }
+}
+
+/// How often a running editor statement looks for a cancel that found no registered query to stop.
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+fn finish(run: &Mutex<Run>, result: Result<Option<RunOutput>, KrishivError>) {
+    let mut r = lock(run);
+    match result {
+        Ok(Some((columns, batches))) => {
+            r.state = "finished";
+            r.outcome = Some(result_json(&columns, &batches));
+        }
+        Ok(None) => {
+            r.state = "cancelled";
+            r.outcome = Some(
+                serde_json::json!({"error": "cancelled", "error_class": "OPERATION_CANCELED"}),
+            );
+        }
+        Err(e) => {
+            let class = e.error_class().name();
+            let cancelled = matches!(class, "OPERATION_CANCELED" | "KRISHIV_QUERY_KILLED");
+            r.state = if cancelled { "cancelled" } else { "failed" };
+            r.outcome = Some(serde_json::json!({
+                "error": krishiv_common::redact::redact(e.message()).into_owned(),
+                "error_class": class,
+                "sql_state": e.sql_state(),
+            }));
+        }
     }
 }
 
@@ -140,6 +396,334 @@ impl UiSource for SessionSource {
             };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
         })
+    }
+
+    fn catalog<'a>(&'a self, path: &'a [String]) -> UiFuture<'a, Vec<Row>> {
+        Box::pin(async move {
+            // The built-in catalog's objects are named without it (`default.t`): the grammar of `SHOW` takes a
+            // schema, and a name with a catalog in front is only needed for another catalog.
+            let scoped = |c: &str, rest: String| {
+                if c == "spark_catalog" {
+                    rest
+                } else {
+                    format!("{}.{rest}", quote(c))
+                }
+            };
+            let sql = match path {
+                [] => "SHOW CATALOGS".to_owned(),
+                [c] if c == "spark_catalog" => "SHOW SCHEMAS".to_owned(),
+                [c] => format!("SHOW SCHEMAS IN {}", quote(c)),
+                [c, s] => format!("SHOW TABLES IN {}", scoped(c, quote(s))),
+                [c, s, t] => format!(
+                    "DESCRIBE TABLE {}",
+                    scoped(c, format!("{}.{}", quote(s), quote(t)))
+                ),
+                _ => return Ok(Vec::new()),
+            };
+            let df = self.session.sql(&sql).await.map_err(ui_error)?;
+            let batches = df.collect().await.map_err(ui_error)?;
+            let mut out = Vec::new();
+            for r in batches_to_rows(&batches) {
+                let first = |keys: &[&str]| {
+                    keys.iter()
+                        .find_map(|k| r.get(*k).and_then(Value::as_str))
+                        .map(str::to_owned)
+                };
+                let Some(name) = first(&["catalog", "tableName", "namespace", "col_name"]) else {
+                    continue;
+                };
+                // `DESCRIBE` ends its column list with blank and `# ...` lines about partitions and metadata.
+                if path.len() == 3 && (name.is_empty() || name.starts_with('#')) {
+                    break;
+                }
+                let mut row = Row::new();
+                row.insert("name".into(), Value::String(name));
+                if let Some(t) = first(&["data_type"]) {
+                    row.insert("data_type".into(), Value::String(t));
+                }
+                if let Some(c) = first(&["comment"]) {
+                    row.insert("comment".into(), Value::String(c));
+                }
+                if let Some(Value::Bool(b)) = r.get("isTemporary") {
+                    row.insert("is_temporary".into(), Value::Bool(*b));
+                }
+                out.push(row);
+            }
+            Ok(out)
+        })
+    }
+
+    fn environment(&self) -> UiFuture<'_, Vec<(String, String)>> {
+        Box::pin(async move { Ok(self.session.conf().entries()) })
+    }
+
+    fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
+        Box::pin(async move {
+            // The statement runs as the caller, under the caller's policy. Only the local administrator (a server
+            // with no authentication, whoever holds its start-up token) runs in the ordinary session; a caller no
+            // guard identified holds no rights and is refused.
+            let caller = match caller {
+                Some(c) if authenticated(c).is_some() => Some(c),
+                Some(c)
+                    if c.identity.as_deref().is_some_and(
+                        <dyn std::any::Any + Send + Sync>::is::<crate::guard::LocalAdmin>,
+                    ) =>
+                {
+                    None
+                }
+                Some(_) => {
+                    return Err(UiError::new(
+                        "the caller's identity is not one this source knows",
+                    ));
+                }
+                None => None,
+            };
+            let (owner, session, principal) = match caller {
+                Some(c) => {
+                    let (key, session) = self.session_of(c)?;
+                    (
+                        Some(key),
+                        session,
+                        authenticated(c).map(|a| a.principal.clone()),
+                    )
+                }
+                None => (None, self.anonymous.clone(), None),
+            };
+            let token = crate::internal::random_token()?;
+            let id = token
+                .get(..32)
+                .ok_or_else(|| UiError::new("no run id"))?
+                .to_owned();
+            let tag = format!("krishiv-ui-run-{id}");
+            let run = Arc::new(Mutex::new(Run {
+                tag: tag.clone(),
+                owner: owner.clone(),
+                principal,
+                cancel_requested: false,
+                state: "running",
+                outcome: None,
+            }));
+            {
+                let mut runs = lock(&self.runs);
+                let running_of_owner = runs
+                    .by_id
+                    .values()
+                    .filter(|r| {
+                        let r = lock(r);
+                        r.state == "running" && r.owner == owner
+                    })
+                    .count();
+                if running_of_owner >= MAX_RUNNING_PER_CALLER {
+                    return Err(UiError::busy(
+                        "too many statements are running; wait for one to finish or cancel it",
+                    ));
+                }
+                // Make room by forgetting the oldest finished run. A run still running is never forgotten (it
+                // could no longer be cancelled from the editor).
+                while runs.order.len() >= MAX_RUNS {
+                    let finished = runs.order.iter().position(|old| {
+                        runs.by_id
+                            .get(old)
+                            .is_none_or(|r| lock(r).state != "running")
+                    });
+                    let Some(at) = finished else {
+                        return Err(UiError::busy(
+                            "the editor is busy with other statements; try again shortly",
+                        ));
+                    };
+                    if let Some(old) = runs.order.remove(at) {
+                        runs.by_id.remove(&old);
+                    }
+                }
+                runs.order.push_back(id.clone());
+                runs.by_id.insert(id.clone(), Arc::clone(&run));
+            }
+            tokio::spawn(run_to_end(
+                session,
+                Arc::clone(&self.runtime),
+                run,
+                sql.to_owned(),
+                tag,
+            ));
+            Ok(id)
+        })
+    }
+
+    fn sql_status<'a>(
+        &'a self,
+        run_id: &'a str,
+        caller: Option<&'a Caller>,
+    ) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            let Some(run) = self.run_of(run_id, caller) else {
+                return Ok(None);
+            };
+            let r = lock(&run);
+            let mut body = r.outcome.clone().unwrap_or_else(|| serde_json::json!({}));
+            if let Value::Object(m) = &mut body {
+                m.insert("state".into(), Value::String(r.state.to_owned()));
+            }
+            Ok(Some(body))
+        })
+    }
+
+    fn sql_cancel<'a>(&'a self, run_id: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, bool> {
+        Box::pin(async move {
+            let Some(run) = self.run_of(run_id, caller) else {
+                return Ok(false);
+            };
+            let (tag, principal) = {
+                let mut r = lock(&run);
+                if r.state != "running" {
+                    return Ok(false);
+                }
+                r.cancel_requested = true;
+                (r.tag.clone(), r.principal.clone())
+            };
+            // The caller's own query ends as a user's cancel (`OPERATION_CANCELED`); an unidentified caller's
+            // (the all-powerful start-up token) as an operator's kill, which the run reports as cancelled too.
+            match principal {
+                Some(p) => self.runtime.cancel_by_tag(&tag, &p, false),
+                None => {
+                    self.runtime
+                        .cancel_by_tag(&tag, &Principal::new("", PrincipalKind::User), true)
+                }
+            };
+            Ok(true)
+        })
+    }
+}
+
+impl SessionSource {
+    /// The run `run_id` when it belongs to `caller`: another caller's run does not exist for this one.
+    fn run_of(&self, run_id: &str, caller: Option<&Caller>) -> Option<Arc<Mutex<Run>>> {
+        let run = lock(&self.runs).by_id.get(run_id).cloned()?;
+        let owner = caller.and_then(|c| self.owner_key(c));
+        let mine = lock(&run).owner == owner;
+        mine.then_some(run)
+    }
+
+    fn owner_key(&self, caller: &Caller) -> Option<String> {
+        let who = authenticated(caller)?;
+        // What a Connect session is bound to (`SessionOwner`): the method, the principal's kind, tenant and name, so
+        // a static token and an OIDC subject of the same name share neither a session nor a run.
+        Some(format!(
+            "{:?}/{:?}/{:?}/{}/{:?}",
+            who.method,
+            who.principal.kind,
+            who.principal.tenant,
+            who.principal.name,
+            who.principal.delegated_by
+        ))
+    }
+}
+
+/// The session guard's record of `caller`; `None` for a caller a guard let through without identifying a principal
+/// (the start-up token's local administrator, an anonymous one): such a caller runs in the ordinary session.
+fn authenticated(caller: &Caller) -> Option<&Authenticated> {
+    caller.identity.as_deref()?.downcast_ref()
+}
+
+/// The UI over stored profiles, with no engine (`krishiv ui --profiles <dir>`, P3-T050): the pages that read the
+/// system tables (queries, history, a query's operators) show what the history store holds; there is nothing live,
+/// no memory or cache table, and nothing to cancel.
+#[derive(Debug)]
+pub struct ProfilesSource {
+    queries: Vec<Row>,
+    operators: Vec<Row>,
+}
+
+impl ProfilesSource {
+    /// Reads every profile under `dir` (`krishiv.history.path`'s store).
+    ///
+    /// # Errors
+    /// Returns an error when the directory cannot be read.
+    pub fn open(dir: &std::path::Path) -> Result<Self, UiError> {
+        let stored = krishiv_session::read_profile_history(dir).map_err(ui_error)?;
+        Ok(Self::from_profiles(&stored))
+    }
+
+    /// The source over profiles already read.
+    #[must_use]
+    pub fn from_profiles(stored: &[krishiv_session::StoredProfile]) -> Self {
+        let mut queries = Vec::new();
+        let mut operators = Vec::new();
+        for p in stored {
+            let doc: Value = serde_json::from_str(&p.profile).unwrap_or(Value::Null);
+            let usage = &doc["usage"];
+            let ended_us = p.finished_at_ms.saturating_mul(1000);
+            let mut q = Row::new();
+            let mut put = |k: &str, v: Value| {
+                q.insert(k.to_owned(), v);
+            };
+            put("query_id", Value::String(p.query_id.clone()));
+            put("state", Value::String(p.state.clone()));
+            put("principal", Value::String(p.principal.clone()));
+            put(
+                "query_text",
+                p.sql.clone().map_or(Value::Null, Value::String),
+            );
+            put(
+                "submitted_at",
+                Value::from(ended_us.saturating_sub(p.duration_ns / 1000)),
+            );
+            put("ended_at", Value::from(ended_us));
+            put("wall_ns", Value::from(p.duration_ns));
+            put("cpu_ns", usage["cpu_ns"].clone());
+            put("peak_memory_bytes", usage["peak_memory_bytes"].clone());
+            put("rows_produced", usage["rows_out"].clone());
+            put("bytes_read", usage["scan"]["bytes"].clone());
+            put("rows_read", usage["scan"]["rows"].clone());
+            put("spill_bytes", usage["spill_bytes"].clone());
+            put("workers", doc["query"]["workers"].clone());
+            put(
+                "error_class",
+                p.error_class.clone().map_or(Value::Null, Value::String),
+            );
+            queries.push(q);
+            for o in doc["operators"].as_array().map_or(&[][..], Vec::as_slice) {
+                let m = &o["metrics"];
+                let mut r = Row::new();
+                r.insert("query_id".into(), Value::String(p.query_id.clone()));
+                r.insert("operator_id".into(), o["id"].clone());
+                r.insert("node_id".into(), o["node"].clone());
+                r.insert("name".into(), o["name"].clone());
+                r.insert("role".into(), o["role"].clone());
+                for (to, from) in [
+                    ("drivers", "drivers"),
+                    ("rows_in", "rows_in"),
+                    ("rows_out", "rows_out"),
+                    ("compute_ns", "compute_time_ns"),
+                    ("max_driver_compute_ns", "max_driver_compute_time_ns"),
+                    ("blocked_io_ns", "blocked_on_io_ns"),
+                    ("blocked_memory_ns", "blocked_on_memory_ns"),
+                    ("blocked_sink_ns", "blocked_on_sink_ns"),
+                    ("peak_reserved_bytes", "peak_reserved_bytes"),
+                    ("spills", "spills"),
+                    ("spilled_bytes", "spilled_bytes"),
+                ] {
+                    r.insert(to.into(), m[from].clone());
+                }
+                operators.push(r);
+            }
+        }
+        Self { queries, operators }
+    }
+}
+
+impl UiSource for ProfilesSource {
+    fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
+        Box::pin(async move {
+            Ok(match table {
+                SystemTable::Queries => self.queries.clone(),
+                SystemTable::Operators => self.operators.clone(),
+                SystemTable::Memory | SystemTable::Caches => Vec::new(),
+            })
+        })
+    }
+
+    fn cancel<'a>(&'a self, _query_id: &'a str) -> UiFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
     }
 }
 
@@ -352,5 +936,49 @@ mod tests {
         )]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![list]).unwrap();
         assert_eq!(batches_to_rows(&[batch])[0]["pipelines"], Value::Null);
+    }
+
+    fn new_run() -> Arc<Mutex<Run>> {
+        Arc::new(Mutex::new(Run {
+            tag: "t".into(),
+            owner: None,
+            principal: None,
+            cancel_requested: false,
+            state: "running",
+            outcome: None,
+        }))
+    }
+
+    /// A statement that panics ends its run as failed (it would otherwise stay running for ever).
+    #[tokio::test]
+    async fn a_panicking_statement_ends_failed() {
+        let run = new_run();
+        supervise(&run, async { panic!("boom") }).await;
+        let r = lock(&run);
+        assert_eq!(r.state, "failed");
+        let outcome = r.outcome.clone().unwrap();
+        assert_eq!(outcome["error_class"], "INTERNAL_ERROR");
+        assert!(!outcome.to_string().contains("boom"));
+    }
+
+    /// An empty result keeps its column names.
+    #[test]
+    fn an_empty_result_keeps_its_columns() {
+        let v = result_json(&["a".to_owned(), "b".to_owned()], &[]);
+        assert_eq!(
+            v,
+            json!({"columns": ["a", "b"], "rows": [], "truncated": false})
+        );
+    }
+
+    /// Editor timestamps are text; an Int64 a browser could not hold exactly is its decimal text, others stay numbers.
+    #[test]
+    fn editor_cells_render_times_as_text_and_keep_integers_exact() {
+        let ts = TimestampMicrosecondArray::from(vec![Some(1_700_000_000_000_000)]);
+        assert_eq!(result_cell(&ts, 0), json!("2023-11-14T22:13:20"));
+        let big = Int64Array::from(vec![i64::MAX, 42, -9_007_199_254_740_993]);
+        assert_eq!(result_cell(&big, 0), json!("9223372036854775807"));
+        assert_eq!(result_cell(&big, 1), json!(42));
+        assert_eq!(result_cell(&big, 2), json!("-9007199254740993"));
     }
 }

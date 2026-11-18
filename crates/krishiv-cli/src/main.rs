@@ -24,6 +24,8 @@ mod repl;
 #[cfg(feature = "server")]
 mod server;
 mod sql;
+#[cfg(feature = "ui")]
+mod ui;
 
 use clap::Parser;
 
@@ -79,6 +81,9 @@ enum Command {
     /// TLS files, ports, directories and path allow lists; exit 1 when a check fails.
     #[cfg(feature = "server")]
     Doctor(doctor::DoctorArgs),
+    /// Open stored query profiles in the web UI with no server and no engine (`krishiv.history.path` stores).
+    #[cfg(feature = "ui")]
+    Ui(ui::UiArgs),
 }
 
 /// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
@@ -145,6 +150,8 @@ fn run() {
         Command::Server(args) => std::process::exit(server::run(&args)),
         #[cfg(feature = "server")]
         Command::Doctor(args) => std::process::exit(doctor::run(&args)),
+        #[cfg(feature = "ui")]
+        Command::Ui(args) => std::process::exit(ui::run(&args)),
     }
 }
 
