@@ -77,6 +77,10 @@ def layout(spark, root):
     # names follows its listing order, which varies between runs.
     for tree, k in (("pyear", "2024"), ("pabc", "abc"), ("pdec2", "1.50"), ("pdec2", "-3.25"), ("pone", "1")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
+    # KN-1 merge review nit 3: trees a case adds a partition directory to after CREATE TEMPORARY VIEW.
+    for tree in ("pva", "pvb"):
+        for k in ("1", "2"):
+            spark.sql(f"SELECT 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for name, values in (
@@ -553,6 +557,35 @@ def cases(spark, root):
         "parquet pqcase A INT, B STRING caseSensitive=true",
         read("parquet", "pqcase", "A INT, B STRING"),
         {"spark.sql.caseSensitive": "true"},
+    )
+    # KN-1 merge review nit 2: a user schema does not skip the existence check (`DataSource.resolveRelation`).
+    for fmt in ("parquet", "json", "csv", "text"):
+        add(f"missing path {fmt}", f"{fmt} missing schema a STRING", read(fmt, "missing", "a STRING"))
+    add(
+        "missing path sql view parquet",
+        "CREATE TEMPORARY VIEW v9 (a STRING) USING parquet OPTIONS (path missing)",
+        sql_view("v9", "a STRING", "parquet", "missing"),
+    )
+
+    # KN-1 merge review nit 3: a partition directory added after the view was created.
+    def view_then_add(name, path, added):
+        def thunk():
+            spark.sql(f"DROP VIEW IF EXISTS {name}")
+            spark.sql(f"CREATE TEMPORARY VIEW {name} (v STRING, k INT) USING parquet OPTIONS (path '{p(path)}')")
+            spark.sql("SELECT 'v3' AS v").coalesce(1).write.parquet(p(added))
+            return spark.sql(f"SELECT * FROM {name}")
+
+        return thunk
+
+    add(
+        "sql view partition value added after create",
+        "CREATE TEMPORARY VIEW v10 (v STRING, k INT) USING parquet OPTIONS (path pva/p); then pva/p/k=3 written",
+        view_then_add("v10", "pva/p", "pva/p/k=3"),
+    )
+    add(
+        "sql view partition column added after create",
+        "CREATE TEMPORARY VIEW v11 (v STRING, k INT) USING parquet OPTIONS (path pvb/p); then pvb/p/k=3/j=1 written",
+        view_then_add("v11", "pvb/p", "pvb/p/k=3/j=1"),
     )
     return out
 

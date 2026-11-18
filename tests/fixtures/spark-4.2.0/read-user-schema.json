@@ -3310,6 +3310,98 @@
      "x"
     ]
    ]
+  },
+  {
+   "name": "missing path parquet",
+   "input": "parquet missing schema a STRING",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/missing"
+   }
+  },
+  {
+   "name": "missing path json",
+   "input": "json missing schema a STRING",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/missing"
+   }
+  },
+  {
+   "name": "missing path csv",
+   "input": "csv missing schema a STRING",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/missing"
+   }
+  },
+  {
+   "name": "missing path text",
+   "input": "text missing schema a STRING",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/missing"
+   }
+  },
+  {
+   "name": "missing path sql view parquet",
+   "input": "CREATE TEMPORARY VIEW v9 (a STRING) USING parquet OPTIONS (path missing)",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/missing"
+   }
+  },
+  {
+   "name": "sql view partition value added after create",
+   "input": "CREATE TEMPORARY VIEW v10 (v STRING, k INT) USING parquet OPTIONS (path pva/p); then pva/p/k=3 written",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "sql view partition column added after create",
+   "input": "CREATE TEMPORARY VIEW v11 (v STRING, k INT) USING parquet OPTIONS (path pvb/p); then pvb/p/k=3/j=1 written",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
   }
  ]
 }

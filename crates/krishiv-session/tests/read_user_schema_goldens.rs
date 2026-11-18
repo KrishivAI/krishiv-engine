@@ -19,7 +19,18 @@ use krishiv_types::{DataType, StructField, StructType};
 use serde_json::{Value, json};
 
 /// Cases not matched yet, with the reason; each must still differ from Spark.
-const KNOWN_GAPS: &[(&str, &str)] = &[];
+const KNOWN_GAPS: &[(&str, &str)] = &[
+    (
+        "sql view partition value added after create",
+        "Spark's `CREATE TEMPORARY VIEW .. USING` resolves the relation once, so its file index keeps the listing \
+         of CREATE (until REFRESH); the engine lists the path again on each query and reads k=3 too",
+    ),
+    (
+        "sql view partition column added after create",
+        "as above: the new listing has a k=3/j=1 directory, so discovery fails with \
+         CONFLICTING_DIRECTORY_STRUCTURES where Spark reads the files of CREATE",
+    ),
+];
 
 /// Cases Spark reads but the engine refuses with `KRISHIV_UNSUPPORTED_FEATURE` (checked: never another result).
 const REFUSED: &[(&str, &str)] = &[
@@ -176,6 +187,15 @@ fn review_layout(s: &Session, root: &Path) {
         ("pone", "1"),
     ] {
         parquet(s, "SELECT 'v' AS v", &root.join(format!("{tree}/p/k={k}")));
+    }
+    for tree in ["pva", "pvb"] {
+        for k in ["1", "2"] {
+            parquet(
+                s,
+                &format!("SELECT 'v{k}' AS v"),
+                &root.join(format!("{tree}/p/k={k}")),
+            );
+        }
     }
     for (tree, k) in [
         ("pfrac", "1.5"),
@@ -348,6 +368,39 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
         "parquet name case differs, both upper, caseSensitive=true".into(),
         read("parquet", "pqcase", "A INT, B STRING"),
     );
+    // KN-1 merge review nit 2: a user schema still checks that the path exists.
+    for fmt in ["parquet", "json", "csv", "text"] {
+        add(
+            format!("missing path {fmt}"),
+            read(fmt, "missing", "a STRING"),
+        );
+    }
+    add(
+        "missing path sql view parquet".into(),
+        Read::View {
+            name: "v9",
+            columns: "a STRING",
+            format: "parquet",
+            path: "missing",
+        },
+    );
+    // KN-1 merge review nit 3: a partition directory added after CREATE.
+    for (case, name, path, added) in [
+        (
+            "sql view partition value added after create",
+            "v10",
+            "pva/p",
+            "pva/p/k=3",
+        ),
+        (
+            "sql view partition column added after create",
+            "v11",
+            "pvb/p",
+            "pvb/p/k=3/j=1",
+        ),
+    ] {
+        add(case.to_owned(), Read::ViewThenAdd { name, path, added });
+    }
 }
 
 /// How a case reads.
@@ -363,6 +416,13 @@ enum Read {
     },
     /// The read, then a filter.
     Where(Box<Read>, &'static str),
+    /// `CREATE TEMPORARY VIEW v (v STRING, k INT) USING parquet OPTIONS (path ..)`, then a Parquet file with
+    /// `v = 'v3'` written to `added`, then `SELECT * FROM v`.
+    ViewThenAdd {
+        name: &'static str,
+        path: &'static str,
+        added: &'static str,
+    },
     /// `CREATE TEMPORARY VIEW v (cols) USING format OPTIONS (path ..)` then `SELECT * FROM v`.
     View {
         name: &'static str,
@@ -798,6 +858,15 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
                 "CREATE TEMPORARY VIEW {name} ({columns}) USING {format} OPTIONS (path '{}')",
                 abs(path)
             )))?;
+            block_on(s.sql(&format!("SELECT * FROM {name}")))
+        }
+        Read::ViewThenAdd { name, path, added } => {
+            block_on(s.sql(&format!("DROP VIEW IF EXISTS {name}")))?;
+            block_on(s.sql(&format!(
+                "CREATE TEMPORARY VIEW {name} (v STRING, k INT) USING parquet OPTIONS (path '{}')",
+                abs(path)
+            )))?;
+            parquet(s, "SELECT 'v3' AS v", &root.join(added));
             block_on(s.sql(&format!("SELECT * FROM {name}")))
         }
     }
