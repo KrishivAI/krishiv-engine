@@ -229,10 +229,12 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees.
+    ///
+    /// A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
     /// `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets the namespace to `default` when the name
     /// differs from the current catalog's only in case; here the current namespace is kept.) The `system` catalog is
-    /// Krishiv's own (ADR 0023) and is reached with `USE system`, not here: Spark has no such catalog, so it is
+    /// Krishiv's own and is reached with `USE system`, not here: Spark has no such catalog, so it is
     /// `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
@@ -253,7 +255,9 @@ impl Catalog<'_> {
         self.run(&format!("USE {}", quoted(&known))).await
     }
 
-    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
+    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees.
+    ///
+    /// Spark returns the loaded catalogs and `spark_catalog`. The `system` catalog is not listed, see
     /// [`Catalog::set_current_catalog`].
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {

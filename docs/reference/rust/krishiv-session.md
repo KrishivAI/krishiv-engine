@@ -1172,7 +1172,7 @@ pub use tokens::StaticTokens;
 
 Declared catalogs: the `krishiv.catalog.<name>.*` keys
 and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
-same for the server at startup and for an embedded session builder (R11). Validation never
+same for the server at startup and for an embedded session builder. Validation never
 connects: a catalog that is down does not stop the server.
 
 ```text
@@ -4215,12 +4215,12 @@ pub struct Catalog<'a> {
 - ```rust
   pub async fn set_current_catalog(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
   ```
-  Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+  Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees.
 
 - ```rust
   pub fn list_catalogs(self: &Self) -> Vec<String> { /* ... */ }
   ```
-  The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
+  The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees.
 
 - ```rust
   pub fn current_database(self: &Self) -> String { /* ... */ }
