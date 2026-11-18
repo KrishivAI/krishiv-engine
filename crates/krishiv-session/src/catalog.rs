@@ -50,6 +50,8 @@ mod scans;
 mod script_results;
 
 use self::file_tables::{FileScanOf, reference_key};
+#[cfg(feature = "delta")]
+pub(crate) use self::scans::reads_files_at;
 pub(crate) use self::scans::reads_stored_table;
 
 /// The session catalog's name, as Spark names it.
@@ -290,6 +292,14 @@ impl SessionCatalog {
                 }),
             ),
         );
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Removes the hidden entries nothing but the catalog holds now, at once (a statement's
+    /// hidden tables, such as a `MERGE` source's spill file, go when the statement ends).
+    pub(crate) fn sweep_hidden(&self) {
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
         Self::collect_garbage(&mut tables);
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }

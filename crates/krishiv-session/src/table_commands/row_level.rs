@@ -22,8 +22,13 @@
 //! The statement runs in-process: a hidden provider table gets no splits
 //! (`QueryCatalog`'s split planning), so a distributed stage would read it whole in every task.
 //!
-//! Not here yet: `MERGE` (PR-37c), merge-on-read (PR-37d), `SET c = DEFAULT`, the conflict
-//! check's read filter (the rewrite is checked as a whole-table read, which is wider), the
+//! The table raises its own errors through [`RowLevelTable::error`] (a Delta table refuses a
+//! condition with a subquery, `DELTA_UNSUPPORTED_SUBQUERY`, and wraps an error raised while the
+//! rewrite writes its rows in `TASK_WRITE_FAILED`); the planner holds no table format's code.
+//! The conflict check's read set is the table's (the Delta connector reads the condition's
+//! partition conjuncts).
+//!
+//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Not here yet: merge-on-read (PR-37d), `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).
@@ -40,8 +45,8 @@ use krishiv_common::error::{
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
-    RowLevelCounts, RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider,
-    TableProviderResolver as _,
+    RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
+    TableProvider, TableProviderResolver as _,
 };
 use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
 use krishiv_plan::analyzer::TableColumn;
@@ -50,8 +55,24 @@ use krishiv_types::DataType;
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 
+/// The rewrite's option holding the rows the condition holds for (the find query's count): a
+/// table's metrics and result rows read it (Delta's `numDeletedRows` / `numUpdatedRows`).
+pub(crate) const AFFECTED_OPTION: &str = "__krishiv_row_level_affected";
+
+/// The rewrite's option holding the statement's condition as written (absent: none), for the
+/// table's commit record (Delta's `operationParameters.predicate`).
+pub(crate) const CONDITION_OPTION: &str = "__krishiv_row_level_condition";
+
+/// The rewrite's option holding the find query's milliseconds (Delta's `scanTimeMs`).
+pub(crate) const SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
+
+/// The rewrite's option holding the name the statement reads the target under (its alias,
+/// else the table's last name part): the qualifier the condition's column names may carry.
+pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
+
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
+#[derive(Debug, Clone)]
 pub(crate) struct Assignment {
     pub(crate) column: String,
     pub(crate) value: Option<String>,
@@ -59,10 +80,10 @@ pub(crate) struct Assignment {
 
 /// The target as a provider: the one row-level table, read whole or restricted to `files`.
 #[derive(Debug)]
-struct Target {
-    table: Arc<dyn RowLevelTable>,
-    op: RowLevelOperation,
-    files: Option<Vec<Vec<u8>>>,
+pub(super) struct Target {
+    pub(super) table: Arc<dyn RowLevelTable>,
+    pub(super) op: RowLevelOperation,
+    pub(super) files: Option<Vec<Vec<u8>>>,
 }
 
 impl TableProvider for Target {
@@ -79,12 +100,12 @@ impl TableProvider for Target {
 }
 
 /// `name` as SQL text: a backquoted identifier.
-fn ident(name: &str) -> String {
+pub(super) fn ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
 /// The first scan of `node`, depth first.
-fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
+pub(super) fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
     match node {
         PhysNode::Scan(s) => Some(s.scan.clone()),
         _ => node.children().into_iter().find_map(first_scan),
@@ -194,19 +215,34 @@ impl Session {
             nullable: false,
             char_varchar: None,
         });
+        // A table may refuse a subquery in the condition (delta-spark does, after resolution:
+        // `PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`).
+        if let Some(c) = condition
+            && has_subquery(&crate::functions::expr(c)?.expr)
+            && let Some(e) = table.error(
+                op,
+                &RowLevelProblem::Subquery {
+                    what: "condition",
+                    condition: c,
+                },
+            )
+        {
+            return Err(e);
+        }
         let hit =
             condition.map_or_else(|| "true".to_owned(), |c| format!("coalesce(({c}), false)"));
-        self.check_assignments(
-            quoted,
-            alias,
-            &hit,
-            &columns,
-            &with_row_id,
-            &table,
-            op,
-            assignments,
-        )
-        .await?;
+        let value_types = self
+            .check_assignments(
+                quoted,
+                alias,
+                &hit,
+                &columns,
+                &with_row_id,
+                &table,
+                op,
+                assignments,
+            )
+            .await?;
 
         // 1. The touched files and the hit count, over the whole snapshot.
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
@@ -223,7 +259,9 @@ impl Session {
             .filter(crate::functions::expr(&hit)?)
             .group_by([crate::functions::col(ROW_FILE_COLUMN)])
             .agg([crate::functions::expr("count(*)")?]);
+        let find_started = std::time::Instant::now();
         let batches = found.collect().await?;
+        let scan_ms = find_started.elapsed().as_millis();
         let (touched, affected) = touched_files(&batches)?;
 
         // 2. The rewrite of the touched files, into the table's rewriter.
@@ -269,15 +307,46 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        let mut request =
-            RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), touched, None);
+        // The condition as the table's conflict check and commit record take it (the parsed,
+        // unresolved expression: column names as written).
+        let read_filter = match condition {
+            Some(c) => Some(Arc::new(crate::functions::expr(c)?.expr)),
+            None => None,
+        };
+        let mut request = RowLevelWrite::new(
+            op,
+            quoted,
+            Arc::clone(physical.schema()),
+            touched,
+            read_filter,
+        );
         request.write_id = Some(crate::session::job_uuid());
-        let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
-        let mut stream = self.run(&plan, &analysis.env).await?;
-        while let Some(batch) = stream.next().await {
-            batch?;
+        request
+            .options
+            .insert(AFFECTED_OPTION.to_owned(), affected.to_string());
+        request
+            .options
+            .insert(SCAN_MS_OPTION.to_owned(), scan_ms.to_string());
+        request
+            .options
+            .insert(ALIAS_OPTION.to_owned(), alias.to_owned());
+        if let Some(c) = condition {
+            request
+                .options
+                .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
-        drop(stream);
+        let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
+        let written = async {
+            let mut stream = self.run(&plan, &analysis.env).await?;
+            while let Some(batch) = stream.next().await {
+                batch?;
+            }
+            Ok::<(), KrishivError>(())
+        }
+        .await;
+        if let Err(e) = written {
+            return Err(write_failed(&table, op, e, &columns, &value_types));
+        }
         self.refresh_files();
 
         // 3. The statement's result.
@@ -310,7 +379,7 @@ impl Session {
         table: &Arc<dyn RowLevelTable>,
         op: RowLevelOperation,
         assignments: &[Assignment],
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<(String, DataType)>, KrishivError> {
         let (name, entry) = self.state.catalog.put_hidden_provider(
             with_row_id.to_vec(),
             Arc::new(Target {
@@ -341,6 +410,7 @@ impl Session {
             }
             .into());
         }
+        let mut value_types = Vec::with_capacity(assignments.len());
         for (a, out) in assignments.iter().zip(&analysis.analyzed.output) {
             let Some(column) = columns
                 .iter()
@@ -348,6 +418,7 @@ impl Session {
             else {
                 continue;
             };
+            value_types.push((column.name.clone(), out.data_type.clone()));
             if !super::can_store(&out.data_type, &column.data_type) {
                 return Err(IncompatibleDataForTableCannotSafelyCast {
                     table_name: quoted.to_owned(),
@@ -361,12 +432,12 @@ impl Session {
                 .into());
             }
         }
-        Ok(())
+        Ok(value_types)
     }
 
     /// A frame reading the hidden table `name` (`columns`), which owns `entry`: a resolved
     /// scan, as a script result's frame reads its table, since no SQL text names it.
-    fn hidden_frame(
+    pub(super) fn hidden_frame(
         &self,
         name: &str,
         entry: Arc<crate::catalog::TempTable>,
@@ -395,6 +466,123 @@ impl Session {
         df.keep.push(entry);
         df
     }
+}
+
+/// `fut`, after which (on completion, failure or drop: a cancelled statement too) the hidden
+/// tables nothing holds any more go from `catalog`: a row-level statement's target scans and
+/// its source copy (a spill file) do not wait for the catalog's next change. The future is
+/// dropped before the sweep, so the entries it held are free by then.
+pub(super) struct Swept<F> {
+    fut: Option<std::pin::Pin<Box<F>>>,
+    catalog: Arc<crate::catalog::SessionCatalog>,
+}
+
+impl<F: Future> Swept<F> {
+    pub(super) fn new(catalog: Arc<crate::catalog::SessionCatalog>, fut: F) -> Self {
+        Self {
+            fut: Some(Box::pin(fut)),
+            catalog,
+        }
+    }
+}
+
+impl<F: Future> Future for Swept<F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        let Some(fut) = this.fut.as_mut() else {
+            return std::task::Poll::Pending;
+        };
+        let out = fut.as_mut().poll(cx);
+        if out.is_ready() {
+            this.fut = None;
+            this.catalog.sweep_hidden();
+        }
+        out
+    }
+}
+
+impl<F> Drop for Swept<F> {
+    fn drop(&mut self) {
+        if self.fut.take().is_some() {
+            self.catalog.sweep_hidden();
+        }
+    }
+}
+
+/// Whether `e` holds a subquery anywhere.
+fn has_subquery(e: &krishiv_plan::Expr) -> bool {
+    let mut stack: Vec<&krishiv_plan::Expr> = vec![e];
+    while let Some(x) = stack.pop() {
+        if matches!(x.node, krishiv_plan::ExprNode::Subquery { .. }) {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    false
+}
+
+/// An error raised while a row-level rewrite writes its rows, as the table raises it
+/// ([`RowLevelProblem::WriteFailed`]; delta-spark wraps it in `TASK_WRITE_FAILED`), else as it
+/// came. `value_types` are the assigned columns and their new values' types.
+pub(super) fn write_failed(
+    table: &Arc<dyn RowLevelTable>,
+    op: RowLevelOperation,
+    e: KrishivError,
+    columns: &[TableColumn],
+    value_types: &[(String, DataType)],
+) -> KrishivError {
+    let overflow = store_assignment_overflow(&e, columns, value_types);
+    table
+        .error(
+            op,
+            &RowLevelProblem::WriteFailed {
+                error: &e,
+                overflow,
+            },
+        )
+        .unwrap_or(e)
+}
+
+/// The assigned column an arithmetic error `e` (SQLSTATE 22003 or 22012: Spark's
+/// `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
+/// `DIVIDE_BY_ZERO`) may come from: one whose store-assignment cast can overflow (an integral
+/// or decimal column whose value's type does not up-cast to it; delta-spark's
+/// `CheckOverflowInTableWrite`, `UpdateExpressionsSupport.scala:729-757`), with the value's
+/// and the column's types. Krishiv cannot tell which value raised: the first such column in
+/// table order.
+fn store_assignment_overflow<'a>(
+    e: &KrishivError,
+    columns: &'a [TableColumn],
+    value_types: &'a [(String, DataType)],
+) -> Option<(&'a str, &'a DataType, &'a DataType)> {
+    if !matches!(e.sql_state(), Some("22003" | "22012")) {
+        return None;
+    }
+    let rank = |t: &DataType| match t {
+        DataType::Byte => Some(1),
+        DataType::Short => Some(2),
+        DataType::Integer => Some(3),
+        DataType::Long => Some(4),
+        _ => None,
+    };
+    let can_overflow = |from: &DataType, to: &DataType| {
+        let target = rank(to).is_some() || matches!(to, DataType::Decimal(..));
+        let up_cast = matches!((rank(from), rank(to)), (Some(a), Some(b)) if a <= b);
+        target && from != to && !up_cast
+    };
+    columns.iter().find_map(|c| {
+        value_types
+            .iter()
+            .find(|(name, value)| {
+                name.eq_ignore_ascii_case(&c.name) && can_overflow(value, &c.data_type)
+            })
+            .map(|(_, value)| (c.name.as_str(), value, &c.data_type))
+    })
 }
 
 /// The touched files (each once) and the total hit count of the find query's rows.
@@ -430,6 +618,16 @@ fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), Krishiv
         }
     }
     Ok((files, hits))
+}
+
+#[cfg(all(test, feature = "delta"))]
+#[test]
+fn the_delta_connector_reads_the_same_option_keys() {
+    use krishiv_connectors_delta::write::dml as d;
+    assert_eq!(AFFECTED_OPTION, d::ROW_LEVEL_AFFECTED_OPTION);
+    assert_eq!(CONDITION_OPTION, d::ROW_LEVEL_CONDITION_OPTION);
+    assert_eq!(SCAN_MS_OPTION, d::ROW_LEVEL_SCAN_MS_OPTION);
+    assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
 }
 
 #[cfg(test)]

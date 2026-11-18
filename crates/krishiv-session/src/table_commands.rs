@@ -1990,6 +1990,13 @@ mod create;
 mod delta;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
+#[cfg(feature = "delta")]
+mod delta_writes;
+#[cfg(feature = "delta")]
+pub(crate) use delta_writes::{DeltaTarget, delta_source};
 
+mod merge;
+mod merge_checks;
+mod merge_source;
 mod pipeline;
 mod row_level;

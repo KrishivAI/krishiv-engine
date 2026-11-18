@@ -23,6 +23,15 @@ then copy ``$OUT/*`` to ``tests/fixtures/delta-4.4.1/``. Each table's ``EXPECTED
 records the rows Spark reads back (ordered by ``id``) and the files of ``_delta_log``, so the
 consuming test checks what the oracle wrote, never a hand-written value.
 
+``... /out dml`` writes the DML oracle (``dml_cases``): per scenario a ``before`` table and
+``dml/DML.json`` with each ``DELETE``/``UPDATE`` step's output, commits, rows and history.
+
+``... /out merge`` writes the MERGE oracle (``merge_cases``): the same for ``MERGE`` steps, in
+``merge/MERGE.json``, with the file-backed sources the steps read.
+
+``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
+(``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
+
 PR-08b's read-path tables (``scan_tables``) are written by ``... /out scan`` (only those, so the
 checkpoint tables keep their bytes): deletion vectors, column mapping ``name`` and ``id`` (a
 rename, a nested rename and a drop), type widening (``int`` to ``bigint`` and ``float`` to
@@ -62,8 +71,8 @@ def session() -> SparkSession:
     )
 
 
-def write_expected(spark: SparkSession, path: str, notes: dict) -> None:
-    rows = [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()]
+def write_expected(spark: SparkSession, path: str, notes: dict, rows_as_dicts: bool = True) -> None:
+    rows = [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()] if rows_as_dicts else []
     log = sorted(
         os.path.relpath(os.path.join(d, f), os.path.join(path, "_delta_log"))
         for d, _, files in os.walk(os.path.join(path, "_delta_log"))
@@ -119,6 +128,8 @@ def typed(v: object) -> object:
         return {"variant": {"metadata": bytes(row.metadata).hex(), "value": bytes(row.value).hex()}}
     if isinstance(v, list):
         return [typed(x) for x in v]
+    if isinstance(v, dict):
+        return {"map": [[typed(k), typed(x)] for k, x in v.items()]}
     raise TypeError(f"no typed form for {type(v)}")
 
 
@@ -146,6 +157,30 @@ def oracle_error(e: Exception, path: str) -> dict:
         record["parameters"] = {k: v.replace(path, "<path>") for k, v in params.items()}
     message = java.getMessage() if java is not None else str(e)
     record["message"] = (message or "").splitlines()[0].replace(path, "<path>")[:600]
+    # The classified causes below it, nearest first (Spark's `TASK_WRITE_FAILED` wraps the
+    # condition the write raised).
+    causes = []
+    cause = java.getCause() if java is not None else None
+    while cause is not None and len(causes) < 8:
+        try:
+            condition = cause.getErrorClass()
+        except Exception:
+            condition = None
+        if condition is not None:
+            causes.append(
+                {
+                    "jvm_class": cause.getClass().getName(),
+                    "condition": condition,
+                    "sqlstate": cause.getSqlState(),
+                    "parameters": {
+                        k: str(v).replace(path, "<path>") for k, v in dict(cause.getMessageParameters()).items()
+                    },
+                    "message": (cause.getMessage() or "").splitlines()[0].replace(path, "<path>")[:600],
+                }
+            )
+        cause = cause.getCause()
+    if causes:
+        record["causes"] = causes
     return record
 
 
@@ -162,7 +197,7 @@ def protocol(path: str) -> dict:
     return found
 
 
-def write_scan_expected(spark: SparkSession, path: str, notes: dict) -> None:
+def write_scan_expected(spark: SparkSession, path: str, notes: dict, rows_as_dicts: bool = True) -> None:
     df = spark.read.format("delta").load(path)
     rows = df.orderBy("id").collect()
     dv_storage: set[str] = set()
@@ -184,7 +219,7 @@ def write_scan_expected(spark: SparkSession, path: str, notes: dict) -> None:
         "dv_storage_types": sorted(dv_storage),
         "timezone": spark.conf.get("spark.sql.session.timeZone"),
     }
-    write_expected(spark, path, notes)
+    write_expected(spark, path, notes, rows_as_dicts)
 
 
 def drop_hadoop_crc(out: str) -> None:
@@ -563,8 +598,1148 @@ def session_probes(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
-def main(out: str, which: str = "checkpoint") -> None:
+def commits(path: str) -> list[dict]:
+    """Every JSON commit of the table's log, in version order: its version, ``commitInfo``
+    (``timestamp``, ``txnId`` and ``engineInfo`` dropped), the protocol and metadata actions, and
+    its ``add`` and ``remove`` actions (``stats`` parsed; times and sizes dropped)."""
+    log = os.path.join(path, "_delta_log")
+    out = []
+    for name in sorted(n for n in os.listdir(log) if n.endswith(".json") and n[0].isdigit()):
+        record: dict = {"version": int(name.split(".")[0]), "adds": [], "removes": []}
+        with open(os.path.join(log, name)) as f:
+            for line in f:
+                action = json.loads(line)
+                if "commitInfo" in action:
+                    info = dict(action["commitInfo"])
+                    for k in ("timestamp", "txnId", "engineInfo", "inCommitTimestamp"):
+                        info.pop(k, None)
+                    record["commitInfo"] = info
+                elif "add" in action:
+                    add = action["add"]
+                    record["adds"].append(
+                        {
+                            "path": add["path"],
+                            "partitionValues": add["partitionValues"],
+                            "stats": json.loads(add["stats"]) if add.get("stats") else None,
+                        }
+                    )
+                elif "remove" in action:
+                    rm = action["remove"]
+                    removed = {"path": rm["path"], "partitionValues": rm.get("partitionValues")}
+                    if rm.get("deletionVector"):
+                        removed["deletionVector"] = rm["deletionVector"]
+                    record["removes"].append(removed)
+                elif "protocol" in action:
+                    record["protocol"] = action["protocol"]
+                elif "metaData" in action:
+                    record["partitionColumns"] = action["metaData"]["partitionColumns"]
+        out.append(record)
+    return out
+
+
+#: The ``stats`` table's columns: every type delta-spark keeps min/max for, the types it keeps
+#: only null counts for, nested columns and a partition column (no statistics).
+STATS_SCHEMA = (
+    "id INT, k INT, b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(10, 2), "
+    "dec38 DECIMAL(38, 4), str STRING, dt DATE, ts TIMESTAMP, ntz TIMESTAMP_NTZ, bool BOOLEAN, "
+    "bin BINARY, st STRUCT<x: INT, y: STRING>, arr ARRAY<INT>, m MAP<STRING, INT>, p STRING"
+)
+
+#: One INSERT per case (one file each): ``k`` names the case. The string cases are delta-spark's
+#: truncation rules (`StatisticsCollection.truncateMinStringAgg`/`truncateMaxStringAgg`, prefix
+#: 32): exactly 32 characters, 33, a surrogate pair across the cut, a non-ASCII character after
+#: it (the U+10FFFF tie-breaker), U+10FFFF characters after it (skipped), and so many of them
+#: that the max is dropped.
+STATS_CASES = [
+    "(1, 1, 1, 10, 100, 1000, 1.5, 2.5, 12.34, 123456789012345678901234567890.1234, 'abc', "
+    "DATE'2024-01-01', TIMESTAMP'2024-01-01 12:30:45.123456', TIMESTAMP_NTZ'2024-01-01 12:30:45.5', "
+    "true, X'0102', named_struct('x', 1, 'y', 'yy'), array(1, 2), map('a', 1), 'x'), "
+    "(3, 2, -5, -10, -100, -1000, -0.5, -2.5, -12.34, -1.0001, 'abd', DATE'1969-12-31', "
+    "TIMESTAMP'1969-12-31 23:59:59.999999', TIMESTAMP_NTZ'1900-01-01 00:00:00', false, NULL, "
+    "named_struct('x', NULL, 'y', 'aa'), NULL, NULL, 'x'), "
+    "(4, 3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
+    "NULL, NULL, 'x')",
+    "(5, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'y')",
+    "(6, 5, NULL, NULL, NULL, NULL, CAST('NaN' AS FLOAT), CAST('NaN' AS DOUBLE), NULL, NULL, NULL, NULL, "
+    "NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x'), (7, 5, NULL, NULL, NULL, NULL, CAST(-0.0 AS FLOAT), "
+    "1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x')",
+]
+STATS_STRINGS = [
+    "a" * 32,
+    "a" * 33,
+    "z" * 40,
+    "a" * 31 + "\U0001f600" + "bc",
+    "a" * 32 + "é" * 3,
+    "a" * 32 + "\U0010ffff" * 2 + "b",
+    "a" * 32 + "\U0010ffff" * 20 + "b",
+    "é" * 40,
+]
+
+
+def sql_string(v: str) -> str:
+    return "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def stats_table(spark: SparkSession, out: str) -> None:
+    """``write-stats``: one file per case of ``STATS_CASES`` and ``STATS_STRINGS`` (``k`` from
+    10 on), so ``delta_stats_match_spark`` writes each case's rows with Krishiv and compares its
+    ``stats`` with the oracle's."""
+    path = os.path.join(out, "write-stats")
+    spark.sql(f"CREATE TABLE delta.`{path}` ({STATS_SCHEMA}) USING delta PARTITIONED BY (p)")
+    for case in STATS_CASES:
+        spark.sql(f"INSERT INTO delta.`{path}` VALUES {case}")
+    nulls = ", ".join(["NULL"] * 8)
+    for n, v in enumerate(STATS_STRINGS):
+        spark.sql(
+            f"INSERT INTO delta.`{path}` VALUES ({100 + n}, {10 + n}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
+            f"{sql_string(v)}, {nulls}, 'x')"
+        )
+    # The rows by case, and every commit's adds with their parsed stats.
+    # `rows` stays empty: its NaN cells are not JSON (``typed_rows`` has them as strings).
+    write_scan_expected(
+        spark, path, {"feature": "stats", "commits": commits(path), "strings": STATS_STRINGS}, rows_as_dicts=False
+    )
+
+
+def run_steps(spark: SparkSession, path: str, steps: list[tuple[str, Any]]) -> list[dict]:
+    """Runs each named step (SQL text, or a callable of the session) on the table at ``path``
+    and records its outcome: the error, or the rows read back (by ``id``) and the commit it
+    wrote."""
+    out = []
+    for name, step in steps:
+        before = len(commits(path)) if os.path.isdir(os.path.join(path, "_delta_log")) else 0
+        record: dict = {"step": name}
+        if isinstance(step, str):
+            record["sql"] = step.replace(path, "<path>")
+        try:
+            spark.sql(step).collect() if isinstance(step, str) else step(spark)
+            record["error"] = None
+        except Exception as e:  # the oracle's error is the record
+            record["error"] = oracle_error(e, path)
+        if os.path.isdir(os.path.join(path, "_delta_log")):
+            log = commits(path)
+            record["commits"] = log[before:]
+            df = spark.read.format("delta").load(path)
+            record["rows"] = [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()]
+        out.append(record)
+    return out
+
+
+def write_modes(spark: SparkSession, out: str) -> None:
+    """``WRITES.json``: the write modes against the oracle (``write_modes_match_oracle``), each
+    step on a table partitioned by ``p``: CTAS, append, overwrite (truncate), dynamic partition
+    overwrite, ``replaceWhere`` (matching and not), a static partition overwrite, v1
+    ``saveAsTable`` overwrite (same schema, another schema) and an overwrite of an append-only
+    table. Each step records the oracle's error or its commit and rows."""
+    path = os.path.join(out, "write-modes")
+    t = f"delta.`{path}`"
+
+    def replace_where(where: str, rows: str):
+        def step(s: SparkSession) -> None:
+            s.sql(f"SELECT * FROM VALUES {rows} AS v(id, v, p)").selectExpr(
+                "CAST(id AS BIGINT) AS id", "v", "p"
+            ).write.format("delta").mode("overwrite").option("replaceWhere", where).save(path)
+
+        return step
+
+    def dynamic(s: SparkSession) -> None:
+        s.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        try:
+            s.sql(f"INSERT OVERWRITE {t} VALUES (20, 'dyn', 'x'), (21, 'dyn', 'z')").collect()
+        finally:
+            s.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+    steps: list[tuple[str, Any]] = [
+        (
+            "ctas",
+            f"CREATE TABLE {t} USING delta PARTITIONED BY (p) AS "
+            "SELECT CAST(id AS BIGINT) AS id, v, p FROM VALUES (1, 'a', 'x'), (2, 'b', 'y') AS s(id, v, p)",
+        ),
+        ("append", f"INSERT INTO {t} VALUES (3, 'c', 'x'), (4, 'd', NULL)"),
+        ("overwrite", f"INSERT OVERWRITE {t} VALUES (5, 'e', 'x'), (6, 'f', 'y')"),
+        ("append_again", f"INSERT INTO {t} VALUES (7, 'g', 'y'), (8, 'h', 'z')"),
+        ("dynamic_overwrite", dynamic),
+        ("replace_where", replace_where("p = 'y'", "(30, 'rw', 'y')")),
+        ("replace_where_mismatch", replace_where("p = 'y'", "(31, 'rw', 'x')")),
+        ("static_partition_overwrite", f"INSERT OVERWRITE {t} PARTITION (p = 'z') VALUES (40, 'st')"),
+        (
+            "insert_overwrite_dataframe_mode",
+            lambda s: (
+                s.sql("SELECT CAST(50 AS BIGINT) AS id, 'df' AS v, 'x' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .save(path)
+            ),
+        ),
+        (
+            "append_dataframe",
+            lambda s: (
+                s.sql("SELECT CAST(51 AS BIGINT) AS id, 'df' AS v, 'w' AS p")
+                .write.format("delta")
+                .mode("append")
+                .save(path)
+            ),
+        ),
+        (
+            "save_errorifexists",
+            lambda s: s.sql("SELECT CAST(52 AS BIGINT) AS id, 'df' AS v, 'w' AS p").write.format("delta").save(path),
+        ),
+        (
+            "save_ignore",
+            lambda s: (
+                s.sql("SELECT CAST(53 AS BIGINT) AS id, 'df' AS v, 'w' AS p")
+                .write.format("delta")
+                .mode("ignore")
+                .save(path)
+            ),
+        ),
+        ("insert_reading_itself", f"INSERT INTO {t} SELECT id + 100, v, p FROM {t}"),
+    ]
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "steps": run_steps(spark, path, steps),
+    }
+
+    # v1 saveAsTable(mode=overwrite) on an existing catalog table.
+    managed = os.path.join(out, "write-save-as-table")
+    spark.sql(
+        f"CREATE TABLE sat USING delta PARTITIONED BY (p) LOCATION '{managed}' AS "
+        "SELECT CAST(1 AS BIGINT) AS id, 'a' AS v, 'x' AS p"
+    )
+    sat_steps: list[tuple[str, Any]] = [
+        (
+            "save_as_table_overwrite_same_schema",
+            lambda s: (
+                s.sql("SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .partitionBy("p")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_overwrite_other_schema",
+            lambda s: (
+                s.sql("SELECT CAST(3 AS BIGINT) AS id, 3 AS other, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .partitionBy("p")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_overwrite_other_partitioning",
+            lambda s: (
+                s.sql("SELECT CAST(4 AS BIGINT) AS id, 'd' AS v, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_append",
+            lambda s: (
+                s.sql("SELECT CAST(5 AS BIGINT) AS id, 'e' AS v, 'x' AS p")
+                .write.format("delta")
+                .mode("append")
+                .saveAsTable("sat")
+            ),
+        ),
+    ]
+    record["save_as_table"] = run_steps(spark, managed, sat_steps)
+    spark.sql("DROP TABLE IF EXISTS sat")
+
+    ao = os.path.join(out, "write-append-only")
+    spark.sql(
+        f"CREATE TABLE delta.`{ao}` (id BIGINT, p STRING) USING delta PARTITIONED BY (p) "
+        "TBLPROPERTIES ('delta.appendOnly' = 'true')"
+    )
+    spark.sql(f"INSERT INTO delta.`{ao}` VALUES (1, 'x')")
+    record["append_only"] = run_steps(
+        spark,
+        ao,
+        [
+            ("append", f"INSERT INTO delta.`{ao}` VALUES (2, 'y')"),
+            ("overwrite", f"INSERT OVERWRITE delta.`{ao}` VALUES (3, 'x')"),
+        ],
+    )
+    created = os.path.join(out, "write-created")
+    record["create_new_location"] = run_steps(
+        spark,
+        created,
+        [("create", f"CREATE TABLE delta.`{created}` (id BIGINT, p STRING) USING delta PARTITIONED BY (p)")],
+    )
+    record["ctas_existing_location"] = run_steps(
+        spark,
+        created,
+        [("ctas", f"CREATE TABLE ctas_x USING delta LOCATION '{created}' AS SELECT CAST(1 AS BIGINT) AS id, 'x' AS p")],
+    )
+    spark.sql("DROP TABLE IF EXISTS ctas_x")
+    for d in (path, managed, ao, created):
+        shutil.rmtree(d, ignore_errors=True)
+    with open(os.path.join(out, "WRITES.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+#: Tables for the writer allow-list (design section 4.2): each created by delta-spark with one
+#: row. ``refused`` rows are features Krishiv does not write; the others it appends to.
+WRITE_FEATURE_TABLES: list[tuple[str, bool, list[str]]] = [
+    ("append-only", False, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true')"]),
+    (
+        "change-data-feed",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"],
+    ),
+    (
+        "column-mapping",
+        False,
+        [
+            "CREATE TABLE {t} (id BIGINT, s STRUCT<x: INT>) USING delta "
+            "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+        ],
+    ),
+    (
+        "deletion-vectors",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"],
+    ),
+    (
+        "domain-metadata",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.domainMetadata' = 'supported')"],
+    ),
+    (
+        "in-commit-timestamp",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')"],
+    ),
+    (
+        "v2-checkpoint",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"],
+    ),
+    (
+        "vacuum-protocol-check",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.vacuumProtocolCheck' = 'supported')"],
+    ),
+    ("timestamp-ntz", False, ["CREATE TABLE {t} (id BIGINT, n TIMESTAMP_NTZ) USING delta"]),
+    (
+        "type-widening",
+        False,
+        ["CREATE TABLE {t} (id BIGINT, i INT) USING delta TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"],
+    ),
+    (
+        "row-tracking",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableRowTracking' = 'true')"],
+    ),
+    (
+        "iceberg-compat-v2",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.columnMapping.mode' = 'name', "
+            "'delta.enableIcebergCompatV2' = 'true')"
+        ],
+    ),
+    ("clustering", True, ["CREATE TABLE {t} (id BIGINT) USING delta CLUSTER BY (id)"]),
+    (
+        "check-constraints",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.checkConstraints' = 'supported')"],
+    ),
+    ("generated-columns", True, ["CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS (id * 2)) USING delta"]),
+    ("identity-columns", True, ["CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS IDENTITY) USING delta"]),
+    (
+        "column-defaults",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')"],
+    ),
+    ("legacy-1-3", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '3')"]),
+    ("legacy-1-4", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '4')"]),
+    (
+        "legacy-2-5",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+            "'delta.minWriterVersion' = '5')"
+        ],
+    ),
+    (
+        "legacy-2-6",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+            "'delta.minWriterVersion' = '6')"
+        ],
+    ),
+    (
+        "check-on-1-2",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta",
+            "ALTER TABLE {t} ADD CONSTRAINT positive CHECK (id > 0)",
+        ],
+    ),
+]
+
+
+def write_feature_tables(spark: SparkSession, out: str) -> None:
+    """``write-features/<name>``: one table per row of ``WRITE_FEATURE_TABLES`` with one row
+    (``id`` = 1, other columns NULL), and ``write-features/FEATURES.json`` with each table's
+    protocol, what created it and whether Krishiv refuses writes to it."""
+    root = os.path.join(out, "write-features")
+    os.makedirs(root, exist_ok=True)
+    report: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "tables": {},
+    }
+    for name, refused, sqls in WRITE_FEATURE_TABLES:
+        path = os.path.join(root, name)
+        t = f"delta.`{path}`"
+        entry: dict = {"refused": refused, "created_by": [q.replace("{t}", "<t>") for q in sqls]}
+        try:
+            for q in sqls:
+                spark.sql(q.format(t=t)).collect()
+            spark.sql(f"INSERT INTO {t} (id) VALUES (1)").collect()
+        except Exception as e:  # the oracle's error is the record
+            entry["error"] = oracle_error(e, path)
+            shutil.rmtree(path, ignore_errors=True)
+            report["tables"][name] = entry
+            continue
+        entry["protocol"] = protocol(path)
+        df = spark.read.format("delta").load(path)
+        entry["fields"] = [f.name for f in df.schema.fields]
+        entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()]
+        report["tables"][name] = entry
+    with open(os.path.join(root, "FEATURES.json"), "w") as f:
+        json.dump(report, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+#: The DML scenarios (``gen_delta_fixtures.py /out dml``): a table set up by ``setup`` (``{t}`` is
+#: the table), copied to ``dml/<name>/before``, then each step run on its own copy of ``before``.
+#: A step is (name, SQL, Spark confs set around it).
+DML_COLUMNS = "id BIGINT, v STRING, n INT"
+DML_ROWS = [
+    "(1, 'a', 1), (2, 'b', NULL), (3, 'c', 3)",
+    "(4, 'd', 4), (5, NULL, 50), (6, 'f', NULL)",
+]
+DML_PART_ROWS = [
+    "(1, 'a', 1, 'x'), (2, 'b', NULL, 'x'), (3, 'c', 3, 'y')",
+    "(4, 'd', 4, 'y'), (5, NULL, 50, NULL), (6, 'f', NULL, 'z')",
+]
+NO_DVS = {
+    "spark.databricks.delta.delete.deletionVectors.persistent": "false",
+    "spark.databricks.delta.update.deletionVectors.persistent": "false",
+}
+DML_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "unpartitioned",
+        [f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta"] + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_ROWS],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_null_condition", "DELETE FROM {t} WHERE n > 3", {}),
+            ("delete_whole_file_by_rows", "DELETE FROM {t} WHERE id <= 3", {}),
+            ("delete_nothing", "DELETE FROM {t} WHERE id = 999", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("delete_alias", "DELETE FROM {t} AS x WHERE x.v = 'c' OR x.v IS NULL", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u', n = n + 1 WHERE id >= 3", {}),
+            ("update_null_condition", "UPDATE {t} SET n = 0 WHERE n < 4", {}),
+            ("update_is_null", "UPDATE {t} SET n = -1 WHERE n IS NULL", {}),
+            ("update_all", "UPDATE {t} SET v = concat(v, '!')", {}),
+            ("update_store_assignment", "UPDATE {t} SET n = id * 10, v = 7 WHERE id = 1", {}),
+            ("update_overflow", "UPDATE {t} SET n = id * 10000000000 WHERE id = 1", {}),
+            ("update_nothing", "UPDATE {t} SET n = 0 WHERE id = 999", {}),
+            # Errors raised while the new values are written (`TASK_WRITE_FAILED` around them).
+            ("update_divide_by_zero", "UPDATE {t} SET n = n div 0 WHERE id = 1", {}),
+            ("update_arithmetic_overflow", "UPDATE {t} SET n = n + 2147483647 WHERE id = 3", {}),
+            ("update_explicit_cast_overflow", "UPDATE {t} SET n = CAST(id * 10000000000 AS INT) WHERE id = 1", {}),
+            # Subqueries in the condition (delta-spark refuses them).
+            ("delete_in_subquery", "DELETE FROM {t} WHERE id IN (SELECT id FROM {t} WHERE n = 3)", {}),
+            ("delete_exists_subquery", "DELETE FROM {t} WHERE EXISTS (SELECT 1)", {}),
+            ("delete_scalar_subquery", "DELETE FROM {t} WHERE id = (SELECT max(id) FROM {t})", {}),
+            ("update_in_subquery", "UPDATE {t} SET n = 0 WHERE id IN (SELECT 2)", {}),
+        ],
+    ),
+    (
+        "partitioned",
+        [f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p)"]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("delete_partition_null", "DELETE FROM {t} WHERE p IS NULL", {}),
+            ("delete_partition_in", "DELETE FROM {t} WHERE p IN ('y', 'z')", {}),
+            ("delete_partition_and_rows", "DELETE FROM {t} WHERE p = 'y' AND id = 3", {}),
+            ("delete_rows_any_partition", "DELETE FROM {t} WHERE n IS NULL", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("update_partition_only", "UPDATE {t} SET v = 'all' WHERE p = 'y'", {}),
+            ("update_moves_partition", "UPDATE {t} SET p = 'w' WHERE id = 4", {}),
+            ("update_partition_to_null", "UPDATE {t} SET p = NULL WHERE p = 'z'", {}),
+            ("update_rows", "UPDATE {t} SET n = n * 2 WHERE id > 1", {}),
+            ("delete_partition_and_subquery", "DELETE FROM {t} WHERE p = 'y' AND id IN (SELECT 3)", {}),
+        ],
+    ),
+    (
+        "column-mapping",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS]
+        + ["ALTER TABLE {t} RENAME COLUMN v TO v2"],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE v2 = 'c'", {}),
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("update_rows", "UPDATE {t} SET v2 = 'u' WHERE n IS NOT NULL", {}),
+        ],
+    ),
+    (
+        "deletion-vectors",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+            "INSERT INTO {t} SELECT id, CAST(id AS STRING), CAST(id % 7 AS INT) FROM range(1, 101)",
+            "DELETE FROM {t} WHERE id % 10 = 0",
+        ],
+        [
+            ("delete_rows_copy_on_write", "DELETE FROM {t} WHERE id < 5", NO_DVS),
+            ("update_rows_copy_on_write", "UPDATE {t} SET v = 'u' WHERE n = 3", NO_DVS),
+            ("delete_all", "DELETE FROM {t}", NO_DVS),
+            ("delete_rows_with_dvs", "DELETE FROM {t} WHERE id < 5", {}),
+            ("update_rows_with_dvs", "UPDATE {t} SET v = 'u' WHERE n = 3", {}),
+        ],
+    ),
+    (
+        "change-data-feed",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("delete_rows", "DELETE FROM {t} WHERE id = 3", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 3", {}),
+            ("update_partition_only", "UPDATE {t} SET v = 'u' WHERE p = 'y'", {}),
+        ],
+    ),
+    (
+        # A struct column `s` with a field `p` beside the partition column `p`: `s.p` is the
+        # struct's field, never the partition column (`x.p` under the alias `x` is the partition).
+        "struct-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, s STRUCT<p: INT, q: INT>, p INT) USING delta PARTITIONED BY (p)",
+            "INSERT INTO {t} VALUES (1, named_struct('p', 1, 'q', 1), 1), (2, named_struct('p', 2, 'q', 2), 1)",
+            "INSERT INTO {t} VALUES (3, named_struct('p', 2, 'q', 3), 1), (4, named_struct('p', 1, 'q', 4), 2)",
+            "INSERT INTO {t} VALUES (5, named_struct('p', 3, 'q', 5), 1), (6, named_struct('p', 3, 'q', 6), 2)",
+        ],
+        [
+            ("delete_struct_field", "DELETE FROM {t} WHERE s.p = 1", {}),
+            ("delete_struct_field_none_match", "DELETE FROM {t} WHERE s.p = 9", {}),
+            ("delete_qualified_partition", "DELETE FROM {t} AS x WHERE x.p = 2", {}),
+            ("delete_struct_field_and_partition", "DELETE FROM {t} WHERE p = 1 AND s.p = 2", {}),
+            ("update_struct_field", "UPDATE {t} SET id = id + 100 WHERE s.p = 2", {}),
+        ],
+    ),
+    (
+        # A TIMESTAMP partition column compared with a string literal under a non-UTC session
+        # zone: Spark casts the literal in the session zone.
+        "timestamp-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, ts TIMESTAMP) USING delta PARTITIONED BY (ts)",
+            "INSERT INTO {t} VALUES (1, TIMESTAMP '2024-01-01 00:00:00'), (2, TIMESTAMP '2024-01-01 08:00:00')",
+            "INSERT INTO {t} VALUES (3, TIMESTAMP '2024-01-01 08:00:00'), (4, TIMESTAMP '2024-01-01 16:00:00')",
+        ],
+        [
+            ("delete_string_literal_utc", "DELETE FROM {t} WHERE ts = '2024-01-01 08:00:00'", {}),
+            (
+                "delete_string_literal_zone",
+                "DELETE FROM {t} WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_timestamp_literal_zone",
+                "DELETE FROM {t} WHERE ts = TIMESTAMP '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_string_range_zone",
+                "DELETE FROM {t} WHERE ts < '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "update_string_literal_zone",
+                "UPDATE {t} SET id = id + 100 WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+        ],
+    ),
+    (
+        "append-only",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true')",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[0]}",
+        ],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("update_rows", "UPDATE {t} SET n = 0 WHERE id = 2", {}),
+        ],
+    ),
+]
+
+
+def dml_cases(spark: SparkSession, out: str) -> None:
+    """``dml/``: per scenario of ``DML_SCENARIOS`` the table before the steps (``before``) and
+    ``DML.json``: per step its SQL, the command's output (columns and rows) or error, the commits
+    it wrote, the rows read back (by ``id``) and ``DESCRIBE HISTORY``'s newest row (operation,
+    parameters, metrics). Each step runs on its own copy of ``before``."""
+    root = os.path.join(out, "dml")
+    os.makedirs(root, exist_ok=True)
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py dml",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "scenarios": {},
+    }
+    for name, setup, steps in DML_SCENARIOS:
+        before = os.path.join(root, name, "before")
+        for q in setup:
+            spark.sql(q.format(t=f"delta.`{before}`")).collect()
+        df = spark.read.format("delta").load(before)
+        scenario: dict = {
+            "setup": [q.replace("{t}", "<t>") for q in setup],
+            "fields": [f.name for f in df.schema.fields],
+            "rows": [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()],
+            "versions": len(commits(before)),
+            "steps": [],
+        }
+        for step, sql, confs in steps:
+            work = os.path.join(out, "dml-work", name, step)
+            shutil.copytree(before, work)
+            text = sql.format(t=f"delta.`{work}`")
+            entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
+            for k, v in confs.items():
+                spark.conf.set(k, v)
+            try:
+                result = spark.sql(text)
+                entry["output_fields"] = [f.name for f in result.schema.fields]
+                entry["output"] = [[typed(r[i]) for i in range(len(r))] for r in result.collect()]
+                entry["error"] = None
+            except Exception as e:  # the oracle's error is the record
+                entry["error"] = oracle_error(e, work)
+            finally:
+                for k in confs:
+                    spark.conf.unset(k)
+            log = commits(work)
+            entry["commits"] = log[scenario["versions"] :]
+            back = spark.read.format("delta").load(work)
+            entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in back.orderBy("id").collect()]
+            newest = spark.sql(f"DESCRIBE HISTORY delta.`{work}` LIMIT 1").collect()[0]
+            entry["history"] = {
+                "version": newest["version"],
+                "operation": newest["operation"],
+                "operationParameters": dict(newest["operationParameters"] or {}),
+                "operationMetrics": dict(newest["operationMetrics"] or {}),
+            }
+            scenario["steps"].append(entry)
+            shutil.rmtree(work)
+        record["scenarios"][name] = scenario
+    shutil.rmtree(os.path.join(out, "dml-work"), ignore_errors=True)
+    with open(os.path.join(root, "DML.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+#: MERGE sources: an inline query (ids 2 and 4 match, 7 and NULL do not), one with a target row
+#: matched twice (id 2), one with keys of the `n` column (NULL among them) and an empty one.
+MERGE_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (2, 'B', 20), (4, 'D', 40), (7, 'G', 70), "
+    "(NULL, 'N', 0) AS s(id, v, n)) s"
+)
+MERGE_DUP_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (2, 'x', 1), (2, 'y', 2), (8, 'z', 3) AS s(id, v, n)) s"
+)
+MERGE_N_SRC = "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (10, 'k', 1), (11, 'l', NULL) AS s(id, v, n)) s"
+MERGE_EMPTY_SRC = "(SELECT CAST(1 AS BIGINT) AS id, 'e' AS v, 1 AS n WHERE false) s"
+MERGE_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n) s"
+MERGE_WIDE_SRC = "(SELECT CAST(2 AS BIGINT) AS id, 'W' AS v, 2 AS n, 'extra' AS e) s"
+#: A source without the target's `n` column.
+MERGE_NARROW_SRC = "(SELECT CAST(id AS BIGINT) AS id, v FROM VALUES (2, 'B'), (7, 'G') AS s(id, v)) s"
+MERGE_PART_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n, p FROM VALUES (2, 'B', 20, 'x'), (4, 'D', 40, 'q'), "
+    "(7, 'G', 70, 'q') AS s(id, v, n, p)) s"
+)
+MERGE_PART_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n, 'q' AS p) s"
+#: The rows of the file-backed sources (`<src_parquet>`, `<src_delta>`), written once by the
+#: generator.
+MERGE_FILE_SOURCE = "SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (3, 'P', 30), (9, 'Q', 90) AS s(id, v, n)"
+
+
+AUTO_MERGE = {"spark.databricks.delta.schema.autoMerge.enabled": "true"}
+
+
+def merge_on(src: str, clauses: str, on: str = "t.id = s.id") -> str:
+    return f"MERGE INTO {{t}} t USING {src} ON {on} {clauses}"
+
+
+MERGE_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "unpartitioned",
+        DML_SCENARIOS[0][1],
+        [
+            ("update_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("update_star", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            ("update_qualified_key", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET t.v = s.v, n = t.n + 1"), {}),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            ("insert_star", merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("insert_by_target", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY TARGET THEN INSERT *"), {}),
+            (
+                "insert_values_partial",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)"),
+                {},
+            ),
+            (
+                "insert_two_clauses",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN NOT MATCHED AND s.id > 6 THEN INSERT * "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, 'x', -1)",
+                ),
+                {},
+            ),
+            ("upsert", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("nmbs_delete", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "nmbs_update_conditional",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.n IS NULL THEN UPDATE SET n = -1"),
+                {},
+            ),
+            (
+                "all_kinds",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET n = s.n WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE THEN DELETE",
+                ),
+                {},
+            ),
+            (
+                "clause_order",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED AND s.n > 30 THEN DELETE WHEN MATCHED AND s.n > 10 THEN UPDATE SET n = s.n "
+                    "WHEN NOT MATCHED AND s.id > 6 THEN INSERT * "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, 'x', -1) "
+                    "WHEN NOT MATCHED BY SOURCE AND t.id < 2 THEN UPDATE SET v = 'gone' "
+                    "WHEN NOT MATCHED BY SOURCE AND t.id > 4 THEN DELETE",
+                ),
+                {},
+            ),
+            ("matched_condition_never_holds", merge_on(MERGE_SRC, "WHEN MATCHED AND s.n > 100 THEN DELETE"), {}),
+            (
+                "target_only_on_conjunct",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = 'c'", "t.id = s.id AND t.n > 2"),
+                {},
+            ),
+            (
+                "null_keys",
+                merge_on(
+                    MERGE_N_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE AND t.n IS NULL THEN DELETE",
+                    "t.n = s.n",
+                ),
+                {},
+            ),
+            (
+                "null_safe_keys",
+                merge_on(
+                    MERGE_N_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *", "t.n <=> s.n"
+                ),
+                {},
+            ),
+            ("nothing_matched", merge_on(MERGE_NONE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("empty_source", merge_on(MERGE_EMPTY_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("empty_source_nmbs", merge_on(MERGE_EMPTY_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "store_assignment",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET n = s.id * 10 "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, s.n, s.n)",
+                ),
+                {},
+            ),
+            ("update_overflow", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET n = s.id * 10000000000"), {}),
+            ("multiple_match_update", merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            (
+                "multiple_match_conditional_update",
+                merge_on(MERGE_DUP_SRC, "WHEN MATCHED AND s.v = 'x' THEN UPDATE SET v = s.v"),
+                {},
+            ),
+            ("multiple_match_delete", merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            (
+                "multiple_match_delete_insert",
+                merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("multiple_match_conditional_delete", merge_on(MERGE_DUP_SRC, "WHEN MATCHED AND s.n > 0 THEN DELETE"), {}),
+            ("multiple_match_insert_only", merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "multiple_match_insert_only_unoptimized",
+                merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.merge.optimizeInsertOnlyMerge.enabled": "false"},
+            ),
+            ("multiple_match_nmbs_only", merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "non_last_matched_omits_condition",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE WHEN MATCHED THEN UPDATE SET v = 'x'"),
+                {},
+            ),
+            (
+                "non_last_not_matched_omits_condition",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT * WHEN NOT MATCHED AND s.id > 5 THEN INSERT *"),
+                {},
+            ),
+            (
+                "non_last_nmbs_omits_condition",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY SOURCE AND t.id > 5 THEN DELETE",
+                ),
+                {},
+            ),
+            ("unresolved_source_column", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.zzz"), {}),
+            ("unresolved_target_column", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET zzz = s.v"), {}),
+            (
+                "insert_reads_target",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, t.v, s.n)"),
+                {},
+            ),
+            ("nmbs_reads_source", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = s.v"), {}),
+            ("unresolved_on", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.zzz"), {}),
+            (
+                "insert_duplicate_columns",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, id) VALUES (s.id, s.id)"),
+                {},
+            ),
+            ("update_duplicate_columns", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v, v = 'x'"), {}),
+            ("non_deterministic_on", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.id AND rand() < 2"), {}),
+            ("subquery_in_clause", merge_on(MERGE_SRC, "WHEN MATCHED AND s.id IN (SELECT 2) THEN DELETE"), {}),
+            (
+                "schema_evolution_conf",
+                merge_on(MERGE_WIDE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.schema.autoMerge.enabled": "true"},
+            ),
+            ("star_with_extra_source_column", merge_on(MERGE_WIDE_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            (
+                "source_parquet_files",
+                merge_on(
+                    "(SELECT * FROM parquet.`<src_parquet>`) s",
+                    "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *",
+                ),
+                {},
+            ),
+            (
+                "source_delta_table",
+                merge_on("delta.`<src_delta>` s", "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            # Schema evolution on, but no clause brings a new column: the MERGE runs.
+            (
+                "schema_evolution_conf_no_new_column",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_explicit_assignments",
+                merge_on(
+                    MERGE_WIDE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v = s.e WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)",
+                ),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_narrow_source",
+                merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            ("star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("update_star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            (
+                "subquery_in_insert_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED AND s.id IN (SELECT 7) THEN INSERT *"),
+                {},
+            ),
+            (
+                "subquery_in_nmbs_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.id IN (SELECT 1) THEN DELETE"),
+                {},
+            ),
+            (
+                "subquery_in_update_clause",
+                merge_on(MERGE_SRC, "WHEN MATCHED AND s.id IN (SELECT 2) THEN UPDATE SET v = s.v"),
+                {},
+            ),
+            ("non_deterministic_clause", merge_on(MERGE_SRC, "WHEN MATCHED AND rand() < 2 THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "partitioned",
+        DML_SCENARIOS[1][1],
+        [
+            ("update_moves_partition", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET p = 'w'"), {}),
+            (
+                "upsert_new_partition",
+                merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("nmbs_delete_partition", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN DELETE"), {}),
+            ("on_partition_conjunct", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.id AND t.p = 'y'"), {}),
+            ("insert_only", merge_on(MERGE_PART_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "upsert_and_conditional_nmbs",
+                merge_on(
+                    MERGE_PART_SRC,
+                    "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN UPDATE SET v = 'nmbs'",
+                ),
+                {},
+            ),
+        ],
+    ),
+    (
+        "column-mapping",
+        DML_SCENARIOS[2][1],
+        [
+            (
+                "upsert",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v2 = s.v "
+                    "WHEN NOT MATCHED THEN INSERT (id, v2, n, p) VALUES (s.id, s.v, s.n, 'n')",
+                ),
+                {},
+            ),
+            ("nmbs_delete", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.v2 IS NULL THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "deletion-vectors",
+        DML_SCENARIOS[3][1],
+        [
+            (
+                "update_copy_on_write",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.merge.deletionVectors.persistent": "false"},
+            ),
+        ],
+    ),
+    (
+        "change-data-feed",
+        DML_SCENARIOS[4][1],
+        [
+            ("insert_only", merge_on(MERGE_PART_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "insert_no_match",
+                merge_on(MERGE_PART_NONE_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            (
+                "upsert",
+                merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "append-only",
+        DML_SCENARIOS[-1][1],
+        [
+            ("insert_only", merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("update_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            (
+                "upsert_no_match",
+                merge_on(MERGE_NONE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+        ],
+    ),
+]
+
+
+def cdc_files(path: str, from_version: int) -> int:
+    """The ``cdc`` actions of the table's JSON commits from ``from_version`` on."""
+    log = os.path.join(path, "_delta_log")
+    n = 0
+    for name in sorted(x for x in os.listdir(log) if x.endswith(".json") and x[0].isdigit()):
+        if int(name.split(".")[0]) < from_version:
+            continue
+        with open(os.path.join(log, name)) as f:
+            n += sum(1 for line in f if "cdc" in json.loads(line))
+    return n
+
+
+def merge_cases(spark: SparkSession, out: str) -> None:
+    """``merge/``: as ``dml_cases`` for the ``MERGE`` steps of ``MERGE_SCENARIOS`` (``MERGE.json``),
+    plus the file-backed sources the steps read (``source-parquet``, ``source-delta``; ``<src_parquet>``
+    and ``<src_delta>`` in the SQL) and each step's ``cdc`` action count."""
+    root = os.path.join(out, "merge")
+    os.makedirs(root, exist_ok=True)
+    src_parquet = os.path.join(root, "source-parquet")
+    src_delta = os.path.join(root, "source-delta")
+    spark.sql(MERGE_FILE_SOURCE).coalesce(1).write.parquet(src_parquet)
+    spark.sql(MERGE_FILE_SOURCE).coalesce(1).write.format("delta").save(src_delta)
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py merge",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "scenarios": {},
+    }
+    for name, setup, steps in MERGE_SCENARIOS:
+        before = os.path.join(root, name, "before")
+        for q in setup:
+            spark.sql(q.format(t=f"delta.`{before}`")).collect()
+        df = spark.read.format("delta").load(before)
+        scenario: dict = {
+            "setup": [q.replace("{t}", "<t>") for q in setup],
+            "fields": [f.name for f in df.schema.fields],
+            "rows": [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()],
+            "versions": len(commits(before)),
+            "steps": [],
+        }
+        for step, sql, confs in steps:
+            work = os.path.join(out, "merge-work", name, step)
+            shutil.copytree(before, work)
+            text = (
+                sql.format(t=f"delta.`{work}`").replace("<src_parquet>", src_parquet).replace("<src_delta>", src_delta)
+            )
+            entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
+            for k, v in confs.items():
+                spark.conf.set(k, v)
+            try:
+                result = spark.sql(text)
+                entry["output_fields"] = [f.name for f in result.schema.fields]
+                entry["output"] = [[typed(r[i]) for i in range(len(r))] for r in result.collect()]
+                entry["error"] = None
+            except Exception as e:  # the oracle's error is the record
+                entry["error"] = oracle_error(e, work)
+            finally:
+                for k in confs:
+                    spark.conf.unset(k)
+            log = commits(work)
+            entry["commits"] = log[scenario["versions"] :]
+            entry["cdc_files"] = cdc_files(work, scenario["versions"])
+            back = spark.read.format("delta").load(work)
+            entry["fields"] = [f.name for f in back.schema.fields]
+            entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in back.orderBy("id").collect()]
+            newest = spark.sql(f"DESCRIBE HISTORY delta.`{work}` LIMIT 1").collect()[0]
+            entry["history"] = {
+                "version": newest["version"],
+                "operation": newest["operation"],
+                "operationParameters": dict(newest["operationParameters"] or {}),
+                "operationMetrics": dict(newest["operationMetrics"] or {}),
+            }
+            scenario["steps"].append(entry)
+            shutil.rmtree(work)
+        record["scenarios"][name] = scenario
+    shutil.rmtree(os.path.join(out, "merge-work"), ignore_errors=True)
+    with open(os.path.join(root, "MERGE.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+def readback(spark: SparkSession, out: str, src: str) -> None:
+    """Spark reads the Krishiv-written tables under ``src`` (``krishiv-written/``, made by the
+    connector's ``write_readback_tables``): per table its rows as ``to_json(struct(*))`` by
+    ``id``, ``DESCRIBE HISTORY`` (version and operation), the protocol, a data-skipping count
+    (``id >= 2``) and an append of its own, made on a copy under ``out``. Writes
+    ``out/READBACK.json``."""
+    from pyspark.sql.functions import col, struct, to_json
+
+    tables: dict = {}
+    for name in sorted(os.listdir(src)):
+        path = os.path.join(src, name)
+        if not os.path.isdir(os.path.join(path, "_delta_log")):
+            continue
+        record: dict = {"error": None}
+        try:
+            df = spark.read.format("delta").load(path)
+            record["rows"] = [
+                r[0] for r in df.orderBy("id").select(to_json(struct(*[col(c) for c in df.columns]))).collect()
+            ]
+            record["count_id_ge_2"] = df.where("id >= 2").count()
+            history = spark.sql(f"DESCRIBE HISTORY delta.`{path}`").orderBy("version").collect()
+            record["history"] = [{"version": h["version"], "operation": h["operation"]} for h in history]
+            record["protocol"] = protocol(path)
+        except Exception as e:  # the oracle's error is the record
+            record["error"] = oracle_error(e, path)
+            tables[name] = record
+            continue
+        copy = os.path.join(out, name)
+        shutil.copytree(path, copy)
+        try:
+            df.orderBy("id").limit(1).write.format("delta").mode("append").save(copy)
+            record["spark_append"] = {
+                "error": None,
+                "rows": spark.read.format("delta").load(copy).count(),
+                "protocol": protocol(copy),
+            }
+        except Exception as e:
+            record["spark_append"] = {"error": oracle_error(e, copy)}
+        tables[name] = record
+    with open(os.path.join(out, "READBACK.json"), "w") as f:
+        json.dump(
+            {
+                "format_version": FORMAT_VERSION,
+                "generator": "tests/scripts/gen_delta_fixtures.py readback",
+                "spark": spark.version,
+                "delta_spark": "4.4.1",
+                "tables": tables,
+            },
+            f,
+            indent=1,
+            sort_keys=True,
+        )
+        f.write("\n")
+
+
+def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
+    if which == "readback":
+        readback(spark, out, src)
+        spark.stop()
+        return
+    if which == "merge":
+        merge_cases(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "dml":
+        dml_cases(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "writes":
+        stats_table(spark, out)
+        write_modes(spark, out)
+        write_feature_tables(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
     if which == "session":
         session_probes(spark, out)
         drop_hadoop_crc(out)
@@ -613,4 +1788,4 @@ def main(out: str, which: str = "checkpoint") -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])

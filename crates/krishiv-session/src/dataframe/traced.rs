@@ -15,7 +15,7 @@ use crate::session::RecordBatchStream;
 
 impl DataFrame {
     /// The result stream; with `edge`, on the carriers a caller reads (`carrier.rs`), else on the engine's own.
-    pub(super) async fn execute_stream_here(
+    pub(crate) async fn execute_stream_here(
         &self,
         edge: bool,
     ) -> Result<RecordBatchStream, KrishivError> {

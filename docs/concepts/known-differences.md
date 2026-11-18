@@ -493,3 +493,118 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   raises.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+
+## Delta Lake writes
+
+Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-connectors-delta`,
+`src/write/`). The rows, partition values and statistics match delta-spark 4.4.1 (the oracle in
+`tests/fixtures/delta-4.4.1/`); these parts of the log differ:
+
+- **Protocol.** A table Krishiv creates carries the table-features protocol (reader 3, writer 7)
+  where delta-spark writes (1, 2) for a table with no features. Spark 4.2 with delta-spark 4.4.1
+  reads such tables and appends to them, keeping the protocol
+  (`tests/fixtures/delta-4.4.1/krishiv-written/READBACK.json`).
+- **Operation names.** A CTAS commit records the kernel's `CREATE TABLE` (delta-spark: `CREATE TABLE
+  AS SELECT`) with the kernel's parameters; a v1 `saveAsTable` overwrite of an existing table is
+  recorded as `WRITE` (delta-spark: `CREATE OR REPLACE TABLE AS SELECT`).
+- **commitInfo fields.** `isBlindAppend` is omitted when false (the kernel owns the field);
+  `isDynamicPartitionOverwrite` is the string `"true"`, not a boolean; a `replaceWhere` writes no
+  `numDeletedRows`; `partitionBy` is always `"[]"`.
+- **Constraint text.** The nested `DELTA_VIOLATE_CONSTRAINT_WITH_VALUES` message of a
+  `replaceWhere` mismatch names the constraint by the filter's text, where delta-spark prints its
+  expression tree.
+- **Float bounds.** Statistics order floats by Arrow's total order: a file holding both `-0.0`
+  and `0.0` keeps the other one as its bound (both are written as `0.0`).
+- **Files.** Data files are named `part-00000-<uuid>.c000.snappy.parquet` for every task and roll
+  over at `maxRecordsPerFile` and at a fixed 128 MiB.
+- **Checkpoints.** A checkpoint after a commit is written without the `.crc` file, and a V2
+  checkpoint without sidecars; it runs after the statement returns, and a failure is logged,
+  never raised.
+- **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
+  on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
+  name. A `replaceWhere` or `INSERT OVERWRITE` filter must name partition columns by one-part names:
+  a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
+  so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
+  `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+
+`DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
+command's `num_affected_rows` and the files removed that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dml/DML.json`; Spark reads the tables back, `dml/krishiv-written/`).
+They differ in:
+
+- **Predicate text.** `operationParameters.predicate` holds the condition as written, in
+  parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
+  (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
+  (`UPDATE`).
+- **Deletion vectors.** Krishiv never writes them: on a table with
+  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
+  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
+  partition per task.
+- **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
+  condition is a comparison, `IN` or `IS [NOT] NULL` of partition columns with literals (combined
+  by `AND`, `OR`, `NOT`); delta-spark also takes other expressions of partition columns. Other
+  conditions rewrite (the same rows go, with a rewrite's metrics). A column qualified by the
+  statement's alias counts (`x.p`); a struct field (`s.p`) and a string compared with a
+  `TIMESTAMP` partition column (Spark casts it in the session time zone) make the statement a
+  rewrite. A partition file with no live row is removed only when its statistics prove it
+  (`numRecords` less its deletion vector's cardinality); delta-spark removes every file of the
+  matching partitions.
+- **Partition-only `UPDATE`.** An `UPDATE` whose condition names only partition columns rewrites
+  the files that hold a matching row; delta-spark rewrites every file of the matching partitions,
+  which differs only for files with no live row.
+- **Read predicates.** The conflict check reads by the condition's top-level `AND` conjuncts that
+  translate as partition predicates, and every live file they select is a read file (as
+  delta-spark's `filterFiles`); delta-spark also takes partition-only conjuncts of other forms,
+  which Krishiv reads as the whole table (a concurrent append to any partition conflicts).
+- **Subqueries.** A condition with a subquery is refused with `DELTA_UNSUPPORTED_SUBQUERY` before
+  anything runs, as delta-spark does; its `cond` parameter is the condition as written, where
+  delta-spark prints Catalyst's SQL of the resolved condition. `delete.allowExistsSubquery`
+  (delta-spark's internal flag admitting `EXISTS` in a `DELETE`) is not read.
+- **Write errors.** An error raised while the rewrite writes its rows is `TASK_WRITE_FAILED` (the
+  table's root) caused by the error, as Spark's writer raises it; an overflow of the stored value's
+  cast is `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`, naming the first assigned column whose new value's
+  type casts to the overflowing type. Krishiv's own refusals, conflicts, internal errors and
+  cancellations stay unwrapped.
+- **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
+  are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
+  change data files yet. A `DELETE` of whole partitions commits.
+
+`MERGE INTO` a Delta table (copy-on-write; the session's `table_commands/merge.rs`, the connector's
+`src/write/merge.rs`) leaves the rows, the command's four counts, the files removed and the counted
+`operationMetrics` that delta-spark leaves (`tests/fixtures/delta-4.4.1/merge/MERGE.json`; Spark
+reads the tables back, `merge/krishiv-written/`). It differs in:
+
+- **Predicate text.** `operationParameters.predicate` and the `predicate` of each entry of
+  `matchedPredicates`, `notMatchedPredicates` and `notMatchedBySourcePredicates` are the
+  conditions as written, in parentheses; delta-spark prints Catalyst's form with expression ids.
+  The same holds for the condition in `DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED` and
+  `DELTA_UNSUPPORTED_SUBQUERY` messages.
+- **Unresolved names.** A name that does not resolve in a `MERGE` is `INTERNAL_ERROR` ("Cannot find
+  main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"), the analyzer's `UNRESOLVED_COLUMN.*` as
+  its cause. This matches a delta-spark 4.4.1 defect: its error class file lacks the class it
+  raises. Revisit when a delta-spark release ships the class. A SQL script's handler does not take
+  it (Krishiv's handlers never take `INTERNAL_ERROR`).
+- **Source.** delta-spark copies the source unless the `MERGE` only inserts or the source reads only
+  Delta tables (`MergeIntoMaterializeSource`). Krishiv reads an insert-only `MERGE`'s source once
+  and a source that is one scan of a Delta table at its snapshot; any other source (a query, files)
+  is copied into a spill file of its own first, a batch at a time, and read back from it. An
+  insert-only `MERGE` and a Delta-table source are read once more to count `numSourceRows`.
+- **Read predicates.** The conflict check reads by the `ON` condition's partition-only conjuncts
+  (the whole table with a `NOT MATCHED BY SOURCE` clause); delta-spark also skips data files by
+  the conjuncts' statistics, so Krishiv's read set is wider (a concurrent append to a partition the
+  `ON` condition does not exclude conflicts).
+- **Change data feed.** On a table with it on, a `MERGE` that removes a file is refused
+  (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written; delta-spark commits it with
+  change data files. A `MERGE` that only inserts commits, as delta-spark's does (with no change
+  data files).
+- **Schema evolution.** Under `spark.databricks.delta.schema.autoMerge.enabled = true` a `MERGE`
+  that would add a column (a `*` clause whose source has a column the target lacks, an
+  assignment to a source column the target lacks) is refused (`KRISHIV_UNSUPPORTED_FEATURE`); other
+  `MERGE`s run, with `*` taking the target columns the source has. `MERGE WITH SCHEMA EVOLUTION`
+  does not parse.
+- **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
+  assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
+  `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
+- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
+  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.

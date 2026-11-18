@@ -487,3 +487,417 @@ fn assignments_are_checked_before_anything_runs() {
     );
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
 }
+
+mod merge {
+    use super::*;
+    use crate::table_commands::merge::{ClauseAction, ClauseKind, MergeClause, MergeStatement};
+
+    const SOURCE: &str =
+        "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'u2'), (10, 'n10') AS v(id, s)";
+
+    fn clause(kind: ClauseKind, condition: Option<&str>, action: ClauseAction) -> MergeClause {
+        MergeClause {
+            kind,
+            condition: condition.map(str::to_owned),
+            action,
+        }
+    }
+
+    fn statement(source: &str, clauses: Vec<MergeClause>) -> MergeStatement {
+        MergeStatement {
+            target: "`t`".to_owned(),
+            target_alias: "t".to_owned(),
+            source: source.to_owned(),
+            source_alias: "src".to_owned(),
+            on: "t.id = src.id".to_owned(),
+            clauses,
+        }
+    }
+
+    fn try_merge(
+        session: &Session,
+        m: MergeStatement,
+    ) -> Result<Option<crate::dataframe::DataFrame>, krishiv_common::error::KrishivError> {
+        let s = session.clone();
+        block_on(session.on_executor(async move { s.run_merge(&m).await }))
+    }
+
+    fn merge(session: &Session, m: MergeStatement) -> Vec<RecordBatch> {
+        let df = try_merge(session, m).unwrap().unwrap();
+        block_on(df.collect()).unwrap()
+    }
+
+    fn strings(files: &Files) -> Vec<(i64, String)> {
+        let mut out: Vec<(i64, String)> = files
+            .lock()
+            .iter()
+            .flat_map(|(_, b)| {
+                let ids = b.column(0).as_primitive::<Int64Type>().values().to_vec();
+                let s: Vec<String> = (0..b.num_rows())
+                    .map(|i| b.column(1).as_string_view().value(i).to_owned())
+                    .collect();
+                ids.into_iter().zip(s).collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn merge_updates_matched_rows_and_inserts_the_others_rewriting_only_touched_files() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let out = merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![
+                    clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", "src.s")]),
+                    ),
+                    clause(ClauseKind::NotMatched, None, ClauseAction::InsertStar),
+                ],
+            ),
+        );
+        assert_eq!(affected(&out), 2);
+        assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let rows = strings(&files);
+        assert!(rows.contains(&(2, "u2".to_owned())), "{rows:?}");
+        assert!(rows.contains(&(10, "n10".to_owned())), "{rows:?}");
+        // f0 (ids 1..=3) replaced; f1, f2 untouched.
+        assert_eq!(files.names(), ["f1", "f2", "f3"]);
+        assert_eq!(files.commits.load(Ordering::Relaxed), 1);
+        assert_eq!(session.memory_reserved(), 0);
+    }
+
+    #[test]
+    fn merge_clauses_fire_in_order_within_their_kind_and_by_source_rows_are_reached() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let out = merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![
+                    clause(
+                        ClauseKind::Matched,
+                        Some("src.s = 'u2'"),
+                        ClauseAction::Delete,
+                    ),
+                    clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", "'never'")]),
+                    ),
+                    clause(
+                        ClauseKind::NotMatchedBySource,
+                        Some("t.id > 8"),
+                        ClauseAction::Delete,
+                    ),
+                    clause(
+                        ClauseKind::NotMatchedBySource,
+                        Some("t.id = 1"),
+                        ClauseAction::Update(vec![set("s", "'by source'")]),
+                    ),
+                ],
+            ),
+        );
+        // id 2 deleted (first matched clause), 9 deleted, 1 updated; 10 not inserted.
+        assert_eq!(affected(&out), 3);
+        assert_eq!(files.ids(), [1, 3, 4, 5, 6, 7, 8]);
+        assert!(strings(&files).contains(&(1, "by source".to_owned())));
+        // A `NOT MATCHED BY SOURCE` clause touches every file.
+        assert_eq!(files.names(), ["f3"]);
+    }
+
+    #[test]
+    fn multiple_matches_raise_deltas_class_unless_the_only_matched_clause_deletes() {
+        use krishiv_common::error::ErrorClass;
+        let dup = "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'a'), (2, 'b') AS v(id, s)";
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let e = try_merge(
+            &session,
+            statement(
+                dup,
+                vec![clause(
+                    ClauseKind::Matched,
+                    Some("src.s = 'a'"),
+                    ClauseAction::Update(vec![set("s", "src.s")]),
+                )],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DeltaMultipleSourceRowMatchingTargetRowInMerge
+        );
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+        // One unconditional DELETE: exempt, and the row counts once.
+        let out = merge(
+            &session,
+            statement(
+                dup,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::Delete)],
+            ),
+        );
+        assert_eq!(affected(&out), 1);
+        assert_eq!(files.ids(), [1, 3, 4, 5, 6, 7, 8, 9]);
+        // Insert-only: no check, no file touched.
+        merge(
+            &session,
+            statement(
+                "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'a'), (2, 'b'), (11, 'c') AS v(id, s)",
+                vec![clause(
+                    ClauseKind::NotMatched,
+                    None,
+                    ClauseAction::InsertStar,
+                )],
+            ),
+        );
+        assert_eq!(files.ids(), [1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 11]);
+        // The files the delete left stay; the inserts are a new file.
+        assert_eq!(files.names(), ["f1", "f2", "f3", "f4"]);
+    }
+
+    #[test]
+    fn a_failed_merge_rewrite_commits_nothing() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![clause(
+                    ClauseKind::Matched,
+                    None,
+                    ClauseAction::Update(vec![set("id", "CAST(t.s AS BIGINT) + 0")]),
+                )],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::CastInvalidInput,
+            "{e}"
+        );
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+        assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn a_table_without_a_row_level_table_keeps_the_refusal() {
+        let files = Files::new();
+        let (session, _) = session_with(&files, false, true);
+        let none = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::Delete)],
+            ),
+        )
+        .unwrap();
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn clause_scopes_and_order_are_checked_before_anything_runs() {
+        use krishiv_common::error::ErrorClass;
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let class = |clauses| {
+            try_merge(&session, statement(SOURCE, clauses))
+                .unwrap_err()
+                .error_class()
+        };
+        assert_eq!(
+            class(vec![
+                clause(ClauseKind::Matched, None, ClauseAction::Delete),
+                clause(ClauseKind::Matched, None, ClauseAction::Delete),
+            ]),
+            ErrorClass::NonLastMatchedClauseOmitCondition
+        );
+        // A `NOT MATCHED` clause sees only the source (a test table is no Delta table: the
+        // analyzer's own error).
+        assert_eq!(
+            class(vec![clause(
+                ClauseKind::NotMatched,
+                None,
+                ClauseAction::Insert(vec![set("id", "t.id")]),
+            )]),
+            ErrorClass::UnresolvedColumnWithSuggestion
+        );
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    }
+
+    /// Without a table hook (`RowLevelTable::error`), a subquery or a non-deterministic
+    /// condition is refused by Krishiv's own class; no table format's class appears.
+    #[test]
+    fn a_table_without_an_error_hook_gets_the_planners_own_refusals() {
+        use krishiv_common::error::ErrorClass;
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let class = |condition: &str| {
+            try_merge(
+                &session,
+                statement(
+                    SOURCE,
+                    vec![clause(
+                        ClauseKind::Matched,
+                        Some(condition),
+                        ClauseAction::Delete,
+                    )],
+                ),
+            )
+            .unwrap_err()
+            .error_class()
+        };
+        assert_eq!(
+            class("src.id IN (SELECT 2)"),
+            ErrorClass::KrishivUnsupportedFeature
+        );
+        assert_eq!(class("rand() < 2"), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    }
+
+    /// Under `spark.databricks.delta.schema.autoMerge.enabled` only a MERGE that would add a
+    /// column is refused; `*` takes the target columns the source has.
+    #[test]
+    fn schema_evolution_refuses_only_a_merge_that_adds_a_column() {
+        use krishiv_common::error::ErrorClass;
+        let files = Files::new();
+        let (session, _) = session(&files);
+        block_on(session.sql("SET spark.databricks.delta.schema.autoMerge.enabled = true"))
+            .unwrap();
+        let wide = "SELECT CAST(2 AS BIGINT) AS id, 'w' AS s, 1 AS extra";
+        let e = try_merge(
+            &session,
+            statement(
+                wide,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::UpdateStar)],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        // A narrow source: `INSERT *` gives the missing column NULL.
+        merge(
+            &session,
+            statement(
+                "SELECT CAST(20 AS BIGINT) AS id",
+                vec![clause(
+                    ClauseKind::NotMatched,
+                    None,
+                    ClauseAction::InsertStar,
+                )],
+            ),
+        );
+        assert!(files.ids().contains(&20));
+        // Without the conf the narrow source is an unresolved name.
+        block_on(session.sql("SET spark.databricks.delta.schema.autoMerge.enabled = false"))
+            .unwrap();
+        let e = try_merge(
+            &session,
+            statement(
+                "SELECT CAST(21 AS BIGINT) AS id",
+                vec![clause(
+                    ClauseKind::NotMatched,
+                    None,
+                    ClauseAction::InsertStar,
+                )],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnresolvedColumnWithSuggestion,
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_case_sensitive_session_is_refused() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        block_on(session.sql("SET spark.sql.caseSensitive = true")).unwrap();
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![clause(ClauseKind::Matched, None, ClauseAction::Delete)],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        );
+    }
+
+    /// A pinned provider whose scan applies filters exactly (a `MemoryTable`): a filtered source
+    /// over it is a bare scan with the filter pushed in, never the whole table.
+    #[derive(Debug)]
+    struct Pinned(MemoryTable);
+
+    impl TableProvider for Pinned {
+        fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+            self.0.scan()
+        }
+
+        fn pinned(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_filtered_source_over_a_pinned_exact_filtering_table_merges_only_its_rows() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let src = Pinned(MemoryTable::new(schema(), vec![Batch::new(rows(&[2, 3]))]));
+        session.state.catalog.put(
+            "src_table",
+            crate::catalog::TempTable::Provider {
+                columns: vec![
+                    TableColumn {
+                        name: "id".to_owned(),
+                        data_type: krishiv_types::DataType::Long,
+                        nullable: true,
+                        char_varchar: None,
+                    },
+                    TableColumn {
+                        name: "s".to_owned(),
+                        data_type: krishiv_types::DataType::String,
+                        nullable: true,
+                        char_varchar: None,
+                    },
+                ],
+                table: Arc::new(src),
+            },
+        );
+        let update = || {
+            vec![clause(
+                ClauseKind::Matched,
+                None,
+                ClauseAction::Update(vec![set("s", "concat(src.s, '!')")]),
+            )]
+        };
+        let out = merge(
+            &session,
+            statement("SELECT * FROM src_table WHERE id = 2", update()),
+        );
+        assert_eq!(affected(&out), 1);
+        let changed: Vec<_> = strings(&files)
+            .into_iter()
+            .filter(|(_, s)| s.ends_with('!'))
+            .collect();
+        assert_eq!(changed, [(2, "s2!".to_owned())]);
+        // The bare scan is read as the pinned provider: both rows.
+        let out = merge(&session, statement("SELECT * FROM src_table", update()));
+        assert_eq!(affected(&out), 2);
+    }
+}

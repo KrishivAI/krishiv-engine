@@ -82,6 +82,14 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         let _ = op;
         None
     }
+
+    /// Whether every scan of this provider reads the same rows (a table-format snapshot at one
+    /// version, an immutable in-memory table): a statement that reads it twice, as `MERGE`
+    /// reads its source, need not copy it first. The default is no (a file listing is taken
+    /// again per scan).
+    fn pinned(&self) -> bool {
+        false
+    }
 }
 
 /// Finds the provider of the table a resolved scan reads, at the version
@@ -244,6 +252,10 @@ impl TableProvider for SpilledTable {
             rows: self.file.num_rows(),
             ..TableStats::default()
         })
+    }
+
+    fn pinned(&self) -> bool {
+        true
     }
 }
 

@@ -132,6 +132,18 @@ workspace = true
 name = "delta_tables"
 required-features = ["delta"]
 
+[[test]]
+name = "delta_writes"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_dml"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_merge"
+required-features = ["delta"]
+
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
 [[test]]
 name = "s3_tpch"

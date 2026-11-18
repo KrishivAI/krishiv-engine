@@ -92,6 +92,11 @@ pub(crate) fn format_options() -> Result<FormatOptions, KrishivError> {
         .0)
 }
 
+/// The file name suffix of a data file in the default options (`.snappy.parquet`).
+pub(crate) fn file_suffix() -> Result<String, KrishivError> {
+    Ok(format()?.file_suffix(&format_options()?))
+}
+
 /// The field id a kernel field asks for, if any.
 fn kernel_field_id(f: &StructField) -> Option<i64> {
     match f.get_config_value(&ColumnMetadataKey::ParquetFieldId)? {

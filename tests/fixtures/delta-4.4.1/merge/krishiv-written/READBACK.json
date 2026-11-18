@@ -1,0 +1,515 @@
+{
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py readback",
+ "spark": "4.2.0",
+ "tables": {
+  "change-data-feed--insert_only": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 7,
+    "writerFeatures": [
+     "changeDataFeed",
+     "invariants",
+     "appendOnly"
+    ]
+   },
+   "rows": [
+    "{\"id\":1,\"v\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v\":\"b\",\"p\":\"x\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v\":\"d\",\"n\":4,\"p\":\"y\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"f\",\"p\":\"z\"}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70,\"p\":\"q\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 7,
+     "writerFeatures": [
+      "changeDataFeed",
+      "invariants",
+      "appendOnly"
+     ]
+    },
+    "rows": 8
+   }
+  },
+  "column-mapping--upsert": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "RENAME COLUMN",
+     "version": 3
+    },
+    {
+     "operation": "MERGE",
+     "version": 4
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 2,
+    "minWriterVersion": 7,
+    "writerFeatures": [
+     "columnMapping",
+     "invariants",
+     "appendOnly"
+    ]
+   },
+   "rows": [
+    "{\"v2\":\"N\",\"n\":0,\"p\":\"n\"}",
+    "{\"id\":1,\"v2\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v2\":\"B\",\"p\":\"x\"}",
+    "{\"id\":3,\"v2\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v2\":\"D\",\"n\":4,\"p\":\"y\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v2\":\"f\",\"p\":\"z\"}",
+    "{\"id\":7,\"v2\":\"G\",\"n\":70,\"p\":\"n\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 2,
+     "minWriterVersion": 7,
+     "writerFeatures": [
+      "columnMapping",
+      "invariants",
+      "appendOnly"
+     ]
+    },
+    "rows": 9
+   }
+  },
+  "deletion-vectors--update_copy_on_write": {
+   "count_id_ge_2": 89,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "DELETE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 3,
+    "minWriterVersion": 7,
+    "readerFeatures": [
+     "deletionVectors"
+    ],
+    "writerFeatures": [
+     "deletionVectors",
+     "invariants",
+     "appendOnly"
+    ]
+   },
+   "rows": [
+    "{\"v\":\"N\",\"n\":0}",
+    "{\"id\":1,\"v\":\"1\",\"n\":1}",
+    "{\"id\":2,\"v\":\"B\",\"n\":2}",
+    "{\"id\":3,\"v\":\"3\",\"n\":3}",
+    "{\"id\":4,\"v\":\"D\",\"n\":4}",
+    "{\"id\":5,\"v\":\"5\",\"n\":5}",
+    "{\"id\":6,\"v\":\"6\",\"n\":6}",
+    "{\"id\":7,\"v\":\"G\",\"n\":0}",
+    "{\"id\":8,\"v\":\"8\",\"n\":1}",
+    "{\"id\":9,\"v\":\"9\",\"n\":2}",
+    "{\"id\":11,\"v\":\"11\",\"n\":4}",
+    "{\"id\":12,\"v\":\"12\",\"n\":5}",
+    "{\"id\":13,\"v\":\"13\",\"n\":6}",
+    "{\"id\":14,\"v\":\"14\",\"n\":0}",
+    "{\"id\":15,\"v\":\"15\",\"n\":1}",
+    "{\"id\":16,\"v\":\"16\",\"n\":2}",
+    "{\"id\":17,\"v\":\"17\",\"n\":3}",
+    "{\"id\":18,\"v\":\"18\",\"n\":4}",
+    "{\"id\":19,\"v\":\"19\",\"n\":5}",
+    "{\"id\":21,\"v\":\"21\",\"n\":0}",
+    "{\"id\":22,\"v\":\"22\",\"n\":1}",
+    "{\"id\":23,\"v\":\"23\",\"n\":2}",
+    "{\"id\":24,\"v\":\"24\",\"n\":3}",
+    "{\"id\":25,\"v\":\"25\",\"n\":4}",
+    "{\"id\":26,\"v\":\"26\",\"n\":5}",
+    "{\"id\":27,\"v\":\"27\",\"n\":6}",
+    "{\"id\":28,\"v\":\"28\",\"n\":0}",
+    "{\"id\":29,\"v\":\"29\",\"n\":1}",
+    "{\"id\":31,\"v\":\"31\",\"n\":3}",
+    "{\"id\":32,\"v\":\"32\",\"n\":4}",
+    "{\"id\":33,\"v\":\"33\",\"n\":5}",
+    "{\"id\":34,\"v\":\"34\",\"n\":6}",
+    "{\"id\":35,\"v\":\"35\",\"n\":0}",
+    "{\"id\":36,\"v\":\"36\",\"n\":1}",
+    "{\"id\":37,\"v\":\"37\",\"n\":2}",
+    "{\"id\":38,\"v\":\"38\",\"n\":3}",
+    "{\"id\":39,\"v\":\"39\",\"n\":4}",
+    "{\"id\":41,\"v\":\"41\",\"n\":6}",
+    "{\"id\":42,\"v\":\"42\",\"n\":0}",
+    "{\"id\":43,\"v\":\"43\",\"n\":1}",
+    "{\"id\":44,\"v\":\"44\",\"n\":2}",
+    "{\"id\":45,\"v\":\"45\",\"n\":3}",
+    "{\"id\":46,\"v\":\"46\",\"n\":4}",
+    "{\"id\":47,\"v\":\"47\",\"n\":5}",
+    "{\"id\":48,\"v\":\"48\",\"n\":6}",
+    "{\"id\":49,\"v\":\"49\",\"n\":0}",
+    "{\"id\":51,\"v\":\"51\",\"n\":2}",
+    "{\"id\":52,\"v\":\"52\",\"n\":3}",
+    "{\"id\":53,\"v\":\"53\",\"n\":4}",
+    "{\"id\":54,\"v\":\"54\",\"n\":5}",
+    "{\"id\":55,\"v\":\"55\",\"n\":6}",
+    "{\"id\":56,\"v\":\"56\",\"n\":0}",
+    "{\"id\":57,\"v\":\"57\",\"n\":1}",
+    "{\"id\":58,\"v\":\"58\",\"n\":2}",
+    "{\"id\":59,\"v\":\"59\",\"n\":3}",
+    "{\"id\":61,\"v\":\"61\",\"n\":5}",
+    "{\"id\":62,\"v\":\"62\",\"n\":6}",
+    "{\"id\":63,\"v\":\"63\",\"n\":0}",
+    "{\"id\":64,\"v\":\"64\",\"n\":1}",
+    "{\"id\":65,\"v\":\"65\",\"n\":2}",
+    "{\"id\":66,\"v\":\"66\",\"n\":3}",
+    "{\"id\":67,\"v\":\"67\",\"n\":4}",
+    "{\"id\":68,\"v\":\"68\",\"n\":5}",
+    "{\"id\":69,\"v\":\"69\",\"n\":6}",
+    "{\"id\":71,\"v\":\"71\",\"n\":1}",
+    "{\"id\":72,\"v\":\"72\",\"n\":2}",
+    "{\"id\":73,\"v\":\"73\",\"n\":3}",
+    "{\"id\":74,\"v\":\"74\",\"n\":4}",
+    "{\"id\":75,\"v\":\"75\",\"n\":5}",
+    "{\"id\":76,\"v\":\"76\",\"n\":6}",
+    "{\"id\":77,\"v\":\"77\",\"n\":0}",
+    "{\"id\":78,\"v\":\"78\",\"n\":1}",
+    "{\"id\":79,\"v\":\"79\",\"n\":2}",
+    "{\"id\":81,\"v\":\"81\",\"n\":4}",
+    "{\"id\":82,\"v\":\"82\",\"n\":5}",
+    "{\"id\":83,\"v\":\"83\",\"n\":6}",
+    "{\"id\":84,\"v\":\"84\",\"n\":0}",
+    "{\"id\":85,\"v\":\"85\",\"n\":1}",
+    "{\"id\":86,\"v\":\"86\",\"n\":2}",
+    "{\"id\":87,\"v\":\"87\",\"n\":3}",
+    "{\"id\":88,\"v\":\"88\",\"n\":4}",
+    "{\"id\":89,\"v\":\"89\",\"n\":5}",
+    "{\"id\":91,\"v\":\"91\",\"n\":0}",
+    "{\"id\":92,\"v\":\"92\",\"n\":1}",
+    "{\"id\":93,\"v\":\"93\",\"n\":2}",
+    "{\"id\":94,\"v\":\"94\",\"n\":3}",
+    "{\"id\":95,\"v\":\"95\",\"n\":4}",
+    "{\"id\":96,\"v\":\"96\",\"n\":5}",
+    "{\"id\":97,\"v\":\"97\",\"n\":6}",
+    "{\"id\":98,\"v\":\"98\",\"n\":0}",
+    "{\"id\":99,\"v\":\"99\",\"n\":1}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 3,
+     "minWriterVersion": 7,
+     "readerFeatures": [
+      "deletionVectors"
+     ],
+     "writerFeatures": [
+      "deletionVectors",
+      "invariants",
+      "appendOnly"
+     ]
+    },
+    "rows": 92
+   }
+  },
+  "partitioned--update_moves_partition": {
+   "count_id_ge_2": 5,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"id\":1,\"v\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v\":\"b\",\"p\":\"w\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v\":\"d\",\"n\":4,\"p\":\"w\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"f\",\"p\":\"z\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 7
+   }
+  },
+  "partitioned--upsert_and_conditional_nmbs": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"id\":1,\"v\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v\":\"B\",\"n\":20,\"p\":\"x\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v\":\"D\",\"n\":40,\"p\":\"q\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"nmbs\",\"p\":\"z\"}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70,\"p\":\"q\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 8
+   }
+  },
+  "partitioned--upsert_new_partition": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"id\":1,\"v\":\"a\",\"n\":1,\"p\":\"x\"}",
+    "{\"id\":2,\"v\":\"B\",\"n\":20,\"p\":\"x\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3,\"p\":\"y\"}",
+    "{\"id\":4,\"v\":\"D\",\"n\":40,\"p\":\"q\"}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"f\",\"p\":\"z\"}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70,\"p\":\"q\"}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 8
+   }
+  },
+  "unpartitioned--all_kinds": {
+   "count_id_ge_2": 3,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"v\":\"N\",\"n\":0}",
+    "{\"id\":2,\"v\":\"b\",\"n\":20}",
+    "{\"id\":4,\"v\":\"d\",\"n\":40}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 5
+   }
+  },
+  "unpartitioned--clause_order": {
+   "count_id_ge_2": 3,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"v\":\"x\",\"n\":-1}",
+    "{\"id\":1,\"v\":\"gone\",\"n\":1}",
+    "{\"id\":2,\"v\":\"b\",\"n\":20}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 6
+   }
+  },
+  "unpartitioned--insert_star": {
+   "count_id_ge_2": 6,
+   "error": null,
+   "history": [
+    {
+     "operation": "CREATE TABLE",
+     "version": 0
+    },
+    {
+     "operation": "WRITE",
+     "version": 1
+    },
+    {
+     "operation": "WRITE",
+     "version": 2
+    },
+    {
+     "operation": "MERGE",
+     "version": 3
+    }
+   ],
+   "protocol": {
+    "minReaderVersion": 1,
+    "minWriterVersion": 2
+   },
+   "rows": [
+    "{\"v\":\"N\",\"n\":0}",
+    "{\"id\":1,\"v\":\"a\",\"n\":1}",
+    "{\"id\":2,\"v\":\"b\"}",
+    "{\"id\":3,\"v\":\"c\",\"n\":3}",
+    "{\"id\":4,\"v\":\"d\",\"n\":4}",
+    "{\"id\":5,\"n\":50}",
+    "{\"id\":6,\"v\":\"f\"}",
+    "{\"id\":7,\"v\":\"G\",\"n\":70}"
+   ],
+   "spark_append": {
+    "error": null,
+    "protocol": {
+     "minReaderVersion": 1,
+     "minWriterVersion": 2
+    },
+    "rows": 9
+   }
+  }
+ }
+}

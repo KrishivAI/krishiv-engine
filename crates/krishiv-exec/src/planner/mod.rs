@@ -63,7 +63,7 @@ pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
-    RowLevelTable, RowLevelWrite,
+    RowLevelProblem, RowLevelTable, RowLevelWrite,
 };
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,

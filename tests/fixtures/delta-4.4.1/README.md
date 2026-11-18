@@ -56,3 +56,37 @@ refuses, with the table path elided as `<path>`:
 `session-table` is that table as the probes found it (before their writes), for the session's tests. `session-appends`
 is a table of three commits (a create and two appends); the session's snapshot-cache tests remove its
 last commit and put it back while a query runs.
+
+Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as the session probes are):
+- `write-stats`: one data file per case (every type delta-spark keeps bounds for, null-count-only types, nested
+  columns, NaN and -0.0, and delta-spark's string truncation cases at the 32-character prefix); `EXPECTED.json`
+  `commits` holds every commit's adds with their parsed `stats` (its `rows` is empty: NaN is not JSON).
+  `delta_stats_match_spark` writes each case's rows again with Krishiv and compares the stats.
+- `WRITES.json`: each write mode on a table partitioned by `p` (CTAS, append, overwrite, dynamic partition overwrite,
+  `replaceWhere` matching and not, a static partition overwrite, DataFrame overwrite and append, `errorifexists`,
+  `ignore`, an insert reading its own table), v1 `saveAsTable` overwrite (same schema, other schema, no
+  `partitionBy`), an overwrite of an append-only table, a `CREATE TABLE` at a new location and a CTAS into it; each
+  step's error or its commits (commitInfo without times and ids, adds, removes) and rows.
+- `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
+  row, its protocol and whether Krishiv refuses writing it.
+
+DML oracle (PR-37b part 2; `gen_delta_fixtures.py /out dml`, run as the session probes are): `dml/<scenario>/before` is a
+table set up by delta-spark (`unpartitioned`, `partitioned` by `p`, `column-mapping` (mode `name`, a renamed column),
+`deletion-vectors` (100 rows, a DELETE that left a DV), `change-data-feed`, `append-only`), and `dml/DML.json` records
+for each `DELETE`/`UPDATE` step, each run on its own copy of `before`: the confs set around it, the command's output
+(`num_affected_rows`) or error, the commits it wrote (commitInfo, adds with stats, removes), the rows read back and
+`DESCRIBE HISTORY`'s newest row. The `deletion-vectors` steps run with and without delta-spark's
+`...deletionVectors.persistent` confs. Consumer: krishiv-session `tests/delta_dml.rs`. `dml/krishiv-written/` holds
+tables after Krishiv's statements (`write_dml_readback_tables`, `--ignored`, `KRISHIV_DELTA_READBACK_OUT`) and the
+`READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out readback /in`).
+
+MERGE oracle (PR-37c; `gen_delta_fixtures.py /out merge`, run as the session probes are): `merge/<scenario>/before` is
+the DML oracle's table setup (`unpartitioned`, `partitioned`, `column-mapping`, `deletion-vectors`, `change-data-feed`,
+`append-only`), `merge/source-parquet` and `merge/source-delta` the file-backed sources the steps read
+(`<src_parquet>`, `<src_delta>`), and `merge/MERGE.json` records for each `MERGE` step, each run on its own copy of
+`before`: the confs set around it, the command's output (four counts) or error, the commits it wrote, its `cdc`
+action count, the rows read back and `DESCRIBE HISTORY`'s newest row. Consumer: krishiv-session `tests/delta_merge.rs`.
+`merge/krishiv-written/` holds tables after Krishiv's `MERGE` statements (`write_merge_readback_tables`, `--ignored`,
+`KRISHIV_DELTA_READBACK_OUT`) and the `READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out
+readback /in`). delta-spark 4.4.1 raises an unresolved name in a `MERGE` as `INTERNAL_ERROR` ("Cannot find main
+error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"): recorded as it ran.
