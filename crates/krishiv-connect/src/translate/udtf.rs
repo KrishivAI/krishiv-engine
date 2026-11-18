@@ -116,7 +116,7 @@ pub fn python_udtf(fun: &pb::CommonInlineUserDefinedTableFunction) -> Result<Pyt
 /// The planner's `transformDataType` (v4.3.0): an `unparsed` type (what a client sends for a string
 /// `returnType`, `@udtf(returnType="a int")`) through `parseDatatypeString`, any other through the proto's
 /// type conversion.
-fn transform_data_type(t: &pb::DataType) -> Result<DataType> {
+pub(super) fn transform_data_type(t: &pb::DataType) -> Result<DataType> {
     match &t.kind {
         Some(pb::data_type::Kind::Unparsed(u)) => {
             super::schema::parse_datatype_string(&u.data_type_string)

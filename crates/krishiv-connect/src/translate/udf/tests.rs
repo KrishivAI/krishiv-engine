@@ -194,3 +194,24 @@ fn register_function_is_a_command_the_server_runs() {
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
     );
 }
+
+#[test]
+fn a_string_return_type_is_parsed_as_the_planner_parses_it() {
+    // `udf(f, "long")` and `udf(f, "a int, b string")`: the client sends the string as `unparsed`
+    // (the planner's `transformDataType`, v4.3.0).
+    for (text, expected) in [("long", DataType::Long), ("bigint", DataType::Long)] {
+        let mut f = inline(Some(Function::PythonUdf(python(100))), Vec::new());
+        if let Some(Function::PythonUdf(p)) = &mut f.function {
+            p.output_type = Some(proto_type(Kind::Unparsed(pb::data_type::Unparsed {
+                data_type_string: text.to_owned(),
+            })));
+        }
+        let command = pb::Command {
+            command_type: Some(CommandType::RegisterFunction(Box::new(f))),
+        };
+        let Ok(Command::RegisterPythonUdf(udf)) = translate_command(&command) else {
+            panic!("a registration of {text}");
+        };
+        assert_eq!(udf.return_type, expected, "{text}");
+    }
+}
