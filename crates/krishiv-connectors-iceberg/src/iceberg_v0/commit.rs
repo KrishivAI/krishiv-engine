@@ -94,7 +94,8 @@ use iceberg::spec::{FormatVersion, Snapshot, TableMetadata};
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{
     KrishivError, KrishivIcebergCommitConflict, KrishivIcebergCommitFailed,
-    KrishivIcebergCommitStateUnknown, KrishivUnsupportedFeature,
+    KrishivIcebergCommitStateUnknown, KrishivIcebergOverwritePartialFile,
+    KrishivUnsupportedFeature,
 };
 
 use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
@@ -105,10 +106,6 @@ use super::validate::{Validation, validate};
 /// The check named by a conflict whose overwrite found a file to remove no
 /// longer live (Java's `failMissingDeletePaths`).
 pub(crate) const CHECK_MISSING: &str = "files to delete";
-
-/// The check named by a failed overwrite whose row filter matches some, but
-/// not all, rows of a data file (`ManifestFilterManager.java:478-480`).
-pub(crate) const CHECK_PARTIAL: &str = "rows to delete";
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -318,6 +315,17 @@ enum End {
     /// request still unresolved names it without the error's "files removed"
     /// text (review nit 4).
     Conflict(Box<KrishivIcebergCommitConflict>),
+    /// An overwrite's row filter matches a data file in part (Java's
+    /// `ValidationException` at `apply`): deterministic, so not a conflict
+    /// (`KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`, SQLSTATE 22000, a data
+    /// exception no client retries, where the conflict's 40001 is retried;
+    /// review 36b2b M4).
+    Partial {
+        /// The filter as Java prints it.
+        filter: String,
+        /// The data file.
+        file: String,
+    },
     /// An error; its own request's outcome (if any) known.
     Error(KrishivError),
 }
@@ -461,8 +469,8 @@ impl Loop<'_> {
                 }
                 // A data file the row filter matches in part (Java's
                 // `ValidationException` at `apply`).
-                Err(FilterError::Partial(message)) => {
-                    return Err(self.conflict(&current, CHECK_PARTIAL, message));
+                Err(FilterError::Partial { filter, file }) => {
+                    return Err(End::Partial { filter, file });
                 }
                 Err(FilterError::Error(e)) => return Err(End::Error(e)),
             };
@@ -788,6 +796,7 @@ impl Loop<'_> {
                     "a conflict with the table at snapshot {} ({}): {}",
                     c.conflicting_snapshot_id, c.check, c.message
                 ),
+                End::Partial { filter, file } => FilterError::partial_text(&filter, &file),
                 End::Error(e) => e.to_string(),
             };
             return KrishivIcebergCommitStateUnknown {
@@ -818,6 +827,14 @@ impl Loop<'_> {
                 c.files = files;
                 (*c).into()
             }
+            End::Partial { filter, file } => KrishivIcebergOverwritePartialFile {
+                filter,
+                file,
+                table: self.table.name(),
+                snapshot_id: self.snapshot_id.to_string(),
+                files,
+            }
+            .into(),
             End::Error(e) => e,
         }
     }

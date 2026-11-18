@@ -312,7 +312,10 @@ pub(crate) async fn prepare_attempt(
         .await
         .map_err(|e| match e {
             FilterError::Error(e) => e,
-            FilterError::Missing(m) | FilterError::Partial(m) => internal(m),
+            FilterError::Missing(m) => internal(m),
+            FilterError::Partial { filter, file } => {
+                internal(FilterError::partial_text(&filter, &file))
+            }
         })
 }
 

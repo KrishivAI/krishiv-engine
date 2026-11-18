@@ -18,9 +18,11 @@
 //!   `filter.rs` removes every file whose rows all match, on every attempt's
 //!   base; a data file some of whose rows match fails with Java's "Cannot
 //!   delete file where some, but not all, rows match filter %s: %s"
-//!   (`KRISHIV_ICEBERG_COMMIT_CONFLICT`, check `rows to delete`: Spark's
-//!   surfaced class for this `ValidationException` was not determinable, so
-//!   the class is Krishiv's, with Java's text). Operation `overwrite`, or
+//!   (`KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`, SQLSTATE 22000: Spark
+//!   surfaces this `ValidationException` with no class, so the class is
+//!   Krishiv's, with Java's text; a data exception, since the files do not
+//!   line up with the filter and a retry fails the same way, where the
+//!   commit conflict's 40001 invites a retry). Operation `overwrite`, or
 //!   `delete` when no row is written.
 //! - **Dynamic overwrite** (`table.newReplacePartitions()`,
 //!   `SparkWrite.java:338-365`): the partitions (spec id and tuple) of the
