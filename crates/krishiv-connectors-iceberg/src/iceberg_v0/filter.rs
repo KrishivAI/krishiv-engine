@@ -74,12 +74,14 @@ use iceberg::spec::{
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::PushdownExpr;
 
-use super::merge::{manifest_writer, with_first_row_id};
+use super::merge::{manifest_writer, rebuild, with_first_row_id};
 use super::scan::{content_file, partition_specs, read_capped, schema_fields};
 use super::storage::from_iceberg;
 use crate::plan::PartitionValue;
+use crate::plan::bounds::decode;
 use crate::plan::metrics::WriterMetrics;
 use crate::plan::strict::{Pred, RowFilter};
+use crate::plan::types::{IcebergType, PartitionSpecs};
 
 /// The files an `OverwriteFiles` or `ReplacePartitions` removes: data files
 /// by location, delete files per entry ([`DeleteKey`]), every file whose
@@ -104,8 +106,53 @@ pub(crate) struct Removals {
     pub(crate) replace_partitions: bool,
 }
 
-/// A partition of a spec: its id and the tuple in the spec's serialisation.
+/// A partition of a spec: its id and the tuple, each value as
+/// [`partition_key`] normalises it.
 pub(crate) type PartitionKey = (i32, Vec<PartitionValue>);
+
+/// The key of the partition `partition` of the spec `spec_id`, its values
+/// compared by value as Java's `PartitionSet` (`StructLikeWrapper` at the
+/// spec's current partition type) does, not by stored bytes (review 36b2b
+/// M3): after `int -> long` or `float -> double` an old manifest holds a
+/// 4-byte tuple and a new file an 8-byte one for the same partition. Each
+/// value is decoded with the field's result type in `specs` (by stored
+/// width) and written at the widest width of its family (ints and longs as
+/// 8-byte longs, floats and doubles as 8-byte doubles); a value the type
+/// does not decode keeps its bytes (an 8-byte long under a type still
+/// `int` is already in that form). `None` when a value is unreadable: such
+/// a key never matches.
+pub(crate) fn partition_key(
+    specs: &PartitionSpecs,
+    spec_id: i32,
+    partition: &[PartitionValue],
+) -> Option<PartitionKey> {
+    use krishiv_io::ScalarValue as S;
+    let fields = specs.get(&spec_id).map(|s| s.fields.as_slice());
+    let values = partition
+        .iter()
+        .enumerate()
+        .map(|(i, v)| match v {
+            PartitionValue::Null => Some(PartitionValue::Null),
+            PartitionValue::Unreadable => None,
+            PartitionValue::Value(b) => {
+                let ty = fields
+                    .and_then(|f| f.get(i))
+                    .and_then(|f| f.result_type.as_ref());
+                let wide = match ty.and_then(|t| decode(b, t)) {
+                    Some(S::Int32(x)) if ty == Some(&IcebergType::Int) => {
+                        i64::from(x).to_le_bytes().to_vec()
+                    }
+                    Some(S::Int64(x) | S::TimestampMicros(x)) => x.to_le_bytes().to_vec(),
+                    Some(S::Float32(x)) => f64::from(x).to_le_bytes().to_vec(),
+                    Some(S::Float64(x)) => x.to_le_bytes().to_vec(),
+                    _ => b.clone(),
+                };
+                Some(PartitionValue::Value(wide))
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((spec_id, values))
+}
 
 impl Removals {
     /// Whether any data file is removed (Java's `deletesDataFiles`,
@@ -179,6 +226,54 @@ pub(crate) struct FilterContext<'a> {
     pub(crate) written: &'a mut Vec<String>,
     /// `krishiv.catalog.maxMetadataBytes` for each manifest read.
     pub(crate) max_metadata_bytes: u64,
+}
+
+/// `f` with its partition tuple at the spec's current partition type
+/// (review 36b2b M3): a manifest written before `int -> long` or `float ->
+/// double` holds the old literal, which iceberg-rust refuses to write under
+/// the promoted type when the manifest is rewritten.
+fn widen_partition(
+    f: DataFile,
+    metadata: &TableMetadata,
+    spec_id: i32,
+) -> Result<DataFile, KrishivError> {
+    use iceberg::spec::{Literal, PrimitiveLiteral, PrimitiveType, Type};
+    let Some(spec) = metadata.partition_spec_by_id(spec_id) else {
+        return Ok(f);
+    };
+    let Ok(ty) = spec.partition_type(metadata.current_schema()) else {
+        return Ok(f);
+    };
+    if ty.fields().len() != f.partition().fields().len() {
+        return Ok(f);
+    }
+    let mut changed = false;
+    let values: Vec<Option<Literal>> = f
+        .partition()
+        .iter()
+        .zip(ty.fields())
+        .map(|(v, field)| match (v, field.field_type.as_ref()) {
+            (
+                Some(Literal::Primitive(PrimitiveLiteral::Int(x))),
+                Type::Primitive(PrimitiveType::Long),
+            ) => {
+                changed = true;
+                Some(Literal::long(i64::from(*x)))
+            }
+            (
+                Some(Literal::Primitive(PrimitiveLiteral::Float(x))),
+                Type::Primitive(PrimitiveType::Double),
+            ) => {
+                changed = true;
+                Some(Literal::double(f64::from(x.0)))
+            }
+            (v, _) => v.cloned(),
+        })
+        .collect();
+    if !changed {
+        return Ok(f);
+    }
+    rebuild(&f, f.first_row_id(), values.into_iter().collect(), spec_id)
 }
 
 /// Why a filter failed.
@@ -452,17 +547,20 @@ pub(crate) async fn filter_manifests(
     // by path or partition, or every row matching the filter; some rows
     // matching is an error in a data manifest and a keep in a delete one.
     let by_filter = |f: &DataFile, spec_id: i32, data: bool| -> Result<bool, FilterError> {
+        if removals.drop_partitions.is_empty() && row_filter.is_none() {
+            return Ok(false);
+        }
+        // One file's metrics, built once for both decisions.
+        let file = content_file(f, spec_id);
         let marked = !removals.drop_partitions.is_empty()
-            && removals
-                .drop_partitions
-                .contains(&(spec_id, content_file(f, spec_id).partition));
+            && partition_key(&specs, spec_id, &file.partition)
+                .is_some_and(|k| removals.drop_partitions.contains(&k));
         if marked {
             return Ok(true);
         }
         let Some(filter) = &row_filter else {
             return Ok(false);
         };
-        let file = content_file(f, spec_id);
         if !filter.rows_might_match(&file) {
             return Ok(false);
         }
@@ -678,6 +776,7 @@ async fn rewrite(
         } else {
             file.clone()
         };
+        let file = widen_partition(file, cx.metadata, m.partition_spec_id)?;
         let data_seq = explicit(l.data_seq, "data")?;
         let file_seq = explicit(l.file_seq, "file")?;
         if l.marked {

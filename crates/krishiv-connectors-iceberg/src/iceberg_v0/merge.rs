@@ -448,11 +448,22 @@ pub(crate) fn with_first_row_id(
     if f.first_row_id() == id {
         return Ok(f.clone());
     }
+    rebuild(f, id, f.partition().clone(), spec_id)
+}
+
+/// `f` with the partition tuple `partition`, the first row id `id` and the
+/// spec id `spec_id`.
+pub(crate) fn rebuild(
+    f: &DataFile,
+    id: Option<i64>,
+    partition: iceberg::spec::Struct,
+    spec_id: i32,
+) -> Result<DataFile, KrishivError> {
     let mut b = DataFileBuilder::default();
     b.content(f.content_type())
         .file_path(f.file_path().to_owned())
         .file_format(f.file_format())
-        .partition(f.partition().clone())
+        .partition(partition)
         .record_count(f.record_count())
         .file_size_in_bytes(f.file_size_in_bytes())
         .column_sizes(f.column_sizes().clone())
