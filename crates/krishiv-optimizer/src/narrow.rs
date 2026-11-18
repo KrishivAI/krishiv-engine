@@ -242,7 +242,7 @@ fn leaf(op: Builtin, args: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
 /// column). Modelled forms (comparisons, ranges, `IN` lists, null tests)
 /// are never guesses here, with or without statistics, even when an operand
 /// is an expression and the fraction is therefore fixed (not counted yet). The
-/// answer comes from the walk [`apply`] makes, so the two agree.
+/// answer comes from the walk the estimator (`apply`) makes, so the two agree.
 #[must_use]
 pub fn selectivity_is_guessed(predicate: &Expr) -> bool {
     let none = std::collections::HashMap::new();
