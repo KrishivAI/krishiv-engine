@@ -83,6 +83,15 @@
     </div>
   {/if}
 
+  {#if d.query.hints?.length}
+    <h2 class="mt-6 mb-2">Advisor hints</h2>
+    <div class="grid gap-2" data-testid="advisor-hints">
+      {#each d.query.hints as h}
+        <Alert variant="warning" icon="▲" title={h.code}>{h.message}</Alert>
+      {/each}
+    </div>
+  {/if}
+
   {#if d.operators.length}
     <h2 class="mt-6 mb-1">Plan heatmap</h2>
     <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Heatmap metric">

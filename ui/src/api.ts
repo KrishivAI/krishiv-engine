@@ -59,6 +59,15 @@ export interface Query {
   cancel_reason?: string | null;
   rows_read?: number | null;
   workers?: number | null;
+  hints?: AdvisorHint[] | null;
+}
+
+/** One advisor hint (the same code, node, operator and message as EXPLAIN ANALYZE and system.queries). */
+export interface AdvisorHint {
+  code: string;
+  node_id: number | null;
+  operator_id: number | null;
+  message: string;
 }
 
 export interface Operator {

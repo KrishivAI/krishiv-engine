@@ -547,6 +547,7 @@ const QUERY_COLUMNS: &[&str] = &[
     "rows_read",
     "files_read",
     "partial",
+    "hints",
 ];
 
 const OPERATOR_COLUMNS: &[&str] = &[
