@@ -114,7 +114,11 @@ impl Feed {
             return Some((Err(external(e.into())), self));
         }
         self.held = Some(reservation);
-        self.pending = cut(&batch, bytes, self.batch_bytes);
+        let limit = self.batch_bytes;
+        self.pending = cut(&batch, bytes, limit)
+            .into_iter()
+            .flat_map(|c| fit(c, limit))
+            .collect();
         // A row is never split: one over the cut size would be a message the client refuses with
         // a transport error, so it fails the fetch with a typed error first (design §4.2, m4).
         if let Some(row) = self
@@ -147,6 +151,27 @@ fn cut(batch: &RecordBatch, bytes: usize, limit: usize) -> VecDeque<RecordBatch>
         .step_by(per_cut)
         .map(|start| batch.slice(start, per_cut.min(rows - start)))
         .collect()
+}
+
+/// `cut` takes rows as equal in size; a cut whose rows are not and that holds more than `limit`
+/// is cut again by its rows' own sizes, so a row over `limit` ends up alone (and is refused) and
+/// no cut of several rows passes `limit` (design §4.2 m4, review m8).
+fn fit(c: RecordBatch, limit: usize) -> Vec<RecordBatch> {
+    if c.num_rows() <= 1 || slice_bytes(&c) <= limit {
+        return vec![c];
+    }
+    let mut out = Vec::new();
+    let (mut start, mut held) = (0, 0usize);
+    for row in 0..c.num_rows() {
+        let size = slice_bytes(&c.slice(row, 1));
+        if row > start && held.saturating_add(size) > limit {
+            out.push(c.slice(start, row - start));
+            (start, held) = (row, 0);
+        }
+        held = held.saturating_add(size);
+    }
+    out.push(c.slice(start, c.num_rows() - start));
+    out
 }
 
 /// The bytes `batch`'s rows hold, counted over its slice only (`get_array_memory_size` counts
@@ -324,6 +349,81 @@ mod tests {
             status.message()
         );
         assert_eq!(p.reserved(), 0, "the batch's grant released");
+    }
+
+    /// A 100 KB row among 1,000 small ones: `cut` (rows taken as equal) puts it in a cut of
+    /// hundreds of rows, which must still be refused (review m8).
+    #[tokio::test]
+    async fn row_over_cut_limit_inside_a_wide_cut_typed_error() {
+        let p = pool(None);
+        let n = 1_000;
+        let ids = Int64Array::from_iter_values(0..n);
+        let s = StringArray::from_iter_values((0..n).map(|i| {
+            if i == 5 {
+                "x".repeat(100_000)
+            } else {
+                "s".to_owned()
+            }
+        }));
+        let b = RecordBatch::try_new(schema(), vec![Arc::new(ids), Arc::new(s)]).expect("batch");
+        let limits = EncodeLimits {
+            batch_bytes: 64 << 10,
+            data_bytes: 16 << 10,
+        };
+        let out = encode_results(schema(), source(vec![Ok(b)]), consumer(&p), limits);
+        let last = out.collect::<Vec<_>>().await.pop().expect("a piece");
+        let status = last.expect_err("the stream ends with the typed error");
+        assert_eq!(
+            status
+                .metadata()
+                .get("x-krishiv-error-class")
+                .and_then(|v| v.to_str().ok()),
+            Some("KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE")
+        );
+        assert_eq!(p.reserved(), 0, "the batch's grant released");
+    }
+
+    /// Ten 30 KB rows ahead of 990 small ones: each cut `fit` returns holds at most the limit
+    /// (or one row), and every row is kept once, in order.
+    #[test]
+    fn fit_cuts_skewed_rows_by_their_sizes() {
+        let n = 1_000;
+        let ids = Int64Array::from_iter_values(0..n);
+        let s = StringArray::from_iter_values((0..n).map(|i| {
+            if i < 10 {
+                "x".repeat(30_000)
+            } else {
+                "s".to_owned()
+            }
+        }));
+        let b = RecordBatch::try_new(schema(), vec![Arc::new(ids), Arc::new(s)]).expect("batch");
+        let limit = 64 << 10;
+        let bytes = b.get_array_memory_size();
+        let cuts: Vec<_> = cut(&b, bytes, limit)
+            .into_iter()
+            .flat_map(|c| fit(c, limit))
+            .collect();
+        for c in &cuts {
+            assert!(
+                c.num_rows() == 1 || slice_bytes(c) <= limit,
+                "a cut of {} rows holds {} bytes",
+                c.num_rows(),
+                slice_bytes(c)
+            );
+        }
+        let total: usize = cuts.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(total, 1_000);
+        let first: Vec<i64> = cuts
+            .iter()
+            .flat_map(|c| {
+                c.column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .map(|a| a.values().to_vec())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(first, (0..n).collect::<Vec<_>>());
     }
 
     #[tokio::test]
