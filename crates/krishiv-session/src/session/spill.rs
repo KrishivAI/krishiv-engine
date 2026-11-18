@@ -125,3 +125,42 @@ pub(crate) fn job_uuid() -> String {
         lo & 0xFFFF_FFFF_FFFF
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A failure an earlier run of the statement recorded is cleared once the directory opens
+    /// (PY-078): a later memory error of the statement must not name a directory that works.
+    #[test]
+    fn a_usable_spill_directory_clears_a_recorded_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = Session::builder()
+            .config(
+                "krishiv.spill.dir",
+                tmp.path().join("spill").to_str().unwrap(),
+            )
+            .build()
+            .unwrap();
+        let stale: KrishivError = InternalError {
+            message: "stale".to_owned(),
+        }
+        .into();
+        let failure = Arc::new(Mutex::new(Some(stale)));
+        let spill = QuerySpill {
+            state: Arc::clone(&session.state),
+            failure: Arc::clone(&failure),
+        };
+        spill.scope().unwrap();
+        assert!(failure.lock().unwrap().is_none());
+        // and again, with the directory already open
+        *failure.lock().unwrap() = Some(
+            InternalError {
+                message: "stale".to_owned(),
+            }
+            .into(),
+        );
+        spill.scope().unwrap();
+        assert!(failure.lock().unwrap().is_none());
+    }
+}
