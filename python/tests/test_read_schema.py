@@ -47,6 +47,16 @@ def test_a_ddl_schema_types_the_columns(spark: SparkSession, path: str, read: st
     assert [r[0] for r in df.orderBy("LocationID").collect()] == [1, 2, 10]
 
 
+@pytest.mark.parametrize("header", [True, False])
+def test_py030_a_lower_case_ddl_schema_is_applied(spark: SparkSession, tmp_path: Path, header: bool) -> None:
+    # Acceptance issue PY-030 (P0): 0.2.1 read `schema="id int, name string"` as struct<id:string,name:string>.
+    f = tmp_path / "people.csv"
+    f.write_text(("id,name\n" if header else "") + "1,ann\n2,bob\n10,cy\n")
+    df = spark.read.csv(str(f), header=header, schema="id int, name string")
+    assert df.schema.simpleString() == "struct<id:int,name:string>"
+    assert [(r.id, r.name) for r in df.orderBy("id").collect()] == [(1, "ann"), (2, "bob"), (10, "cy")]
+
+
 def test_a_struct_type_schema_reads_nullable(spark: SparkSession, tmp_path: Path) -> None:
     f = tmp_path / "a.json"
     f.write_text('{"a":1,"b":"x"}\n{"a":2}\n')
