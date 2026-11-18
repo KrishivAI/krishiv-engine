@@ -51,7 +51,8 @@
 //!   residual and strict metrics evaluator, bound to the attempt's schema);
 //!   a data file some, but not all, of whose rows may match is
 //!   [`FilterError::Partial`] with Java's "Cannot delete file where some, but
-//!   not all, rows match filter %s: %s" (`:478-480`), a delete file so
+//!   not all, rows match filter %s: %s" (`:478-480`; the commit loop raises
+//!   it as `KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`), a delete file so
 //!   matched is kept (`:554`). [`Removals::drop_partitions`]
 //!   (`dropPartition`) removes every live file of a spec id and tuple.
 //!
@@ -185,11 +186,24 @@ pub(crate) struct FilterContext<'a> {
 pub(crate) enum FilterError {
     /// Files to remove that no manifest holds live: Java's message.
     Missing(String),
-    /// A data file some, but not all, of whose rows match the row filter:
-    /// Java's `ValidationException` text.
-    Partial(String),
+    /// A data file some, but not all, of whose rows match the row filter
+    /// (Java's `ValidationException`): the filter's text and the file.
+    Partial {
+        /// The filter as Java prints it.
+        filter: String,
+        /// The file's location.
+        file: String,
+    },
     /// Anything else.
     Error(KrishivError),
+}
+
+impl FilterError {
+    /// Java's text of a [`FilterError::Partial`]
+    /// (`ManifestFilterManager.java:478-480`).
+    pub(crate) fn partial_text(filter: &str, file: &str) -> String {
+        format!("Cannot delete file where some, but not all, rows match filter {filter}: {file}")
+    }
 }
 
 impl From<KrishivError> for FilterError {
@@ -456,10 +470,10 @@ pub(crate) async fn filter_manifests(
             return Ok(true);
         }
         if data {
-            return Err(FilterError::Partial(format!(
-                "Cannot delete file where some, but not all, rows match filter {text}: {}",
-                f.file_path()
-            )));
+            return Err(FilterError::Partial {
+                filter: text.clone(),
+                file: f.file_path().to_owned(),
+            });
         }
         Ok(false)
     };

@@ -127,6 +127,12 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE" : {
+    "message" : [
+      "Cannot delete file where some, but not all, rows match filter <filter>: <file>. The overwrite of the Iceberg table <table> (snapshot <snapshotId>) is not committed; <files>. An overwrite by filter removes whole files only, so running it again fails the same way: overwrite by a filter on the table's partition columns, or one every file matches wholly or not at all."
+    ],
+    "sqlState" : "22000"
+  },
   "KRISHIV_IDEMPOTENCY_KEY_REUSED" : {
     "message" : [
       "The request id <requestId> was already used for another request. Send a new request id for a different request."

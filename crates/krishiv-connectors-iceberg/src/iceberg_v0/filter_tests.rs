@@ -760,8 +760,8 @@ fn a_row_filter_removes_whole_files_and_refuses_partial_data_files() {
         &with(id_ge.clone()),
         &mut Vec::new(),
     ) {
-        Err(FilterError::Partial(text)) => assert_eq!(
-            text,
+        Err(FilterError::Partial { filter, file }) => assert_eq!(
+            FilterError::partial_text(&filter, &file),
             format!(
                 "Cannot delete file where some, but not all, rows match filter \
                  ref(name=\"id\") >= 0: {}",

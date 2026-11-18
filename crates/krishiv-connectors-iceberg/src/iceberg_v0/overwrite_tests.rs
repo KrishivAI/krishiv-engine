@@ -168,6 +168,22 @@ fn conflict(e: &KrishivError, text: &str) {
     assert!(e.to_string().contains(text), "{e}");
 }
 
+/// The partial-match error: deterministic, so its own class and a SQLSTATE
+/// no client retries (review 36b2b M4), Java's text, the files removed.
+pub(super) fn partial(e: &KrishivError, text: &str) {
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergOverwritePartialFile,
+        "{e}"
+    );
+    assert_eq!(e.sql_state(), Some("22000"), "{e}");
+    assert!(e.to_string().contains(text), "{e}");
+    assert!(
+        e.to_string().contains("the written files were removed"),
+        "{e}"
+    );
+}
+
 /// `INSERT OVERWRITE` without a partition spec: every file replaced.
 #[test]
 fn truncate_replaces_every_row() {
@@ -255,7 +271,7 @@ fn bucket_partitions_refuse_a_straddling_file() {
         vec![rows(&[Some(3)])],
     )
     .unwrap_err();
-    conflict(
+    partial(
         &e,
         "Cannot delete file where some, but not all, rows match filter ref(name=\"id\") == 3:",
     );
@@ -295,7 +311,7 @@ fn truncate_partitions_drop_whole_files() {
         vec![],
     )
     .unwrap_err();
-    conflict(&e, "some, but not all, rows match");
+    partial(&e, "some, but not all, rows match");
     let range_filter = call(
         Builtin::And,
         vec![
@@ -438,7 +454,7 @@ fn metrics_alone_drop_files_of_an_unpartitioned_table() {
         vec![],
     )
     .unwrap_err();
-    conflict(&e, "some, but not all, rows match");
+    partial(&e, "some, but not all, rows match");
     overwrite(
         &env,
         &catalog,
