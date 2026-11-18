@@ -1757,7 +1757,17 @@ fn json_rows(responses: &[pb::ExecutePlanResponse]) -> (String, Vec<String>) {
 
 /// The lateral join of `rows/udtf<k>/dataframe_lateral` over the left relation `left` (SQL).
 fn lateral_repeat(python: &Path, repo: &Path, kind: &str, left: &str) -> pb::Plan {
-    let id = || col("id");
+    lateral_repeat_over(python, repo, kind, sql_relation(left), &|| col("id"))
+}
+
+/// [`lateral_repeat`] over any left relation, the outer references being `id()`.
+fn lateral_repeat_over(
+    python: &Path,
+    repo: &Path,
+    kind: &str,
+    left: pb::Relation,
+    id: &dyn Fn() -> pb::Expression,
+) -> pb::Plan {
     let minus_three = expr(ExprType::UnresolvedFunction(
         pb::expression::UnresolvedFunction {
             function_name: "-".to_owned(),
@@ -1778,7 +1788,7 @@ fn lateral_repeat(python: &Path, repo: &Path, kind: &str, left: &str) -> pb::Pla
         qualifier: Vec::new(),
     })));
     root(relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
-        left: Some(Box::new(sql_relation(left))),
+        left: Some(Box::new(left)),
         right: Some(Box::new(right)),
         join_condition: None,
         join_type: pb::join::JoinType::Inner as i32,
@@ -1824,4 +1834,72 @@ async fn the_lateral_join_udtf_goldens() {
         want_rows.sort();
         assert_eq!(rows, want_rows, "{kind}");
     }
+}
+
+/// A `lateralJoin` whose right side is a plain subquery (a filter over a SQL relation), not a UDTF, reading
+/// the left column `id`: each left row meets the right rows with `x <= id`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lateral_join_over_a_plain_subquery_reads_the_left_column() {
+    let run = start(None).await;
+    let right = relation(RelType::Filter(Box::new(pb::Filter {
+        input: Some(Box::new(sql_relation(
+            "SELECT * FROM VALUES (1), (2), (3) AS r(x)",
+        ))),
+        condition: Some(expr(ExprType::UnresolvedFunction(
+            pb::expression::UnresolvedFunction {
+                function_name: "<=".to_owned(),
+                arguments: vec![col("x"), col("id")],
+                ..Default::default()
+            },
+        ))),
+    })));
+    let plan = root(relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
+        left: Some(Box::new(sql_relation(
+            "SELECT * FROM VALUES (1), (2) AS t(id)",
+        ))),
+        right: Some(Box::new(right)),
+        join_condition: None,
+        join_type: pb::join::JoinType::Inner as i32,
+    }))));
+    let responses = execute(&run.channel, plan, ADMIN).await.expect("runs");
+    let (schema, rows) = json_rows(&responses);
+    assert_eq!(schema, "struct<id:int,x:int>");
+    assert_eq!(rows, ["[1,1]", "[2,1]", "[2,2]"]);
+}
+
+/// `df["id"].outer()` arrives as an attribute whose `plan_id` is the left relation's. Spark 4.2 does not
+/// resolve a DataFrame reference against an enclosing query (analyzer golden `outer`), and neither does
+/// Krishiv: `CANNOT_RESOLVE_DATAFRAME_COLUMN`, not rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udtf_argument_naming_the_left_relation_by_plan_id_is_not_resolved_as_an_outer_reference()
+{
+    const T: &str = "SELECT * FROM VALUES (2, 'a', 20), (1, 'a', 10), (4, 'b', CAST(NULL AS INT)), \
+                     (3, 'b', 30), (5, 'c', 50) AS t(id, g, v)";
+    const LEFT_ID: i64 = 7;
+    let Some(py) = python() else { return };
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = start(Some(&py)).await;
+    let mut left = sql_relation(T);
+    left.common = Some(pb::RelationCommon {
+        plan_id: Some(LEFT_ID),
+        ..Default::default()
+    });
+    let id = || {
+        expr(ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: "id".to_owned(),
+                plan_id: Some(LEFT_ID),
+                ..Default::default()
+            },
+        ))
+    };
+    let plan = lateral_repeat_over(&py, &repo, "300", left, &id);
+    let status = execute(&run.channel, plan, ADMIN)
+        .await
+        .expect_err("a plan_id reference is not an outer one");
+    assert_eq!(
+        error_class(&status),
+        "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+        "{status:?}"
+    );
 }
