@@ -5,8 +5,8 @@
 //! `close_all` for shutdown. The RPCs are in `service.rs`, `statement.rs` and `call.rs`.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
@@ -29,6 +29,7 @@ use crate::handles::{HandleLimits, Handles};
 use crate::metrics::Requests;
 use crate::sessions::{Holds, Release, Sessions};
 use crate::sql_info::{ServerInfo, sql_info_data};
+use crate::statement::FetchCell;
 
 /// The limits of a [`FlightSqlServer`], from the `krishiv.flightSql.*` keys (all Startup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,8 @@ pub(crate) struct Inner {
     pub(crate) requests: Requests,
     pub(crate) sql_info: SqlInfoData,
     pub(crate) config: FlightSqlConfig,
+    /// The live `DoGet` streams' idle cells, for the sweep (design §4.2).
+    pub(crate) fetches: Mutex<Vec<Weak<FetchCell>>>,
 }
 
 /// Krishiv's Arrow Flight SQL service (module docs). Cheap to clone: the state is shared.
@@ -221,6 +224,7 @@ impl FlightSqlServer {
                 requests: Requests::default(),
                 sql_info: sql_info_data(info)?,
                 config,
+                fetches: Mutex::new(Vec::new()),
             }),
         })
     }
@@ -265,6 +269,7 @@ impl FlightSqlServer {
             .filter(|(id, owner)| !inner.manager.is_live(owner, id))
             .map(|(id, _)| id)
             .collect();
+        self.expire_idle_fetches(now);
         let released = inner.sessions.sweep(now, &gone);
         let n = released.len();
         for r in released {
@@ -311,6 +316,36 @@ impl FlightSqlServer {
                 self.release(&r);
             }
         }
+        n
+    }
+
+    /// Watches a `DoGet` stream's idle cell (the sweep holds it weakly).
+    pub(crate) fn watch_fetch(&self, cell: &Arc<FetchCell>) {
+        self.fetches().push(Arc::downgrade(cell));
+    }
+
+    fn fetches(&self) -> std::sync::MutexGuard<'_, Vec<Weak<FetchCell>>> {
+        self.inner
+            .fetches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Cancels the fetches whose reader has not asked for the next piece within
+    /// `fetchIdleTimeout` (design §4.2); returns how many. The marks are dropped after the lock.
+    pub(crate) fn expire_idle_fetches(&self, now: Instant) -> usize {
+        let timeout = self.inner.config.fetch_idle_timeout;
+        let live: Vec<Arc<FetchCell>> = {
+            let mut cells = self.fetches();
+            cells.retain(|w| w.strong_count() > 0);
+            cells.iter().filter_map(Weak::upgrade).collect()
+        };
+        let expired: Vec<_> = live.iter().filter_map(|c| c.expire(now, timeout)).collect();
+        let n = expired.len();
+        if n > 0 {
+            tracing::info!(target: "krishiv::flight_sql", fetches = n, "idle fetches cancelled");
+        }
+        drop(expired);
         n
     }
 

@@ -8,8 +8,10 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::task::{Context, Poll};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, TicketStatementQuery};
@@ -17,7 +19,7 @@ use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::SchemaRef;
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
-    InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
+    InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError, KrishivFlightSqlFetchIdle,
     KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
     KrishivFlightSqlStatementTooLarge,
 };
@@ -126,17 +128,72 @@ impl Drop for SlotGuard {
 
 /// The marks of a `DoGet`, released in reverse order of taking: the operation, the fetch, the
 /// response budget, the call (struct fields drop in declaration order).
-struct Marks {
+pub(crate) struct Marks {
     op: OpGuard,
     _fetch: FetchGuard,
     _budget: OwnedSemaphorePermit,
     _call: CallSession,
 }
 
-/// A `DoGet` stream holding its marks until it ends or is dropped.
+/// What the sweep shares with a `DoGet` stream (design §4.2, M3 of v3): since when tonic owes the
+/// stream a poll (it was handed a piece and has not asked again), and the stream's marks. A reader
+/// idle past `fetchIdleTimeout` loses its marks to the sweep (its query is cancelled; its
+/// operation, response budget and call are released) and the stream ends `DEADLINE_EXCEEDED`.
+/// The clock runs only while tonic owes a poll, never while the engine computes the next batch.
+pub(crate) struct FetchCell {
+    epoch: Instant,
+    /// Milliseconds after `epoch` plus one since tonic owes a poll; 0 while it does not.
+    owed_since: AtomicU64,
+    marks: Mutex<Option<Marks>>,
+    expired: AtomicBool,
+}
+
+impl FetchCell {
+    fn new(marks: Marks) -> Self {
+        Self {
+            epoch: Instant::now(),
+            owed_since: AtomicU64::new(0),
+            marks: Mutex::new(Some(marks)),
+            expired: AtomicBool::new(false),
+        }
+    }
+
+    fn take(&self) -> Option<Marks> {
+        self.marks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    fn owe_from(&self, now: Instant) {
+        let ms = u64::try_from(now.saturating_duration_since(self.epoch).as_millis())
+            .unwrap_or(u64::MAX - 1);
+        self.owed_since.store(ms + 1, Ordering::Release);
+    }
+
+    /// Takes the marks of a stream idle over `timeout` at `now` (dropped by the caller, outside
+    /// any lock); `None` when it is not idle or already ended.
+    pub(crate) fn expire(&self, now: Instant, timeout: Duration) -> Option<Marks> {
+        let since = self.owed_since.load(Ordering::Acquire);
+        if since == 0 {
+            return None;
+        }
+        let at = self.epoch + Duration::from_millis(since - 1);
+        if now.saturating_duration_since(at) < timeout {
+            return None;
+        }
+        let marks = self.take()?;
+        self.expired.store(true, Ordering::Release);
+        Some(marks)
+    }
+}
+
+/// A `DoGet` stream holding its marks (in its [`FetchCell`]) until it ends or is dropped.
 struct Guarded {
     inner: BoxStream<'static, Result<FlightData, Status>>,
-    marks: Option<Marks>,
+    cell: Arc<FetchCell>,
+    timeout: Duration,
+    done: bool,
 }
 
 impl Stream for Guarded {
@@ -144,19 +201,35 @@ impl Stream for Guarded {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
+        if this.done {
+            return Poll::Ready(None);
+        }
+        // tonic asked: it owes nothing now.
+        this.cell.owed_since.store(0, Ordering::Release);
+        if this.cell.expired.load(Ordering::Acquire) {
+            this.done = true;
+            let e: KrishivError = KrishivFlightSqlFetchIdle {
+                timeout: format!("{:?}", this.timeout),
+            }
+            .into();
+            return Poll::Ready(Some(Err(flight_status(&e))));
+        }
         let next = this.inner.as_mut().poll_next(cx);
         match &next {
+            Poll::Ready(Some(Ok(_))) => this.cell.owe_from(Instant::now()),
             Poll::Ready(None) => {
-                if let Some(m) = this.marks.take() {
+                this.done = true;
+                if let Some(m) = this.cell.take() {
                     m.op.finish();
                 }
             }
             Poll::Ready(Some(Err(_))) => {
-                if let Some(m) = this.marks.take() {
+                this.done = true;
+                if let Some(m) = this.cell.take() {
                     m.op.fail();
                 }
             }
-            _ => {}
+            Poll::Pending => {}
         }
         next
     }
@@ -525,14 +598,18 @@ impl FlightSqlServer {
             Kind::Pending => return Err(flight_status(&not_found())),
         };
         let encoded = encode_results(schema, batches, consumer, limits);
+        let cell = Arc::new(FetchCell::new(Marks {
+            op,
+            _fetch: fetch,
+            _budget: budget,
+            _call: call,
+        }));
+        self.watch_fetch(&cell);
         let stream = Guarded {
             inner: encoded,
-            marks: Some(Marks {
-                op,
-                _fetch: fetch,
-                _budget: budget,
-                _call: call,
-            }),
+            cell,
+            timeout: inner.config.fetch_idle_timeout,
+            done: false,
         };
         Ok(Response::new(Box::pin(stream)))
     }

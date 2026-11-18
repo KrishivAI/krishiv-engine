@@ -436,3 +436,56 @@ async fn unsupported_actions_unimplemented() {
         .expect_err("unknown action");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stalled_reader_cancelled_after_idle_timeout() {
+    let mut h = start(FlightSqlConfig {
+        fetch_idle_timeout: Duration::from_millis(200),
+        encode: krishiv_flight_sql::EncodeLimits {
+            batch_bytes: 64 << 10,
+            data_bytes: 16 << 10,
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (info, _) = info(
+        &mut h,
+        OPS,
+        None,
+        "SELECT id, id * 2 AS d FROM range(0, 5000000)",
+    )
+    .await
+    .expect("info");
+    let mut stream = h
+        .client
+        .do_get(authed(ticket(&info), OPS, None))
+        .await
+        .expect("do_get")
+        .into_inner();
+    stream
+        .message()
+        .await
+        .expect("first message")
+        .expect("schema");
+    // The reader stops: tonic fills the HTTP/2 window and then owes the stream a poll.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let swept_at = Instant::now() + Duration::from_secs(1);
+    h.flight.sweep_at(swept_at);
+    // Its query was cancelled and its session released; the stream ends with the typed error
+    // after what was already buffered.
+    wait_sessions(&h, 0).await;
+    let end = loop {
+        match stream.message().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the stream ended without the idle error"),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(end.code(), Code::DeadlineExceeded, "{end:?}");
+    assert_eq!(
+        end.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_FETCH_IDLE")
+    );
+}

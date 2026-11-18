@@ -45,7 +45,9 @@ pub fn code_of(class: &str, sql_state: Option<&str>) -> Code {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => return Code::PermissionDenied,
         "OPERATION_CANCELED" | "KRISHIV_QUERY_KILLED" => return Code::Cancelled,
-        "KRISHIV_QUERY_TIMEOUT" => return Code::DeadlineExceeded,
+        "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_FLIGHT_SQL_FETCH_IDLE" => return Code::DeadlineExceeded,
+        "INVALID_HANDLE.FORMAT" => return Code::InvalidArgument,
+        "INVALID_HANDLE.OPERATION_ALREADY_EXISTS" => return Code::AlreadyExists,
         "KRISHIV_SESSION_LIMIT" | "KRISHIV_OPERATION_LIMIT" | "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" => {
             return Code::ResourceExhausted;
         }
@@ -61,6 +63,7 @@ pub fn code_of(class: &str, sql_state: Option<&str>) -> Code {
     match sql_state.and_then(|s| s.get(..2)) {
         Some("42" | "22" | "23" | "54" | "07") => Code::InvalidArgument,
         Some("0A") => Code::Unimplemented,
+        Some("40") => Code::Aborted,
         Some("53") => Code::ResourceExhausted,
         Some("25" | "55") => Code::FailedPrecondition,
         _ => Code::Internal,
@@ -117,6 +120,22 @@ mod tests {
                 Some("HY008"),
                 Code::DeadlineExceeded,
             ),
+            (
+                "KRISHIV_FLIGHT_SQL_FETCH_IDLE",
+                Some("HY008"),
+                Code::DeadlineExceeded,
+            ),
+            (
+                "INVALID_HANDLE.FORMAT",
+                Some("HY000"),
+                Code::InvalidArgument,
+            ),
+            (
+                "INVALID_HANDLE.OPERATION_ALREADY_EXISTS",
+                Some("HY000"),
+                Code::AlreadyExists,
+            ),
+            ("X_40", Some("40001"), Code::Aborted),
             ("X_25", Some("25000"), Code::FailedPrecondition),
             (
                 "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED",
