@@ -221,6 +221,14 @@ impl ConnectServer {
         self
     }
 
+    /// This server refusing new work while `flag` is set (the drain controller's flag, design
+    /// P3-T066 §5.1), in place of its own flag, which `serve` sets at shutdown.
+    #[must_use]
+    pub fn with_draining(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.draining = flag;
+        self
+    }
+
     /// The server's response budget (`krishiv.connect.maxResponseBytes`),
     /// shared with the service it serves.
     #[must_use]

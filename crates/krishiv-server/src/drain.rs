@@ -67,6 +67,8 @@ struct Inner {
 #[derive(Debug)]
 pub struct DrainController {
     serving: Arc<AtomicBool>,
+    /// True while new work is refused; the flag the Connect service reads.
+    refusing: Arc<AtomicBool>,
     inner: Mutex<Inner>,
 }
 
@@ -76,6 +78,7 @@ impl DrainController {
     pub fn new(serving: Arc<AtomicBool>) -> Self {
         Self {
             serving,
+            refusing: Arc::new(AtomicBool::new(false)),
             inner: Mutex::new(Inner {
                 state: DrainState::Serving,
                 deadline: None,
@@ -98,6 +101,7 @@ impl DrainController {
         if s.state == DrainState::Serving {
             // Readiness flips before anything is refused.
             self.serving.store(false, Ordering::Release);
+            self.refusing.store(true, Ordering::Release);
             s.state = DrainState::Draining;
             s.deadline = Some(deadline);
             s.cancelled_at = None;
@@ -123,8 +127,16 @@ impl DrainController {
             s.deadline = None;
             s.cancelled_at = None;
             self.serving.store(true, Ordering::Release);
+            self.refusing.store(false, Ordering::Release);
         }
         Ok(Self::status_of(&s))
+    }
+
+    /// The flag that is true while new work is refused, for surfaces that read a flag (the
+    /// Connect service).
+    #[must_use]
+    pub fn refusing_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.refusing)
     }
 
     /// Whether new work is refused (`KRISHIV_SERVER_DRAINING`).
@@ -194,6 +206,9 @@ mod tests {
         assert_eq!(st.state, DrainState::Draining);
         assert!(!flag.load(Ordering::SeqCst));
         assert!(c.refuses_new_work());
+        assert!(c.refusing_flag().load(Ordering::SeqCst));
+        c.resume().unwrap();
+        assert!(!c.refusing_flag().load(Ordering::SeqCst));
     }
 
     #[test]

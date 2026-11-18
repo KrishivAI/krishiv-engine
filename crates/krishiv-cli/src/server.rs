@@ -36,7 +36,7 @@ use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
-    SERVER_READINESS_TIMEOUT, UI_ALLOWED_HOSTS, UI_ENABLED,
+    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -327,10 +327,17 @@ async fn run_listeners(
         admin_bound,
         tls.is_some(),
     )?;
-    let mut connect = ConnectServer::new(
-        Arc::clone(&manager),
-        ConnectServerConfig::from_config(config),
-    );
+    // The drain controller (design P3-T066 §5.1) decides when the listeners stop: once held work
+    // is done or the grace period and the stop bound passed. The Connect server then has nothing
+    // left to wait for, so its own grace is zero.
+    let grace = duration(config, &SERVER_SHUTDOWN_TIMEOUT, Duration::from_secs(30));
+    let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
+        &ready,
+    )));
+    let mut connect_config = ConnectServerConfig::from_config(config);
+    connect_config.shutdown_timeout = Duration::ZERO;
+    let mut connect = ConnectServer::new(Arc::clone(&manager), connect_config)
+        .with_draining(drain.refusing_flag());
     if authenticated {
         connect = connect.with_auth(
             ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
@@ -347,7 +354,14 @@ async fn run_listeners(
     // readiness must start the drain, not kill the process.
     let handlers = Signals::install()
         .map_err(|e| format!("cannot install the SIGTERM/SIGINT handlers: {e}"))?;
-    let signals = tokio::spawn(watch_signals(handlers, Arc::clone(&ready), stop_tx));
+    let signals = tokio::spawn(watch_signals(
+        handlers,
+        Arc::clone(&drain),
+        Arc::clone(&runtime),
+        Arc::clone(&manager),
+        grace,
+        stop_tx,
+    ));
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
@@ -596,16 +610,56 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
     }
 }
 
-/// The first SIGTERM or SIGINT starts the drain; a second exits at once.
+/// The first SIGTERM or SIGINT starts the drain (`Drain { grace_period = shutdownTimeout,
+/// exit_when_drained = true }`, design P3-T066 §5.1a); a second exits at once.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-async fn watch_signals(mut signals: Signals, ready: Arc<AtomicBool>, stop: watch::Sender<bool>) {
+async fn watch_signals(
+    mut signals: Signals,
+    drain: Arc<krishiv_server::drain::DrainController>,
+    runtime: Arc<EngineRuntime>,
+    manager: Arc<SessionManager>,
+    grace: Duration,
+    stop: watch::Sender<bool>,
+) {
     signals.next().await;
-    ready.store(false, Ordering::Release);
-    eprintln!("krishiv server: shutting down (a second signal exits at once)");
-    let _ = stop.send(true);
+    eprintln!("krishiv server: draining (a second signal exits at once)");
+    let driver = tokio::spawn(drive_drain(drain, runtime, manager, grace, stop));
     signals.next().await;
+    driver.abort();
     eprintln!("krishiv server: second signal, exiting");
     std::process::exit(130);
+}
+
+/// Starts the drain and steps it until `DRAINED`: new work is refused at once, held work gets
+/// `grace`, what is left is cancelled with `CancelReason::Drain`, and the listeners stop when
+/// the controller says so.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+pub(crate) async fn drive_drain(
+    drain: Arc<krishiv_server::drain::DrainController>,
+    runtime: Arc<EngineRuntime>,
+    manager: Arc<SessionManager>,
+    grace: Duration,
+    stop: watch::Sender<bool>,
+) {
+    use krishiv_server::drain::DrainStep;
+    runtime.set_draining(true);
+    drain.start(std::time::Instant::now(), grace, true);
+    loop {
+        match drain.step(std::time::Instant::now(), manager.busy()) {
+            DrainStep::Wait => {}
+            DrainStep::CancelRemaining => {
+                let n = runtime.cancel_all(krishiv_session::CancelReason::Drain);
+                eprintln!("krishiv server: drain deadline, cancelled {n} queries");
+            }
+            DrainStep::Drained { exit } => {
+                if exit {
+                    let _ = stop.send(true);
+                }
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// SIGTERM and SIGINT, registered when installed (tokio registers a
@@ -677,5 +731,68 @@ mod tests {
         assert!(!metrics_need_token(&public, lo));
         assert!(metrics_need_token(&public, any));
         assert!(!metrics_need_token(&config(&[]), lo));
+    }
+
+    /// Design P3-T066 §5.1: a drain refuses new queries at once, gives a stuck one the grace
+    /// period, cancels it with the drain reason (`KRISHIV_QUERY_KILLED`) and then stops.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drain_cancels_a_stuck_query_at_the_deadline_and_then_stops() {
+        let runtime = EngineRuntime::builder().build().unwrap();
+        let base = Session::builder()
+            .runtime(Arc::clone(&runtime))
+            .build()
+            .unwrap();
+        let manager = Arc::new(SessionManager::from_base(
+            base,
+            krishiv_connect_server::SessionLimits::default(),
+        ));
+        // The query runs in a session the manager holds, as every Connect query does.
+        let caller = krishiv_session::auth::Authenticated::new(
+            krishiv_common::principal::Principal::local_user(),
+            None,
+            krishiv_session::auth::Method::None,
+        );
+        let entry = manager
+            .get_or_create(&caller, "00112233-4455-6677-8899-aabbccddeeff", None, "u")
+            .unwrap();
+        let session = entry.session().clone();
+        let df = session
+            .sql("SELECT count(*) FROM range(0, 100000000000, 1, 4)")
+            .await
+            .unwrap();
+        let query = tokio::spawn(async move { df.collect().await });
+        while session.running_queries() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let ready = Arc::new(AtomicBool::new(true));
+        let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
+            &ready,
+        )));
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let driver = tokio::spawn(drive_drain(
+            Arc::clone(&drain),
+            Arc::clone(&runtime),
+            Arc::clone(&manager),
+            Duration::from_millis(300),
+            stop_tx,
+        ));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!ready.load(Ordering::SeqCst), "readiness flips first");
+        let refused = session.sql("SELECT 1").await.unwrap().collect().await;
+        assert_eq!(
+            refused.unwrap_err().error_class().name(),
+            "KRISHIV_SERVER_DRAINING"
+        );
+        tokio::time::timeout(Duration::from_secs(20), stop_rx.wait_for(|stop| *stop))
+            .await
+            .expect("the drain finishes")
+            .unwrap();
+        driver.await.unwrap();
+        let e = tokio::time::timeout(Duration::from_secs(20), query)
+            .await
+            .expect("the cancelled query ends")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
     }
 }
