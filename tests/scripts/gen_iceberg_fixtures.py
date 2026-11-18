@@ -169,9 +169,9 @@ def typed(value):
     return str(value)  # decimal, date, timestamp: ISO text, rendered the same way by the Rust side
 
 
-def table_expected(spark: SparkSession, name: str, rows: bool = True) -> dict:
+def table_expected(spark: SparkSession, name: str, with_rows: bool = True) -> dict:
     df = spark.sql(f"SELECT * FROM o.db.{name} ORDER BY id")
-    rows = [{k: typed(v) for k, v in r.asDict().items()} for r in df.collect()] if rows else []
+    rows = [{k: typed(v) for k, v in r.asDict().items()} for r in df.collect()] if with_rows else []
     snaps = [
         r["snapshot_id"]
         for r in spark.sql(
@@ -207,7 +207,7 @@ def main() -> None:
     out["evolved"]["as_of"] = json.loads(json.dumps(out["evolved"]["as_of"], default=typed))
     # The theta tables are compared through their statistics files, not their rows (20,000 of them).
     for n in ["thetas", "thetas_big"]:
-        out[n] = table_expected(spark, n, rows=False)
+        out[n] = table_expected(spark, n, with_rows=False)
     out["_oracle"] = {"spark": spark.version, "iceberg": "1.12.0"}
     with open(os.path.join(WAREHOUSE, "EXPECTED.json"), "w") as f:
         json.dump(out, f, indent=1, sort_keys=True, default=typed)
