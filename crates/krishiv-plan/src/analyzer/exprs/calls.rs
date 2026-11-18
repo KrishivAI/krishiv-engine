@@ -89,7 +89,7 @@ impl Resolver<'_> {
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
-        if matches!(entry.id.name(), "from_protobuf" | "to_protobuf") {
+        if is_builtin_entry(entry) && matches!(entry.id.name(), "from_protobuf" | "to_protobuf") {
             // A binary literal is the descriptor set and the rewritten options `map(..)` of string literals the options: values the
             // result type reads (Spark folds both). Other functions keep seeing neither as a constant.
             for (c, k) in constants.iter_mut().zip(kids) {
@@ -168,7 +168,8 @@ impl Resolver<'_> {
             AnalysisError::new(err, origin)
         })?;
         let mut call_kids = call_kids;
-        if matches!(entry.id.name(), "from_protobuf" | "to_protobuf")
+        if is_builtin_entry(entry)
+            && matches!(entry.id.name(), "from_protobuf" | "to_protobuf")
             && Self::descriptor_literal(kids).is_some()
             && let Some(Some(Constant::Binary(bytes))) = constants.get(2)
             && let Some(k) = call_kids.get_mut(2)

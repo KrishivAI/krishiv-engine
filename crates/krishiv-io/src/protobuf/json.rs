@@ -45,7 +45,6 @@ const WELL_KNOWN: &[&str] = &[
     "google.protobuf.BytesValue",
     "google.protobuf.FloatValue",
     "google.protobuf.DoubleValue",
-    "google.protobuf.Empty",
     "google.protobuf.Any",
 ];
 
@@ -269,12 +268,18 @@ impl Printer<'_> {
             (Kind::Bytes, Raw::Len(b)) => quoted(&base64(b), out),
             (Kind::Enum(e), Raw::Varint(v)) => {
                 let n = v as i32;
-                if self.enums_as_ints {
+                if e.name() == "NullValue"
+                    && e.get_value(0).is_some_and(|v| v.name() == "NULL_VALUE")
+                {
+                    // JsonFormat prints this enum as JSON null whatever the options.
+                    out.push_str("null");
+                } else if self.enums_as_ints {
                     out.push_str(&n.to_string());
                 } else {
                     match e.get_value(n) {
                         Some(ev) => string(ev.name(), out),
-                        None => string(&format!("UNKNOWN_ENUM_VALUE_{}_{n}", e.name()), out),
+                        // JsonFormat prints an unknown value as its number.
+                        None => out.push_str(&n.to_string()),
                     }
                 }
             }
