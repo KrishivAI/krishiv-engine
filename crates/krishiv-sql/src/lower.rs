@@ -33,7 +33,7 @@ use krishiv_plan::{
     SortOrder, SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet,
     WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
 };
-use krishiv_types::DecimalType;
+use krishiv_types::{DataType, DecimalType};
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
@@ -52,7 +52,7 @@ mod pipe;
 mod unit_call;
 mod variant;
 
-pub use identified::lower_identified;
+pub use identified::{lower_identified, lower_with_default_collation};
 type R<T> = Result<T, ParseError>;
 
 /// The most grouping sets one `GROUP BY` expands to.
@@ -239,6 +239,9 @@ struct Lowerer {
     /// The names the session substituted for `IDENTIFIER(..)` clauses: a column at one of these
     /// spans is [`ColumnRef::by_identifier`].
     identifier_spans: Vec<Span>,
+    /// A view's `DEFAULT COLLATION` (never `UTF8_BINARY`, the plain default): its string literals
+    /// and written `CAST(.. AS STRING)` take it (ADR 0043 Decision 7).
+    default_collation: Option<krishiv_types::Collation>,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -1085,7 +1088,16 @@ impl Lowerer {
     fn expr_inner(&mut self, e: &Expr) -> R<IrExpr> {
         let sp = e.span;
         Ok(match &e.kind {
-            ExprKind::Literal(v) => self.ex(literal(v, sp)?, sp),
+            ExprKind::Literal(v) => {
+                let node = literal(v, sp)?;
+                match (&node, self.default_collation) {
+                    // A string literal takes the view's default collation at default strength.
+                    (ExprNode::Literal(IrLiteral::String(_)), Some(c)) => {
+                        IrExpr::default_collate(self.ex(node, sp), c)
+                    }
+                    _ => self.ex(node, sp),
+                }
+            }
             ExprKind::Keyword(k) => {
                 self.ex(ExprNode::Literal(IrLiteral::String(k.value.clone())), sp)
             }
@@ -1335,10 +1347,17 @@ impl Lowerer {
                 data_type,
                 try_cast,
             } => {
-                let to = data_type
+                let mut to = data_type
                     .without_char_varchar()
                     .to_data_type()
                     .map_err(|e| err(e, data_type.span))?;
+                // A `STRING` written without a collation takes the view's default; a written
+                // collation, `UTF8_BINARY` included, is kept.
+                if let (Some(c), None, DataType::String) =
+                    (self.default_collation, &data_type.collation, &to)
+                {
+                    to = DataType::collated_string(c);
+                }
                 let mode = if *try_cast {
                     CastMode::Try
                 } else {

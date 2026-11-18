@@ -1301,6 +1301,9 @@ impl Session {
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
+            if let Some(c) = &view.collation {
+                rows.push(("Collation".to_owned(), c.clone()));
+            }
             rows.push(("View Text".to_owned(), view.written.clone()));
             rows.push(("View Original Text".to_owned(), view.written.clone()));
             let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
@@ -1686,6 +1689,9 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         let mut out = format!("CREATE VIEW {}.{} (\n{cols})\n", t.namespace, t.name);
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
+        }
+        if let Some(c) = &view.collation {
+            out.push_str(&format!("DEFAULT COLLATION {c}\n"));
         }
         if !t.properties.is_empty() {
             let props = t

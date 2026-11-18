@@ -487,12 +487,8 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
             ErrorClass::UnsupportedFeatureCollationsInMapKeys,
         ),
         (
-            "CREATE VIEW vv DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c",
-            ErrorClass::KrishivUnsupportedFeature,
-        ),
-        (
-            "CREATE TEMPORARY VIEW tv DEFAULT COLLATION UNICODE AS SELECT 'a' AS c",
-            ErrorClass::KrishivUnsupportedFeature,
+            "CREATE VIEW vv DEFAULT COLLATION NO_SUCH_COLLATION AS SELECT 'a' AS c",
+            ErrorClass::CollationInvalidName,
         ),
         (
             "SET spark.sql.legacy.collationAwareHashFunctions = true",
@@ -506,7 +502,7 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
         let e = block_on(s.sql(sql)).unwrap_err();
         assert_eq!(e.error_class(), class, "{sql}");
     }
-    // The defaults themselves, a binary view default, and the switches off are fine; the
+    // The defaults themselves, a view default, and the switches off are fine; the
     // session default collation does not change literals (Spark 4.2).
     for sql in [
         "SET spark.sql.collation.allowInMapKeys = false",
@@ -1794,4 +1790,67 @@ fn nvl2_column_names_show_the_arguments_as_written() {
             .collect();
         assert_eq!(names, [want], "{sql}");
     }
+}
+
+/// `CREATE VIEW ... DEFAULT COLLATION` (ADR 0043 Decision 7), values from the Spark 4.3.0 oracle:
+/// the body's literals and `CAST(.. AS STRING)` take the default at default strength, so a column's
+/// own collation beats it; `ALTER VIEW ... AS` keeps it; `DESCRIBE EXTENDED` and `SHOW CREATE
+/// TABLE` show it.
+#[test]
+fn a_view_default_collation_types_its_literals() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "CREATE TABLE vt (c1 STRING COLLATE UTF8_LCASE, c2 STRING) USING parquet",
+        "INSERT INTO vt VALUES ('a', 'b')",
+        "CREATE VIEW v2 DEFAULT COLLATION UTF8_LCASE AS SELECT c1, c2, c2 = 'B' AS x, c1 = 'B' AS y, \
+         'a' = 'A' AS z, CAST(c2 AS STRING) AS w, CAST(1 AS STRING) AS q FROM vt",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let row = |sql: &str| {
+        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        (0..b[0].num_columns())
+            .map(|i| arrow_cast::display::array_value_to_string(b[0].column(i), 0).unwrap())
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    assert_eq!(
+        row("SELECT COLLATION(c1), COLLATION(c2), COLLATION(w), COLLATION(q), x, y, z FROM v2"),
+        "SYSTEM.BUILTIN.UTF8_LCASE|SYSTEM.BUILTIN.UTF8_BINARY|SYSTEM.BUILTIN.UTF8_LCASE|\
+         SYSTEM.BUILTIN.UTF8_LCASE|false|false|true"
+    );
+    for sql in [
+        "CREATE VIEW v DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c1, 'b' AS c2",
+        "CREATE OR REPLACE VIEW vr DEFAULT COLLATION utf8_lcase_rtrim AS SELECT 'a ' AS c1",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    assert_eq!(row("SELECT COUNT(*) FROM v WHERE c1 = 'A'"), "1");
+    assert_eq!(row("SELECT COUNT(*) FROM vr WHERE c1 = 'A'"), "1");
+    // `ALTER VIEW ... AS` keeps the default.
+    block_on(
+        block_on(s.sql("ALTER VIEW v AS SELECT 'q' AS c9"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        row("SELECT COLLATION(c9) FROM v"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    let b = block_on(block_on(s.sql("DESCRIBE EXTENDED v")).unwrap().collect()).unwrap();
+    let described: Vec<String> = (0..b[0].num_rows())
+        .filter_map(|i| {
+            let name = arrow_cast::display::array_value_to_string(b[0].column(0), i).unwrap();
+            (name == "Collation")
+                .then(|| arrow_cast::display::array_value_to_string(b[0].column(1), i).unwrap())
+        })
+        .collect();
+    assert_eq!(described, ["UTF8_LCASE"]);
+    let shown = row("SHOW CREATE TABLE v");
+    assert!(
+        shown.contains("\nDEFAULT COLLATION UTF8_LCASE\n")
+            && shown.ends_with("AS SELECT 'q' AS c9\n"),
+        "{shown}"
+    );
 }

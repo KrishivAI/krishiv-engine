@@ -23,12 +23,31 @@ pub fn lower_identified(
     case_sensitive: bool,
     identifier_spans: &[Span],
 ) -> R<Plan> {
+    lower_with_default_collation(query, source, case_sensitive, identifier_spans, None)
+}
+
+/// [`lower_identified`] for the query of a view with `DEFAULT COLLATION` (ADR 0043 Decision 7,
+/// design `P2-collations.md` 3.2): the query's string literals and written `CAST(.. AS STRING)`
+/// take `default`, a literal at the default strength of a literal (a column's collation beats it)
+/// and a cast as a written collation does. A cast to a type with a written collation, `UTF8_BINARY`
+/// included, is kept. `None` and `UTF8_BINARY` change nothing.
+///
+/// # Errors
+/// As for [`lower`](crate::lower).
+pub fn lower_with_default_collation(
+    query: &Query,
+    source: SourceId,
+    case_sensitive: bool,
+    identifier_spans: &[Span],
+    default: Option<krishiv_types::Collation>,
+) -> R<Plan> {
     let mut l = Lowerer::new(
         source,
         query.span,
         case_sensitive,
         identifier_spans.to_vec(),
     );
+    l.default_collation = default.filter(|c| !c.is_utf8_binary());
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
 }
@@ -48,6 +67,7 @@ impl Lowerer {
             recursive: 0,
             case_sensitive,
             identifier_spans,
+            default_collation: None,
         }
     }
 

@@ -131,6 +131,10 @@ pub(crate) struct ViewDef {
     /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
     /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
     pub(crate) schema_mode: Option<ViewSchemaMode>,
+    /// `DEFAULT COLLATION` as `Collation::name` spells it: the query's string literals and
+    /// `CAST(.. AS STRING)` take it each time the view is read, and `ALTER VIEW ... AS` keeps it.
+    /// `None` for no default or `UTF8_BINARY` (which Spark prints too, but changes nothing).
+    pub(crate) collation: Option<String>,
 }
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).

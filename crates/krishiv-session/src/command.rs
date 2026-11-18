@@ -277,8 +277,18 @@ impl Session {
             }
             .into());
         }
-        let plan = krishiv_sql::lower_identified(&v.query, self.next_source_id(), false, ids)
-            .map_err(|e| e.error)?;
+        let default = match &v.collation {
+            Some(c) => crate::collation_defaults::view_default(&c.value)?,
+            None => None,
+        };
+        let plan = krishiv_sql::lower_with_default_collation(
+            &v.query,
+            self.next_source_id(),
+            false,
+            ids,
+            default,
+        )
+        .map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
             &key,
@@ -365,6 +375,7 @@ impl Session {
                 original
                     .and_then(|o| o.get(v.query.span.start..v.query.span.end))
                     .map(str::to_owned),
+                default,
             ),
         );
         self.state.cache.forget_table(&v.name.value);

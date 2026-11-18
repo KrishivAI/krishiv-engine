@@ -1724,15 +1724,30 @@ impl Resolver<'_> {
                 // A cast to the collated type: the carrier is unchanged, so it costs nothing at
                 // run time. The unresolved node stays the display form.
                 let to = DataType::collated_string(*collation);
+                // A view's `DEFAULT COLLATION` types its literals (`Expr::default_collate`): the
+                // display form is Spark's `'a' collate UTF8_LCASE` (it names the column), a
+                // `Default`-mode cast of the literal, which the strength pass reads as a default
+                // collation, not an explicit one.
                 let mut bound = Bound {
                     expr: rebuilt(ExprNode::Cast {
                         expr: Arc::clone(&args[0]),
                         to: to.clone(),
                         mode: CastMode::Ansi,
                     }),
-                    ..keep(arg_type(to, child.nullable))
+                    ..keep(arg_type(to.clone(), child.nullable))
                 };
-                bound.shown = Some(Arc::clone(e));
+                bound.shown = Some(if e.is_default_collate() {
+                    Arc::new(
+                        Expr::new(ExprNode::Cast {
+                            expr: kids[0].shown(),
+                            to,
+                            mode: CastMode::Default,
+                        })
+                        .with_origin(e.origin),
+                    )
+                } else {
+                    Arc::clone(e)
+                });
                 bound
             }
             // Generators take their several names before this point

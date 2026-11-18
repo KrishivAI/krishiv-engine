@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Default collations the engine does not honour yet (ADR 0043 Decision 7, design
 //! `P2-collations.md` section 3.2). The parser accepts the syntax; running such a statement would
-//! ignore the default and type its strings as `UTF8_BINARY`, so it is refused instead.
+//! ignore the default and type its strings as `UTF8_BINARY`, so it is refused instead. A view's
+//! default is honoured: its body is lowered under it.
 
 use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, UnsupportedFeatureCollationsInMapKeys,
-    UnsupportedFeatureObjectLevelCollations, UnsupportedFeatureSchemaLevelCollations,
+    KrishivError, UnsupportedFeatureCollationsInMapKeys, UnsupportedFeatureObjectLevelCollations,
+    UnsupportedFeatureSchemaLevelCollations,
 };
 use krishiv_sql::ast::{AlterTableAction, Statement, TableElement};
 use krishiv_types::{Collation, DataType};
 
-/// A view's `DEFAULT COLLATION`: `UTF8_BINARY` is the plain default and changes nothing; any other
-/// needs the view body analysed under it (a later unit).
-fn view_default(parts: &[&str]) -> Result<(), KrishivError> {
-    let c = Collation::parse(&parts.join("."))?;
-    if c.is_utf8_binary() {
-        return Ok(());
-    }
-    Err(KrishivUnsupportedFeature {
-        feature: "DEFAULT COLLATION on a view".to_owned(),
-    }
-    .into())
+/// A view's `DEFAULT COLLATION` (`name` as written, qualified or not): `None` for `UTF8_BINARY`,
+/// the plain default, which changes nothing; the view body is lowered under any other
+/// ([`krishiv_sql::lower_with_default_collation`]).
+///
+/// # Errors
+/// `COLLATION_INVALID_NAME` for an unknown name.
+pub(crate) fn view_default(name: &str) -> Result<Option<Collation>, KrishivError> {
+    let c = Collation::parse(name)?;
+    Ok((!c.is_utf8_binary()).then_some(c))
 }
 
 /// Whether `dt` holds a map whose key holds a collated string.
@@ -33,7 +32,7 @@ fn collated_map_key(dt: &DataType) -> bool {
 /// # Errors
 /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`, `.OBJECT_LEVEL_COLLATIONS` and
 /// `.COLLATIONS_IN_MAP_KEYS` as Spark 4.2 raises them with its switches off;
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a view default; `COLLATION_INVALID_NAME` for an unknown name.
+/// a view's default is honoured ([`view_default`]).
 ///
 /// With `schema_level` (`spark.sql.collation.schemaLevel.enabled`) a schema's default is stored and
 /// shown (`DESCRIBE SCHEMA`); a table or view in such a schema is refused where it is created.
@@ -71,14 +70,6 @@ pub(crate) fn refuse_unhonoured(
                 Ok(())
             }
             _ => Ok(()),
-        },
-        Statement::CreateView(v) => match &v.collation {
-            Some(c) => view_default(&[c.value.as_str()]),
-            None => Ok(()),
-        },
-        Statement::CreatePermanentView(v) => match &v.collation {
-            Some(c) => view_default(&c.parts.iter().map(|p| p.value.as_str()).collect::<Vec<_>>()),
-            None => Ok(()),
         },
         _ => Ok(()),
     }

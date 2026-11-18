@@ -288,11 +288,16 @@ impl Expander<'_> {
             }
             .into());
         };
-        let lowered = krishiv_sql::lower_identified(
+        let default = match &view.collation {
+            Some(name) => crate::collation_defaults::view_default(name)?,
+            None => None,
+        };
+        let lowered = krishiv_sql::lower_with_default_collation(
             &query,
             (stored.next_source)(),
             stored.parser.case_sensitive,
             &view.identifier_spans,
+            default,
         )
         .map_err(|e| e.error)?;
         self.path.push(key);

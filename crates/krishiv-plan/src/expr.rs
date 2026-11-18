@@ -692,6 +692,26 @@ impl Expr {
         Self::new(ExprNode::Literal(value))
     }
 
+    /// A string literal typed by a view's `DEFAULT COLLATION` (ADR 0043 Decision 7): it takes
+    /// `collation` but keeps the *default* strength of a literal, so a column's collation beats it.
+    /// An unresolved [`ExprNode::Collate`] whose written name is empty marks it.
+    #[must_use]
+    pub fn default_collate(literal: Self, collation: krishiv_types::Collation) -> Self {
+        let origin = literal.origin;
+        Self::new(ExprNode::Collate {
+            expr: Arc::new(literal),
+            collation,
+            name: String::new(),
+        })
+        .with_origin(origin)
+    }
+
+    /// Whether this is the [`Expr::default_collate`] form of `COLLATE`.
+    #[must_use]
+    pub fn is_default_collate(&self) -> bool {
+        matches!(&self.node, ExprNode::Collate { name, .. } if name.is_empty())
+    }
+
     /// An unresolved, non-distinct, unfiltered call of `name`.
     #[must_use]
     pub fn function(name: impl Into<String>, args: Vec<Self>) -> Self {

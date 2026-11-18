@@ -55,8 +55,8 @@ pub use classify::{
 pub use error::{ParseError, parse_exception_suffix};
 pub use frontend::Frontend;
 pub use lower::{
-    lower, lower_expression, lower_identified, lower_select_item, lower_with, parse_and_lower,
-    parse_and_lower_named_expression,
+    lower, lower_expression, lower_identified, lower_select_item, lower_with,
+    lower_with_default_collation, parse_and_lower, parse_and_lower_named_expression,
 };
 pub use params::{ParameterMarker, parameter_markers};
 pub use reads::{is_bare_default, shared_from_query, statement_reads};

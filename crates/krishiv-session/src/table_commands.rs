@@ -580,11 +580,30 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower_identified(
+        // The default as Spark stores it (`UTF8_BINARY` too, which changes nothing).
+        let stored_collation = match &v.collation {
+            Some(c) => Some(
+                krishiv_types::Collation::parse(
+                    &c.parts
+                        .iter()
+                        .map(|p| p.value.as_str())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                )?
+                .name(),
+            ),
+            None => None,
+        };
+        let collation = match &stored_collation {
+            Some(name) => crate::collation_defaults::view_default(name)?,
+            None => None,
+        };
+        let plan = krishiv_sql::lower_with_default_collation(
             query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
             ids,
+            collation,
         )
         .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
@@ -687,6 +706,7 @@ impl Session {
                 written: crate::identifier_clause::written_within(
                     original, ids, written, query.span,
                 ),
+                collation: stored_collation,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -747,7 +767,16 @@ impl Session {
                 span: v.span,
             },
             columns,
-            collation: None,
+            collation: v.collation.as_ref().map(|c| Ident {
+                value: c
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+                quoted: false,
+                span: c.span,
+            }),
             query: query.clone(),
             span: v.span,
         };
@@ -1045,6 +1074,44 @@ impl Session {
                     .into(),
             );
         }
+        // A temporary view: `AS query` replaces it under the `DEFAULT COLLATION` it was created with.
+        if self.temp_entry_of(&name, &env)
+            && let AlterViewAction::SetQuery {
+                query,
+                schema_binding: None,
+                ..
+            } = &a.action
+            && let Some(entry) = self
+                .state
+                .catalog
+                .get(&name.name, env.analysis.conf.case_sensitive)
+            && let crate::catalog::TempTable::View {
+                text: Some(_),
+                collation,
+                ..
+            } = &*entry
+        {
+            let view = CreateView {
+                or_replace: true,
+                if_not_exists: false,
+                name: Ident {
+                    value: name.name.clone(),
+                    quoted: false,
+                    span: a.span,
+                },
+                columns: Vec::new(),
+                collation: collation.map(|c| Ident {
+                    value: c.name(),
+                    quoted: false,
+                    span: a.span,
+                }),
+                query: Box::new((**query).clone()),
+                span: a.span,
+            };
+            return self
+                .create_temp_view(&view, false, ids, Some(original))
+                .await;
+        }
         let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
             return Err(name.not_found());
         };
@@ -1062,11 +1129,18 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower_identified(
+                // `ALTER VIEW ... AS` keeps the view's `DEFAULT COLLATION`.
+                let kept = existing.view.as_ref().and_then(|v| v.collation.clone());
+                let default = match &kept {
+                    Some(name) => crate::collation_defaults::view_default(name)?,
+                    None => None,
+                };
+                let plan = krishiv_sql::lower_with_default_collation(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
                     ids,
+                    default,
                 )
                 .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
@@ -1107,6 +1181,7 @@ impl Session {
                     written: crate::identifier_clause::written_within(
                         original, ids, written, query.span,
                     ),
+                    collation: kept,
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

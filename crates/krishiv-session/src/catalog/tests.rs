@@ -78,6 +78,7 @@ fn expanding_a_cycle_is_an_internal_error() {
         pins: Vec::new(),
         text: None,
         keeps: ViewKeeps::default(),
+        collation: None,
     };
     session.put("a", view("b"));
     session.put("b", view("a"));

@@ -119,6 +119,10 @@ pub(crate) enum TempTable {
         /// inlines this entry runs its observed nodes, so it completes them. Part of the entry, so a
         /// query reads the handles of the definition it expanded, and they are published with it.
         keeps: ViewKeeps,
+        /// The `DEFAULT COLLATION` of a view `CREATE TEMPORARY VIEW` made (never `UTF8_BINARY`):
+        /// its plan already holds the literals it typed, and `ALTER VIEW ... AS` lowers the new
+        /// query under it. `None` for no default and for a DataFrame view.
+        collation: Option<krishiv_types::Collation>,
     },
 }
 
@@ -128,6 +132,7 @@ impl TempTable {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumn>,
         text: Option<String>,
+        collation: Option<krishiv_types::Collation>,
     ) -> Self {
         Self::View {
             plan,
@@ -135,6 +140,7 @@ impl TempTable {
             pins: Vec::new(),
             text,
             keeps: ViewKeeps::default(),
+            collation,
         }
     }
 }
@@ -288,6 +294,7 @@ impl SessionCatalog {
                     pins,
                     text: None,
                     keeps,
+                    collation: None,
                 }),
             ),
         );

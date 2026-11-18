@@ -428,6 +428,15 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
         }
         ExprNode::Literal(Literal::String(_)) => Some((Collation::UTF8_BINARY, Strength::Default)),
         ExprNode::Alias { expr, .. } => strength_of(expr, memo),
+        // A literal a view's `DEFAULT COLLATION` typed (`Expr::default_collate`, bound to a
+        // `Default`-mode cast of the literal): the default collation at default strength.
+        ExprNode::Cast {
+            expr,
+            to: DataType::CollatedString(c),
+            mode: CastMode::Default,
+        } if matches!(expr.node, ExprNode::Literal(Literal::String(_))) => {
+            Some((*c, Strength::Default))
+        }
         // A written `CAST(x AS STRING COLLATE c)` (bound, so never in `Default` mode) is
         // explicit; the analyzer's own implicit cast, shown in `Default` mode, takes its
         // child's strength.
