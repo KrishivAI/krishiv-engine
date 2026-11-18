@@ -38,6 +38,7 @@ mod prefix_cache;
 mod python_relations;
 mod rule_differential;
 mod runtime_filters;
+mod scan_instance;
 mod scan_row_drop;
 mod semantics;
 mod share_subtree;

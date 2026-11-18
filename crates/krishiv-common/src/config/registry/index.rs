@@ -317,6 +317,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     ),
     (
+        "krishiv.exec.scan.instanceProjection",
+        &EXEC_SCAN_INSTANCE_PROJECTION,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
