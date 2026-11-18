@@ -41,7 +41,12 @@ impl SpillScopes for QuerySpill {
                         operation: (*operation).to_owned(),
                         path: path.display().to_string(),
                         reason: format!(
-                            "{source}; set `krishiv.spill.dir` to a writable local directory"
+                            "{}; set `krishiv.spill.dir` to a writable local directory",
+                            if source.kind() == std::io::ErrorKind::StorageFull {
+                                format!("the spill disk is full ({source})")
+                            } else {
+                                source.to_string()
+                            }
                         ),
                     }
                     .into(),

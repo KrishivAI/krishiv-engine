@@ -301,6 +301,8 @@ fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
         krishiv_common::error::ErrorClass::KrishivSpillIoError,
         "{err}"
     );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+    assert!(err.to_string().contains("a_file"), "{err}");
     let df = block_on(s.sql("SELECT count(*) AS n FROM range(10)")).unwrap();
     assert_eq!(block_on(df.collect()).unwrap().len(), 1);
 }
@@ -366,9 +368,19 @@ fn an_invalid_spill_setting_keeps_its_own_error_class() {
             .await
     })
     .unwrap_err();
-    assert_ne!(
+    assert_eq!(
         err.error_class(),
-        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        krishiv_common::error::ErrorClass::KrishivInvalidConfigValue,
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains("krishiv.spill.zstd.level"),
+        "{err}"
+    );
+    assert_eq!(
+        err.cause()
+            .map(krishiv_common::error::KrishivError::error_class),
+        Some(krishiv_common::error::ErrorClass::UnableToAcquireMemory),
         "{err}"
     );
 }
