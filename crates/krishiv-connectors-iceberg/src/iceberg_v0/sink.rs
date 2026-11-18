@@ -31,6 +31,12 @@
 //!   outcome deletes nothing). A finalize dropped while a request is in
 //!   flight leaves orphans, never a table that references deleted files. A
 //!   write of no rows still commits a snapshot with no files.
+//! - **Statistics** (PR-54b, `statistics_file.rs`): when the target has them
+//!   on, each driver's writer sketches its rows (charged to a reservation of
+//!   the driver's consumer, refused → that task has none), `finalize`
+//!   unions the tasks' sketches (charged to its own consumer) into the
+//!   write's, and each commit attempt writes them into a statistics file. A
+//!   task without sketches leaves the whole write without statistics.
 //! - **Input checks.** [`IcebergWriteSink::try_new`] refuses a request whose
 //!   `input_schema` does not have the table's columns, by name in order and of
 //!   the table's types (nullability and field ids aside), with
@@ -89,6 +95,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::append::{WriteIds, write_new_manifests};
 use super::commit::{CommitClock, CommitContext, CommitTable, commit_append};
 use super::data_file::{WrittenDataFile, data_file};
+use super::statistics_file::{SketchColumn, TaskSketches, sketch_columns, union_tasks};
 use super::storage::Registered;
 use super::types::arrow_schema;
 use super::write::{DataFileWriter, TaskIds};
@@ -111,6 +118,9 @@ pub(crate) struct WriteTarget {
     pub(crate) max_metadata_bytes: u64,
     /// `krishiv.iceberg.write.maxOpenFiles`, as the provider was opened.
     pub(crate) max_open_files: usize,
+    /// Whether the write writes statistics (`krishiv.iceberg.write.statistics.enabled`
+    /// and the table's `krishiv.write.statistics.enabled`, as the provider was opened).
+    pub(crate) statistics: bool,
 }
 
 impl std::fmt::Debug for WriteTarget {
@@ -132,6 +142,8 @@ pub(crate) struct IcebergWriteSink {
     /// The commit's idempotency key, also the files' operation id.
     write_id: String,
     clock: Arc<dyn CommitClock>,
+    /// The columns sketched, when the write has statistics (PR-54b).
+    sketch_columns: Option<Arc<[SketchColumn]>>,
 }
 
 impl std::fmt::Debug for IcebergWriteSink {
@@ -146,7 +158,8 @@ impl std::fmt::Debug for IcebergWriteSink {
 /// Batches queued per driver before its sink blocks.
 const QUEUED_BATCHES: usize = 2;
 
-type Outcome = Result<Vec<WrittenDataFile>, KrishivError>;
+/// A task's files and, when the write has statistics, its sketches.
+type Outcome = Result<(Vec<WrittenDataFile>, Option<TaskSketches>), KrishivError>;
 
 /// One driver's writer task, as `finalize` sees it.
 struct Writer {
@@ -220,6 +233,7 @@ impl WriterTask {
             writer.abort().await;
             return;
         }
+        let sketches = writer.take_sketches();
         let files = match writer.finish().await {
             Ok(files) => files,
             Err(e) => {
@@ -228,7 +242,7 @@ impl WriterTask {
             }
         };
         let locations: Vec<String> = files.iter().map(|f| f.location.clone()).collect();
-        let kept = done.send(Ok(files)).is_ok() && keep.await.unwrap_or(false);
+        let kept = done.send(Ok((files, sketches))).is_ok() && keep.await.unwrap_or(false);
         if !kept {
             delete_paths(&file_io, locations).await;
         }
@@ -264,12 +278,16 @@ impl IcebergWriteSink {
             })?;
         let has_required = table.fields().iter().any(|f| has_required(f));
         let write_id = request.write_id.clone().unwrap_or_else(random_uuid);
+        let sketch_columns = target
+            .statistics
+            .then(|| sketch_columns(target.base.current_schema()).into());
         Ok(Self {
             target,
             table,
             has_required,
             write_id,
             clock: Arc::new(IoClock { handle }),
+            sketch_columns,
         })
     }
 
@@ -305,11 +323,15 @@ impl IcebergWriteSink {
         };
         let mut keeps = Vec::with_capacity(writers.len());
         let mut files: Vec<WrittenDataFile> = Vec::new();
+        let mut sketches = Vec::with_capacity(writers.len());
         let mut first_error = None;
         for w in writers {
             keeps.push(w.keep);
             match w.done.await {
-                Ok(Ok(f)) => files.extend(f),
+                Ok(Ok((f, s))) => {
+                    files.extend(f);
+                    sketches.push(s);
+                }
                 Ok(Err(e)) => {
                     first_error.get_or_insert(e);
                 }
@@ -365,6 +387,10 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         };
+        // The tasks' sketches, unioned (statistics never fail the write).
+        if let Some(columns) = &self.sketch_columns {
+            new.statistics = union_tasks(columns, sketches, ctx.consumer().reservation());
+        }
         // From here the commit loop owns cleanup (design note §7.4).
         written.armed = false;
         let query_id = ctx.query().id().0.to_string();
@@ -459,13 +485,18 @@ impl Sink for IcebergWriteSink {
             attempt_id: unique_u64(),
             write_id: &self.write_id,
         };
+        let sketches = self
+            .sketch_columns
+            .as_ref()
+            .and_then(|c| TaskSketches::new(Arc::clone(c), ctx.consumer().reservation()));
         let writer = DataFileWriter::with_registered(
             &self.target.base,
             self.target.registered.clone(),
             ids,
             self.target.max_open_files,
             ctx.consumer().reservation(),
-        )?;
+        )?
+        .with_sketches(sketches);
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();

@@ -34,20 +34,20 @@ use super::provider_tests::{Env, env};
 use super::scan::read_manifest_files;
 
 /// One commit request's body.
-type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
+pub(super) type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
 
 /// A foreign writer's request, built on the metadata it is given.
-type Foreign =
+pub(super) type Foreign =
     Box<dyn FnOnce(TableMetadata) -> Pin<Box<dyn Future<Output = Request> + Send>> + Send>;
 
 /// The snapshot id and write key of the write under test.
-const OURS: i64 = 7_000;
-const OUR_KEY: &str = "w-ours";
-const OUR_UUID: &str = "uuid-ours";
+pub(super) const OURS: i64 = 7_000;
+pub(super) const OUR_KEY: &str = "w-ours";
+pub(super) const OUR_UUID: &str = "uuid-ours";
 
 /// What the catalog does with one request.
 #[derive(Debug, Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     /// Applied (or refused) and answered.
     Answer,
     /// Applied; the answer is lost (a timeout).
@@ -82,14 +82,14 @@ enum Action {
 
 /// When a foreign writer commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum When {
+pub(super) enum When {
     BeforeRequest(usize),
     AfterRequest(usize),
     BeforeLoad(usize),
 }
 
 /// Why a catalog refused a request.
-enum Refusal {
+pub(super) enum Refusal {
     Conflict,
     Stale,
     Duplicate,
@@ -103,7 +103,7 @@ struct Pending {
     loads_left: Option<usize>,
 }
 
-struct State {
+pub(super) struct State {
     meta: TableMetadata,
     location: String,
     version: u32,
@@ -118,8 +118,8 @@ struct State {
 }
 
 /// The catalog under test: one table, a script of faults.
-struct TestCatalog {
-    state: Mutex<State>,
+pub(super) struct TestCatalog {
+    pub(super) state: Mutex<State>,
 }
 
 /// The table `m` after the catalog applies `request`, or why not.
@@ -157,7 +157,7 @@ fn error(message: &str) -> KrishivError {
 
 impl State {
     /// Applies `request` and writes the metadata file; the refusal if any.
-    fn land(&mut self, request: &Request) -> Result<TableMetadata, Refusal> {
+    pub(super) fn land(&mut self, request: &Request) -> Result<TableMetadata, Refusal> {
         let next = apply(&self.meta, &self.location, request)?;
         self.persist(next.clone());
         Ok(next)
@@ -270,7 +270,7 @@ fn refs_only(m: &TableMetadata) -> TableMetadata {
 }
 
 impl TestCatalog {
-    fn new(meta: TableMetadata, location: String) -> Self {
+    pub(super) fn new(meta: TableMetadata, location: String) -> Self {
         Self {
             state: Mutex::new(State {
                 meta,
@@ -286,11 +286,11 @@ impl TestCatalog {
         }
     }
 
-    fn script(&self, faults: &[Fault]) {
+    pub(super) fn script(&self, faults: &[Fault]) {
         self.state.lock().unwrap().script.extend(faults);
     }
 
-    fn on(&self, when: When, f: Foreign) {
+    pub(super) fn on(&self, when: When, f: Foreign) {
         self.state
             .lock()
             .unwrap()
@@ -317,12 +317,12 @@ impl TestCatalog {
         self.state.lock().unwrap().land_held()
     }
 
-    fn metadata(&self) -> (TableMetadata, String) {
+    pub(super) fn metadata(&self) -> (TableMetadata, String) {
         let s = self.state.lock().unwrap();
         (s.meta.clone(), s.location.clone())
     }
 
-    fn requests(&self) -> usize {
+    pub(super) fn requests(&self) -> usize {
         self.state.lock().unwrap().requests
     }
 
@@ -409,11 +409,11 @@ impl CommitTable for TestCatalog {
 }
 
 /// Virtual time: a sleep advances the clock at once and is recorded.
-struct TestClock {
-    now: AtomicI64,
-    waits: Mutex<Vec<u64>>,
+pub(super) struct TestClock {
+    pub(super) now: AtomicI64,
+    pub(super) waits: Mutex<Vec<u64>>,
     /// Jitter at its largest (`bound - 1`) rather than 0.
-    max_jitter: AtomicBool,
+    pub(super) max_jitter: AtomicBool,
 }
 
 #[async_trait]
@@ -531,12 +531,12 @@ fn upgrade(to: FormatVersion) -> Foreign {
 /// A table of format `version` with one committed snapshot (row `1|1|init`),
 /// the catalog over it, the clock and the write under test: one data file
 /// (`10|2|ours`) and its manifests, written against that snapshot.
-struct Case {
-    env: Env,
-    cat: TestCatalog,
-    clock: Arc<TestClock>,
-    base: TableMetadata,
-    new: NewManifests,
+pub(super) struct Case {
+    pub(super) env: Env,
+    pub(super) cat: TestCatalog,
+    pub(super) clock: Arc<TestClock>,
+    pub(super) base: TableMetadata,
+    pub(super) new: NewManifests,
 }
 
 fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
@@ -590,12 +590,12 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     }
 }
 
-fn case() -> Case {
+pub(super) fn case() -> Case {
     case_with(2, &[])
 }
 
 impl Case {
-    fn run(&mut self) -> Result<TableMetadata, KrishivError> {
+    pub(super) fn run(&mut self) -> Result<TableMetadata, KrishivError> {
         let io = self.env.reg.file_io();
         let cx = CommitContext {
             io: &io,
@@ -611,7 +611,7 @@ impl Case {
         ))
     }
 
-    fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
+    pub(super) fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
         foreign(&self.env, &self.clock, &self.base, name, id, branch)
     }
 
@@ -629,7 +629,7 @@ impl Case {
     }
 
     /// The location of attempt `n`'s manifest list.
-    fn list(&self, n: u32) -> String {
+    pub(super) fn list(&self, n: u32) -> String {
         format!(
             "{}/metadata/snap-{OURS}-{n}-{OUR_UUID}.avro",
             self.base.location()
@@ -640,18 +640,18 @@ impl Case {
         self.new.manifests[0].manifest_path.clone()
     }
 
-    fn data(&self) -> String {
+    pub(super) fn data(&self) -> String {
         self.env.at("ours.parquet")
     }
 
-    fn waits(&self) -> Vec<u64> {
+    pub(super) fn waits(&self) -> Vec<u64> {
         self.clock.waits.lock().unwrap().clone()
     }
 
     /// The table's invariants: every live data file listed once, our
     /// snapshot at most once, and the rows `expected` (`id|x|name`, by id)
     /// through SQL and the same files through iceberg-rust's planning.
-    fn check(&self, expected: &[&str]) {
+    pub(super) fn check(&self, expected: &[&str]) {
         let (m, loc) = self.cat.metadata();
         let files = iceberg_rust_files(&self.env, &m, &loc);
         let unique: HashSet<&String> = files.iter().collect();
@@ -667,12 +667,12 @@ impl Case {
     }
 }
 
-fn exists(url: &str) -> bool {
+pub(super) fn exists(url: &str) -> bool {
     std::path::Path::new(url.strip_prefix("file://").unwrap()).exists()
 }
 
-const INIT: &str = "1|1|init.parquet";
-const MINE: &str = "10|2|ours";
+pub(super) const INIT: &str = "1|1|init.parquet";
+pub(super) const MINE: &str = "10|2|ours";
 
 /// The plain path: one request, committed; the list, manifest and data file
 /// kept; no wait.

@@ -31,7 +31,10 @@
 //!   `krishiv.write-id` and `krishiv.query-id`;
 //! - requirements `assert-table-uuid` and `assert-ref-snapshot-id` (the base,
 //!   or null for a ref that does not exist yet); updates `add-snapshot` and
-//!   `set-snapshot-ref`, the branch keeping its retention.
+//!   `set-snapshot-ref`, the branch keeping its retention, then (PR-54b)
+//!   `set-statistics` for the attempt's own Puffin statistics file
+//!   (`statistics_file.rs`), when the write has sketches and they describe
+//!   the whole snapshot on this attempt's parent.
 //!
 //! Where a manifest rolls follows Java's rule over iceberg-rust's
 //! (uncompressed) encoded length, not Java's flushed, compressed length, and
@@ -43,8 +46,8 @@ use std::sync::Arc;
 use iceberg::io::FileIO;
 use iceberg::spec::{
     DataFile, FormatVersion, ManifestFile, ManifestListWriter, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Summary, TableMetadata,
-    UNASSIGNED_SEQUENCE_NUMBER,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, StatisticsFile, Summary,
+    TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
@@ -53,6 +56,7 @@ use super::data_file::check_partition;
 use super::merge::{MergeConfig, MergeContext, arrange};
 use super::rolling::{ManifestNames, SpecManifests};
 use super::scan::{read_manifest_files, snapshot_refs};
+use super::statistics_file::{AttemptSnapshot, WriteSketches, attempt_statistics, skipped};
 use super::storage::from_iceberg;
 
 /// `write.metadata.path` (Java's `TableProperties.WRITE_METADATA_LOCATION`).
@@ -143,6 +147,14 @@ pub(crate) struct NewManifests {
     /// `merge.rs`): kept when the committed list names them, else deleted
     /// with the attempt's other files (design note §7.4).
     pub(crate) merged: Vec<String>,
+    /// The write's column sketches (PR-54b, `statistics_file.rs`): each attempt
+    /// writes a statistics file of its snapshot from them and adds
+    /// `set-statistics`; `None` when the write has none or dropped them.
+    pub(crate) statistics: Option<WriteSketches>,
+    /// Every statistics file an attempt started writing: kept when the
+    /// committed metadata names it, else deleted with the attempt's other
+    /// files (design note §7.4).
+    pub(crate) statistics_files: Vec<String>,
     /// Attempts prepared so far (Java's `SnapshotProducer.attempt`).
     attempts: u32,
 }
@@ -238,6 +250,8 @@ pub(crate) async fn write_new_manifests(
         added,
         data_files,
         merged: Vec::new(),
+        statistics: None,
+        statistics_files: Vec::new(),
         attempts: 0,
     })
 }
@@ -271,7 +285,8 @@ pub(crate) struct Attempt {
     pub(crate) snapshot: Snapshot,
     /// `assert-table-uuid`, `assert-ref-snapshot-id`.
     pub(crate) requirements: Vec<TableRequirement>,
-    /// `add-snapshot`, `set-snapshot-ref`.
+    /// `add-snapshot`, `set-snapshot-ref`, then `set-statistics` when the
+    /// attempt has a statistics file (PR-54b).
     pub(crate) updates: Vec<TableUpdate>,
 }
 
@@ -479,6 +494,30 @@ pub(crate) async fn prepare_attempt(
     let retention = base_ref
         .as_ref()
         .map_or_else(main_retention, |r| r.retention.clone());
+    let mut updates = vec![
+        TableUpdate::AddSnapshot {
+            snapshot: snapshot.clone(),
+        },
+        TableUpdate::SetSnapshotRef {
+            ref_name: branch.to_owned(),
+            reference: SnapshotReference::new(snapshot_id, retention),
+        },
+    ];
+    if let Some(statistics) = attempt_statistics_file(
+        io,
+        AttemptSnapshot {
+            metadata,
+            parent: parent.map(AsRef::as_ref),
+            snapshot_id,
+            sequence_number,
+        },
+        new,
+        &format!("{dir}/{snapshot_id}-{}-{attempt}.stats", new.commit_uuid),
+    )
+    .await
+    {
+        updates.push(TableUpdate::SetStatistics { statistics });
+    }
     Ok(Attempt {
         requirements: vec![
             TableRequirement::UuidMatch {
@@ -489,17 +528,35 @@ pub(crate) async fn prepare_attempt(
                 snapshot_id: base_ref.as_ref().map(|r| r.snapshot_id),
             },
         ],
-        updates: vec![
-            TableUpdate::AddSnapshot {
-                snapshot: snapshot.clone(),
-            },
-            TableUpdate::SetSnapshotRef {
-                ref_name: branch.to_owned(),
-                reference: SnapshotReference::new(snapshot_id, retention),
-            },
-        ],
+        updates,
         snapshot,
     })
+}
+
+/// The statistics file of an attempt (PR-54b, `statistics_file.rs`), written
+/// at `path` from `new`'s sketches; `None` when the write has none, no column
+/// describes the whole snapshot (rule 2), or writing failed (rule 3: counted,
+/// logged, and the path left in `new.statistics_files` for cleanup).
+async fn attempt_statistics_file(
+    io: &FileIO,
+    at: AttemptSnapshot<'_>,
+    new: &mut NewManifests,
+    path: &str,
+) -> Option<StatisticsFile> {
+    let sketches = new.statistics.as_ref()?;
+    // Listed before the file exists, so a failed write's file is deleted.
+    new.statistics_files.push(path.to_owned());
+    match attempt_statistics(io, at, sketches, path).await {
+        Ok(Some(file)) => Some(file),
+        Ok(None) => {
+            new.statistics_files.pop();
+            None
+        }
+        Err(e) => {
+            skipped(&format!("writing the statistics file {path}: {e}"));
+            None
+        }
+    }
 }
 
 /// A branch with no retention of its own (the table's defaults apply).

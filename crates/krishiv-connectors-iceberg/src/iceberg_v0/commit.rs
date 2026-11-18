@@ -53,7 +53,7 @@
 //!   that is not a number is `KRISHIV_UNSUPPORTED_FEATURE` (Java:
 //!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
-//!   the manifest lists of every other attempt and the manifests the found
+//!   the manifest lists (and statistics files) of every other attempt and the manifests the found
 //!   snapshot does not list are deleted (this write's new manifests a listed
 //!   merged manifest absorbed, and merged manifests of an attempt that did
 //!   not commit, `merge.rs`), never a data file and never a base manifest. Every outcome known
@@ -71,6 +71,15 @@
 //!   appear): the accepted remainder. Any outcome unresolved →
 //!   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **nothing is deleted**:
 //!   a late request would otherwise reference deleted files.
+//!
+//! - **Statistics** (PR-54b, `statistics_file.rs`): an attempt's
+//!   `set-statistics` and its Puffin file are rebuilt with the attempt (a
+//!   resend repeats them); the statistics files are cleaned up as the lists
+//!   are (kept when the committed metadata names them). A known refusal
+//!   ([`CommitOutcome::Failed`] to an attempt's first request) of a request
+//!   carrying `set-statistics` is resent once at once without it, the
+//!   statistics dropped for the rest of the write (counted as skipped), so a
+//!   catalog that does not take the update never fails the data commit.
 //!
 //! This differs from Java, which never resends and throws
 //! `CommitStateUnknownException` once its status check gives up (R:B2).
@@ -90,6 +99,7 @@ use krishiv_common::error::{
 
 use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt};
 use super::scan::{read_manifest_files, snapshot_refs};
+use super::statistics_file::skipped;
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -381,7 +391,7 @@ impl Loop<'_> {
     ) -> Result<TableMetadata, End> {
         'attempts: loop {
             self.before_request().await?;
-            let attempt = prepare_attempt(
+            let mut attempt = prepare_attempt(
                 self.cx.io,
                 &current,
                 new,
@@ -407,7 +417,19 @@ impl Loop<'_> {
                     .await;
                 match outcome {
                     CommitOutcome::Committed(m) => return Ok(*m),
-                    CommitOutcome::Failed(e) if !unknown => return Err(End::Error(e)),
+                    CommitOutcome::Failed(e) if !unknown => {
+                        if drop_statistics(&mut attempt) {
+                            new.statistics = None;
+                            skipped(&format!(
+                                "the catalog refused the request that carried them ({e}); \
+                                 sent again without them"
+                            ));
+                            // Known not applied: the same attempt, at once.
+                            first = true;
+                            continue;
+                        }
+                        return Err(End::Error(e));
+                    }
                     CommitOutcome::Failed(e) => self.last_answer = e.to_string(),
                     CommitOutcome::Unknown(reason) => {
                         if !unknown {
@@ -660,6 +682,17 @@ impl Loop<'_> {
         for list in self.lists.iter().filter(|l| !named.contains(l.as_str())) {
             let _ = self.cx.io.delete(list).await;
         }
+        let stats: HashSet<&str> = m
+            .statistics_iter()
+            .map(|f| f.statistics_path.as_str())
+            .collect();
+        for path in new
+            .statistics_files
+            .iter()
+            .filter(|p| !stats.contains(p.as_str()))
+        {
+            let _ = self.cx.io.delete(path).await;
+        }
         let Ok(listed) = read_manifest_files(
             self.cx.io,
             keep,
@@ -739,6 +772,15 @@ const KEPT: &str = "the written files were kept, since an earlier request of thi
      again, or its rows may appear twice (remove_orphan_files removes the files if \
      it never lands)";
 
+/// Removes `attempt`'s `set-statistics`; whether it had one.
+fn drop_statistics(attempt: &mut Attempt) -> bool {
+    let before = attempt.updates.len();
+    attempt
+        .updates
+        .retain(|u| !matches!(u, TableUpdate::SetStatistics { .. }));
+    attempt.updates.len() != before
+}
+
 /// The base an attempt asserts for its branch (`assert-ref-snapshot-id`).
 fn attempt_base(attempt: &Attempt) -> Option<i64> {
     attempt.requirements.iter().find_map(|r| match r {
@@ -756,6 +798,7 @@ async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
         .iter()
         .chain(manifests)
         .chain(&new.merged)
+        .chain(&new.statistics_files)
         .chain(lists)
     {
         let _ = io.delete(path).await;
