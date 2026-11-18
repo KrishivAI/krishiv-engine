@@ -224,4 +224,30 @@ mod tests {
         );
         assert!(c.set("krishiv.sql.timestampType", "DATETIME").is_err());
     }
+
+    /// Each setting answers to its `krishiv.sql.*` key and to the Spark key, and both reach one entry.
+    #[test]
+    fn each_client_read_key_is_reachable_by_its_krishiv_name_and_spark_alias() {
+        for key in [
+            "krishiv.sql.timestampType",
+            "krishiv.sql.session.localRelationCacheThreshold",
+            "krishiv.sql.session.localRelationSizeLimit",
+            "krishiv.sql.session.localRelationChunkSizeRows",
+            "krishiv.sql.session.localRelationChunkSizeBytes",
+            "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
+            "krishiv.sql.execution.pandas.convertToArrowArraySafely",
+            "krishiv.sql.execution.pandas.inferPandasDictAsMap",
+            "krishiv.sql.pyspark.inferNestedDictAsStruct.enabled",
+            "krishiv.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
+            "krishiv.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
+            "krishiv.sql.execution.arrow.useLargeVarTypes",
+        ] {
+            let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
+            assert_eq!(entry.key, key);
+            let alias = entry
+                .spark_alias
+                .unwrap_or_else(|| panic!("{key} has no Spark alias"));
+            assert!(std::ptr::eq(lookup(alias).unwrap(), entry), "{alias}");
+        }
+    }
 }
