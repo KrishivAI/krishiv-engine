@@ -16,11 +16,17 @@ The call comes in the task message (:class:`UdtfCall`): the argument offsets (by
 named argument), the partition child indexes, the declared return type (Spark JSON) and ``analyze``'s pickled
 ``AnalyzeResult`` when the UDTF has one (passed to ``__init__`` as Spark does).
 
+A 300 UDTF's rows are converted as Spark's are: ``StructType.toInternal`` in the worker (``wrap_udtf``), then, for
+what the JVM does with the pickled row, :func:`_from_java`: Pyrolite's view of each Python value (a 32-bit
+``int`` is an ``Integer``, a larger one a ``Long``, ...) through ``EvaluatePython.makeFromJava`` (v4.2.0): a value
+of another type than the declared one is mostly NULL, an integer is truncated to the column's width, anything
+is a string's ``toString``; a short tuple for a struct is ``STRUCT_ARRAY_LENGTH_MISMATCH`` and a decimal over its
+precision ``NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION`` (:class:`SparkJvmError`, which the worker reports as
+those classes). A JVM object's own ``toString`` (``[B@...`` for bytes, a ``GregorianCalendar`` for a date, an
+``Object[]`` for a tuple) is not reproduced: the value's Python ``str`` stands for it.
+
 Not here: Spark's legacy pandas conversion of 301
-(``spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled``), refused with ``NOT_IMPLEMENTED``. A 300
-UDTF's rows are converted to Arrow here as 301's are, where Spark pickles them to its JVM, which converts each
-value (``EvaluatePython.makeFromJava``): values of another type than the declared one may differ (no Spark golden
-pins them yet).
+(``spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled``), refused with ``NOT_IMPLEMENTED``.
 """
 
 from __future__ import annotations
@@ -111,6 +117,16 @@ class _Cursor:
     def __init__(self) -> None:
         self.raw: Any = None
         self.ref: tuple[Any, int] | None = None
+
+
+class SparkJvmError(Exception):
+    """An error Spark's JVM raises converting a 300 UDTF's row (``EvaluatePython.makeFromJava``): the worker
+    reports its class and parameters, and the server raises that class."""
+
+    def __init__(self, condition: str, parameters: dict[str, str]) -> None:
+        super().__init__(f"[{condition}] {parameters}")
+        self.condition = condition
+        self.parameters = parameters
 
 
 def _wrap_kwargs_support(f: Callable[..., Any], args_offsets: list[int], kwargs_offsets: dict[str, int]) -> Any:
@@ -594,6 +610,8 @@ def _row_udtf_mapper(
     check_output_row_against_schema = _build_null_checker(return_type)
     arrow_return_type = to_arrow_type(return_type, timezone="UTC", prefers_large_types=conf.use_large_var_types)
     return_type_size = len(return_type)
+    # Only 300 reads it, in a pool worker, where the type is pyspark's (the facade runs no UDTF).
+    to_internal: Callable[[Any], Any] = getattr(return_type, "toInternal", lambda row: row)
 
     def wrap(f: Callable[..., Any]) -> Callable[..., Iterator[Any]]:
         fname = getattr(f, "__name__", "")
@@ -628,8 +646,10 @@ def _row_udtf_mapper(
         def convert_to_arrow(data: Any) -> Any:
             rows = list(check_return_value(data))
             if eval_type == SQL_TABLE_UDF:
-                # `def eval(): yield` gives a None row: the JVM joins it with a null row (EvalPythonUDTFExec).
-                rows = [tuple([None] * return_type_size) if r is None else r for r in rows]
+                # `wrap_udtf`'s `toInternal`, then the JVM's conversion; a None row stays None (the JVM joins it
+                # with a null row, EvalPythonUDTFExec).
+                internal = [None if r is None else to_internal(r) for r in rows]
+                return _jvm_batch(internal, return_type, arrow_return_type)
             if len(rows) == 0:
                 return pa.RecordBatch.from_pylist([], schema=pa.schema(list(arrow_return_type)))
             try:
@@ -695,6 +715,181 @@ def _row_udtf_mapper(
     finally:
         if cleanup is not None:
             cleanup()
+
+
+def _java_kind(v: Any) -> str:
+    """The Java type Pyrolite unpickles ``v`` as (``net.razorvine.pickle``), by what ``makeFromJava`` matches."""
+    import datetime
+    import decimal
+
+    if isinstance(v, bool):
+        return "Boolean"
+    if isinstance(v, int):
+        if -(2**31) <= v < 2**31:
+            return "Integer"
+        return "Long" if -(2**63) <= v < 2**63 else "BigInteger"
+    if isinstance(v, float):
+        return "Double"
+    if isinstance(v, str):
+        return "String"
+    if isinstance(v, (bytes, bytearray)):
+        return "byte[]"
+    if isinstance(v, decimal.Decimal):
+        return "BigDecimal"
+    if isinstance(v, (datetime.date, datetime.time)):
+        return "Calendar"
+    if isinstance(v, tuple):
+        return "Object[]"
+    if isinstance(v, list):
+        return "List"
+    if isinstance(v, dict):
+        return "Map"
+    return "Object"
+
+
+def _wrap(v: int, bits: int) -> int:
+    """Java's narrowing of an integer to ``bits`` (``Long.toInt``: the low bits, two's complement)."""
+    v &= (1 << bits) - 1
+    return v - (1 << bits) if v >= 1 << (bits - 1) else v
+
+
+def _java_string(v: Any) -> str:
+    """Java's ``toString`` of the unpickled value, where Python's text is the same; else Python's ``str``."""
+    kind = _java_kind(v)
+    if kind == "Boolean":
+        return "true" if v else "false"
+    if kind == "List":
+        return "[" + ", ".join("null" if e is None else _java_string(e) for e in v) + "]"
+    if kind == "Map":
+        return "{" + ", ".join(f"{_java_text(k)}={_java_text(x)}" for k, x in v.items()) + "}"
+    if kind == "Double":
+        return _java_double(v)
+    return str(v)
+
+
+def _java_text(v: Any) -> str:
+    return "null" if v is None else _java_string(v)
+
+
+def _java_double(v: float) -> str:
+    """``Double.toString``: plain from 1e-3 up to 1e7, else ``d.dddE±n``."""
+    import math
+
+    if math.isnan(v):
+        return "NaN"
+    if math.isinf(v):
+        return "Infinity" if v > 0 else "-Infinity"
+    if v == 0:
+        return "-0.0" if math.copysign(1.0, v) < 0 else "0.0"
+    if 1e-3 <= abs(v) < 1e7:
+        text = repr(v)
+        return text if "." in text or "e" in text else text + ".0"
+    import decimal
+
+    _, digits, exponent = decimal.Decimal(repr(abs(v))).as_tuple()
+    text = "".join(map(str, digits)).rstrip("0") or "0"
+    power = len(digits) - 1 + int(exponent)
+    mantissa = text[0] + "." + (text[1:] or "0")
+    return f"{'-' if v < 0 else ''}{mantissa}E{power}"
+
+
+def _from_java(dt: Any, v: Any) -> Any:
+    """``EvaluatePython.makeFromJava(dt)`` (v4.2.0) of the value Pyrolite makes of ``v``, as the internal value
+    (days for a date, microseconds for a timestamp) of the declared type; ``None`` where Spark's match fails."""
+    import decimal
+
+    from krishiv._udf.types import (
+        ArrayType,
+        BinaryType,
+        BooleanType,
+        ByteType,
+        DateType,
+        DayTimeIntervalType,
+        DecimalType,
+        DoubleType,
+        FloatType,
+        IntegerType,
+        LongType,
+        MapType,
+        ShortType,
+        StringType,
+        StructType,
+        TimestampNTZType,
+        TimestampType,
+    )
+
+    if v is None:
+        return None
+    kind = _java_kind(v)
+    if isinstance(dt, BooleanType):
+        return v if kind == "Boolean" else None
+    for t, bits in ((ByteType, 8), (ShortType, 16), (IntegerType, 32), (LongType, 64)):
+        if isinstance(dt, t):
+            return _wrap(v, bits) if kind in ("Integer", "Long") else None
+    if isinstance(dt, FloatType):
+        import struct
+
+        return struct.unpack("f", struct.pack("f", v))[0] if kind == "Double" else None
+    if isinstance(dt, DoubleType):
+        return v if kind == "Double" else None
+    if isinstance(dt, DecimalType):
+        if kind != "BigDecimal":
+            return None
+        quantum = decimal.Decimal(1).scaleb(-dt.scale)
+        rounded = v.quantize(quantum, rounding=decimal.ROUND_HALF_UP, context=decimal.Context(prec=100))
+        if len(rounded.as_tuple().digits) > dt.precision and rounded != 0:
+            raise SparkJvmError(
+                "NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION",
+                {
+                    "roundedValue": str(rounded),
+                    "originalValue": str(v),
+                    "precision": str(dt.precision),
+                    "scale": str(dt.scale),
+                },
+            )
+        return rounded
+    if isinstance(dt, DateType):
+        return v if kind == "Integer" else None
+    if isinstance(dt, (TimestampType, TimestampNTZType, DayTimeIntervalType)):
+        return v if kind in ("Integer", "Long") else None
+    if isinstance(dt, StringType):
+        return _java_string(v)
+    if isinstance(dt, BinaryType):
+        if kind == "String":
+            return v.encode("utf-8")
+        return bytes(v) if kind == "byte[]" else None
+    if isinstance(dt, ArrayType):
+        if kind in ("List", "Object[]"):
+            return [_from_java(dt.elementType, e) for e in v]
+        return None
+    if isinstance(dt, MapType):
+        if kind != "Map":
+            return None
+        return [(_from_java(dt.keyType, k), _from_java(dt.valueType, x)) for k, x in v.items()]
+    if isinstance(dt, StructType):
+        if kind != "Object[]":
+            return None
+        if len(v) != len(dt.fields):
+            raise SparkJvmError(
+                "STRUCT_ARRAY_LENGTH_MISMATCH", {"expected": str(len(dt.fields)), "actual": str(len(v))}
+            )
+        return {f.name: _from_java(f.dataType, x) for f, x in zip(dt.fields, v, strict=True)}
+    return None
+
+
+def _jvm_batch(rows: list[Any], return_type: StructType, arrow_return_type: Any) -> Any:
+    """300's rows (each ``toInternal``'s result, or ``None`` for a ``None`` row) as the JVM keeps them, in Arrow:
+    each field through :func:`_from_java`; a ``None`` row is all NULL (``EvalPythonUDTFExec``'s null row)."""
+    import pyarrow as pa
+
+    columns: list[list[Any]] = [[] for _ in return_type.fields]
+    for row in rows:
+        for i, f in enumerate(return_type.fields):
+            columns[i].append(None if row is None else _from_java(f.dataType, row[i]))
+    schema = pa.schema(list(arrow_return_type))
+    return pa.RecordBatch.from_arrays(
+        [pa.array(c, type=field.type) for c, field in zip(columns, schema, strict=True)], schema=schema
+    )
 
 
 def _check_table_udf_row(result: Any, return_type_size: int, func: str) -> None:

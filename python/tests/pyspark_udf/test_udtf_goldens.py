@@ -29,9 +29,9 @@ GOLDENS = json.loads((Path(__file__).resolve().parent / "udtf" / "goldens.json")
 KNOWN_GAPS: list[tuple[str, str]] = [
     (
         r".*",
-        "PR-26c-4: UDTF planning (a UDTF cannot be planned from SQL or Spark Connect yet: `F.udtf`, "
-        "`F.arrow_udtf` and `spark.udtf.register` are NOT_IMPLEMENTED in the embedded facade, and the server's "
-        "worker pool runs the handlers but no plan reaches them)",
+        "PR-48: the embedded facade has no UDTFs (`F.udtf`, `F.arrow_udtf` and `spark.udtf.register` are "
+        "NOT_IMPLEMENTED in-process); the server's worker pool runs these cases from SQL "
+        "(`crates/krishiv-udf-pool/tests/udtf_goldens.rs`)",
     ),
 ]
 
