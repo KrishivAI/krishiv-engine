@@ -15,7 +15,7 @@ use std::sync::Arc;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
     ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    Origin, PlanId, PlanNode, ReadSource, SetOperation, SqlArgs,
+    Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -112,6 +112,15 @@ impl Translator<'_> {
                 name: c.name.clone(),
                 metrics: self.expressions(&c.metrics)?,
             },
+            RelType::Sample(s) => self.sample(s)?,
+            RelType::Deduplicate(d) => self.deduplicate(d)?,
+            RelType::Hint(h) => PlanNode::Hint {
+                input: self.input("Hint", h.input.as_deref())?,
+                name: h.name.clone(),
+                params: self.expressions(&h.parameters)?,
+            },
+            RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
+            RelType::Unpivot(u) => self.unpivot(u)?,
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Relation",
@@ -120,6 +129,143 @@ impl Translator<'_> {
             }
         };
         Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+    }
+
+    /// `Sample`, as Spark's `transformSample`: Bernoulli sampling without replacement, the seed
+    /// drawn per plan when the client sends none. Sampling with replacement (a Poisson draw) and
+    /// `deterministic_order` (`randomSplit`'s per-partition sort) have no IR node.
+    fn sample(&mut self, s: &pb::Sample) -> Result<PlanNode> {
+        if s.with_replacement.unwrap_or(false) {
+            return Err(unsupported_field(
+                "Sample",
+                "with_replacement",
+                "sampling with replacement",
+            ));
+        }
+        if s.deterministic_order {
+            return Err(unsupported_field(
+                "Sample",
+                "deterministic_order",
+                "randomSplit's deterministic order",
+            ));
+        }
+        Ok(PlanNode::Sample {
+            input: self.input("Sample", s.input.as_deref())?,
+            bounds: SampleBounds {
+                lower: s.lower_bound,
+                upper: s.upper_bound,
+            },
+            seed: s.seed,
+        })
+    }
+
+    /// `Deduplicate`, as Spark's `transformDeduplicate`: over every column it is `distinct()`;
+    /// over a subset it keeps the first row per key, which needs the input's columns and so
+    /// waits for an IR node. `within_watermark` is a streaming operator.
+    fn deduplicate(&mut self, d: &pb::Deduplicate) -> Result<PlanNode> {
+        let all = d.all_columns_as_keys.unwrap_or(false);
+        if !all && d.column_names.is_empty() {
+            return Err(assertion(
+                "Deduplicate requires to either deduplicate on all columns or a subset of columns",
+            ));
+        }
+        if all && !d.column_names.is_empty() {
+            return Err(assertion(
+                "Cannot deduplicate on both all columns and a subset of columns",
+            ));
+        }
+        if d.within_watermark.unwrap_or(false) {
+            return Err(unsupported_field(
+                "Deduplicate",
+                "within_watermark",
+                "dropDuplicatesWithinWatermark",
+            ));
+        }
+        if !all {
+            return Err(unsupported_field(
+                "Deduplicate",
+                "column_names",
+                "deduplicating on a subset of columns",
+            ));
+        }
+        Ok(PlanNode::Distinct {
+            input: self.input("Deduplicate", d.input.as_deref())?,
+        })
+    }
+
+    /// `RepartitionByExpression` without a partition count is `DISTRIBUTE BY exprs`; a count has
+    /// no IR field yet.
+    fn repartition_by_expression(&mut self, r: &pb::RepartitionByExpression) -> Result<PlanNode> {
+        if r.num_partitions.is_some() {
+            return Err(unsupported_field(
+                "RepartitionByExpression",
+                "num_partitions",
+                "repartition(n, exprs)",
+            ));
+        }
+        if r.partition_exprs.is_empty() {
+            return Err(assertion(
+                "Repartition by expression needs at least one partition expression",
+            ));
+        }
+        Ok(PlanNode::Repartition {
+            input: self.input("RepartitionByExpression", r.input.as_deref())?,
+            exprs: self.expressions(&r.partition_exprs)?,
+        })
+    }
+
+    /// `Unpivot` (`DataFrame.unpivot`, `melt`): Spark's output is the id columns, then the name
+    /// and value columns, with every null value row kept (the DataFrame form has no `EXCLUDE
+    /// NULLS`). The IR node keeps every other column as an id, so the input is first projected
+    /// to the ids and the value columns. A value that is not a plain column, and an absent
+    /// `values` (every non-id column, known only after analysis), are refused.
+    fn unpivot(&mut self, u: &pb::Unpivot) -> Result<PlanNode> {
+        let Some(values) = &u.values else {
+            return Err(unsupported_field(
+                "Unpivot",
+                "values",
+                "unpivot without explicit value columns",
+            ));
+        };
+        if values.values.is_empty() {
+            return Err(assertion("Unpivot requires at least one value column"));
+        }
+        let input = self.input("Unpivot", u.input.as_deref())?;
+        let ids = self.expressions(&u.ids)?;
+        let values = self.expressions(&values.values)?;
+        let column_sets = values
+            .iter()
+            .map(|v| {
+                let column = match &v.node {
+                    ExprNode::Column(_) => Arc::clone(v),
+                    _ => {
+                        return Err(unsupported_field(
+                            "Unpivot",
+                            "values",
+                            "unpivot of a value that is not a column",
+                        ));
+                    }
+                };
+                Ok(UnpivotColumnSet {
+                    columns: vec![column],
+                    alias: None,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let projected = Arc::new(
+            LogicalPlan::new(PlanNode::Project {
+                input,
+                exprs: ids.into_iter().chain(values).collect(),
+            })
+            .with_origin(Origin::UNKNOWN),
+        );
+        Ok(PlanNode::Unpivot {
+            input: projected,
+            value_columns: vec![u.value_column_name.clone()],
+            name_column: u.variable_column_name.clone(),
+            column_sets,
+            include_nulls: true,
+        })
     }
 
     /// `SetOperation`, as Spark's `transformSetOperation` (v4.2.0): `is_all` defaults to false,

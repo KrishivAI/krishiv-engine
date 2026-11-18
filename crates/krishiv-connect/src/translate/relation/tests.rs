@@ -895,7 +895,7 @@ fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
         (RelType::ToDf(Box::default()), "TO_DF(18)"),
-        (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
+        (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
         (RelType::Drop(Box::default()), "DROP(21)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
@@ -1028,5 +1028,134 @@ fn collect_metrics_without_an_input_is_refused() {
             "message",
             "CollectMetrics needs an input relation".to_owned()
         )]
+    );
+}
+
+// ---- group 3-5 arms: sample, deduplicate, hint, repartition, unpivot ---------------------------
+
+#[test]
+fn sample_is_bernoulli_without_replacement() {
+    let sample = |with_replacement: Option<bool>, deterministic_order: bool| {
+        relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: 0.0,
+            upper_bound: 0.5,
+            with_replacement,
+            seed: Some(7),
+            deterministic_order,
+        })))
+    };
+    let PlanNode::Sample { bounds, seed, .. } = node(&sample(None, false)) else {
+        panic!("not a sample")
+    };
+    assert_eq!((bounds.lower, bounds.upper, seed), (0.0, 0.5, Some(7)));
+    assert!(matches!(
+        node(&sample(Some(false), false)),
+        PlanNode::Sample { .. }
+    ));
+    assert_eq!(
+        code(&sample(Some(true), false)),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        code(&sample(None, true)),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+#[test]
+fn deduplicate_over_all_columns_is_distinct() {
+    let dedup = |all: Option<bool>, names: &[&str], watermark: Option<bool>| {
+        relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+            input: input(),
+            column_names: names.iter().map(|n| (*n).to_owned()).collect(),
+            all_columns_as_keys: all,
+            within_watermark: watermark,
+        })))
+    };
+    assert!(matches!(
+        node(&dedup(Some(true), &[], None)),
+        PlanNode::Distinct { .. }
+    ));
+    for bad in [dedup(None, &[], None), dedup(Some(true), &["a"], None)] {
+        assert_eq!(code(&bad), ErrorClass::ConnectInvalidPlanAssertionFailure);
+    }
+    for unsupported in [
+        dedup(None, &["a"], None),
+        dedup(Some(true), &[], Some(true)),
+    ] {
+        assert_eq!(code(&unsupported), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
+#[test]
+fn hint_and_repartition_by_expression() {
+    let hint = relation(RelType::Hint(Box::new(pb::Hint {
+        input: input(),
+        name: "broadcast".into(),
+        parameters: vec![],
+    })));
+    let PlanNode::Hint { name, params, .. } = node(&hint) else {
+        panic!("not a hint")
+    };
+    assert_eq!((name.as_str(), params.len()), ("broadcast", 0));
+    let repartition = |exprs: Vec<Expression>, n: Option<i32>| {
+        relation(RelType::RepartitionByExpression(Box::new(
+            pb::RepartitionByExpression {
+                input: input(),
+                partition_exprs: exprs,
+                num_partitions: n,
+            },
+        )))
+    };
+    let PlanNode::Repartition { exprs, .. } = node(&repartition(vec![attr("a")], None)) else {
+        panic!("not a repartition")
+    };
+    assert_eq!(exprs.len(), 1);
+    assert_eq!(
+        code(&repartition(vec![attr("a")], Some(4))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        code(&repartition(vec![], None)),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
+    let unpivot = |values: Option<Vec<Expression>>| {
+        relation(RelType::Unpivot(Box::new(pb::Unpivot {
+            input: input(),
+            ids: vec![attr("id")],
+            values: values.map(|values| pb::unpivot::Values { values }),
+            variable_column_name: "k".into(),
+            value_column_name: "v".into(),
+        })))
+    };
+    let PlanNode::Unpivot {
+        input,
+        value_columns,
+        name_column,
+        column_sets,
+        include_nulls,
+    } = node(&unpivot(Some(vec![attr("a"), attr("b")])))
+    else {
+        panic!("not an unpivot")
+    };
+    assert_eq!(
+        (value_columns, name_column),
+        (vec!["v".to_owned()], "k".to_owned())
+    );
+    assert_eq!(column_sets.len(), 2);
+    assert!(include_nulls);
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        panic!("ids and values are projected first")
+    };
+    assert_eq!(exprs.len(), 3);
+    assert_eq!(code(&unpivot(None)), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        code(&unpivot(Some(vec![]))),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
     );
 }
