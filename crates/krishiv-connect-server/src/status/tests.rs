@@ -116,6 +116,11 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::KrishivOperationLimit),
         "org.apache.spark.SparkException"
     );
+    // A null config value is Spark's `require`: PySpark raises `IllegalArgumentException`.
+    assert_eq!(
+        first(ErrorClass::InvalidConfValueRequirement),
+        "java.lang.IllegalArgumentException"
+    );
     assert_eq!(
         first(ErrorClass::OperationCanceled),
         "org.apache.spark.SparkSQLException"
