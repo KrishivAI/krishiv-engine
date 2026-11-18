@@ -202,7 +202,19 @@ impl ResourceGroups {
     /// `system.resource_groups`).
     #[must_use]
     pub fn rows(&self) -> Vec<GroupRow> {
-        self.shared.rows()
+        let (etag, loaded_at_ms) = {
+            let doc = self.current();
+            (
+                doc.etag.clone(),
+                i64::try_from(doc.loaded_at_ms).unwrap_or(i64::MAX),
+            )
+        };
+        let mut rows = self.shared.rows();
+        for row in &mut rows {
+            row.config_etag.clone_from(&etag);
+            row.loaded_at_ms = loaded_at_ms;
+        }
+        rows
     }
 
     /// `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).

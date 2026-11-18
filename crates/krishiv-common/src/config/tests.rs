@@ -6,6 +6,7 @@ use std::time::Duration;
 use super::*;
 use crate::error::ErrorClass;
 
+mod credential_keys;
 mod readiness;
 
 #[test]
@@ -1132,6 +1133,9 @@ fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
         "krishiv.io.cache.path",
         // One cap for the runtime's one shared store (design P2-E1 R6).
         "krishiv.resultCache.maxBytes",
+        // What bounds a role stays startup-only: `SetConfigDefaults` cannot widen it (P3-T066 §5.5).
+        "krishiv.io.local.allowedRoots",
+        "krishiv.io.objectStore.allowedPrefixes",
     ] {
         assert_eq!(
             lookup(key).map(|e| e.settable_by),
