@@ -937,8 +937,7 @@ impl Instantiation<'_> {
         Ok(())
     }
 
-    /// Builds `n`, tagged with its pre-order index so the operators it
-    /// adds report under it.
+    /// Builds `n`, tagged with its pre-order index (its operators' report).
     fn node(&mut self, n: &PhysNode) -> Result<Built> {
         let built = self.untagged(n)?;
         Ok(self.tag(n, built))
@@ -964,6 +963,7 @@ impl Instantiation<'_> {
             PhysNode::PythonMap { .. }
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonUdtf { .. }
             | PhysNode::PythonAggregate { .. } => self.python_relation(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
