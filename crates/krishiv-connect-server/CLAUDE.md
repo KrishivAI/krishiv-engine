@@ -109,7 +109,7 @@ Paths are relative to this crate.
   under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
   `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
   `admin_runs_map_in_arrow`, `admin_runs_each_grouped_map_kind_per_group`, `admin_runs_each_cogrouped_map_kind`); `copy_for` gives a
-  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `SessionUdfRuntime::set_artifacts` takes the session's Python artifacts (default: ignored; `SessionUdfs` forwards the paths to the pool, an archive without its `#fragment` until the pool takes aliases, PR-26c-3 part B; `tests/udf.rs` `a_udf_imports_a_pyfile_added_to_its_session`); `tests/udf.rs` (real workers with
+  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `SessionUdfRuntime::set_artifacts` takes the session's Python artifacts (default: ignored; `SessionUdfs` forwards them to the pool, an archive's `#fragment` as its alias; `tests/udf.rs` `a_udf_imports_a_pyfile_added_to_its_session`, `a_udf_imports_from_an_archive_under_its_fragment`); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
