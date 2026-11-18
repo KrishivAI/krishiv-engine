@@ -760,3 +760,186 @@ async fn requests_reach_the_metrics_snapshot() {
     });
     assert!(ok_query, "{:?}", snapshot.counters);
 }
+
+/// Fail closed (design §16 m5, review m7): what 65a does not serve is `UNIMPLEMENTED` before
+/// arrow-rs decodes its body (an action body that is not a protobuf still answers so), and each
+/// refusal is counted as `unsupported`.
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_rpcs_unimplemented_before_decoding() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    for kind in [
+        "ClosePreparedStatement",
+        "BeginTransaction",
+        "CreatePreparedStatement",
+    ] {
+        let e = h
+            .client
+            .do_action(authed(
+                Action::new(kind, b"not a protobuf".to_vec()),
+                OPS,
+                None,
+            ))
+            .await
+            .expect_err(kind);
+        assert_eq!(e.code(), Code::Unimplemented, "{kind}: {e:?}");
+    }
+    let catalogs = arrow_flight::sql::CommandGetCatalogs {};
+    let e = h
+        .client
+        .get_flight_info(authed(
+            FlightDescriptor::new_cmd(catalogs.as_any().encode_to_vec()),
+            OPS,
+            None,
+        ))
+        .await
+        .expect_err("GetCatalogs is 65b");
+    assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
+    let e = h
+        .client
+        .do_put(authed(
+            futures::stream::empty::<arrow_flight::FlightData>(),
+            OPS,
+            None,
+        ))
+        .await
+        .expect_err("DoPut is 65b");
+    assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
+    let e = h
+        .client
+        .do_get(authed(Ticket::new(vec![0xff, 0xff, 0xff]), OPS, None))
+        .await
+        .expect_err("not a command");
+    assert_eq!(e.code(), Code::InvalidArgument, "{e:?}");
+    assert_eq!(h.flight.session_count(), 0, "no session work");
+    let unsupported: f64 = h
+        .flight
+        .metrics()
+        .counters
+        .iter()
+        .filter(|c| {
+            c.labels
+                .contains(&("command".to_owned(), "unsupported".to_owned()))
+        })
+        .map(|c| c.value)
+        .sum();
+    assert!(unsupported >= 6.0, "{unsupported}");
+}
+
+/// The deprecated `CancelQuery` (§4.5): `CancelFlightInfo`'s rules, `CANCEL_RESULT_CANCELLED`.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_query_releases_its_handle() {
+    use arrow_flight::sql::{ActionCancelQueryRequest, ActionCancelQueryResult, Any};
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT 1").await.expect("info");
+    let body = ActionCancelQueryRequest {
+        info: i.encode_to_vec().into(),
+    }
+    .as_any()
+    .encode_to_vec();
+    let mut results = h
+        .client
+        .do_action(authed(
+            Action::new("CancelQuery", body),
+            OPS,
+            cookie.as_deref(),
+        ))
+        .await
+        .expect("cancel")
+        .into_inner();
+    let result = results.next().await.expect("one result").expect("ok");
+    let answer: ActionCancelQueryResult = Any::decode(result.body)
+        .expect("any")
+        .unpack()
+        .expect("unpack")
+        .expect("a CancelQuery result");
+    assert_eq!(answer.result, 1, "CANCEL_RESULT_CANCELLED");
+    let e = fetch(&mut h, OPS, cookie.as_deref(), ticket(&i))
+        .await
+        .expect_err("released");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+}
+
+/// A cancel whose ticket is not a statement ticket is `INVALID_HANDLE.FORMAT`, `INVALID_ARGUMENT`
+/// (§6, review m7); another principal's ticket is `NOT_FOUND` like an unknown one (§4.5).
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_ticket_format_and_owner() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let bad = FlightInfo::new().with_endpoint(
+        arrow_flight::FlightEndpoint::new().with_ticket(Ticket::new(b"garbage".to_vec())),
+    );
+    let e = h
+        .client
+        .do_action(authed(
+            Action::new(
+                "CancelFlightInfo",
+                CancelFlightInfoRequest::new(bad).encode_to_vec(),
+            ),
+            OPS,
+            None,
+        ))
+        .await
+        .expect_err("malformed");
+    assert_eq!(e.code(), Code::InvalidArgument, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("INVALID_HANDLE.FORMAT")
+    );
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT 1").await.expect("info");
+    let e = h
+        .client
+        .do_action(authed(
+            Action::new(
+                "CancelFlightInfo",
+                CancelFlightInfoRequest::new(i.clone()).encode_to_vec(),
+            ),
+            OTHER,
+            None,
+        ))
+        .await
+        .expect_err("not theirs");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+    fetch(&mut h, OPS, cookie.as_deref(), ticket(&i))
+        .await
+        .expect("the owner's ticket still works");
+}
+
+/// Another principal's cookie gets a new session and a new cookie, never the owner's (§3.2).
+#[tokio::test(flavor = "multi_thread")]
+async fn foreign_cookie_gets_new_session() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (_, mine) = info(&mut h, OPS, None, "SET spark.sql.shuffle.partitions = 3")
+        .await
+        .expect("info");
+    let mine = mine.expect("cookie");
+    let (_, theirs) = info(&mut h, OTHER, Some(&mine), "SELECT 1")
+        .await
+        .expect("a new session for the other principal");
+    let theirs = theirs.expect("a new cookie");
+    assert_ne!(theirs, mine);
+}
+
+/// A fetch longer than the handle TTL keeps its handle: the TTL runs from the end of the last
+/// operation, never while one is live (§4.1).
+#[tokio::test(flavor = "multi_thread")]
+async fn long_doget_outlives_handle_ttl() {
+    let mut h = start(FlightSqlConfig {
+        handles: krishiv_flight_sql::HandleLimits {
+            ttl: Duration::from_millis(100),
+            ..krishiv_flight_sql::HandleLimits::default()
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let mut s = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(5));
+    assert_eq!(h.flight.handle_count(), 1, "a live fetch keeps its handle");
+    s.message().await.expect("reads on").expect("a piece");
+    drop(s);
+    wait_busy(&h, 0).await;
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(5));
+    assert_eq!(h.flight.handle_count(), 0, "idle past its TTL: gone");
+}
