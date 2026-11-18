@@ -66,7 +66,7 @@ impl Session {
         withheld: bool,
         inspected: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        let start = query_start_micros();
+        let start = self.query_start.unwrap_or_else(query_start_micros);
         // A recursive CTE runs as an operator of the physical plan; the
         // session only tells each loop how many rows its readers need.
         let limited;

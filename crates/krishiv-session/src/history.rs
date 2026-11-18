@@ -134,6 +134,7 @@ pub struct QueryOptions {
     pub(crate) deadline: Option<std::time::Duration>,
     pub(crate) request_tags: Vec<Arc<str>>,
     pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
+    pub(crate) query_start_micros: Option<i64>,
 }
 
 impl QueryOptions {
@@ -161,6 +162,15 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Fixes the start instant of each query the statement plans, in microseconds since the
+    /// epoch: `current_timestamp()`, `now()`, `current_date()` and `localtimestamp()` read it
+    /// instead of the planning clock. A caller that runs the same statement again with the same
+    /// instant (an Arrow Flight SQL ticket fetched twice, P3-T101) gets the same clock values.
+    pub fn query_start(mut self, micros: i64) -> Self {
+        self.query_start_micros = Some(micros);
         self
     }
 
