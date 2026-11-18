@@ -123,7 +123,7 @@ metrics in the table's default mode (Java's `MetricsConfig.columnMode(id)`); v1/
 first, a pre-upgrade file, a real v2 → v3 upgrade, a file of several row groups in several splits under a pruning filter,
 v1/v2, the derivation against a model) · `filter.rs` (PR-36b part 2a, design note §7.3 step 4a.2) an `OverwriteFiles`'s
 removals on every attempt's base, as Java's `ManifestFilterManager` (apache-iceberg 1.12.0): data files by path, then
-delete files by path, DVs of removed data files (`removeDanglingDeletesFor`) and delete files older than every data
+delete files per entry (`DeleteKey`: path, referenced data file, content offset; one Puffin file holds many DVs), DVs of removed data files (`removeDanglingDeletesFor`) and delete files older than every data
 file (`dropDeleteFilesOlderThan`); a manifest without a hit kept as is, a hit one rewritten from **live entries only**
 (the hit `DELETED` under the write's id, the rest `EXISTING` with their own ids, explicit sequence numbers, v3
 `first_row_id`), duplicates counted once (`deleted-duplicate-files`); "Missing required files to delete" for a file no
@@ -140,7 +140,9 @@ deletes for the replaced files, `snapshot` the deletes only; on v3 the rows must
 `cow_tests.rs` (the session planner's find and rewrite queries driven by hand over `sink_tests`' catalog: DELETE on
 unpartitioned and partitioned v2, UPDATE, MERGE, v3 lineage kept, an empty DELETE, a DV and an old position delete removed
 with their file, a foreign append under both levels, a foreign removal, `rebase_after_foreign_manifest_merge`, a cancelled
-statement, `take`) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+statement, `take` (`_metadata` refused), one Puffin file holding two files' DVs, a foreign row delta under both
+levels, a v3 rewrite merged on the first attempt keeping row ids); `cow_fault_tests.rs` (the overwrite through
+`commit_tests`' scripted catalog: unknown answer then a missing removal, unknown answer then landed, a known failure) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
 driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
 whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
 `finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
@@ -263,7 +265,10 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - **Row-level DML (PR-36b part 2a):** the session's planner (`krishiv-session` `table_commands/row_level.rs`) does not
   select the lineage columns, so DML on a v3 table through SQL is refused until it carries them (the scans expose them);
   it passes no read filter yet (the conflict filter is every row, wider than Spark's) and has no MERGE (PR-37c). The
-  filter reads every manifest with live files (Java prunes by the removed files' partitions first).
+  filter reads every manifest with live files (Java prunes by the removed files' partitions first), one at a time
+  on every attempt (the scan fetches with a concurrency of 8). An empty change still validates (Spark commits with no
+  validation when the optimizer removed the scan, `SparkWrite.java:473-492`), so an empty serializable DELETE fails
+  against a concurrent append: a divergence toward refusal.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the
