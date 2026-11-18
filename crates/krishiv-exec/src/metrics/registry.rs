@@ -177,7 +177,7 @@ pub const ERROR_CLASS_LABEL: LabelDef = LabelDef {
 /// `surface`: the server listener a request came in on (ADR 0046 §8).
 pub const SURFACE_LABEL: LabelDef = LabelDef {
     name: "surface",
-    values: &["connect", "admin", "metrics", "ui"],
+    values: &["connect", "admin", "metrics", "ui", "flight-sql"],
 };
 
 /// `method`: how a request tried to authenticate.

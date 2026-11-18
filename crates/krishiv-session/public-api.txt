@@ -350,10 +350,11 @@ impl core::marker::StructuralPartialEq for krishiv_session::auth::SecretRef
 #[non_exhaustive] pub enum krishiv_session::auth::Surface
 pub krishiv_session::auth::Surface::Admin
 pub krishiv_session::auth::Surface::Connect
+pub krishiv_session::auth::Surface::FlightSql
 pub krishiv_session::auth::Surface::Metrics
 pub krishiv_session::auth::Surface::Ui
 impl krishiv_session::auth::Surface
-pub const krishiv_session::auth::Surface::ALL: [Self; 4]
+pub const krishiv_session::auth::Surface::ALL: [Self; 5]
 pub fn krishiv_session::auth::Surface::as_str(self) -> &'static str
 impl core::clone::Clone for krishiv_session::auth::Surface
 pub fn krishiv_session::auth::Surface::clone(&self) -> krishiv_session::auth::Surface
@@ -1690,6 +1691,7 @@ pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Se
 pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::QueryOptions::query_start(self, i64) -> Self
 pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl core::clone::Clone for krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::clone(&self) -> krishiv_session::QueryOptions
