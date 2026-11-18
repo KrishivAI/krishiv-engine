@@ -8,8 +8,8 @@
 //! checks that every offset is a char boundary: the whole buffer valid and
 //! every value starting on a boundary means every value is valid. The bytes
 //! are still checked, so a corrupt spill file or exchange frame still fails.
-//! A `Utf8View` column takes views into that buffer (Arrow's zero-copy
-//! conversion), so no `unsafe` is needed.
+//! A `Utf8View` column is then built from the checked values (only those
+//! past 12 bytes are copied again), so no `unsafe` is needed.
 
 use std::sync::Arc;
 
@@ -26,14 +26,26 @@ use crate::error::{Result, internal};
 /// An internal error when a value is not UTF-8, when the values pass the
 /// offset range of `Utf8`, or for any other `data_type`.
 pub(crate) fn text_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<ArrayRef> {
-    let total: usize = values.iter().flatten().map(|v| v.len()).sum();
+    let total = || values.iter().flatten().map(|v| v.len()).sum::<usize>();
     Ok(match data_type {
-        DataType::Utf8 => Arc::new(string_array::<i32>(values, total)?),
-        DataType::LargeUtf8 => Arc::new(string_array::<i64>(values, total)?),
-        DataType::Utf8View if i32::try_from(total).is_ok() => {
-            Arc::new(StringViewArray::from(&string_array::<i32>(values, total)?))
+        DataType::Utf8 => Arc::new(string_array::<i32>(values, total())?),
+        DataType::LargeUtf8 => Arc::new(string_array::<i64>(values, total())?),
+        DataType::Utf8View => {
+            // Validated once through a string array, then copied into views:
+            // the view buffers hold only values past the 12 inline bytes, as
+            // a builder makes them, so filters and spill compaction find no
+            // unused bytes to collect.
+            let total = total();
+            if i32::try_from(total).is_ok() {
+                Arc::new(StringViewArray::from_iter(
+                    string_array::<i32>(values, total)?.iter(),
+                ))
+            } else {
+                Arc::new(StringViewArray::from_iter(
+                    string_array::<i64>(values, total)?.iter(),
+                ))
+            }
         }
-        DataType::Utf8View => Arc::new(StringViewArray::from(&string_array::<i64>(values, total)?)),
         t => return Err(internal(format!("no text decoding for {t}"))),
     })
 }
@@ -150,6 +162,22 @@ mod tests {
                 assert!(err.contains("not UTF-8"), "{t} case {i}: {err}");
             }
         }
+    }
+
+    #[test]
+    fn view_buffers_hold_only_long_values() {
+        let long = "a value of more than twelve bytes";
+        let values: [Option<&[u8]>; 4] = [
+            Some(b"short"),
+            Some(long.as_bytes()),
+            None,
+            Some(b"twelve bytes"),
+        ];
+        let a = text_array(&DataType::Utf8View, &values).unwrap();
+        let v = a.as_string_view();
+        let held: usize = v.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
+        assert_eq!(held, long.len());
+        assert_eq!(v.total_buffer_bytes_used(), long.len());
     }
 
     #[test]
