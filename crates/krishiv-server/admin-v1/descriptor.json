@@ -1,0 +1,617 @@
+{
+  "enums": {},
+  "messages": {
+    "CancelQueriesByTagRequest": {
+      "fields": {
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "selector": {
+          "jsonName": "selector",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "CancelQueriesByTagResponse": {
+      "fields": {
+        "query_ids": {
+          "jsonName": "queryIds",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "CancelQueryRequest": {
+      "fields": {
+        "query_id": {
+          "jsonName": "queryId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "CancelQueryResponse": {
+      "fields": {}
+    },
+    "Capability": {
+      "fields": {
+        "detail": {
+          "jsonName": "detail",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "kind": {
+          "jsonName": "kind",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "name": {
+          "jsonName": "name",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "GetCapabilitiesRequest": {
+      "fields": {}
+    },
+    "GetCapabilitiesResponse": {
+      "fields": {
+        "capabilities": {
+          "jsonName": "capabilities",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Capability"
+        }
+      }
+    },
+    "GetVersionRequest": {
+      "fields": {}
+    },
+    "GetVersionResponse": {
+      "fields": {
+        "admin_v1_revision": {
+          "jsonName": "adminV1Revision",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "preview": {
+          "jsonName": "preview",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        },
+        "version": {
+          "jsonName": "version",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "KillSessionRequest": {
+      "fields": {
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "session_id": {
+          "jsonName": "sessionId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "KillSessionResponse": {
+      "fields": {
+        "queries_cancelled": {
+          "jsonName": "queriesCancelled",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        }
+      }
+    },
+    "ListQueriesRequest": {
+      "fields": {
+        "page_size": {
+          "jsonName": "pageSize",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "page_token": {
+          "jsonName": "pageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "principal": {
+          "jsonName": "principal",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "session_id": {
+          "jsonName": "sessionId",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "states": {
+          "jsonName": "states",
+          "label": "repeated",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "tag": {
+          "jsonName": "tag",
+          "label": "singular",
+          "number": 6,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ListQueriesResponse": {
+      "fields": {
+        "next_page_token": {
+          "jsonName": "nextPageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "queries": {
+          "jsonName": "queries",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Query"
+        }
+      }
+    },
+    "ListSessionsRequest": {
+      "fields": {
+        "page_size": {
+          "jsonName": "pageSize",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "page_token": {
+          "jsonName": "pageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ListSessionsResponse": {
+      "fields": {
+        "next_page_token": {
+          "jsonName": "nextPageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "sessions": {
+          "jsonName": "sessions",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Session"
+        }
+      }
+    },
+    "Query": {
+      "fields": {
+        "ended": {
+          "jsonName": "ended",
+          "label": "singular",
+          "number": 9,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "error_class": {
+          "jsonName": "errorClass",
+          "label": "singular",
+          "number": 10,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "principal": {
+          "jsonName": "principal",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "query_id": {
+          "jsonName": "queryId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "resource_group": {
+          "jsonName": "resourceGroup",
+          "label": "singular",
+          "number": 11,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "session_id": {
+          "jsonName": "sessionId",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "started": {
+          "jsonName": "started",
+          "label": "singular",
+          "number": 8,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "state": {
+          "jsonName": "state",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "statement_class": {
+          "jsonName": "statementClass",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "submitted": {
+          "jsonName": "submitted",
+          "label": "singular",
+          "number": 7,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "tags": {
+          "jsonName": "tags",
+          "label": "repeated",
+          "number": 12,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Query.TagsEntry"
+        },
+        "text": {
+          "jsonName": "text",
+          "label": "singular",
+          "number": 6,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "Query.TagsEntry": {
+      "fields": {
+        "key": {
+          "jsonName": "key",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      },
+      "mapEntry": true
+    },
+    "Session": {
+      "fields": {
+        "client_type": {
+          "jsonName": "clientType",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "close_reason": {
+          "jsonName": "closeReason",
+          "label": "singular",
+          "number": 10,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "closed": {
+          "jsonName": "closed",
+          "label": "singular",
+          "number": 9,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "created": {
+          "jsonName": "created",
+          "label": "singular",
+          "number": 7,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "delegated_by": {
+          "jsonName": "delegatedBy",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "last_active": {
+          "jsonName": "lastActive",
+          "label": "singular",
+          "number": 8,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "principal": {
+          "jsonName": "principal",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "queries_running": {
+          "jsonName": "queriesRunning",
+          "label": "singular",
+          "number": 12,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "queries_started": {
+          "jsonName": "queriesStarted",
+          "label": "singular",
+          "number": 13,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "session_id": {
+          "jsonName": "sessionId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "state": {
+          "jsonName": "state",
+          "label": "singular",
+          "number": 6,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "tags": {
+          "jsonName": "tags",
+          "label": "repeated",
+          "number": 11,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Session.TagsEntry"
+        },
+        "transport": {
+          "jsonName": "transport",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "Session.TagsEntry": {
+      "fields": {
+        "key": {
+          "jsonName": "key",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      },
+      "mapEntry": true
+    }
+  },
+  "methods": {
+    "CancelQueriesByTag": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/queries:cancelByTag"
+      },
+      "privilege": "authenticated",
+      "request": "CancelQueriesByTagRequest",
+      "response": "CancelQueriesByTagResponse",
+      "serverStreaming": false
+    },
+    "CancelQuery": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/queries/{query_id}:cancel"
+      },
+      "privilege": "authenticated",
+      "request": "CancelQueryRequest",
+      "response": "CancelQueryResponse",
+      "serverStreaming": false
+    },
+    "GetCapabilities": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/capabilities"
+      },
+      "privilege": "authenticated",
+      "request": "GetCapabilitiesRequest",
+      "response": "GetCapabilitiesResponse",
+      "serverStreaming": false
+    },
+    "GetVersion": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/version"
+      },
+      "privilege": "authenticated",
+      "request": "GetVersionRequest",
+      "response": "GetVersionResponse",
+      "serverStreaming": false
+    },
+    "KillSession": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/sessions/{session_id}:kill"
+      },
+      "privilege": "authenticated",
+      "request": "KillSessionRequest",
+      "response": "KillSessionResponse",
+      "serverStreaming": false
+    },
+    "ListQueries": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/queries"
+      },
+      "privilege": "authenticated",
+      "request": "ListQueriesRequest",
+      "response": "ListQueriesResponse",
+      "serverStreaming": false
+    },
+    "ListSessions": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/sessions"
+      },
+      "privilege": "authenticated",
+      "request": "ListSessionsRequest",
+      "response": "ListSessionsResponse",
+      "serverStreaming": false
+    }
+  },
+  "package": "krishiv.admin.v1",
+  "revision": 2
+}

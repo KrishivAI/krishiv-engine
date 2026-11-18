@@ -36,16 +36,39 @@ impl QueryCatalog {
     /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+        self.open_files_with(plan, true).await
+    }
+
+    /// As [`Self::open_files`], taking no distinct-value samples: they read column values, which a
+    /// plan shown without `Select` must not depend on (P3 PR-14d).
+    pub(crate) async fn open_files_unsampled(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<(), KrishivError> {
+        self.open_files_with(plan, false).await
+    }
+
+    async fn open_files_with(&self, plan: &LogicalPlan, sample: bool) -> Result<(), KrishivError> {
         self.check_reference_options(plan)?;
         let scans = self.file_scans(plan);
         for (key, source, table, _, partitions) in &scans {
             if self.opened(key).is_some() {
                 continue;
             }
+            #[cfg(feature = "delta")]
+            if crate::delta::is_delta(source) {
+                // The table's log is read once per query, never listed as files.
+                self.delta
+                    .open_scanned(source, self.delta_name(key), table)
+                    .await?;
+                continue;
+            }
             let ReadSource::Files {
                 format,
                 paths,
                 options,
+                schema,
+                ..
             } = source
             else {
                 continue;
@@ -64,7 +87,36 @@ impl QueryCatalog {
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
                 }
-                _ => self.files.listing(format, paths, options).await?,
+                // A user schema: its columns, then the partition columns under
+                // the paths (Spark 4.2.0's `userSpecifiedSchema`); nothing is
+                // inferred from the files' contents.
+                _ if schema.is_some() => {
+                    self.files
+                        .listing_with_schema(format, paths, options, schema.as_ref())
+                        .await?
+                }
+                _ => match self.files.listing(format, paths, options).await {
+                    Ok(listing) => listing,
+                    // A view with declared columns over a directory with no file to infer from reads no
+                    // rows, as an empty table of those columns does (not the inference error).
+                    Err(e)
+                        if e.error_class()
+                            == krishiv_common::error::ErrorClass::UnableToInferSchema
+                            && matches!(key, FilesKey::View(_))
+                            && !table.fields().is_empty() =>
+                    {
+                        self.files
+                            .listing_known(
+                                format,
+                                paths,
+                                options,
+                                Arc::clone(table),
+                                &krishiv_exec::files::KnownPartitions::default(),
+                            )
+                            .await?
+                    }
+                    Err(e) => return Err(e),
+                },
             };
             let opened = open_table(
                 Arc::clone(&listing.format),
@@ -74,7 +126,8 @@ impl QueryCatalog {
                 listing.options.clone(),
             )
             .await?
-            .with_partition_columns(listing.partition_columns.to_vec());
+            .with_partition_columns(listing.partition_columns.to_vec())
+            .with_path_roots(listing.path_roots.clone());
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -82,7 +135,9 @@ impl QueryCatalog {
         }
         // Boxed: the sample's future would otherwise nest inside every
         // caller's state machine (the MCP server's overflows the layout depth).
-        Box::pin(self.sample_distinct(plan, &scans)).await;
+        if sample {
+            Box::pin(self.sample_distinct(plan, &scans)).await;
+        }
         Ok(())
     }
 
@@ -132,6 +187,29 @@ impl QueryCatalog {
             }
         }
         Ok(())
+    }
+
+    /// How Delta errors name the table a scan of `key` reads: a permanent table by its
+    /// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path,
+    /// a back-quoted view name holding a `.` included. Decided by the entry's kind, never by
+    /// the spelling of the key.
+    #[cfg(feature = "delta")]
+    fn delta_name(&self, key: &FilesKey) -> Option<String> {
+        let (FilesKey::View(k) | FilesKey::Table(k) | FilesKey::Reference { key: k, .. }) = key
+        else {
+            return None;
+        };
+        self.loaded(k)
+            .is_some_and(|t| {
+                matches!(
+                    &*t,
+                    TempTable::Files {
+                        permanent: true,
+                        ..
+                    }
+                )
+            })
+            .then(|| k.clone())
     }
 
     /// The scans of files in `plan`: what each reads, and the columns the

@@ -154,7 +154,7 @@ fn slice<'a>(bytes: &'a [u8], range: &std::ops::Range<u64>) -> &'a [u8] {
 }
 
 /// Runs a decoder over `bytes` for `split`.
-fn read_split(
+pub(super) fn read_split(
     bytes: &[u8],
     o: &FormatOptions,
     req: &ScanRequest,
@@ -196,7 +196,7 @@ pub(super) fn read(
     read_split(bytes, o, req, ByteRange::whole(bytes.len() as u64))
 }
 
-fn rows_of(batches: &[RecordBatch]) -> Vec<Vec<Option<String>>> {
+pub(super) fn rows_of(batches: &[RecordBatch]) -> Vec<Vec<Option<String>>> {
     let mut rows = Vec::new();
     for b in batches {
         for i in 0..b.num_rows() {
@@ -248,7 +248,11 @@ pub(super) fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, Krishi
     infer_named(bytes, "f.json", o)
 }
 
-fn infer_named(bytes: &[u8], name: &str, o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
+pub(super) fn infer_named(
+    bytes: &[u8],
+    name: &str,
+    o: &FormatOptions,
+) -> Result<SchemaRef, KrishivError> {
     let (sched, file) = in_memory_file(bytes, name);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -271,7 +275,7 @@ fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivErro
     Ok(out)
 }
 
-fn schema_string(s: &Schema) -> String {
+pub(super) fn schema_string(s: &Schema) -> String {
     let fields: Vec<String> = s
         .fields()
         .iter()
@@ -1024,7 +1028,8 @@ fn inference_follows_spark_rules() {
     let deep = format!("{{\"a\":{}1{}}}\n", "[".repeat(40), "]".repeat(40));
     let e = infer(deep.as_bytes(), &options(&serde_json::json!({}))).expect_err("too deep");
     assert_eq!(e.error_class(), ErrorClass::FailedToParseTooComplex);
-    // multiLine inference reads the whole file.
+    // multiLine inference reads each file's first value (Spark 4.2.0:
+    // `struct<a:bigint,b:string>`; the second object is not read).
     let s = infer(
         b"{\n\"a\": 1,\n\"b\": \"x\"\n}\n{\n\"a\": 2.5\n}\n",
         &options(&serde_json::json!({"multiLine": "true"})),
@@ -1039,7 +1044,7 @@ fn inference_follows_spark_rules() {
     );
     assert_eq!(
         s.field_with_name("a").expect("a").data_type(),
-        &DataType::Float64
+        &DataType::Int64
     );
 }
 
@@ -1237,13 +1242,8 @@ fn multi_line_records_span_lines() {
     let text = "{\n  \"a\": 1,\n  \"b\": \"x\\ty\"\n}\n{\n\"a\": 2\n}\n";
     let schema = ddl("a int, b string");
     let got = read(text.as_bytes(), &o, &ScanRequest::all(Arc::clone(&schema))).expect("read");
-    assert_eq!(
-        rows_of(&got),
-        [
-            vec![Some("1".into()), Some("x\ty".into())],
-            vec![Some("2".into()), None],
-        ]
-    );
+    // The file is its first value: Spark 4.2.0 reads one row.
+    assert_eq!(rows_of(&got), [vec![Some("1".into()), Some("x\ty".into())]]);
     // Comments inside multi-line records honour allowComments.
     let o = options(&serde_json::json!({"multiLine": "true", "allowComments": "true"}));
     let got = read(
@@ -1253,52 +1253,20 @@ fn multi_line_records_span_lines() {
     )
     .expect("read");
     assert_eq!(rows_of(&got)[0][0], Some("3".into()));
-    // A truncated tail is one malformed record, not silent loss: PERMISSIVE
-    // keeps nulls plus the raw tail in the corrupt column.
-    let o = options(&serde_json::json!({"multiLine": "true"}));
-    let got = read(
-        "{\"a\": 1}\n{\"a\": ".as_bytes(),
-        &o,
-        &ScanRequest::all(Arc::clone(&schema)),
-    )
-    .expect("read");
-    assert_eq!(rows_of(&got).len(), 2);
+    // A truncated value after the first is not read, in every mode (Spark
+    // 4.2.0 returns the first row; `count_tests.rs` has a malformed first
+    // value).
     let corrupt = ddl("a int, _corrupt_record string");
-    let got = read(
-        "{\"a\": 1}\n{\"a\": ".as_bytes(),
-        &o,
-        &ScanRequest::all(Arc::clone(&corrupt)),
-    )
-    .expect("read corrupt");
-    assert_eq!(
-        rows_of(&got),
-        [
-            vec![Some("1".into()), None],
-            vec![None, Some("\n{\"a\": ".into())],
-        ]
-    );
-    let o = options(&serde_json::json!({"multiLine": "true", "mode": "DROPMALFORMED"}));
-    let got = read(
-        "{\"a\": 1}\n{\"a\": ".as_bytes(),
-        &o,
-        &ScanRequest::all(Arc::clone(&corrupt)),
-    )
-    .expect("read drop");
-    assert_eq!(rows_of(&got), [vec![Some("1".into()), None]]);
-    let o = options(&serde_json::json!({"multiLine": "true", "mode": "FAILFAST"}));
-    let e = read(
-        "{\"a\": 1}\n{\"a\": ".as_bytes(),
-        &o,
-        &ScanRequest::all(Arc::clone(&schema)),
-    )
-    .expect_err("truncated");
-    assert_eq!(
-        classes_of(&e),
-        [
-            ErrorClass::FailedReadFileNoHint,
-            ErrorClass::MalformedRecordInParsingWithoutSuggestion,
-        ]
-    );
+    for mode in ["PERMISSIVE", "DROPMALFORMED", "FAILFAST"] {
+        let o = options(&serde_json::json!({"multiLine": "true", "mode": mode}));
+        let got = read(
+            "{\"a\": 1}\n{\"a\": ".as_bytes(),
+            &o,
+            &ScanRequest::all(Arc::clone(&corrupt)),
+        )
+        .expect("read");
+        assert_eq!(rows_of(&got), [vec![Some("1".into()), None]], "{mode}");
+    }
 }
 
 #[test]

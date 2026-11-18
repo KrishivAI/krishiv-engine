@@ -8,6 +8,7 @@
 //! krishiv.auth.tokens.<name>.principal = prometheus                (required)
 //! krishiv.auth.tokens.<name>.kind      = user | service            (default user)
 //! krishiv.auth.tokens.<name>.role      = viewer | operator | admin (required)
+//!   (a token whose kind is service also needs krishiv.auth.principals.<principal>.expires)
 //! spark.connect.authenticate.token     = <token> | env:.. | file:.. (Spark's key: one admin token)
 //! krishiv.auth.sparkTokenPrincipal     = spark                     (that token's principal)
 //! krishiv.auth.failureThrottle.maxFailures = 20                    (per peer address and window)
@@ -19,6 +20,8 @@
 //! krishiv.auth.mtls.userPrincipals     = alice, bob               (certificate principals that are users)
 //! krishiv.auth.roles.{viewer,operator,admin} = a, b               (certificate principal names; ADR 0046 §6)
 //! krishiv.auth.oidc.*                  (OIDC access tokens; see `oidc_config.rs`)
+//! krishiv.auth.principals.<name>.*     (rights by principal name; see `principals.rs`)
+//! krishiv.auth.impersonation.*         (end users' roles, signed assertions; see `impersonation.rs`)
 //! ```
 //!
 //! A static token names its own role. A certificate principal gets its role from the
@@ -30,14 +33,16 @@
 //! setting never leaves a server open.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::PrincipalKind;
 
 use super::Role;
+use super::impersonation::ImpersonationConfig;
 use super::mtls::MtlsConfig;
 use super::oidc_config::OidcConfig;
+use super::principals::{PrincipalTable, check_name};
 use super::secret_ref::{SecretRef, invalid};
 
 /// The key prefix of every Krishiv authentication setting.
@@ -67,6 +72,11 @@ pub struct TokenSpec {
     pub kind: PrincipalKind,
     /// The role.
     pub role: Role,
+    /// When the token stops working: `krishiv.auth.principals.<principal>.expires`. Required
+    /// for a service principal (P3-T061 Q5). [`ServerAuth`](super::ServerAuth) applies the
+    /// earlier of this and the principal's own `expires`, so a hand-set later date never
+    /// extends it.
+    pub expires: Option<SystemTime>,
 }
 
 /// Failure throttling (threat model T-A4).
@@ -105,6 +115,10 @@ pub struct AuthConfig {
     pub roles: RoleLists,
     /// OIDC access tokens.
     pub oidc: OidcConfig,
+    /// The rights of named principals beyond their role (P3-T061 §3).
+    pub principals: PrincipalTable,
+    /// Trusted impersonation (P3-T061 §4).
+    pub impersonation: ImpersonationConfig,
 }
 
 /// `krishiv.auth.roles.{viewer,operator,admin}`: principal names by role.
@@ -166,6 +180,8 @@ impl AuthConfig {
         let mut throttle = ThrottleConfig::default();
         let mut mtls = MtlsConfig::default();
         let mut oidc = OidcConfig::default();
+        let mut principals = PrincipalTable::default();
+        let mut impersonation = ImpersonationConfig::default();
         let mut role_lists: BTreeMap<Role, (String, String)> = BTreeMap::new();
         for (key, raw) in settings {
             if key == SPARK_TOKEN_KEY {
@@ -185,11 +201,25 @@ impl AuthConfig {
                 let entry = groups.entry(name.to_owned()).or_default();
                 match field {
                     "secret" => entry.secret = Some(SecretRef::parse(key, raw, false)?),
-                    "principal" => entry.principal = Some(non_empty(key, raw)?),
+                    "principal" => {
+                        let name = non_empty(key, raw)?;
+                        check_name(key, &name)?;
+                        entry.principal = Some(name);
+                    }
                     "kind" => entry.kind = Some(parse_kind(key, raw)?),
                     "role" => entry.role = Some(parse_role(key, raw)?),
                     _ => return Err(unknown(key)),
                 }
+                continue;
+            }
+            if let Some(r) = rest.strip_prefix("impersonation.") {
+                if impersonation.apply(key, r, raw)? {
+                    continue;
+                }
+                return Err(unknown(key));
+            }
+            if let Some(principal) = rest.strip_prefix("principals.") {
+                principals.apply(key, principal, raw)?;
                 continue;
             }
             if mtls.apply(key, rest, raw)? || oidc.apply(key, raw)? {
@@ -203,7 +233,10 @@ impl AuthConfig {
                 continue;
             }
             match rest {
-                "sparkTokenPrincipal" => spark_principal = non_empty(key, raw)?,
+                "sparkTokenPrincipal" => {
+                    spark_principal = non_empty(key, raw)?;
+                    check_name(key, &spark_principal)?;
+                }
                 "failureThrottle.maxFailures" => {
                     throttle.max_failures = raw
                         .trim()
@@ -236,6 +269,7 @@ impl AuthConfig {
                 principal: f.principal.ok_or_else(|| missing("principal"))?,
                 kind: f.kind.unwrap_or(PrincipalKind::User),
                 role: f.role.ok_or_else(|| missing("role"))?,
+                expires: None,
                 name,
             });
         }
@@ -247,10 +281,46 @@ impl AuthConfig {
                 principal: spark_principal,
                 kind: PrincipalKind::User,
                 role: Role::Admin,
+                expires: None,
             });
         }
         mtls.validate()?;
         oidc.validate()?;
+        impersonation.validate()?;
+        // An assertion the OIDC verifier would also accept could log in as the end user
+        // directly, past the impersonation rules (review M4).
+        if impersonation.assertion.is_on()
+            && impersonation.assertion.issuer == oidc.issuer
+            && impersonation.assertion.audience == oidc.audience
+        {
+            return Err(invalid(
+                "krishiv.auth.impersonation.assertion.audience",
+                impersonation
+                    .assertion
+                    .audience
+                    .as_deref()
+                    .unwrap_or_default(),
+                "the assertion issuer and audience must not both equal krishiv.auth.oidc.*: an \
+                 assertion would also be a login token",
+            ));
+        }
+        principals.validate()?;
+        for t in &mut tokens {
+            t.expires = principals.get(&t.principal).and_then(|r| r.expires);
+            // A shared secret for a machine is the credential most likely to be forgotten in a
+            // config file for years: it must say when it stops working (P3-T061 Q5).
+            if t.kind == PrincipalKind::Service && t.expires.is_none() {
+                return Err(invalid(
+                    &format!("{PREFIX}principals.{}.expires", t.principal),
+                    "",
+                    &format!(
+                        "token `{}` names service principal `{}`: a static service token needs \
+                         an expiry date",
+                        t.name, t.principal
+                    ),
+                ));
+            }
+        }
         // Each list once, whole, so a key given twice keeps its last value.
         let mut roles = RoleLists::default();
         for (role, (key, raw)) in role_lists {
@@ -262,6 +332,8 @@ impl AuthConfig {
             mtls,
             roles,
             oidc,
+            principals,
+            impersonation,
         })
     }
 

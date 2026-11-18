@@ -58,6 +58,7 @@ fn two_tokens(dir: &Path) -> AuthConfig {
         ("krishiv.auth.tokens.prom.principal", "prometheus"),
         ("krishiv.auth.tokens.prom.kind", "service"),
         ("krishiv.auth.tokens.prom.role", "Viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2999-01-01"),
     ])
     .unwrap()
 }
@@ -644,6 +645,7 @@ fn failure_logs_never_contain_the_token() {
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_max_level(tracing::Level::TRACE)
         .with_writer(move || writer.clone())
         .finish();
@@ -771,4 +773,315 @@ mod roles {
         assert!(!none.allows(&table("spark_catalog"), Privilege::Browse));
         assert_eq!(none.role(), None);
     }
+}
+
+#[test]
+fn config_reads_principal_rights() {
+    let c = config(&[
+        ("krishiv.auth.principals.portal.privileges", "impersonate"),
+        (
+            "krishiv.auth.principals.portal.impersonates",
+            "group:analysts",
+        ),
+    ])
+    .expect("valid");
+    assert!(
+        c.principals
+            .has("portal", super::PrincipalPrivilege::Impersonate)
+    );
+    assert!(!c.is_configured(), "rights alone authenticate no one");
+    let err = config(&[("krishiv.auth.principals.portal.impersonates", "alice")])
+        .expect_err("a list without the privilege");
+    assert!(invalid_config(&err), "{err}");
+    let err = config(&[("krishiv.auth.principals.portal.secret", "env:X")])
+        .expect_err("credentials stay under krishiv.auth.tokens");
+    assert!(invalid_config(&err), "{err}");
+}
+
+/// P3-T061 Q5: a static token of a service principal needs `expires`; one already past refuses
+/// startup; one that passes its date while the server runs fails as expired, without counting
+/// toward the throttle, and never agrees with a client certificate.
+#[test]
+fn static_service_tokens_need_an_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let service = |extra: &[(&str, &str)]| {
+        let mut pairs = vec![
+            ("krishiv.auth.tokens.prom.secret", b.as_str()),
+            ("krishiv.auth.tokens.prom.principal", "prometheus"),
+            ("krishiv.auth.tokens.prom.kind", "service"),
+            ("krishiv.auth.tokens.prom.role", "viewer"),
+        ];
+        pairs.extend_from_slice(extra);
+        config(&pairs)
+    };
+    let err = service(&[]).expect_err("no expiry");
+    assert!(invalid_config(&err), "{err}");
+    assert!(
+        err.to_string()
+            .contains("krishiv.auth.principals.prometheus.expires"),
+        "{err}"
+    );
+
+    let past = service(&[("krishiv.auth.principals.prometheus.expires", "2001-01-01")])
+        .expect("the config itself is valid");
+    let err = ServerAuth::new(&past).expect_err("expired at startup");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("has expired"), "{err}");
+
+    // Built before its date, used after it.
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(900_000_000);
+    let tokens = StaticTokens::build_at(&past.tokens, then).unwrap();
+    let mut live = past;
+    live.tokens.clear();
+    let auth = ServerAuth::new(&live).unwrap().with_tokens(tokens);
+    let now = Instant::now();
+    let c = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    for _ in 0..30 {
+        assert_eq!(
+            auth.authenticate_at(&c, now).unwrap_err(),
+            AuthFailure::Expired
+        );
+    }
+}
+
+/// A principal name may contain dots: the field is the last segment.
+#[test]
+fn principal_names_may_contain_dots() {
+    let c = config(&[
+        ("krishiv.auth.principals.etl.prod.privileges", "impersonate"),
+        ("krishiv.auth.principals.etl.prod.impersonates", "alice"),
+        ("krishiv.auth.principals.etl.prod.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    let rights = c.principals.get("etl.prod").expect("entry by whole name");
+    assert!(rights.may_impersonate("alice", &[]));
+    assert!(rights.expires.is_some());
+    assert!(c.principals.get("etl").is_none());
+    let err =
+        config(&[("krishiv.auth.principals..expires", "2099-01-01")]).expect_err("an empty name");
+    assert!(invalid_config(&err), "{err}");
+    let err = config(&[("krishiv.auth.principals.expires", "2099-01-01")]).expect_err("no name");
+    assert!(invalid_config(&err), "{err}");
+    // A typo'd name is refused, never kept as a separate principal.
+    for bad in [
+        "krishiv.auth.principals.etl..prod.expires",
+        "krishiv.auth.principals..etl.expires",
+        "krishiv.auth.principals.etl..expires",
+        "krishiv.auth.principals. etl.expires",
+    ] {
+        let err = config(&[(bad, "2099-01-01")]).expect_err(bad);
+        assert!(invalid_config(&err), "{bad}: {err}");
+    }
+}
+
+#[test]
+fn dotted_principal_names_never_collide() {
+    // `a.b` with field `privileges` and `a` with field `b.privileges` cannot be told apart by
+    // the key; the field is the last segment, so the key always means principal `a.b`.
+    let c = config(&[
+        ("krishiv.auth.principals.a.b.privileges", "impersonate"),
+        ("krishiv.auth.principals.a.b.impersonates", "alice"),
+        ("krishiv.auth.principals.a.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    assert!(
+        c.principals
+            .get("a.b")
+            .expect("a.b")
+            .may_impersonate("alice", &[])
+    );
+    assert!(
+        !c.principals
+            .get("a")
+            .expect("a")
+            .may_impersonate("alice", &[])
+    );
+    assert!(c.principals.get("a.b").expect("a.b").expires.is_none());
+    // A name that ends in a field word is still one name.
+    let c = config(&[(
+        "krishiv.auth.principals.x.privileges.privileges",
+        "impersonate",
+    )])
+    .expect("valid");
+    assert!(c.principals.get("x.privileges").is_some());
+    assert!(c.principals.get("x").is_none());
+    // Names compare exactly: a case twin gets no rights.
+    let c = config(&[
+        ("krishiv.auth.principals.ETL.privileges", "impersonate"),
+        ("krishiv.auth.principals.ETL.impersonates", "alice"),
+    ])
+    .expect("valid");
+    assert!(c.principals.get("etl").is_none());
+}
+
+#[test]
+fn a_static_service_token_may_be_named_with_dots() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let c = config(&[
+        ("krishiv.auth.tokens.etl.secret", b.as_str()),
+        ("krishiv.auth.tokens.etl.principal", "etl.prod"),
+        ("krishiv.auth.tokens.etl.kind", "service"),
+        ("krishiv.auth.tokens.etl.role", "operator"),
+        ("krishiv.auth.principals.etl.prod.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    let auth = ServerAuth::new(&c).expect("builds");
+    let cr = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    let a = auth.authenticate_at(&cr, Instant::now()).expect("logs in");
+    assert_eq!(a.principal.name, "etl.prod");
+}
+
+/// A hand-built config cannot skip the expiry a service token needs.
+#[test]
+fn a_hand_built_service_token_without_expiry_refuses_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.kind", "service"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    ServerAuth::new(&c).expect("with expiry");
+    // The principal's own `expires` still applies (#785 review N2).
+    c.tokens[0].expires = None;
+    ServerAuth::new(&c).expect("the principal's expiry");
+    // No date on the token and none for its principal.
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+    ])
+    .expect("a user token");
+    c.tokens[0].kind = PrincipalKind::Service;
+    let err = ServerAuth::new(&c).expect_err("no expiry");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("prometheus.expires"), "{err}");
+}
+
+/// #827 review nit 1: a hand-built token's principal meets the principal-name rule too.
+#[test]
+fn a_hand_built_token_with_a_malformed_principal_refuses_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+    ])
+    .expect("valid");
+    for bad in ["svc..a", ".svc", "svc.", " svc"] {
+        c.tokens[0].principal = bad.to_owned();
+        let err = ServerAuth::new(&c).expect_err(bad);
+        assert!(invalid_config(&err), "{bad}: {err}");
+        assert!(
+            err.to_string().contains("tokens.prom.principal"),
+            "{bad}: {err}"
+        );
+    }
+}
+
+/// #785 review R1: a token's principal follows the principal-name rule, refused at the token's
+/// own key, so the operator is never sent to a `principals.<p>.expires` key that cannot be set.
+#[test]
+fn a_token_principal_follows_the_principal_name_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    for bad in ["etl..prod", ".etl", "etl."] {
+        for kind in ["user", "service"] {
+            let err = config(&[
+                ("krishiv.auth.tokens.etl.secret", b.as_str()),
+                ("krishiv.auth.tokens.etl.principal", bad),
+                ("krishiv.auth.tokens.etl.kind", kind),
+                ("krishiv.auth.tokens.etl.role", "operator"),
+            ])
+            .expect_err(bad);
+            assert!(invalid_config(&err), "{bad}: {err}");
+            assert!(
+                err.to_string()
+                    .contains("krishiv.auth.tokens.etl.principal"),
+                "{bad}: {err}"
+            );
+        }
+    }
+    let err = config(&[
+        (SPARK_TOKEN_KEY, b.as_str()),
+        ("krishiv.auth.sparkTokenPrincipal", "spark..admin"),
+    ])
+    .expect_err("spark token principal");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("sparkTokenPrincipal"), "{err}");
+}
+
+/// #785 review N2: a token's own expiry and its principal's `expires` are one rule, the
+/// earlier applies, whichever the config was built by.
+#[test]
+fn the_earlier_of_token_and_principal_expiry_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let service = |expires: &str| {
+        config(&[
+            ("krishiv.auth.tokens.prom.secret", b.as_str()),
+            ("krishiv.auth.tokens.prom.principal", "prometheus"),
+            ("krishiv.auth.tokens.prom.kind", "service"),
+            ("krishiv.auth.tokens.prom.role", "viewer"),
+            ("krishiv.auth.principals.prometheus.expires", expires),
+        ])
+        .expect("valid")
+    };
+    let far = std::time::UNIX_EPOCH + Duration::from_secs(200 * 365 * 86_400);
+    // The table's date passed: a later date on the token itself does not extend it.
+    let mut c = service("2001-01-01");
+    c.tokens[0].expires = Some(far);
+    let err = ServerAuth::new(&c).expect_err("the principal's rights ended");
+    assert!(err.to_string().contains("has expired"), "{err}");
+    // The token's own date passed: the table's later date does not extend it.
+    let mut c = service("2999-01-01");
+    c.tokens[0].expires = Some(std::time::UNIX_EPOCH + Duration::from_secs(1));
+    let err = ServerAuth::new(&c).expect_err("the token ended");
+    assert!(err.to_string().contains("has expired"), "{err}");
+    // A token without its own date takes the table's.
+    let mut c = service("2999-01-01");
+    c.tokens[0].expires = None;
+    let auth = ServerAuth::new(&c).expect("the table's date applies");
+    let cr = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    auth.authenticate_at(&cr, Instant::now()).expect("logs in");
+}
+
+/// #785 review N3: the public `StaticTokens::lookup` refuses an expired token, as login does.
+#[test]
+fn lookup_refuses_an_expired_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.kind", "service"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2001-01-01"),
+    ])
+    .expect("valid");
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(900_000_000);
+    let tokens = StaticTokens::build_at(&c.tokens, then).unwrap();
+    assert!(
+        tokens
+            .lookup_at(TOKEN_B, then)
+            .is_some_and(|(_, _, expired)| !expired)
+    );
+    assert!(tokens.lookup(TOKEN_B).is_none(), "expired now");
+}
+
+/// P3-T101 §2 H3: a session's transport names the surface its denials count under.
+#[test]
+fn a_transport_maps_to_its_listener_surface() {
+    use crate::Transport;
+    assert_eq!(Surface::of(Transport::Connect), Some(Surface::Connect));
+    assert_eq!(Surface::of(Transport::FlightSql), Some(Surface::FlightSql));
+    assert_eq!(Surface::of(Transport::Ui), Some(Surface::Ui));
+    assert_eq!(Surface::of(Transport::Embedded), None);
+    assert_eq!(Surface::of(Transport::Mcp), None);
 }

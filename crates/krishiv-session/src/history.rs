@@ -133,6 +133,8 @@ pub struct QueryOptions {
     pub(crate) operation_id: Option<String>,
     pub(crate) deadline: Option<std::time::Duration>,
     pub(crate) request_tags: Vec<Arc<str>>,
+    pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
+    pub(crate) query_start_micros: Option<i64>,
 }
 
 impl QueryOptions {
@@ -160,6 +162,26 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Fixes the start instant of each query the statement plans, in microseconds since the
+    /// epoch: `current_timestamp()`, `now()`, `current_date()` and `localtimestamp()` read it
+    /// instead of the planning clock. A caller that runs the same statement again with the same
+    /// instant (an Arrow Flight SQL ticket fetched twice, P3-T101) gets the same clock values.
+    pub fn query_start(mut self, micros: i64) -> Self {
+        self.query_start_micros = Some(micros);
+        self
+    }
+
+    /// Gives the statement's queries the trace context of the request that started them: the
+    /// W3C `traceparent` and `baggage` header values, either absent. Per request, unlike
+    /// [`crate::Session::set_inbound_trace`], which sets the session's: concurrent requests of one
+    /// session each keep their own. The headers are untrusted and never fail anything: a missing
+    /// or malformed `traceparent` means no trace for these queries (the session's own trace, if
+    /// any, is not used either). A valid `traceparent` brings its `baggage` (at most 32 well-formed entries within 4 KiB), read back with [`crate::Session::baggage`] on the statement's handle.
+    pub fn inbound_trace(mut self, traceparent: Option<&str>, baggage: Option<&str>) -> Self {
+        self.inbound_trace = Some((traceparent.map(str::to_owned), baggage.map(str::to_owned)));
         self
     }
 
@@ -433,29 +455,30 @@ impl QueryHistory {
         });
     }
 
-    /// The rows `principal` may see, oldest first: its own, or every row
-    /// when `principal` is `None`.
-    pub(crate) fn snapshot(&self, principal: Option<&str>) -> Vec<QueryRow> {
+    /// The rows of the principal with ownership key `owner`
+    /// ([`crate::sessions::owner_key`]), oldest first, or every row when `None`.
+    pub(crate) fn snapshot(&self, owner: Option<&str>) -> Vec<QueryRow> {
         self.rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rows
             .iter()
-            .filter(|r| principal.is_none_or(|p| r.principal == p))
+            .filter(|r| owner.is_none_or(|o| r.owner == o))
             .cloned()
             .collect()
     }
 
-    /// The operators of the remembered queries `principal` may see, oldest
-    /// query first (copied after the lock is released).
-    pub(crate) fn operators(&self, principal: Option<&str>) -> Vec<OperatorRow> {
+    /// The operators of the remembered queries of the principal with
+    /// ownership key `owner`, or of every query when `None`, oldest query
+    /// first (copied after the lock is released).
+    pub(crate) fn operators(&self, owner: Option<&str>) -> Vec<OperatorRow> {
         let shared: Vec<Arc<[OperatorRow]>> = self
             .rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rows
             .iter()
-            .filter(|r| principal.is_none_or(|p| r.principal == p))
+            .filter(|r| owner.is_none_or(|o| r.owner == o))
             .map(|r| Arc::clone(&r.operators))
             .collect();
         shared.iter().flat_map(|o| o.iter().cloned()).collect()

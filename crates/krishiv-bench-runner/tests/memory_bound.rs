@@ -122,6 +122,18 @@ fn cgroup_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Resident room a coverage-instrumented build needs on top of the bound: the profile counters and
+/// bitmaps are mapped into the process (the coverage job measured 0.2 to 5 MB over a 140 MiB bound).
+/// `cargo llvm-cov` sets `LLVM_PROFILE_FILE` for every test process; a plain run gets no allowance.
+fn instrumented_bound(bound: u64) -> u64 {
+    const INSTRUMENTATION_ALLOWANCE: u64 = 32 << 20;
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        bound + INSTRUMENTATION_ALLOWANCE
+    } else {
+        bound
+    }
+}
+
 /// The cgroup cap for a child with resident-set bound `bound`, or `None` where `systemd-run --user`
 /// does not work (CI runners). Says which, since a run without the cap only compares the peak
 /// RSS; `KRISHIV_TEST_REQUIRE_CGROUP=1` makes a missing cgroup a failure.
@@ -218,7 +230,7 @@ fn memory_field(json: &str, key: &str) -> Option<u64> {
 fn peak_rss_stays_within_the_bound_while_queries_spill() {
     let dir = tempfile::tempdir().unwrap();
     write_tables(dir.path());
-    let bound = rss_bound(LIMIT, THREADS);
+    let bound = instrumented_bound(rss_bound(LIMIT, THREADS));
     // A cgroup also charges the page cache of the spill files the child
     // writes (reclaimable once written back, but charged meanwhile), which is
     // not resident memory: the cap allows for it on top of the bound. The
@@ -238,10 +250,24 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
             "{name}: {reply:?} (an empty reply is a killed runner: memory above {bound} B)"
         );
         let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
+        // The mapped code is file-backed: an unoptimized test build with debug info maps 70+ MiB
+        // of it, more on a CI runner's build than on a developer's, and it moved the high-water
+        // mark past the bound with no change in the memory the queries hold. The bound is about
+        // the process's own memory: the peak less the file-backed part. That part is read after
+        // the query, so it may include code first mapped after the peak, by which the check
+        // under-counts own memory (a few pages; code pages the kernel dropped err the other way).
+        let mapped = memory_field(&reply, "rss_file_bytes").expect("Linux reports RssFile");
+        let own = peak.saturating_sub(mapped);
         let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
         let spilled = memory_field(&reply, "spill_files").unwrap();
-        eprintln!("{name}: peak RSS {peak} B, peak reserved {reserved} B, {spilled} spill files");
-        assert!(peak <= bound, "{name}: peak RSS {peak} B above {bound} B");
+        eprintln!(
+            "{name}: peak RSS {peak} B ({mapped} B file-backed, {own} B own), peak reserved \
+             {reserved} B, {spilled} spill files"
+        );
+        assert!(
+            own <= bound,
+            "{name}: peak own memory {own} B (RSS {peak} B less {mapped} B file-backed) above {bound} B"
+        );
         assert!(
             reserved <= LIMIT,
             "{name}: reserved {reserved} B above the limit"
@@ -408,7 +434,7 @@ fn q21_shaped_expected() -> (i64, i64) {
 fn a_q21_shaped_spilling_join_stays_within_the_bound() {
     let dir = tempfile::tempdir().unwrap();
     write_li(dir.path());
-    let bound = rss_bound(LI_LIMIT, LI_THREADS);
+    let bound = instrumented_bound(rss_bound(LI_LIMIT, LI_THREADS));
     let cap = cgroup_cap(bound);
     let mut runner = Runner::start(
         dir.path(),
@@ -466,11 +492,14 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         "{threads} krishiv-io threads, at most {allowed}"
     );
     let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
+    // As in `peak_rss_stays_within_the_bound_while_queries_spill`: the mapped code is not counted.
+    let mapped = memory_field(&reply, "rss_file_bytes").expect("Linux reports RssFile");
+    let own = peak.saturating_sub(mapped);
     let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
     let spilled = memory_field(&reply, "spill_files").unwrap();
     eprintln!(
-        "q21-shaped: peak RSS {peak} B (bound {bound} B), peak reserved {reserved} B, \
-         {spilled} spill files, {threads} krishiv-io threads"
+        "q21-shaped: peak RSS {peak} B ({mapped} B file-backed, {own} B own; bound {bound} B), \
+         peak reserved {reserved} B, {spilled} spill files, {threads} krishiv-io threads"
     );
     assert!(
         spilled > 0,
@@ -480,7 +509,10 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         operator_counter(&reply, "reversed_partitions") > 0,
         "spilled partitions are joined with roles reversed: {reply}"
     );
-    assert!(peak <= bound, "peak RSS {peak} B above {bound} B");
+    assert!(
+        own <= bound,
+        "peak own memory {own} B (RSS {peak} B less {mapped} B file-backed) above {bound} B"
+    );
     assert!(
         reserved <= LI_LIMIT,
         "reserved {reserved} B above the limit"

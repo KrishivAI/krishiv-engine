@@ -341,6 +341,38 @@ fn bytes_evaluate(
         _ => None,
     };
     let mut words = vec![0u64; n.div_ceil(64)];
+    // A Bloom filter past the caches: hash the rows the range keeps first,
+    // then probe them as a batch, which prefetches (`check_batch`).
+    // Rows are kept as `u32`: a batch of 2^32 rows or more (never made)
+    // keeps the one-row loop below.
+    if let Member::Bloom(bloom) = member
+        && bloom.num_bytes() > super::bloom::PREFETCH_ABOVE_BYTES
+        && u32::try_from(n).is_ok()
+    {
+        let mut rows: Vec<u32> = Vec::with_capacity(n);
+        let mut hashes = Vec::with_capacity(n);
+        for_each_bytes(a, |i, b| {
+            if valid.is_none_or(|v| v.value(i)) && bounds.is_none_or(|(lo, hi)| b >= lo && b <= hi)
+            {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "below the batch length, which fits in u32 (checked above)"
+                )]
+                rows.push(i as u32);
+                hashes.push(xxh64(b));
+            }
+        });
+        let hit = bloom.check_batch(&hashes);
+        for (k, &row) in rows.iter().enumerate() {
+            let i = row as usize;
+            if hit.value(k)
+                && let Some(w) = words.get_mut(i / 64)
+            {
+                *w |= 1 << (i % 64);
+            }
+        }
+        return BooleanBuffer::new(Buffer::from_vec(words), 0, n);
+    }
     for_each_bytes(a, |i, b| {
         let ok = valid.is_none_or(|v| v.value(i))
             && bounds.is_none_or(|(lo, hi)| b >= lo && b <= hi)

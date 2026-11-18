@@ -35,6 +35,10 @@ struct Feed {
     cursor: usize,
     /// Decompresses pushed bytes (then `size` and `fetched` count compressed bytes).
     dec: Option<Decompressor>,
+    /// The error that ended a compressed stream early. The plain bytes decoded
+    /// before it stay in `buf` (Hadoop's line reader returns the lines read
+    /// before its codec throws), and the feed counts as fully fetched.
+    broken: Option<FormatError>,
 }
 
 impl Feed {
@@ -46,6 +50,7 @@ impl Feed {
             buf_pos: start,
             cursor: 0,
             dec: None,
+            broken: None,
         }
     }
 
@@ -84,9 +89,18 @@ impl Feed {
         self.cursor = 0;
         match self.dec.as_mut() {
             Some(d) => {
-                d.push(bytes, &mut self.buf)?;
-                if range.end >= self.size {
-                    d.finish(&mut self.buf)?;
+                let mut res = d.push(bytes, &mut self.buf);
+                if res.is_ok() && range.end >= self.size {
+                    res = d.finish(&mut self.buf);
+                }
+                if let Err(e) = res {
+                    if !matches!(e, FormatError::Corrupt(_)) {
+                        return Err(e);
+                    }
+                    self.dec = None;
+                    self.broken = Some(e);
+                    self.fetched = self.size;
+                    return Ok(());
                 }
             }
             None => self.buf.extend_from_slice(bytes),
@@ -107,6 +121,9 @@ pub(crate) struct LineReader {
     /// Lines starting at or before this offset belong to the previous split.
     skip_to: Option<u64>,
     finished: bool,
+    /// A broken compressed stream ends the file after its complete lines
+    /// instead of failing (schema inference under `ignoreCorruptFiles`).
+    lenient: bool,
 }
 
 /// Where a line ends in `rest`: its length and its terminator's length, or
@@ -155,6 +172,30 @@ impl LineReader {
             sep,
             skip_to: (start != 0).then_some(start),
             finished,
+            lenient: false,
+        }
+    }
+
+    /// With `lenient`, a compressed stream that breaks ends the file after the
+    /// lines decoded before the break, as if it ended there; otherwise the break
+    /// is raised once those lines are read.
+    #[must_use]
+    pub(crate) fn lenient(mut self, lenient: bool) -> Self {
+        self.lenient = lenient;
+        self
+    }
+
+    /// The end of the lines: [`ReadChunk::End`], or the error that broke the
+    /// stream. The partial line after the last terminator is dropped with it.
+    fn end(&mut self) -> FormatResult<ReadChunk> {
+        self.finished = true;
+        match self.feed.broken.take() {
+            Some(e) if self.lenient => {
+                tracing::warn!(error = %e, "a compressed file ends early; kept the lines read before the break");
+                Ok(ReadChunk::End)
+            }
+            Some(e) => Err(e),
+            None => Ok(ReadChunk::End),
         }
     }
 
@@ -182,12 +223,12 @@ impl LineReader {
                 return Ok(ReadChunk::End);
             }
             let eof = self.feed.eof();
-            let (len, term) = match terminator(self.feed.rest(), &self.sep, eof) {
+            // After a break the bytes end mid-stream: a lone `\r` there is
+            // not known to end its line.
+            let clean_eof = eof && self.feed.broken.is_none();
+            let (len, term) = match terminator(self.feed.rest(), &self.sep, clean_eof) {
                 Some(found) => found,
-                None if eof && self.feed.rest().is_empty() => {
-                    self.finished = true;
-                    return Ok(ReadChunk::End);
-                }
+                None if eof && (self.feed.rest().is_empty() || !clean_eof) => return self.end(),
                 None if eof => (self.feed.rest().len(), 0),
                 None => {
                     return match self.feed.want() {
@@ -268,7 +309,12 @@ impl WholeReader {
     /// # Errors
     /// An internal error for bytes that do not continue the file.
     pub(crate) fn push(&mut self, range: &Range<u64>, bytes: &Bytes) -> FormatResult<()> {
-        self.feed.push(range, bytes)
+        self.feed.push(range, bytes)?;
+        // A record may span the rest of the file: a broken stream fails it.
+        match self.feed.broken.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// The file's bytes once all are pushed (once; later calls `None`).

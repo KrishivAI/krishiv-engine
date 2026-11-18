@@ -534,7 +534,8 @@ def test_divide_by_zero_accessors(spark: SparkSession) -> None:
     assert e.getCondition() == "DIVIDE_BY_ZERO"
     assert e.getSqlState() == "22012"
     assert e.getMessageParameters() == {"config": '"spark.sql.ansi.enabled"'}
-    assert e.getMessage() == str(e)
+    # `getMessage()` is the message alone; `str()` adds the span, as for an analysis error (RS-14).
+    assert str(e) == e.getMessage() + "\n== SQL (line 1, position 8) ==\nselect 1 / 0 as x\n       ^^^^^"
     assert "[DIVIDE_BY_ZERO]" in e.getMessage()
     # As Spark 4.2: the failed expression's span in the statement.
     (qc,) = e.getQueryContext()
@@ -567,6 +568,30 @@ def test_sql_error_text_marks_the_span(spark: SparkSession) -> None:
     # `getMessage()` is Spark's message alone; `str()` adds the span, as classic PySpark does.
     assert "== SQL" not in e.getMessage()
     assert str(e) == e.getMessage() + "\n== SQL (line 1, position 8) ==\nSELECT a\n       ^"
+
+
+def test_runtime_error_text_marks_the_span(spark: SparkSession) -> None:
+    # RS-14: an ANSI run-time error raised by an action shows the span that raised it, as an analysis error does.
+    ansi = spark.conf.get("spark.sql.ansi.enabled") or "true"
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    spark.sql("CREATE OR REPLACE TEMPORARY VIEW rs14 AS SELECT 'abc' AS a")
+    try:
+        for sql, caret in [
+            ("select cast('abc' as int)", "^" * 18),
+            ("select 1/0", "^^^"),
+            ("select cast(a as int) from rs14", "^" * 14),
+        ]:
+            with pytest.raises(errors.PySparkException) as raised:
+                spark.sql(sql).collect()
+            e = raised.value
+            summary = f"== SQL (line 1, position 8) ==\n{sql}\n       {caret}"
+            assert "== SQL" not in e.getMessage(), sql
+            assert str(e) == e.getMessage() + "\n" + summary, sql
+            (qc,) = e.getQueryContext()
+            assert qc.summary() == summary + "\n", sql  # Spark's summary ends with a newline
+    finally:
+        spark.sql("DROP VIEW IF EXISTS rs14")
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
 
 
 def test_sql_error_text_counts_lines_and_characters(spark: SparkSession) -> None:

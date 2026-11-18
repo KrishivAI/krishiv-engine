@@ -29,3 +29,16 @@ fn an_aliased_expression_key_groups_and_names_the_column() -> R {
     assert_eq!(rows, 2);
     Ok(())
 }
+
+#[test]
+fn aliased_keys_of_explicit_grouping_sets_group_by_the_bare_expression() -> R {
+    let s = Session::new()?;
+    let m = || (col("id") % lit(2)).alias("m");
+    let df = block_on(s.sql("SELECT id FROM range(10)"))?
+        .grouping_sets([vec![m()], vec![]], [m()])
+        .agg([count_star().alias("n")]);
+    let batches = block_on(df.collect())?;
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 3);
+    Ok(())
+}

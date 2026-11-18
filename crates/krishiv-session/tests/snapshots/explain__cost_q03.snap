@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-session/tests/explain.rs
-assertion_line: 142
 expression: "explain_sql(&s, &format!(\"EXPLAIN COST {}\", query(3)))"
 ---
 == Optimized Logical Plan ==
@@ -24,7 +23,7 @@ Limit 10, Statistics(sizeInBytes=40.0 B, rowCount=1)
 TopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
 +- Exchange SinglePartition
    +- LocalTopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
-      +- Project [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23)))#4611686018427387927 AS revenue#33, o_orderdate#12, o_shippriority#15]
+      +- Project [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23)))#34 AS revenue#33, o_orderdate#12, o_shippriority#15]
          +- HashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
             +- Exchange hashpartitioning(l_orderkey#17, o_orderdate#12, o_shippriority#15)
                +- PartialHashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]

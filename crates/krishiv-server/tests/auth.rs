@@ -60,6 +60,7 @@ async fn start() -> SocketAddr {
         ("krishiv.auth.tokens.prom.principal", "prometheus"),
         ("krishiv.auth.tokens.prom.kind", "service"),
         ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2999-01-01"),
         ("krishiv.auth.tokens.ops.secret", o.as_str()),
         ("krishiv.auth.tokens.ops.principal", "ann"),
         ("krishiv.auth.tokens.ops.role", "operator"),
@@ -96,7 +97,7 @@ async fn call(addr: SocketAddr, method: &str, path: &str, token: Option<&str>) -
     let mut s = TcpStream::connect(addr).await.expect("connect");
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
     );
     s.write_all(request.as_bytes()).await.expect("write");
     let mut out = String::new();

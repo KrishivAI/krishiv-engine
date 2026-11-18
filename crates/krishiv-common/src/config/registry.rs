@@ -2,7 +2,8 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_COALESCE_INPUT, EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER,
+    EXEC_JOIN_ROW_LAYOUT,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -10,38 +11,51 @@ use std::time::Duration;
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
     build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
-    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
+    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
 pub use python::{
-    ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS,
-    PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT,
-    PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
-    UDF_SANDBOX,
+    ARROW_MAX_RECORDS_PER_BATCH, ARROW_PYSPARK_VALIDATE_SCHEMA, PYTHON_UDF_ARROW_ENABLED,
+    PYTHON_UDF_THREADS, PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES,
+    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
+    PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
+mod access;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
+mod runtime_filter_bloom;
 mod server;
+pub use access::{
+    ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+};
 pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
+    DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
+    ICEBERG_WRITE_MAX_OPEN_FILES,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+pub use runtime_filter_bloom::{RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER};
 pub use server::{
-    CONNECT_ADDRESS, CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_EXECUTE_AHEAD_BYTES,
-    CONNECT_EXECUTE_DETACHED_TIMEOUT, CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
-    CONNECT_EXECUTE_RETRY_BUFFER_SIZE, CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
-    CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE, CONNECT_HANDSHAKE_TIMEOUT,
-    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
-    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
-    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
-    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS,
-    CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
-    CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
+    CONNECT_ADDRESS, CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
+    CONNECT_ARTIFACTS_MAX_TOTAL_BYTES, CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    CONNECT_EXECUTE_MAINTENANCE_INTERVAL, CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION, CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
+    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE, CONNECT_MAX_OPERATIONS_PER_SESSION,
+    CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
+    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_ALLOWED_HOSTS,
     SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
 };
 
@@ -62,6 +76,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_AGG_DIRECT_KEYS,
+    &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -71,6 +86,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_JOIN_FUSE_PROBE_SELECT,
+    &EXEC_COALESCE_INPUT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
@@ -84,7 +100,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &HISTORY_PATH,
+    &HISTORY_LITERALS,
+    &HISTORY_MAX_BYTES,
     &UI_ENABLED,
+    &UI_ALLOWED_HOSTS,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -97,9 +117,15 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &LATE_PAYLOAD_JOIN,
+    &PAYLOAD_ABOVE_AGGREGATE,
+    &DISCOVER_KEYS,
+    &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
@@ -108,6 +134,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE,
+    &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -120,7 +148,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &DELTA_LOG_THREADS,
+    &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     &CATALOG_MAX_METADATA_BYTES,
+    &ICEBERG_MANIFEST_CACHE_BYTES,
+    &ICEBERG_WRITE_MAX_OPEN_FILES,
+    &ICEBERG_COMMIT_MAX_INTERVENING,
     &CATALOG_MAX_COLUMNS,
     &CATALOG_REQUEST_TIMEOUT,
     &IO_COALESCE_BYTES,
@@ -137,7 +169,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
     &IO_LOCAL_ALLOWED_ROOTS,
+    &ACCESS_PROVIDER,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
+    &IO_EGRESS_PRIVATE_ADDRESSES,
+    &IO_EGRESS_ALLOWED_CIDRS,
+    &IO_EGRESS_PROXY,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,
@@ -155,6 +191,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &UNION_OUTPUT_PARTITIONING,
     &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
@@ -174,6 +211,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
     &ARROW_MAX_RECORDS_PER_BATCH,
+    &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
     &PYTHON_UDF_THREADS,
     &UDF_SANDBOX,
@@ -209,6 +247,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
     &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
     &CONNECT_MAX_RESPONSE_BYTES,
+    &CONNECT_ARTIFACTS_MAX_BYTES,
+    &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+    &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
     &CONNECT_MAX_CONNECTIONS,
     &CONNECT_HANDSHAKE_TIMEOUT,
     &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
@@ -217,6 +258,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SERVER_SHUTDOWN_TIMEOUT,
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
+    &SERVER_ALLOWED_HOSTS,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -637,6 +679,72 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Startup,
 };
 
+/// Where finished queries' profiles are kept (P3-T051).
+pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A directory where the engine keeps one compact profile for every finished query, as \
+          Parquet files, so `system.queries` history survives a restart and a stored profile can \
+          be opened later. A profile has the plan, the operators' counters and the query's \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
+          ends and never fails the query; a failed write is counted in \
+          `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Most bytes the profile history keeps (P3-T051).
+pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
+          takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
+pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedHosts",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
+          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
+          another name that resolves to this server cannot read it (DNS rebinding). A server \
+          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
+          `[::1]`. A server bound to another address checks the `Host` header only when this is \
+          set (it already requires authentication, and TLS for bearer methods). The \
+          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Whether `krishiv server` serves the web UI backend (design T133).
 pub static UI_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.ui.enabled",
@@ -798,7 +906,8 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           seed, so an operator that spills splits its rows the same way on every run. Costs \
           parallelism where it falls back to one driver: meant for reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns. The \
+          can still change when an operator spills, or whether a hash join build copies its \
+          rows into blocks as they arrive, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
           probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",
@@ -1402,7 +1511,10 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4_000_000)),
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none.",
+          none, and one that turns out larger publishes none. Left at its default, it is raised to \
+          20,000,000 for a scan estimated at least 20 times its build \
+          (`krishiv.runtimeFilter.bloom.atScale`), and for a build past that under a scan 8 times it to the keys \
+          the memory tier holds (`krishiv.runtimeFilter.bloom.memoryTier`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1415,7 +1527,10 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(8 * MIB)),
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%.",
+          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
+          for a scan estimated at least 20 times its build \
+          (`krishiv.runtimeFilter.bloom.atScale`), and for a build past 20,000,000 keys under a scan 8 times it \
+          to 1/64 of the query memory limit (`krishiv.runtimeFilter.bloom.memoryTier`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1472,6 +1587,24 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.unionOutputPartitioning`.
+pub static UNION_OUTPUT_PARTITIONING: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.unionOutputPartitioning",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A UNION ALL whose inputs are each one partition (Spark's SinglePartition: a range of \
+          one slice with rows or a global aggregate, through projections, filters, samples, \
+          generators and LIMITs) is one partition, its inputs read in turn, as Spark's UnionExec \
+          reports its output partitioning: partition-indexed functions above it \
+          (spark_partition_id, rand with a seed, monotonically_increasing_id) see index 0 and one \
+          stream. Not applied when the inputs run together (a hash-join probe above the union). \
+          Off: the union's partitions follow one another, one per input partition.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.unionOutputPartitioning"),
 };
 
 /// `krishiv.connect.maxPlanDepth`.

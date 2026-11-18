@@ -188,7 +188,7 @@ fn create_table_errors() {
     run(&s, "CREATE TABLE IF NOT EXISTS t (a INT, b INT)");
     assert_eq!(col0(&s, "SELECT CAST(count(*) AS STRING) FROM t"), ["0"]);
     assert_eq!(
-        class(&s, "CREATE TABLE d (a INT) USING delta"),
+        class(&s, "CREATE TABLE d (a INT) USING nosuchformat"),
         "DATA_SOURCE_NOT_FOUND"
     );
     assert_eq!(
@@ -754,9 +754,10 @@ fn provider_names_and_defaults() {
         class(&s, "CREATE TEMPORARY TABLE tt (a INT) USING parquet"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
+    // No columns and no files to read them from: Spark 4.2.0's source gives UNABLE_TO_INFER_SCHEMA (not run against a real Spark).
     assert_eq!(
         class(&s, "CREATE TABLE nocols USING parquet"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "UNABLE_TO_INFER_SCHEMA"
     );
 }
 

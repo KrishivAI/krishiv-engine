@@ -7,7 +7,7 @@
 //! - `schema`: the analyzed schema, the same `DataType` `ExecutePlan` sends;
 //! - `explain`: `DataFrame::explain` in the requested mode;
 //! - `tree_string`: Spark's `StructType.treeString` (`analyze::types`);
-//! - `is_local`: whether the translated root is an inline table (Spark's
+//! - `is_local`: whether the translated root is a local relation (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
 //! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
@@ -18,8 +18,22 @@
 //!   canonicalized `sameResult` and `semanticHash`; the hash is Krishiv's own
 //!   value, and Spark's other rewrites (commutative operands, renaming
 //!   projects) are not made;
-//! - `persist`, `unpersist`, `get_storage_level`: refused (56K00) until the
-//!   cache arms land (design P3-T083, PR-47).
+//! - `persist`, `unpersist`, `get_storage_level`: the frame's `persist` (or `cache` without a
+//!   level), `unpersist` and `storage_level` (design P3-T083 §3.4; the level converter is
+//!   `crate::cache`); `blocking` is accepted and ignored (removal is synchronous).
+//!
+//! Access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`,
+//! `semantic_hash` and `same_semantics` analyze for metadata
+//! (`DataFrame::schema_for_metadata` / `analyzed_for_metadata`): every catalog
+//! table and view the plan reads needs `Browse`, so a viewer may ask them. A
+//! read by path keeps `Select`: its schema is inferred from file contents (CSV
+//! `header=true` column names are the file's first line).
+//! `input_files` lists paths and keeps `Select`. `explain`
+//! (`DataFrame::explain_for_metadata`, P3 PR-14d) is the ordinary text for a
+//! principal whose `Select` check passes; otherwise the plan chosen with no
+//! table statistics and no distinct-value samples, with a note saying so.
+//! Its `cost` mode, a read by path and a permanent view keep `Select` (they
+//! show statistics, contents or a view's text).
 
 pub mod types;
 
@@ -27,17 +41,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ConnectInvalidPlanUnknownAnalyzeMethod, KrishivError,
+    ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanUnknownAnalyzeMethod, KrishivError,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::analyze_plan_request::Analyze;
 use krishiv_connect::proto::v4_3::analyze_plan_request::explain::ExplainMode as ProtoMode;
 use krishiv_connect::proto::v4_3::analyze_plan_response as res;
 use krishiv_plan::{LogicalPlan, PlanNode, ReadSource};
-use krishiv_session::{DataFrame, ExplainMode};
+use krishiv_session::{DataFrame, ExplainMode, QueryOptions};
 
-use crate::execute::{request_plan, schema};
+use crate::cache::{proto_of, storage_level_of};
+use crate::execute::{request_plan, request_relation, schema};
 use crate::manager::SessionEntry;
 use crate::operation::ExecuteLimits;
 
@@ -46,8 +60,7 @@ use crate::operation::ExecuteLimits;
 /// # Errors
 /// The plan's decoding, translation and analysis errors;
 /// `CONNECT_INVALID_PLAN.UNKNOWN_ANALYZE_METHOD` for an unset arm;
-/// `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for the cache
-/// arms; `CONNECT_INVALID_PLAN.INVALID_ENUM` for an unspecified explain mode
+/// `CONNECT_INVALID_PLAN.INVALID_ENUM` for an unspecified explain mode
 /// (Spark throws a classless `UnsupportedOperationException`: a recorded
 /// difference).
 pub async fn analyze_plan(
@@ -63,18 +76,32 @@ pub async fn analyze_plan(
     })
 }
 
+/// The request's relation (`persist`, `unpersist`, `get_storage_level`) as a `DataFrame`.
+async fn frame_of_relation(
+    entry: &SessionEntry,
+    relation: Option<&pb::Relation>,
+) -> Result<DataFrame, KrishivError> {
+    let empty = pb::Relation::default();
+    request_relation(entry, relation.unwrap_or(&empty))
+        .await?
+        .frame(entry.session(), QueryOptions::new())
+        .await
+}
+
 /// The request's plan as a `DataFrame` (translated, not analyzed). The
 /// plan is borrowed, never cloned: a deep plan's copy (and its drop) would
 /// recurse on the async worker's stack (translation runs a deep plan on a
 /// big stack of its own).
 async fn frame(
-    session: &krishiv_session::Session,
+    entry: &SessionEntry,
     plan: Option<&pb::Plan>,
     limits: &ExecuteLimits,
 ) -> Result<DataFrame, KrishivError> {
     let empty = pb::Plan::default();
-    let logical = request_plan(session, plan.unwrap_or(&empty), limits).await?;
-    Ok(session.from_plan(&logical))
+    request_plan(entry, plan.unwrap_or(&empty), limits)
+        .await?
+        .frame(entry.session(), QueryOptions::new())
+        .await
 }
 
 async fn analyze(
@@ -91,54 +118,62 @@ async fn analyze(
             .into());
         }
         Some(Analyze::Schema(s)) => {
-            let df = frame(session, s.plan.as_ref(), limits).await?;
+            let df = frame(entry, s.plan.as_ref(), limits).await?;
             res::Result::Schema(res::Schema {
-                schema: Some(schema::proto_schema(&*df.schema().await?)?),
+                schema: Some(schema::proto_schema(&*df.schema_for_metadata().await?)?),
             })
         }
         Some(Analyze::Explain(e)) => {
             // Spark builds the Dataset (translation, analysis) before it
-            // reads the mode.
-            let df = frame(session, e.plan.as_ref(), limits).await?;
-            df.analyzed().await?;
+            // reads the mode: a metadata analysis here (`Browse`), then the
+            // explain a principal may see (see the module docs).
+            let df = frame(entry, e.plan.as_ref(), limits).await?;
+            df.analyzed_for_metadata().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
-                explain_string: df.explain(mode).await?,
+                explain_string: df.explain_for_metadata(mode).await?,
             })
         }
         Some(Analyze::TreeString(t)) => {
-            let df = frame(session, t.plan.as_ref(), limits).await?;
-            let spark = schema::spark_schema(&*df.schema().await?)?;
+            let df = frame(entry, t.plan.as_ref(), limits).await?;
+            let spark = schema::spark_schema(&*df.schema_for_metadata().await?)?;
             res::Result::TreeString(res::TreeString {
                 tree_string: types::tree_string(&spark, t.level),
             })
         }
         Some(Analyze::IsLocal(l)) => {
-            // Spark: the analyzed plan is a `LocalRelation`. Krishiv's
-            // analyzer lowers inline rows to `OneRowRelation` (as for
-            // `SELECT 1`), so the question is asked of the translated plan
-            // (an inline table, as `LocalRelation` will translate in T012);
-            // SQL `VALUES` is SQL text until analysis and answers false.
-            // The plan is still analyzed so that an invalid one fails as in
-            // Spark.
+            // Spark: the analyzed plan is a `LocalRelation`. A `local_relation` translates to
+            // a `Read` of a local relation (its user schema already applied eagerly, so the
+            // analyzed plan is that bare relation either way); Krishiv's analyzer lowers inline
+            // rows to `OneRowRelation` (as for `SELECT 1`), so the question is asked of the
+            // translated plan; SQL `VALUES` is SQL text until analysis and answers false. The
+            // plan is still analyzed so that an invalid one fails as in Spark.
             let empty = pb::Plan::default();
-            let logical = request_plan(session, l.plan.as_ref().unwrap_or(&empty), limits).await?;
-            let is_local = matches!(logical.root().node, PlanNode::InlineTable { .. });
-            session.from_plan(&logical).analyzed().await?;
+            let requested = request_plan(entry, l.plan.as_ref().unwrap_or(&empty), limits).await?;
+            let is_local = matches!(
+                requested.plan.root().node,
+                PlanNode::InlineTable { .. } | PlanNode::Read(ReadSource::Local(_))
+            );
+            requested
+                .frame(session, QueryOptions::new())
+                .await?
+                .analyzed_for_metadata()
+                .await?;
             res::Result::IsLocal(res::IsLocal { is_local })
         }
         Some(Analyze::IsStreaming(s)) => {
             // Analyzed so that an invalid plan fails as in Spark.
-            frame(session, s.plan.as_ref(), limits)
+            frame(entry, s.plan.as_ref(), limits)
                 .await?
-                .analyzed()
+                .analyzed_for_metadata()
                 .await?;
             res::Result::IsStreaming(res::IsStreaming {
                 is_streaming: false,
             })
         }
         Some(Analyze::InputFiles(f)) => {
-            let analyzed = frame(session, f.plan.as_ref(), limits)
+            // The paths themselves are shown: `Select` on them (ADR 0046 §3b).
+            let analyzed = frame(entry, f.plan.as_ref(), limits)
                 .await?
                 .analyzed()
                 .await?;
@@ -157,22 +192,49 @@ async fn analyze(
             )?)?),
         }),
         Some(Analyze::SameSemantics(s)) => {
-            let target =
-                semantic_hash(frame(session, s.target_plan.as_ref(), limits).await?).await?;
-            let other = semantic_hash(frame(session, s.other_plan.as_ref(), limits).await?).await?;
+            let target = semantic_hash(frame(entry, s.target_plan.as_ref(), limits).await?).await?;
+            let other = semantic_hash(frame(entry, s.other_plan.as_ref(), limits).await?).await?;
             res::Result::SameSemantics(res::SameSemantics {
                 result: target == other,
             })
         }
         Some(Analyze::SemanticHash(s)) => {
-            let hash = semantic_hash(frame(session, s.plan.as_ref(), limits).await?).await?;
+            let hash = semantic_hash(frame(entry, s.plan.as_ref(), limits).await?).await?;
             res::Result::SemanticHash(res::SemanticHash {
                 result: fold_hash(hash),
             })
         }
-        Some(Analyze::Persist(_)) => return Err(cache_arm("PERSIST", 14)),
-        Some(Analyze::Unpersist(_)) => return Err(cache_arm("UNPERSIST", 15)),
-        Some(Analyze::GetStorageLevel(_)) => return Err(cache_arm("GET_STORAGE_LEVEL", 16)),
+        Some(Analyze::Persist(p)) => {
+            crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
+            // `persist(level)`, or `persist()` (the session's default level) without one.
+            let df = frame_of_relation(entry, p.relation.as_ref()).await?;
+            let df = match &p.storage_level {
+                Some(level) => df.persist(storage_level_of(level)),
+                None => df.cache(),
+            };
+            // Spark registers at once; the engine does at the first read of the registry: this
+            // analysis (an invalid plan fails here as in Spark).
+            df.is_cached().await?;
+            res::Result::Persist(res::Persist {})
+        }
+        Some(Analyze::Unpersist(u)) => {
+            crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
+            // `blocking` is accepted: removal is synchronous either way.
+            frame_of_relation(entry, u.relation.as_ref())
+                .await?
+                .unpersist()
+                .await?;
+            res::Result::Unpersist(res::Unpersist {})
+        }
+        Some(Analyze::GetStorageLevel(g)) => {
+            let level = frame_of_relation(entry, g.relation.as_ref())
+                .await?
+                .storage_level()
+                .await?;
+            res::Result::GetStorageLevel(res::GetStorageLevel {
+                storage_level: Some(proto_of(level)),
+            })
+        }
         Some(Analyze::JsonToDdl(j)) => res::Result::JsonToDdl(res::JsonToDdl {
             ddl_string: types::json_to_ddl(&j.json_string)?,
         }),
@@ -198,19 +260,11 @@ fn explain_mode(mode: i32) -> Result<ExplainMode, KrishivError> {
     }
 }
 
-/// The refusal of a cache arm until design P3-T083 (PR-47).
-fn cache_arm(name: &str, number: u32) -> KrishivError {
-    ConnectInvalidPlanInvalidOneOfFieldNotSupported {
-        full_name: "spark.connect.AnalyzePlanRequest".to_owned(),
-        name: name.to_owned(),
-        number: number.to_string(),
-    }
-    .into()
-}
-
-/// The semantic hash of `df`'s analyzed plan.
+/// The semantic hash of `df`'s analyzed plan (a metadata analysis: `Browse`).
 async fn semantic_hash(df: DataFrame) -> Result<u128, KrishivError> {
-    Ok(krishiv_plan::semantic_plan_hash(&df.analyzed().await?.plan))
+    Ok(krishiv_plan::semantic_plan_hash(
+        &df.analyzed_for_metadata().await?.plan,
+    ))
 }
 
 /// A 128-bit hash folded into the `int32` the response carries.

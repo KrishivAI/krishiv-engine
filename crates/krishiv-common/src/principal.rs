@@ -21,6 +21,11 @@ pub struct Principal {
     pub tenant: Option<String>,
     /// User or service principal.
     pub kind: PrincipalKind,
+    /// The service principal that acts for this one (trusted impersonation, P3-T061 §4.2 rule
+    /// 4), `None` when the principal authenticated itself. Authorization checks the principal
+    /// itself; the audit and `system.queries` / `system.sessions` show both. It never enters
+    /// [`Self::id`]: what a query may read is the end user's, whoever asked for it.
+    pub delegated_by: Option<String>,
 }
 
 /// The kind of a principal.
@@ -42,7 +47,16 @@ impl Principal {
             groups: Vec::new(),
             tenant: None,
             kind,
+            delegated_by: None,
         }
+    }
+
+    /// This principal, acting through the service principal `delegator` (trusted
+    /// impersonation).
+    #[must_use]
+    pub fn with_delegator(mut self, delegator: impl Into<String>) -> Self {
+        self.delegated_by = Some(delegator.into());
+        self
     }
 
     /// The principal of a context nobody has set one on: it has no name, and
@@ -66,12 +80,7 @@ impl Principal {
             .iter()
             .find_map(|k| std::env::var(k).ok())
             .unwrap_or_else(|| "unknown".to_owned());
-        Self {
-            name,
-            groups: Vec::new(),
-            tenant: None,
-            kind: PrincipalKind::User,
-        }
+        Self::new(name, PrincipalKind::User)
     }
 
     /// The identity that enters the context fingerprint: kind, tenant,
@@ -123,6 +132,16 @@ mod tests {
         let mut b = Principal::new("y", PrincipalKind::User);
         b.tenant = Some("t/`x".to_owned());
         assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn the_delegator_is_kept_but_not_in_the_id() {
+        let alice = Principal::new("alice", PrincipalKind::User);
+        let via = alice.clone().with_delegator("portal");
+        assert_eq!(via.delegated_by.as_deref(), Some("portal"));
+        assert_eq!(alice.delegated_by, None);
+        assert_eq!(via.id(), alice.id());
+        assert_ne!(via, alice);
     }
 
     #[test]

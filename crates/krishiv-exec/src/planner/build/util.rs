@@ -38,6 +38,50 @@ pub(super) fn max_id(root: &LogicalPlan) -> u64 {
     max
 }
 
+/// The attributes `root` reads: every column an expression of any node (subquery plans included) refers
+/// to, the output of the root, and the whole input of a node that reads its input positionally (a union,
+/// a set operation, a `DISTINCT`). A scan's carrier column (kept only to count rows) is not among them.
+/// A node that renumbers or renames attributes (`Shift`, a CTE reference) can hide a reference, which is
+/// the safe side for its one use, `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: it never refuses a valid query.
+pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
+    let mut out: HashSet<AttrId> = HashSet::new();
+    if let Some(o) = root.resolved_output() {
+        out.extend(o.iter().map(|c| c.id));
+    }
+    let mut stack = vec![root];
+    let mut seen = HashSet::new();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(p)) {
+            continue;
+        }
+        if matches!(
+            p.node,
+            PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::Distinct { .. }
+        ) {
+            p.for_each_child(&mut |c| {
+                if let Some(o) = c.resolved_output() {
+                    out.extend(o.iter().map(|c| c.id));
+                }
+            });
+        }
+        p.for_each_child(&mut |c| stack.push(c));
+        p.for_each_expr(&mut |e| {
+            let mut exprs = vec![e.as_ref()];
+            while let Some(e) = exprs.pop() {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                        out.insert(c.id);
+                    }
+                    ExprNode::Subquery { plan, .. } => stack.push(plan),
+                    _ => {}
+                }
+                e.for_each_child(&mut |c| exprs.push(c));
+            }
+        });
+    }
+    out
+}
+
 /// The Arrow type each column of a union has in every input, and whether
 /// every branch converts to it: the type the inputs all store it in (kept
 /// as is), or, where they differ, the canonical Arrow type of its Spark
@@ -232,6 +276,7 @@ pub(crate) fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),
+        krishiv_plan::ReadSource::Local(_) => "LocalRelation".to_owned(),
         _ => "source".to_owned(),
     }
 }

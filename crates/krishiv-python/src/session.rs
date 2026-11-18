@@ -7,7 +7,7 @@ use krishiv_session::Session;
 use pyo3::prelude::*;
 
 use crate::dataframe::{OwnedTable, PyDataFrame};
-use crate::errors::{block_on_sql, to_py};
+use crate::errors::{block_on, block_on_sql, to_py};
 use crate::stream::ArrowStream;
 
 /// Numbers the tables `create_dataframe` registers.
@@ -21,6 +21,55 @@ const ARROW_TABLE_PREFIX: &str = "__krishiv_arrow_";
 fn is_arrow_table(name: &str) -> bool {
     name.get(..ARROW_TABLE_PREFIX.len())
         .is_some_and(|p| p.eq_ignore_ascii_case(ARROW_TABLE_PREFIX))
+}
+
+/// `(name, catalog, description, location_uri)`.
+type DatabaseRow = (String, String, Option<String>, String);
+/// `(name, catalog, namespace, description, table_type, is_temporary)`.
+type TableRow = (
+    String,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<String>,
+    String,
+    bool,
+);
+/// `(name, description, data_type, nullable, is_partition, is_bucket, is_cluster)`.
+type ColumnRow = (String, Option<String>, String, bool, bool, bool, bool);
+/// `(name, catalog, namespace, description, class_name, is_temporary)`.
+type FunctionRow = (
+    String,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<String>,
+    String,
+    bool,
+);
+
+fn database_row(d: krishiv_session::spark_catalog::Database) -> DatabaseRow {
+    (d.name, d.catalog, d.description, d.location_uri)
+}
+
+fn table_row(t: krishiv_session::spark_catalog::Table) -> TableRow {
+    (
+        t.name,
+        t.catalog,
+        t.namespace,
+        t.description,
+        t.table_type,
+        t.is_temporary,
+    )
+}
+
+fn function_row(f: krishiv_session::spark_catalog::Function) -> FunctionRow {
+    (
+        f.name,
+        f.catalog,
+        f.namespace,
+        f.description,
+        f.class_name,
+        f.is_temporary,
+    )
 }
 
 /// A Krishiv session.
@@ -112,19 +161,41 @@ impl PySession {
         !is_arrow_table(name) && self.inner.drop_temp_view(name)
     }
 
-    /// The DataFrame reading the files `paths` as `format`, with `options`.
-    #[pyo3(signature = (format, paths, options=None))]
+    /// The DataFrame reading the files `paths` as `format`, with `options`
+    /// and the user's schema, if any: `schema_json` a struct type's JSON form
+    /// (`StructType.json()`), or `schema_ddl` a DDL string (`"a INT"`), as
+    /// PySpark's `DataFrameReader.schema` hands either to Spark.
+    #[pyo3(signature = (format, paths, options=None, schema_json=None, schema_ddl=None))]
     fn read(
         &self,
+        py: Python<'_>,
         format: &str,
         paths: Vec<String>,
         options: Option<Vec<(String, String)>>,
-    ) -> PyDataFrame {
+        schema_json: Option<&str>,
+        schema_ddl: Option<&str>,
+    ) -> PyResult<PyDataFrame> {
         let mut reader = self.inner.read().format(format);
         for (key, value) in options.unwrap_or_default() {
             reader = reader.option(&key, &value);
         }
-        PyDataFrame::new(reader.load(paths))
+        if let Some(json) = schema_json {
+            match krishiv_types::DataType::from_json(json) {
+                Ok(krishiv_types::DataType::Struct(s)) => reader = reader.schema(s),
+                Ok(other) => {
+                    let e = krishiv_common::error::InvalidSchemaNonStructType {
+                        input_schema: format!("\"{json}\""),
+                        data_type: format!("\"{}\"", other.sql()),
+                    };
+                    return Err(to_py(py, &e.into()));
+                }
+                Err(e) => return Err(to_py(py, &e)),
+            }
+        }
+        if let Some(ddl) = schema_ddl {
+            reader = reader.schema_ddl(ddl).map_err(|e| to_py(py, &e))?;
+        }
+        Ok(PyDataFrame::new(reader.load(paths)))
     }
 
     /// A DataFrame of the Arrow data `data` (any object implementing the
@@ -180,6 +251,161 @@ impl PySession {
     /// `REFRESH path`).
     fn refresh_files(&self) {
         self.inner.refresh_files();
+    }
+
+    // ---- spark.catalog (`krishiv_session::Catalog`); the Python `Catalog` wraps the tuples in named tuples ----
+
+    /// The current catalog's name.
+    fn catalog_current_catalog(&self) -> String {
+        self.inner.catalog().current_catalog()
+    }
+
+    /// Makes `name` the current catalog (`CATALOG_NOT_FOUND` for any but `spark_catalog`).
+    fn catalog_set_current_catalog(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move {
+            session.catalog().set_current_catalog(&name).await
+        })
+    }
+
+    /// The catalogs' names.
+    fn catalog_list_catalogs(&self) -> Vec<String> {
+        self.inner.catalog().list_catalogs()
+    }
+
+    /// The current database's name.
+    fn catalog_current_database(&self) -> String {
+        self.inner.catalog().current_database()
+    }
+
+    /// Makes `name` the current database.
+    fn catalog_set_current_database(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move {
+            session.catalog().set_current_database(&name).await
+        })
+    }
+
+    /// `(name, catalog, description, location_uri)` of the databases matching `pattern`.
+    #[pyo3(signature = (pattern=None))]
+    fn catalog_list_databases(
+        &self,
+        py: Python<'_>,
+        pattern: Option<String>,
+    ) -> PyResult<Vec<DatabaseRow>> {
+        let session = self.inner.clone();
+        let rows = block_on(py, async move {
+            session.catalog().list_databases(pattern.as_deref()).await
+        })?;
+        Ok(rows.into_iter().map(database_row).collect())
+    }
+
+    /// The database `name`, as [`Self::catalog_list_databases`] rows.
+    fn catalog_get_database(&self, py: Python<'_>, name: &str) -> PyResult<DatabaseRow> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { session.catalog().get_database(&name).await },
+        )
+        .map(database_row)
+    }
+
+    /// Whether the database `name` exists.
+    fn catalog_database_exists(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { session.catalog().database_exists(&name).await },
+        )
+    }
+
+    /// `(name, catalog, namespace, description, table_type, is_temporary)` of the tables in `database`.
+    #[pyo3(signature = (database=None, pattern=None))]
+    fn catalog_list_tables(
+        &self,
+        py: Python<'_>,
+        database: Option<String>,
+        pattern: Option<String>,
+    ) -> PyResult<Vec<TableRow>> {
+        let session = self.inner.clone();
+        let rows = block_on(py, async move {
+            session
+                .catalog()
+                .list_tables(database.as_deref(), pattern.as_deref())
+                .await
+        })?;
+        Ok(rows.into_iter().map(table_row).collect())
+    }
+
+    /// The table or view `name`, as [`Self::catalog_list_tables`] rows.
+    fn catalog_get_table(&self, py: Python<'_>, name: &str) -> PyResult<TableRow> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move { session.catalog().get_table(&name).await }).map(table_row)
+    }
+
+    /// Whether the table or view `name` exists.
+    fn catalog_table_exists(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { session.catalog().table_exists(&name).await },
+        )
+    }
+
+    /// `(name, description, data_type, nullable, is_partition, is_bucket, is_cluster)` of the columns of `name`.
+    fn catalog_list_columns(&self, py: Python<'_>, name: &str) -> PyResult<Vec<ColumnRow>> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        let rows = block_on(
+            py,
+            async move { session.catalog().list_columns(&name).await },
+        )?;
+        Ok(rows
+            .into_iter()
+            .map(|c| {
+                (
+                    c.name,
+                    c.description,
+                    c.data_type,
+                    c.nullable,
+                    c.is_partition,
+                    c.is_bucket,
+                    c.is_cluster,
+                )
+            })
+            .collect())
+    }
+
+    /// `(name, catalog, namespace, description, class_name, is_temporary)` of the functions matching `pattern`.
+    #[pyo3(signature = (pattern=None))]
+    fn catalog_list_functions(
+        &self,
+        py: Python<'_>,
+        pattern: Option<String>,
+    ) -> PyResult<Vec<FunctionRow>> {
+        let session = self.inner.clone();
+        let rows = block_on(py, async move {
+            session.catalog().list_functions(pattern.as_deref()).await
+        })?;
+        Ok(rows.into_iter().map(function_row).collect())
+    }
+
+    /// The function `name`, as [`Self::catalog_list_functions`] rows.
+    fn catalog_get_function(&self, py: Python<'_>, name: &str) -> PyResult<FunctionRow> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { session.catalog().get_function(&name).await },
+        )
+        .map(function_row)
+    }
+
+    /// Whether the function `name` exists.
+    fn catalog_function_exists(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
+        let (session, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { session.catalog().function_exists(&name).await },
+        )
     }
 
     /// Bytes the relation cache holds now.
