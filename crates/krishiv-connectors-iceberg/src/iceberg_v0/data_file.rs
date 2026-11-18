@@ -230,8 +230,12 @@ pub(crate) fn data_file(
         bounds
             .iter()
             .map(|(id, bytes)| {
+                // A reserved metadata column (a rewrite's row lineage,
+                // `lineage.rs`) is typed as iceberg-rust's manifest reader
+                // types it.
                 let p = schema
                     .field_by_id(*id)
+                    .or_else(|| iceberg::metadata_columns::get_metadata_field(*id).ok())
                     .and_then(|f| f.field_type.as_primitive_type().cloned())
                     .ok_or_else(|| internal(format!("bound of column {id}, not in the schema")))?;
                 let d = Datum::try_from_bytes(bytes, p).map_err(from_iceberg)?;

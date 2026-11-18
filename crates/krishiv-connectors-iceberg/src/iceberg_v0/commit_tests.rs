@@ -29,10 +29,13 @@ use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
 
 use super::append::{NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt, write_new_manifests};
 use super::append_tests::{MAX, create, file, iceberg_rust_files, ids, rows};
-use super::commit::{CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append};
+use super::commit::{
+    CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append, commit_validated,
+};
 use super::provider_tests::{Env, env};
 use super::scan::read_manifest_files;
 use super::statistics_tests::sketches;
+use super::validate::Validation;
 
 /// One commit request's body.
 pub(super) type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
@@ -649,6 +652,27 @@ impl Case {
         ))
     }
 
+    /// [`Self::run`] through `commit_validated` with `validation`.
+    pub(super) fn run_validated(
+        &mut self,
+        validation: &Validation,
+    ) -> Result<TableMetadata, KrishivError> {
+        let io = self.env.reg.file_io();
+        let cx = CommitContext {
+            io: &io,
+            clock: self.clock.as_ref(),
+            max_metadata_bytes: MAX,
+        };
+        self.env.rt.block_on(commit_validated(
+            &self.cat,
+            cx,
+            &self.base,
+            &mut self.new,
+            ids(OUR_KEY),
+            validation,
+        ))
+    }
+
     pub(super) fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
         foreign(&self.env, &self.clock, &self.base, name, id, branch)
     }
@@ -674,7 +698,7 @@ impl Case {
         )
     }
 
-    fn manifest(&self) -> String {
+    pub(super) fn manifest(&self) -> String {
         self.new.manifests[0].manifest_path.clone()
     }
 

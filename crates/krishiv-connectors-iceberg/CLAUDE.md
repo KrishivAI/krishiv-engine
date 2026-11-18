@@ -80,6 +80,22 @@ No production `CommitTable` yet (PR-17's catalog clients); the production clock 
 applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
 on virtual time; the §10 36a cases; merged first attempts committed, rebased, failed and left unknown; the sweep
 merging in one schedule in three; table invariants and the store's files checked after each case)
+· `validate.rs` (PR-36b unit 1, design note §7.3 steps 2–3) commit validation as Java's `MergingSnapshotProducer`
+(apache-iceberg 1.12.0): `Validation` (checks, isolation level, conflict filter, files removed / referenced / DV'd,
+`max_intervening`), `walk` from the branch head to S0 along parent ids (Java's "Cannot determine history ..." when it
+does not end at S0; past `krishiv.iceberg.commit.maxIntervening` a conflict), `read_history` (only the manifests an
+intervening snapshot added, `ADDED`/`DELETED` entries; `EXISTING` only in the delete manifests the added delete files
+check reads, as Java's `DeleteFileIndex`), `check`: added data files (`append`,
+`overwrite`; serializable only), added delete files (`overwrite`, `delete`; live entries with data sequence number above
+S0's; an equality delete judged only by its `equality_ids` columns' metrics), added
+DVs (`overwrite`, `delete`, `replace`), removed files by path (`overwrite`, `replace`, `delete`, `delete` skippable
+for references), through `Pruner` in conservative mode (every unknown a match), Java's message texts; run by
+`commit.rs`'s `commit_validated` on every rebase (`commit_append` passes `Validation::none()`, no walk). No caller
+validates yet (the operations are unit 2). Tests `validate_tests.rs` (the walk, each check over a hand-built history,
+the conservative evaluator, histories written by iceberg-rust's writers, the loop with `commit_tests`' catalog: a
+validation read error with outcomes known, after an unknown answer and while unresolved, a second rebase, a stale
+answer). Open items (filter bound by name to Sn's schema, the CoW check set, two unverified texts) in `validate.rs`'s
+module docs
 · `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
 table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
 partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
@@ -94,7 +110,17 @@ retry never reuses a failed attempt's names; `with_sketches`/`take_sketches` (PR
 (tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
 an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
 abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
-· `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+· `lineage.rs` (PR-36b unit 2a, design note §8 item 3) v3 row lineage: `_row_id` (2147483540) and
+`_last_updated_sequence_number` (2147483539) as the spec's "Row Lineage" rules: `IcebergTableProvider::lineage_scan`
+(crate-private, the seam unit 2's CoW rewrite reads through) appends both to the table schema; its inner file scan
+reads the stored values by reserved id (null when the file lacks them), the file's `first_row_id` and data sequence
+number as `FileConstants` and the row position as the row id, under the delete-aware source, and `LineageSource`
+derives the values (stored non-null wins, else `first_row_id + _pos` / data sequence number; a file without
+`first_row_id` reads null for both); `DataFileWriter::with_lineage` writes both columns under their ids, optional longs,
+metrics in the table's default mode (Java's `MetricsConfig.columnMode(id)`); v1/v2 tables refuse both
+(`KRISHIV_UNSUPPORTED_FEATURE`); tests `lineage_tests.rs` (a rewrite round trip, stored/updated/inserted rows, deletes
+first, a pre-upgrade file, a real v2 → v3 upgrade, a file of several row groups in several splits under a pruning filter,
+v1/v2, the derivation against a model) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
 driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
 whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
 `finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
@@ -202,6 +228,13 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - **Manifest probe memory** (`rolling.rs`): a probe holds its cloned entries and the encoded bytes (in the writer and
   the scratch store until deleted), and the search keeps the reaching probe's bytes, so up to about twice the
   target size (8 MiB default) plus the entries on the driver, uncharged, as iceberg-rust's own manifest buffering is.
+- **Row lineage (PR-36b unit 2a):** a lineage scan reading a lineage column refuses `_metadata` columns
+  (`KRISHIV_UNSUPPORTED_FEATURE`: the row position is read as the row id; so does a row id with `_metadata`); a table
+  with a user column named `_row_id` or `_last_updated_sequence_number` is refused (Krishiv's own rule, uncited); filters on the lineage columns are not
+  pushed. The Iceberg scan does not `supports_take`, which main's `RowIdScan` requires: **an acceptance item of unit 2**
+  (review finding 2), whose `RowLevelTable` needs `take` (or an Iceberg row id wrapper of its own) first. Whether Spark hides or refuses the columns on v1/v2 tables is not verified
+  (its `SparkTable` source was not supplied); Krishiv refuses. A file whose manifest leaves its data sequence number
+  null reads a null `_last_updated_sequence_number` where none is stored.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

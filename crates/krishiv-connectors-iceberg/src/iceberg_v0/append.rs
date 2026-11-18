@@ -150,6 +150,9 @@ pub(crate) struct NewManifests {
     /// The write's column sketches (PR-54b, `statistics_file.rs`): each attempt
     /// writes a statistics file of its snapshot from them and adds
     /// `set-statistics`; `None` when the write has none or dropped them.
+    /// Appends only: rule 2 unions with the parent's sketch, so a write that
+    /// removes rows (an overwrite or delete through `commit_validated`) must
+    /// leave it `None` until it decides what it carries forward (review S3).
     pub(crate) statistics: Option<WriteSketches>,
     /// Every statistics file an attempt started writing: kept when the
     /// committed metadata names it, else deleted with the attempt's other
