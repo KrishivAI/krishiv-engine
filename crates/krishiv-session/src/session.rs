@@ -1420,7 +1420,7 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
         }
     }
 
@@ -1437,7 +1437,7 @@ impl Session {
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
         let r = self
-            .check_store_options(&env.config, std::iter::empty())
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
             .await;
         crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the
