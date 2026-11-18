@@ -584,6 +584,19 @@ impl PyDataFrame {
         )
     }
 
+    /// Registers this DataFrame as the global temporary view `global_temp.name`; `replace` says whether
+    /// one of that name may be replaced.
+    fn create_global_temp_view(&self, py: Python<'_>, name: &str, replace: bool) -> PyResult<()> {
+        let (df, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move {
+            if replace {
+                df.create_or_replace_global_temp_view(&name).await
+            } else {
+                df.create_global_temp_view(&name).await
+            }
+        })
+    }
+
     /// `(name, Spark simple type string, nullable)` per column, by analysis.
     fn schema(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
         let df = self.inner.clone();

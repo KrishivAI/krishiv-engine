@@ -50,6 +50,7 @@ DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
+DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
@@ -113,6 +114,9 @@ Session.def conf_set(self, key: str, value: str) -> None
 Session.def conf_unset(self, key: str) -> None
 Session.def create_dataframe(self, data: object) -> DataFrame
 Session.def drop_temp_view(self, name: str) -> bool
+Session.def interrupt_all(self) -> list[str]
+Session.def interrupt_operation(self, id: str) -> list[str]
+Session.def interrupt_tag(self, tag: str) -> list[str]
 Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
@@ -120,6 +124,7 @@ Session.def refresh_table(self, name: str) -> None
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
+Session.def tagged(self, tags: list[str]) -> Session
 Session.def temp_table_names(self) -> list[str]
 Session.def uncache_table(self, name: str) -> None
 WindowSpec.def __new__(cls) -> WindowSpec
@@ -1280,6 +1285,8 @@ DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
 DataFrame.def count(self) -> int
 DataFrame.def cov(self, col1: str, col2: str) -> float
+DataFrame.def createGlobalTempView(self, name: str) -> None
+DataFrame.def createOrReplaceGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceTempView(self, name: str) -> None
 DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
 DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
@@ -1564,11 +1571,18 @@ SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
 SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
 SparkSession.builder: Builder
 SparkSession.class Builder()
-SparkSession.def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def __init__(self, native: _NativeSession, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def addTag(self, tag: str) -> None
+SparkSession.def clearTags(self) -> None
 SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
 SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
+SparkSession.def getTags(self) -> set[str]
+SparkSession.def interruptAll(self) -> list[str]
+SparkSession.def interruptOperation(self, op_id: str) -> list[str]
+SparkSession.def interruptTag(self, tag: str) -> list[str]
 SparkSession.def newSession(self) -> SparkSession
 SparkSession.def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
+SparkSession.def removeTag(self, tag: str) -> None
 SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
 SparkSession.def stop(self) -> None
 SparkSession.def table(self, tableName: str) -> DataFrame
