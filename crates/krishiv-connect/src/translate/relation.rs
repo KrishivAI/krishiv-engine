@@ -258,12 +258,12 @@ impl Translator<'_> {
             .collect::<Result<Vec<_>>>()?;
         // The analyzer keeps every input column no column set references, so a column that is
         // both an id and a value (Spark keeps it and unpivots it) or a value listed twice would
-        // lose its id copy and make the projection ambiguous. Refuse it by name, ignoring case
-        // (over-refusing is safe), until the IR can keep a referenced column.
+        // lose its id copy and make the projection ambiguous. Refuse it by the last name part, ignoring case
+        // (a qualified spelling must not slip past; over-refusing is safe), until the IR can keep a referenced column.
         let mut seen = std::collections::HashSet::new();
         for e in ids.iter().chain(values.iter()) {
             if let ExprNode::Column(c) = &e.node {
-                let key: Vec<String> = c.name.iter().map(|p| p.to_lowercase()).collect();
+                let key = c.name.last().map(|p| p.to_lowercase());
                 if !seen.insert(key) {
                     return Err(unsupported_field(
                         "Unpivot",
