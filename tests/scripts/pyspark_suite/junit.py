@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,18 @@ class Record:
     status: str
     ms: int
     reason_class: str | None = None
+    message: str = ""  # first line of the skip/failure/error message, cut at 200 characters
+
+    @property
+    def conditional_skip(self) -> bool:
+        """A runtime skip caused by the client mode (remote-only, "Requires JVM access"), not by the server."""
+        return self.status == "skip" and _conditional(self.message)
+
+    @property
+    def cause(self) -> str:
+        """A short key for grouping failures: the Spark error class in brackets if there is one, else the text."""
+        m = re.search(r"\[([A-Z][A-Z0-9_.]+)\]", self.message)
+        return m.group(1) if m else (self.message[:80] or self.reason_class or "unknown")
 
     @property
     def test_id(self) -> str:
@@ -46,7 +59,9 @@ def parse(xml_path: Path, version: str, file: str) -> list[Record]:
         ms = int(float(case.get("time") or 0) * 1000)
         status = "pass"
         reason = None
+        message = ""
         for child in case:
+            message = ((child.get("message") or "").splitlines() or [""])[0][:200]
             if child.tag == "skipped":
                 status = "skip"
             elif child.tag == "failure":
@@ -56,7 +71,9 @@ def parse(xml_path: Path, version: str, file: str) -> list[Record]:
             if status != "pass":
                 reason = (child.get("type") or None) if child.tag != "skipped" else None
                 break
-        out.append(Record(version, file, cls, case.get("name") or "", status, ms, reason))
+        out.append(
+            Record(version, file, cls, case.get("name") or "", status, ms, reason, message if status != "pass" else "")
+        )
     return out
 
 

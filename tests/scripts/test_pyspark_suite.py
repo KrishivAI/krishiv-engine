@@ -264,7 +264,7 @@ def test_dashboard_has_a_run_outcome_table_only_for_runs():
     den, remaining = compute("4.3.0", {"a.py::T::t"}, set(), set(), [], None)
     assert "Run outcomes" not in dashboard([summarize(den, remaining, [], source="collected")])
     out = dashboard([summarize(den, remaining, [], source="run")])
-    assert "| 4.3.0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |" in out
+    assert "| 4.3.0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 (none) | 0 |" in out
 
 
 def test_pytest_wrapper_exits_with_pytest_status(tmp_path):
@@ -283,3 +283,46 @@ def test_pytest_wrapper_exits_with_pytest_status(tmp_path):
     )
     assert done.returncode == 1
     assert b"1 failed" in done.stdout
+
+
+def test_runtime_skip_of_the_client_mode_is_a_conditional_skip_but_a_missing_package_is_not():
+    from pyspark_suite.junit import Record
+
+    jvm = Record("4.3.0", "a.py", "T", "t1", "skip", 0, None, "Requires JVM access")
+    pkg = Record("4.3.0", "a.py", "T", "t2", "skip", 0, None, "pandas >= 2 is not installed")
+    failed = Record("4.3.0", "a.py", "T", "t3", "fail", 0, None, "Requires JVM access")
+    assert jvm.conditional_skip
+    assert not pkg.conditional_skip
+    assert not failed.conditional_skip
+
+
+def test_failure_causes_use_the_spark_error_class_and_the_dashboard_says_no_oracle_run():
+    from pyspark_suite.junit import Record
+
+    msg = 'failed on setup with "SparkNoSuchElementException: [SQL_CONF_NOT_FOUND] The SQL config cannot be found"'
+    recs = [Record("4.3.0", "a.py", "T", f"t{i}", "error", 0, None, msg) for i in range(3)]
+    den, remaining = compute("4.3.0", {f"a.py::T::t{i}" for i in range(3)}, set(), set(), [], None)
+    s = summarize(den, remaining, recs, source="run", conditional_source="krishiv-run")
+    assert s["error_causes"] == {"SQL_CONF_NOT_FOUND": 3}
+    assert s["file_top_cause"] == {"a.py": "SQL_CONF_NOT_FOUND"}
+    out = dashboard([s])
+    assert "no oracle run" in out
+    assert "SQL_CONF_NOT_FOUND 3" in out
+    assert "(krishiv-run)" in out
+
+
+def test_collect_update_refuses_to_replace_a_run_summary(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    import pyspark_suite.__main__ as m
+
+    (tmp_path / "python/pyspark/sql/tests/connect").mkdir(parents=True)
+    monkeypatch.setattr(m, "collect_ids", lambda _: {"a.py::T::t"})
+    monkeypatch.setattr(m, "census", lambda _: ({"a.py::T::t"}, set()))
+    monkeypatch.setattr(m.mf, "load", lambda _: [])
+    monkeypatch.setattr(m, "_committed", lambda v: json.loads(json.dumps(_summary(v, "run", ["a.py::T::t"]))))
+    monkeypatch.setattr(m, "check_drift", lambda *a: type("D", (), {"drifted": False, "lines": lambda self: []})())
+    args = argparse.Namespace(version="4.3.0", checkout=tmp_path, oracle_junit=None, update=True)
+    with pytest.raises(SystemExit, match="is a run"):
+        m.cmd_collect(args)

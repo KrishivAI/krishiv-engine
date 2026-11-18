@@ -57,6 +57,10 @@ def cmd_collect(a: argparse.Namespace) -> None:
     den, remaining = compute(a.version, collected, skipped & collected, set(), entries, cond)
     print(json.dumps(den.as_dict(), indent=1))
     print("\n".join(drift.lines()))
+    prev = _committed(a.version)
+    if a.update and prev and prev.get("source") == "run":
+        # A collected summary has no pass list: replacing a run summary would turn the ratchet off silently.
+        raise SystemExit(f"collect: {a.version}'s committed summary is a run; refresh it with `run`, not --update")
     if a.update:
         print(f"wrote {write_summary(summarize(den, remaining, [], source='collected'), DATA / 'summary')}")
     elif drift.drifted:
@@ -98,7 +102,19 @@ def cmd_run(a: argparse.Namespace) -> None:
         records += run_file(a.version, a.checkout, rel, out_dir, a.server_cmd, a.port)
     # A partial (`--only`) run must not replace the committed full summary.
     target = DATA / "results" if a.only else DATA / "summary"
-    path = write_summary(summarize(den, remaining, records, source="run"), target)
+    # Runtime skips that are the client mode's (remote-only, "Requires JVM access") are decided by the client
+    # environment, not the server: they leave the denominator as conditional skips, as the oracle's would.
+    run_cond = {r.test_id for r in records if r.conditional_skip}
+    den, remaining = compute(a.version, collected, skipped, set(), entries, (cond or set()) | run_cond)
+    summary = summarize(
+        den,
+        remaining,
+        records,
+        source="run",
+        conditional_source="oracle+krishiv-run" if cond else "krishiv-run",
+        oracle_run=bool(a.oracle_junit),
+    )
+    path = write_summary(summary, target)
     print(f"wrote {path}")
 
 

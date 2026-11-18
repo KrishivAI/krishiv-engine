@@ -19,9 +19,23 @@ CLIENT_ONLY_FILES = (
 )
 
 
-def summarize(den: Denominator, remaining: set[str], records: list[Record], *, source: str) -> dict:
+def summarize(
+    den: Denominator,
+    remaining: set[str],
+    records: list[Record],
+    *,
+    source: str,
+    conditional_source: str = "none",
+    oracle_run: bool = False,
+) -> dict:
     """`source` is `static` (ast census, nothing run) or `collected` (pytest) / `run`."""
     status = {r.test_id: r.status for r in records if r.test_id in remaining}
+    # Why tests fail: the Spark error class (or the first words of the message) per non-pass record, most common first.
+    causes = Counter(r.cause for r in records if r.test_id in remaining and r.status in ("error", "fail", "timeout"))
+    file_causes: dict[str, Counter] = {}
+    for r in records:
+        if r.test_id in remaining and r.status in ("error", "fail", "timeout"):
+            file_causes.setdefault(r.file, Counter())[r.cause] += 1
     passed = {t for t, s in status.items() if s == "pass"}
     # A whole-file timeout, crash or missing XML is a `<file>` record; keep it visible, not just in `not_run`.
     # Also a collection error (pytest reports it as an error testcase that matches no census id).
@@ -49,6 +63,13 @@ def summarize(den: Denominator, remaining: set[str], records: list[Record], *, s
         "pass_rate": rate(len(passed), den.denominator),
         "client_only": len(client_only),
         "pass_rate_without_client_only": rate(len(passed - client_only), server_den),
+        # Where the conditional-skip bucket came from: `oracle` (Spark's JUnit), `krishiv-run` (the run's own runtime
+        # skips whose message is the remote-only/JVM skip) or `none`; `oracle_run` is false until step 2 of the design
+        # checklist is done, and then `denominator.oracle_env` is "not measured", not a real 0.
+        "conditional_source": conditional_source,
+        "oracle_run": oracle_run,
+        "error_causes": dict(causes.most_common(10)),
+        "file_top_cause": {f: c.most_common(1)[0][0] for f, c in sorted(file_causes.items())},
         "passed_ids": sorted(passed),  # the pass-list ratchet input
     }
 
@@ -79,7 +100,8 @@ def dashboard(summaries: list[dict]) -> str:
     for s in sorted(summaries, key=lambda x: x["version"], reverse=True):
         d = s["denominator"]
         lines.append(
-            f"| {s['version']} | {s['source']} | {d['collected']} | {d['spark_skips']} | {d['oracle_env']} | "
+            f"| {s['version']} | {s['source']} | {d['collected']} | {d['spark_skips']} | "
+            f"{d['oracle_env'] if s.get('oracle_run') else 'no oracle run'} | "
             f"{d['manifest']} | {d['denominator']} | {s['passed']} | {s['pass_rate']}% | "
             f"{s['pass_rate_without_client_only']}% | {100 * d['excluded_share']:.1f}%"
             f"{'' if d['within_cap'] else ' **OVER CAP**'} |"
@@ -91,7 +113,8 @@ def dashboard(summaries: list[dict]) -> str:
             "Run outcomes of the denominator tests (`skip` is a runtime skip under the Krishiv server; the oracle's",
             "conditional skips are the `conditional skips` count of the denominator, kept apart):",
             "",
-            "| Spark | pass | fail | error | timeout | skip | not run | conditional skips | files that failed whole |",
+            "| Spark | pass | fail | error | timeout | skip | not run | conditional skips (source) | "
+            "files that failed whole |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for s in sorted(runs, key=lambda x: x["version"], reverse=True):
@@ -99,8 +122,13 @@ def dashboard(summaries: list[dict]) -> str:
             lines.append(
                 f"| {s['version']} | {c.get('pass', 0)} | {c.get('fail', 0)} | {c.get('error', 0)} | "
                 f"{c.get('timeout', 0)} | {c.get('skip', 0)} | {s['not_run']} | "
-                f"{s['denominator'].get('conditional_skips', 0)} | {len(s['file_failures'])} |"
+                f"{s['denominator'].get('conditional_skips', 0)} ({s.get('conditional_source', 'none')}) | "
+                f"{len(s['file_failures'])} |"
             )
+    for s in sorted(runs, key=lambda x: x["version"], reverse=True):
+        if s.get("error_causes"):
+            top = ", ".join(f"{k} {v}" for k, v in list(s["error_causes"].items())[:5])
+            lines += ["", f"Most common causes of failure in {s['version']}: {top}."]
     lines += ["", "Excluded tests by reason class:", ""]
     for s in sorted(summaries, key=lambda x: x["version"], reverse=True):
         parts = ", ".join(f"{k} {v}" for k, v in s["denominator"]["by_reason"].items()) or "none"
