@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
@@ -68,6 +68,9 @@ pub struct EngineRuntime {
     query_index: AtomicU64,
     /// The number of the next session built on the runtime.
     session_seq: AtomicU64,
+    /// Set while the server drains (design P3-T066 §5.1): a query that reads more than
+    /// `system.*` is refused with `KRISHIV_SERVER_DRAINING` before it is admitted.
+    draining: AtomicBool,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
     /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
@@ -414,6 +417,7 @@ impl EngineRuntime {
             formats: Arc::new(FormatRegistry::with_defaults()),
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
+            draining: AtomicBool::new(false),
             history: Arc::new(QueryHistory::new(capacity)),
             profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
@@ -433,6 +437,26 @@ impl EngineRuntime {
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))
+    }
+
+    /// Starts or ends the drain (design P3-T066 §5.1). While draining, a new query is refused
+    /// with `KRISHIV_SERVER_DRAINING` unless it reads only `system.*`; queries already admitted
+    /// are not touched. Every surface that runs statements through a session of this runtime is
+    /// covered by it.
+    pub fn set_draining(&self, draining: bool) {
+        self.draining.store(draining, Ordering::Release);
+    }
+
+    /// Whether the drain is on ([`Self::set_draining`]).
+    #[must_use]
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    /// Cancels every running query of every session with `reason` (the drain deadline uses
+    /// [`CancelReason::Drain`]); how many ended, counting statements still being planned.
+    pub fn cancel_all(&self, reason: CancelReason) -> usize {
+        self.cancel_counted(reason, &|_, _| true).1
     }
 
     /// The memory root every session's pool and query hangs off.

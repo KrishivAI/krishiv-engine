@@ -356,3 +356,23 @@ fn delegated_sessions_show_the_delegator() {
         assert_eq!(queries, [Some(mine.to_owned())], "{mine}: own queries only");
     }
 }
+
+#[test]
+fn a_draining_runtime_refuses_new_queries_but_runs_system_tables_and_cancels_the_rest() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "alice");
+    let df = block_on(s.sql("SELECT id FROM range(0, 2000000000)")).unwrap();
+    let running = block_on(df.execute_stream()).unwrap();
+    rt.set_draining(true);
+    assert!(rt.is_draining());
+    // A new query is refused with the drain class; one that reads only `system.*` runs.
+    let df = block_on(s.sql("SELECT 1")).unwrap();
+    let err = block_on(df.collect()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING");
+    assert_eq!(texts(&s, "SELECT state FROM system.sessions").len(), 1);
+    // The deadline cancels what is left, with the drain reason.
+    assert!(rt.cancel_all(CancelReason::Drain) >= 1);
+    drop(running);
+    rt.set_draining(false);
+    assert_eq!(texts(&s, "SELECT CAST(1 AS STRING)"), ["1"]);
+}

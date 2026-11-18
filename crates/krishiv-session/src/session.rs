@@ -1714,9 +1714,13 @@ impl Session {
         env: &QueryEnv,
         exempt: bool,
     ) -> Result<crate::admission::Permit, KrishivError> {
-        // A query that reads only `system.*` is never queued behind the load it inspects.
+        // A query that reads only `system.*` is never queued behind the load it inspects, and it
+        // still runs while the server drains (design P3-T066 §5.1).
         if exempt {
             return Ok(self.exempt_permit(log_id));
+        }
+        if self.state.runtime.is_draining() {
+            return Err(krishiv_common::error::KrishivServerDraining {}.into());
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
