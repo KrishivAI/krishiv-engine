@@ -142,13 +142,21 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
+    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    FlightSql,
 }
 
 impl Surface {
     /// Every surface, in counter order.
-    pub const ALL: [Self; 4] = [Self::Connect, Self::Admin, Self::Metrics, Self::Ui];
+    pub const ALL: [Self; 5] = [
+        Self::Connect,
+        Self::Admin,
+        Self::Metrics,
+        Self::Ui,
+        Self::FlightSql,
+    ];
 
-    /// The label value: `connect`, `admin`, `metrics` or `ui`.
+    /// The label value: `connect`, `admin`, `metrics`, `ui` or `flight-sql`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -156,6 +164,7 @@ impl Surface {
             Self::Admin => "admin",
             Self::Metrics => "metrics",
             Self::Ui => "ui",
+            Self::FlightSql => "flight-sql",
         }
     }
 }
