@@ -286,8 +286,7 @@ fn a_spilling_query_with_an_unusable_spill_directory_names_the_directory() {
     assert!(err.to_string().contains("a_file"), "{err}");
 }
 
-/// PY-078: a write names the directory too, and the failure belongs to the query that had it: the
-/// same session's later query that never spills is unaffected.
+/// PY-078: a write names the directory too; a query that never spills is unaffected.
 #[test]
 fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
     let tmp = tempfile::tempdir().unwrap();
@@ -372,4 +371,22 @@ fn an_invalid_spill_setting_keeps_its_own_error_class() {
         krishiv_common::error::ErrorClass::KrishivSpillIoError,
         "{err}"
     );
+}
+
+/// PY-078 (review): the same frame run again once the directory is usable spills and succeeds.
+#[test]
+fn a_frame_run_again_after_the_spill_directory_became_usable_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("6m"));
+    let df = block_on(s.sql(QUERY)).unwrap();
+    block_on(df.collect()).unwrap_err();
+    std::fs::remove_file(&file).unwrap();
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, usize::try_from(KEYS).unwrap());
 }

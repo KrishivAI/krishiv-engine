@@ -54,6 +54,8 @@ impl SpillScopes for QuerySpill {
             })?;
             *slot = Some(manager);
         }
+        // The directory is open: a failure an earlier run of this statement recorded is stale.
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = None;
         slot.as_ref().map_or_else(
             || Err(internal("the spill directory is not open".to_owned())),
             |m| {
