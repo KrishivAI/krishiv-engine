@@ -4,7 +4,9 @@
 
 use serde_json::{Value, json};
 
-use super::{descriptor_problems, generate, openapi_problems, preview_of, revision_problem, run};
+use super::{
+    descriptor_problems, generate, openapi_problems, preview_of, revision_problem, run, schema_of,
+};
 
 /// One non-additive change: what it is and how to make it.
 type Change = (&'static str, Box<dyn Fn(&mut Value)>);
@@ -405,4 +407,13 @@ fn a_removed_field_against_the_base_fails_unless_allowed_while_preview() {
         .err()
         .unwrap_or_default();
     assert!(err.contains("no longer `preview`"), "{err}");
+}
+
+#[test]
+fn a_duration_is_a_protojson_string_not_a_missing_component() {
+    let s = schema_of("message:google.protobuf.Duration");
+    assert_eq!(s["type"], "string");
+    assert!(s.get("$ref").is_none(), "{s}");
+    let pattern = s["pattern"].as_str().unwrap();
+    assert!(pattern.ends_with("s$"), "{pattern}");
 }
