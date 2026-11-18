@@ -521,6 +521,7 @@ fn reference(
                         | AggregateFunction::PercentileApprox { .. }
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
+                        | AggregateFunction::HistogramNumeric { .. }
                         | AggregateFunction::BitmapConstructAgg
                         | AggregateFunction::BitmapOrAgg
                         | AggregateFunction::BitmapAndAgg

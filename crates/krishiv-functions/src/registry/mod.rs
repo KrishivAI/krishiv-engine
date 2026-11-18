@@ -41,6 +41,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod time;
+mod time_window;
 mod url;
 mod variant;
 mod vector;
@@ -200,6 +201,8 @@ pub enum Aggregate {
     PercentileDisc,
     /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++.
     ApproxCountDistinct,
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram`.
+    HistogramNumeric,
     /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap with the bit of
     /// each non-NULL position set; never NULL.
     BitmapConstructAgg,
@@ -305,6 +308,11 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "timestampdiff" => "timestampdiff",
         // `base[index]`: the lowering of a subscript (Spark's `ExtractValue`).
         "__subscript" => "__subscript",
+        // The candidate windows of a row (`window(ts, ...)`): the analyzer builds the call and explodes it.
+        "__time_windows" => "__time_windows",
+        // `window_time(w)`: the catalog row is an aggregate (Spark's `Unevaluable` expression), so the analyzer
+        // renames the calls to this scalar.
+        "__window_time" => "__window_time",
         // The comparison key of a collated value (ADR 0043); the analyzer and the optimizer build it.
         "__collation_key" => "__collation_key",
         "__collation_map_keys" => "__collation_map_keys",
@@ -331,7 +339,11 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
-    let arity = if name == "__indeterminate_collation" {
+    let arity = if name == "__time_windows" {
+        Arity::new([false, false, false, false, true, false, false], "4")
+    } else if name == "__window_time" {
+        Arity::new([false, true, false, false, false, false, false], "1")
+    } else if name == "__indeterminate_collation" {
         Arity::new([false, false, false, true, false, false, false], "3")
     } else if name == "__collation_array_set" {
         Arity::new([false, false, false, false, false, true, false], "5")

@@ -40,7 +40,7 @@ Paths are relative to this crate.
   `details` (cause chain ≤ 5, each error in its client-safe form, query contexts, no stack trace)
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
-  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  the analyzed plan; `persist`, `unpersist` and `get_storage_level` are the frame's own (`src/cache.rs` converts the protocol's `StorageLevel` both ways); access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
@@ -56,7 +56,13 @@ Paths are relative to this crate.
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under `connect`, as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
-  no groups) is the session key. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
+  `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
+  `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
+  `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never
+  `UserContext.user_id`; decided by `ServerAuth::impersonate` / `impersonate_signed` from the connection's own peer
+  (`ConnectAuth::with_impersonation`; without it, or with authentication off, act-as is refused); unreadable metadata,
+  or plain metadata that disagrees with the assertion beside it, is refused through `refuse_impersonation`; every
+  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs` (its `signed` module, feature `oidc`: assertions against a loopback JWK set, metadata beside them that disagrees refused). `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
@@ -82,7 +88,7 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), `checkpoint_command` (`src/execute/cache_command.rs`: `DataFrame::checkpoint` / `local_checkpoint`, the result held under a UUID in `SessionEntry`'s map and answered as `checkpoint_command_result`) and `remove_cached_remote_relation_command` (drops the id, an unknown one is fine) run; a `cached_remote_relation` is looked up at translation (`Requested::bind`, `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND` when absent) and spliced in by `Session::from_plan_over` (the new frame owns what the held frames own; a read inside a subquery expression is not replaced; a lazy checkpoint's rows are taken by the first analysis that reads it, `AnalyzePlan` included, a recorded difference from Spark pinned by `tests/cache.rs`); `persist`, `unpersist` and `checkpoint_command` need the operator floor (`Check::SideEffect`: `Operate` on `System("cache")`, `tests/auth.rs`); `SessionEntry::close` drops the held frames; other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
   store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md); `clean_cache` (PySpark's exit cleanup) and a `register_function` that ran end
@@ -137,6 +143,9 @@ Paths are relative to this crate.
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046
   §5, threat model T-A8); a session id another owner holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer
   as unknown. Groups are not in the key; the method is (a token and an OIDC subject of one name are two owners).
+  An impersonated principal's key also holds its delegator and its groups (P3-T061 A4, rule 5): alice through a
+  front end, alice herself and alice through another front end are three owners, and a changed act-as identity
+  finds no session.
 - **A session's policy is its caller's role at creation, for life**: a caller whose role differs never gets that
   session; it is closed without a tombstone and the lookup goes on as for a free id (a create builds a new one,
   a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`, an RPC that creates nothing
@@ -187,5 +196,5 @@ Paths are relative to this crate.
 0003, 0026, 0046
 
 ## Tests
-`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`

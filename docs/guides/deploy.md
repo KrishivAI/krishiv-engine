@@ -12,7 +12,7 @@ description: "The three deployment modes: embedded, single-node and distributed.
 
 ## Embedded
 
-Nothing to deploy: import the package. Krishiv 0.2 is on PyPI (`pip install "krishiv[pyarrow]"`). Supported CPUs are
+Nothing to deploy: import the package. Krishiv 0.2 is on PyPI (`pip install krishiv`). Supported CPUs are
 x86-64-v3 (Intel Haswell or AMD Zen and newer) and Armv8.2 (AWS Graviton2 or newer, Apple silicon). On an older x86-64
 CPU install `krishiv-compat` instead (the same package, imports as `krishiv`; install one of the two, not both). An
 unsupported CPU is detected at import time and reported by name instead of crashing.

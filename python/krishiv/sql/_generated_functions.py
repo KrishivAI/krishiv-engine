@@ -494,7 +494,6 @@ __all__ = [
 _ENGINE_UNSUPPORTED = (
     "collate",
     "count_min_sketch",
-    "histogram_numeric",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -1332,8 +1331,8 @@ def hex(col: ColumnOrName) -> Column:
 
 
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("histogram_numeric")
+    """Calls the registry function ``histogram_numeric``."""
+    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:

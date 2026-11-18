@@ -41,6 +41,7 @@ use krishiv_types::batch::Weights;
 
 use super::bitmap::{BitmapAcc, BitmapOp};
 use super::collect::{CollectAcc, VectorAcc};
+use super::histogram::HistAcc;
 use super::hll::{self, HllAcc};
 use super::hll_sketch::{HllSketchAcc, HllSketchOp};
 use super::listagg::ListAggAcc;
@@ -317,6 +318,8 @@ enum Kind {
     Approx(GkAcc),
     /// `approx_count_distinct`: HyperLogLog++ registers (see `hll`).
     Hll(HllAcc),
+    /// `histogram_numeric`: Spark's numeric histograms (see `histogram`).
+    Hist(HistAcc),
     /// The bitmap aggregates: one 4,096-byte buffer per group (see `bitmap`).
     Bitmap(BitmapAcc),
     /// `hll_sketch_agg` and `hll_union_agg`: DataSketches HLL sketches per group (see `hll_sketch`).
@@ -494,6 +497,7 @@ impl Accumulator {
             }
             (F::PercentileApprox { .. }, _) => Kind::Approx(GkAcc::default()),
             (F::ApproxCountDistinct { p }, _) => Kind::Hll(HllAcc::new(*p)),
+            (F::HistogramNumeric { nb }, _) => Kind::Hist(HistAcc::new(*nb)),
             (F::BitmapConstructAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Construct)),
             (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
             (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
@@ -647,6 +651,7 @@ impl Accumulator {
             Kind::Exact(_)
             | Kind::Approx(_)
             | Kind::Hll(_)
+            | Kind::Hist(_)
             | Kind::Bitmap(_)
             | Kind::HllSketch(_)
             | Kind::Udf(_) => Vec::new(),
@@ -663,6 +668,7 @@ impl Accumulator {
             Kind::Exact(e) => e.size(),
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
+            Kind::Hist(h) => h.size(),
             Kind::Bitmap(b) => b.size(),
             Kind::HllSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
@@ -751,6 +757,7 @@ impl Accumulator {
             Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
+            Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new),
             _ => 0,
@@ -824,6 +831,7 @@ impl Accumulator {
             Kind::Exact(e) => e.resize(n),
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
+            Kind::Hist(h) => h.resize(n),
             Kind::Bitmap(b) => b.resize(n),
             Kind::HllSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
@@ -908,6 +916,7 @@ impl Accumulator {
             Kind::Exact(e) => e.reserve(new),
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
+            Kind::Hist(h) => h.reserve(new),
             Kind::Bitmap(b) => b.reserve(new),
             Kind::HllSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
@@ -1091,6 +1100,7 @@ impl Accumulator {
             | Kind::MinMaxStruct { .. }
             | Kind::Collect(_)
             | Kind::Approx(_)
+            | Kind::Hist(_)
             | Kind::Hll(_)
             | Kind::Bitmap(_)
             | Kind::HllSketch(_) => 1,
@@ -1146,6 +1156,7 @@ mod struct_extremum_tests;
 
 mod results;
 use results::*;
+pub(crate) use results::{decimal_unscaled_in, narrow};
 
 mod output;
 

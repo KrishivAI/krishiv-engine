@@ -4,6 +4,7 @@
 //! (P3-T026; commits are T027).
 
 use std::fmt;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::TryStreamExt;
@@ -13,6 +14,7 @@ use iceberg::table::Table;
 use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
+use super::commit::CommitTable;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
@@ -40,6 +42,9 @@ pub struct IcebergTable {
     pub(super) max_metadata_bytes: u64,
     /// `krishiv.iceberg.manifestCache.bytes` (0: no manifest cache).
     pub(super) manifest_cache_bytes: u64,
+    /// The catalog's commit endpoint, when the table was loaded through one
+    /// that can commit: providers opened over it accept appends.
+    pub(super) committer: Option<Arc<dyn CommitTable>>,
 }
 
 impl fmt::Debug for IcebergTable {
@@ -118,7 +123,21 @@ impl IcebergTable {
             registered,
             max_metadata_bytes,
             manifest_cache_bytes,
+            committer: None,
         })
+    }
+
+    /// The same table committing through `committer`: providers opened over
+    /// it declare `BATCH_WRITE` and append ([`super::sink`]). Crate-private
+    /// until the catalog clients (PR-17) build a `CommitTable`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "PR-17's catalog clients attach their committer")
+    )]
+    #[must_use]
+    pub(crate) fn with_committer(mut self, committer: Arc<dyn CommitTable>) -> Self {
+        self.committer = Some(committer);
+        self
     }
 
     /// The current schema as Spark's Iceberg integration shows it.

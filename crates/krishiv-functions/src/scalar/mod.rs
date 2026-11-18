@@ -60,6 +60,7 @@ mod session;
 mod shuffle;
 mod string;
 mod r#struct;
+mod time_window;
 mod udf;
 mod url;
 mod variant;
@@ -533,6 +534,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (xml::NAMES, xml::bind),
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
+    (time_window::NAMES, time_window::bind),
     (collation::NAMES, collation::bind),
     (array_edit::NAMES, array_edit::bind),
     (array_scan::NAMES, array_scan::bind),

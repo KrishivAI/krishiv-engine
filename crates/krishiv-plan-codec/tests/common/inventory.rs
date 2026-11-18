@@ -1352,6 +1352,26 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "aggregate_histogram_numeric",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::HistogramNumeric { nb: 5 },
+                        args: vec![0],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::Int32,
+                        name: "x".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
             "aggregate_bitmaps",
             PhysNode::Aggregate {
                 input: boxed(scan()),
@@ -1995,6 +2015,27 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
                         output: AttrId(10),
                     },
                 ],
+                window: None,
+            },
+        ),
+        (
+            "python_window",
+            PhysNode::PythonAggregate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                keys: vec![0],
+                key_values: Vec::new(),
+                calls: vec![
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggArrow),
+                        output: AttrId(9),
+                    },
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggPandas),
+                        output: AttrId(10),
+                    },
+                ],
+                window: Some(vec![true, false]),
             },
         ),
         (

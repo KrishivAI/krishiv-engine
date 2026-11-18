@@ -652,7 +652,7 @@ fn lower_sql(
         return Err(unsupported("SQL text without a SQL front end", origin));
     };
     let source = SourceId(u32::try_from(b.sql.len()).unwrap_or(u32::MAX));
-    let lowered = Arc::clone(frontend.lower(query, source)?.root());
+    let lowered = super::time_window::rewrite(Arc::clone(frontend.lower(query, source)?.root()))?;
     // SQL text follows the session's CTE precedence like the plan around it.
     let policy = super::legacy::CtePolicy {
         precedence: ctx.conf.cte_precedence,

@@ -323,6 +323,17 @@ message PythonAggregateNode {
   repeated uint64 keys = 3;
   repeated PythonCall calls = 4;
   repeated uint64 key_values = 5;
+  // feature: python_udf_windows
+  PythonWindow window = 6;
+}
+
+// feature: python_udf_windows
+// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+// `keys` are the window's partitioning, the output every input row with one
+// value per call; per call, whether its frame is bounded (its first two
+// arguments are each row's frame start and end).
+message PythonWindow {
+  repeated bool bounded = 1;
 }
 
 // feature: python_udf_relations
@@ -804,21 +815,23 @@ enum AggregateFunction {
   // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
   // feature: collated_min_max
   AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
+  // feature: histogram_numeric
+  AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC = 49;
   // `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
   // feature: bitmap_aggregates
-  AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG = 49;
+  AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG = 50;
   // `bitmap_or_agg(bitmap)`.
   // feature: bitmap_aggregates
-  AGGREGATE_FUNCTION_BITMAP_OR_AGG = 50;
+  AGGREGATE_FUNCTION_BITMAP_OR_AGG = 51;
   // `bitmap_and_agg(bitmap)`.
   // feature: bitmap_aggregates
-  AGGREGATE_FUNCTION_BITMAP_AND_AGG = 51;
+  AGGREGATE_FUNCTION_BITMAP_AND_AGG = 52;
   // `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
   // feature: hll_sketch_aggregates
-  AGGREGATE_FUNCTION_HLL_SKETCH_AGG = 52;
+  AGGREGATE_FUNCTION_HLL_SKETCH_AGG = 53;
   // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
   // feature: hll_sketch_aggregates
-  AGGREGATE_FUNCTION_HLL_UNION_AGG = 53;
+  AGGREGATE_FUNCTION_HLL_UNION_AGG = 54;
 }
 
 enum AggregateInput {
@@ -873,6 +886,9 @@ message AggregateExpr {
   bytes result_element = 17;
   // feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
   UdafCall udaf = 18;
+  // feature: histogram_numeric (`histogram_numeric` only: the folded number of
+  // bins, at least 2).
+  int32 histogram_bins = 19;
 }
 
 // The call of a session aggregate UDF: its implementation by name and

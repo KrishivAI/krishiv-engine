@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT tuple_intersection_double(a) FROM t16")
+df = spark.sql("SELECT tuple_intersection_theta_double(a) FROM t16")
 df = df.select(F.dense_rank("a"), F.col("b"))
 df = spark.sql("SELECT find_in_set(a) FROM t16")
 df = spark.sql("SELECT arrays_overlap(a) FROM t16")
-df = spark.sql("SELECT to_varchar(a) FROM t16")
+df = spark.sql("SELECT to_unix_timestamp(a) FROM t16")

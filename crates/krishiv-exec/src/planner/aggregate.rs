@@ -673,6 +673,15 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
                 vec![Arc::clone(&f.args[0])],
             )
         }
+        "histogram_numeric" if f.args.len() == 2 => {
+            let ExprNode::Literal(krishiv_plan::Literal::Integer(nb)) = &f.args[1].node else {
+                return None;
+            };
+            (
+                AggregateFunction::HistogramNumeric { nb: *nb },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
         "approx_count_distinct" if f.args.len() == 2 => {
             let rsd = double_arg(&f.args[1])?;
             let p = crate::aggregate::precision_for(rsd)?;

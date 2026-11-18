@@ -265,12 +265,20 @@ fn is_syntax(name: &str) -> bool {
 
 /// Names implemented outside the function registry: the planner's built-in operators
 /// (`krishiv_plan::Builtin`, e.g. `concat`, `div`), the grouping functions the analyzer lowers,
-/// the table functions `range` and `sql_keywords`, and `collate`, which the SQL lowering handles.
+/// the table functions `range` and `sql_keywords`, `collate`, which the SQL lowering handles, and `session_window` and
+/// `window_time`, which the analyzer rewrites (`analyzer/time_window.rs`).
 fn plan_owned(name: &str) -> bool {
     krishiv_plan::Builtin::from_name(name).is_some()
         || matches!(
             name.to_ascii_lowercase().as_str(),
-            "grouping" | "grouping_id" | "range" | "sql_keywords" | "collate"
+            "grouping"
+                | "grouping_id"
+                | "range"
+                | "sql_keywords"
+                | "collate"
+                | "window"
+                | "session_window"
+                | "window_time"
         )
 }
 

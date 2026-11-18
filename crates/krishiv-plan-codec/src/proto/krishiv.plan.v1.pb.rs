@@ -407,6 +407,19 @@ pub struct PythonAggregateNode {
     pub calls: ::prost::alloc::vec::Vec<PythonCall>,
     #[prost(uint64, repeated, tag = "5")]
     pub key_values: ::prost::alloc::vec::Vec<u64>,
+    /// feature: python_udf_windows
+    #[prost(message, optional, tag = "6")]
+    pub window: ::core::option::Option<PythonWindow>,
+}
+/// feature: python_udf_windows
+/// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+/// `keys` are the window's partitioning, the output every input row with one
+/// value per call; per call, whether its frame is bounded (its first two
+/// arguments are each row's frame start and end).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonWindow {
+    #[prost(bool, repeated, tag = "1")]
+    pub bounded: ::prost::alloc::vec::Vec<bool>,
 }
 /// feature: python_udf_relations
 /// The Python UDF of a relation node: by name and version, the columns of its
@@ -959,6 +972,10 @@ pub struct AggregateExpr {
     /// feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
     #[prost(message, optional, boxed, tag = "18")]
     pub udaf: ::core::option::Option<::prost::alloc::boxed::Box<UdafCall>>,
+    /// feature: histogram_numeric (`histogram_numeric` only: the folded number of
+    /// bins, at least 2).
+    #[prost(int32, tag = "19")]
+    pub histogram_bins: i32,
 }
 /// The call of a session aggregate UDF: its implementation by name and
 /// version, and the columns the planner fixed for it. A worker must hold
@@ -2293,21 +2310,23 @@ pub enum AggregateFunction {
     /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
     /// feature: collated_min_max
     MinByKeyFirst = 48,
+    /// feature: histogram_numeric
+    HistogramNumeric = 49,
     /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
     /// feature: bitmap_aggregates
-    BitmapConstructAgg = 49,
+    BitmapConstructAgg = 50,
     /// `bitmap_or_agg(bitmap)`.
     /// feature: bitmap_aggregates
-    BitmapOrAgg = 50,
+    BitmapOrAgg = 51,
     /// `bitmap_and_agg(bitmap)`.
     /// feature: bitmap_aggregates
-    BitmapAndAgg = 51,
+    BitmapAndAgg = 52,
     /// `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
     /// feature: hll_sketch_aggregates
-    HllSketchAgg = 52,
+    HllSketchAgg = 53,
     /// `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
     /// feature: hll_sketch_aggregates
-    HllUnionAgg = 53,
+    HllUnionAgg = 54,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2365,6 +2384,7 @@ impl AggregateFunction {
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
             Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
             Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
+            Self::HistogramNumeric => "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC",
             Self::BitmapConstructAgg => "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG",
             Self::BitmapOrAgg => "AGGREGATE_FUNCTION_BITMAP_OR_AGG",
             Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
@@ -2424,6 +2444,7 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
             "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
             "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
+            "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC" => Some(Self::HistogramNumeric),
             "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG" => Some(Self::BitmapConstructAgg),
             "AGGREGATE_FUNCTION_BITMAP_OR_AGG" => Some(Self::BitmapOrAgg),
             "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
