@@ -518,6 +518,13 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
             && t.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
+    if revision.starts_with('~') {
+        return Err(unsupported(format!(
+            "{scheme} revisions such as `@{revision}` (the converted-Parquet branch is not readable; \
+             name a file of the dataset's own branch, tag or commit: \
+             hf://datasets/<org>/<name>[@revision]/<path to a file>)"
+        )));
+    }
     if !plain(org) || !plain(name) || !plain(revision) {
         return Err(unsupported(format!(
             "{scheme} paths other than hf://datasets/<org>/<name>[@revision]/<path>"
@@ -541,6 +548,34 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
         store_id: StoreId::new(format!("hf://{authority}")),
         display,
     })
+}
+
+/// Refuses an `hf://` read path that does not name one file: the Hugging Face store has no
+/// listing, so a directory (an empty path or one ending in `/`) or a glob cannot be expanded.
+/// Other schemes pass unchanged.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming how to write the path, for an `hf://` directory or glob.
+pub fn check_hf_file_path(path: &str) -> Result<()> {
+    let Some(rest) = path
+        .split_once("://")
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("hf"))
+        .map(|(_, rest)| rest)
+    else {
+        return Ok(());
+    };
+    let is_glob = rest.contains(['*', '?', '[', '{']);
+    // `datasets/<org>/<name>[@rev]/<path>`: no path, or a path ending in `/`, is a directory.
+    let is_dir = rest.ends_with('/') || rest.splitn(4, '/').nth(3).is_none_or(str::is_empty);
+    if is_glob || is_dir {
+        let what = if is_glob { "a glob" } else { "a directory" };
+        return Err(unsupported(format!(
+            "hf:// reading {what} ({path}): hf:// reads only named files and has no listing; \
+             name each file, e.g. hf://datasets/<org>/<name>[@revision]/data/train.parquet, \
+             or pass several paths"
+        )));
+    }
+    Ok(())
 }
 
 /// Builds cloud object stores from the session configuration, one per
