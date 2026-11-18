@@ -5,7 +5,10 @@ PY-046, PY-050, PY-051), never a bare ``AttributeError`` or ``ModuleNotFoundErro
 from __future__ import annotations
 
 import importlib
+import inspect
+import pkgutil
 import warnings
+from typing import Any
 
 import pytest
 
@@ -50,6 +53,27 @@ def test_importing_an_absent_module_names_the_feature(module: str, needle: str) 
     _refused(info, needle)
 
 
+@pytest.mark.parametrize("module", ["krishiv.pandas", "krishiv.ml"])
+def test_an_absent_module_is_also_an_import_error(module: str) -> None:
+    # `try: import x except ImportError` and `pkgutil.walk_packages` must treat it as absent.
+    with pytest.raises(ImportError):
+        importlib.import_module(module)
+    walked = [m.name for m in pkgutil.walk_packages(krishiv.__path__, "krishiv.")]
+    assert "krishiv.sql" in walked
+
+
+def test_absent_attributes_are_also_attribute_errors(spark: krishiv.SparkSession) -> None:
+    # `getattr` with a default, `hasattr` and `inspect.getmembers` see a missing name, as Spark's own
+    # `PySparkAttributeError` gives them.
+    df = spark.range(1)
+    assert getattr(spark, "sparkContext", None) is None
+    assert not hasattr(df, "rdd")
+    assert "rdd" not in dict(inspect.getmembers(df))
+    assert "sparkContext" not in dict(inspect.getmembers(spark))
+    with pytest.raises(AttributeError):
+        _ = spark.sparkContext
+
+
 def test_hive_and_jdbc_names_are_refused(spark: krishiv.SparkSession) -> None:
     with pytest.raises(UnsupportedOperationException) as info:
         krishiv.SparkSession.builder.enableHiveSupport()
@@ -86,6 +110,46 @@ def test_cluster_settings_warn_and_still_start() -> None:
     assert any(m.startswith("spark.executor.instances=4 has no effect") for m in messages)
     assert any(m.startswith("spark.submit.deployMode=cluster has no effect") for m in messages)
     assert session.range(2).count() == 2
+
+
+@pytest.mark.parametrize(
+    ("setter", "expected"),
+    [
+        (lambda b: b.config("spark.driver.memory", "4g"), "spark.driver.memory=4g"),
+        (lambda b: b.config("spark.dynamicAllocation.enabled", "true"), "spark.dynamicAllocation.enabled=true"),
+        (lambda b: b.master("k8s://https://host:6443"), "spark.master=k8s://https://host:6443"),
+        (lambda b: b.config(map={"spark.executor.cores": 2}), "spark.executor.cores=2"),
+    ],
+)
+def test_each_cluster_setting_form_warns_at_the_users_line(setter: Any, expected: str) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        setter(krishiv.SparkSession.builder)
+    ours = [w for w in caught if str(w.message).startswith(expected)]
+    assert len(ours) == 1
+    assert ours[0].filename == __file__
+
+
+def test_conf_set_on_a_running_session_warns_too(spark: krishiv.SparkSession) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        spark.conf.set("spark.executor.memory", "8g")
+    ours = [w for w in caught if str(w.message).startswith("spark.executor.memory=8g has no effect")]
+    assert len(ours) == 1
+    assert ours[0].filename == __file__
+
+
+def test_a_builder_option_on_the_active_session_warns_once() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        krishiv.SparkSession.builder.config("spark.executor.instances", "2").getOrCreate()
+    assert len([w for w in caught if str(w.message).startswith("spark.executor.instances=2")]) == 1
+
+
+def test_format_jdbc_load_is_refused_not_a_path_type_error(spark: krishiv.SparkSession) -> None:
+    with pytest.raises(UnsupportedOperationException) as info:
+        spark.read.format("jdbc").load()
+    _refused(info, "jdbc")
 
 
 def test_local_settings_do_not_warn() -> None:

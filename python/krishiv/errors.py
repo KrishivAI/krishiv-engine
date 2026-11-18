@@ -489,6 +489,40 @@ def not_implemented(feature: str) -> PySparkNotImplementedError:
     return PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 
 
+class UnsupportedFeatureAttributeError(UnsupportedOperationException, AttributeError):
+    """``KRISHIV_UNSUPPORTED_FEATURE`` raised where Spark has an attribute Krishiv lacks. It is also an
+    ``AttributeError``, so ``getattr(obj, name, default)``, ``hasattr`` and ``inspect.getmembers`` treat the
+    name as absent, as they do for a plain missing attribute."""
+
+
+class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError):
+    """``KRISHIV_UNSUPPORTED_FEATURE`` raised by importing a module Krishiv lacks. It is also an
+    ``ImportError``, so ``try: import x except ImportError`` and ``pkgutil.walk_packages`` treat the
+    module as absent."""
+
+
+def _unsupported_args(feature: str) -> dict[str, Any]:
+    return {
+        "errorClass": "KRISHIV_UNSUPPORTED_FEATURE",
+        "messageParameters": {"feature": feature},
+        "sqlState": "0A000",
+    }
+
+
+def _unsupported_text(feature: str) -> str:
+    return f"[KRISHIV_UNSUPPORTED_FEATURE] The feature {feature} is not supported by Krishiv yet. SQLSTATE: 0A000"
+
+
+def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError:
+    """:func:`unsupported_feature` for an attribute or property (also an ``AttributeError``)."""
+    return UnsupportedFeatureAttributeError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
+def unsupported_module(feature: str) -> UnsupportedFeatureImportError:
+    """:func:`unsupported_feature` for a module (also an ``ImportError``)."""
+    return UnsupportedFeatureImportError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
 def unsupported_feature(feature: str) -> UnsupportedOperationException:
     """The engine's unsupported-feature error, as the engine itself raises it
     (``KRISHIV_UNSUPPORTED_FEATURE``, SQLSTATE ``0A000``): for a PySpark method

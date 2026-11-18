@@ -210,10 +210,14 @@ class SparkRuntimeException(PySparkException)
 class SparkUpgradeException(PySparkException)
 class SqlQueryContext(QueryContext)
 class UnknownException(PySparkException)
+class UnsupportedFeatureAttributeError(UnsupportedOperationException, AttributeError)
+class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError)
 class UnsupportedOperationException(PySparkException)
 def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
 def not_implemented(feature: str) -> PySparkNotImplementedError
+def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
+def unsupported_module(feature: str) -> UnsupportedFeatureImportError
 ## sql/__init__.py
 __all__
 __all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Observation', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
@@ -1253,6 +1257,7 @@ RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
 RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
 RuntimeConfig.def unset(self, key: str) -> None
 class RuntimeConfig()
+def warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None
 ## sql/dataframe.py
 ColumnOrName
 ColumnsOrNames
@@ -1260,7 +1265,6 @@ DataFrame.@property def columns(self) -> list[str]
 DataFrame.@property def dtypes(self) -> list[tuple[str, str]]
 DataFrame.@property def is_cached(self) -> bool
 DataFrame.@property def na(self) -> DataFrameNaFunctions
-DataFrame.@property def rdd(self) -> Any
 DataFrame.@property def schema(self) -> StructType
 DataFrame.@property def sparkSession(self) -> SparkSession
 DataFrame.@property def stat(self) -> DataFrameStatFunctions

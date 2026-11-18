@@ -8,6 +8,17 @@ description: "`RuntimeConfig`: `spark.conf`."
 
 `RuntimeConfig`: `spark.conf`.
 
+## Functions
+
+### `warn_if_cluster_setting`
+
+```python
+def warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None
+```
+
+Warns that `key=value` has no effect when it chooses a cluster deployment. `stacklevel` counts
+from the caller of this function (1 is the caller), so the warning points at the user's line.
+
 ## `RuntimeConfig`
 
 ```python
