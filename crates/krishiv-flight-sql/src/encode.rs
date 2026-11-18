@@ -140,20 +140,20 @@ struct TooLarge;
 /// `limit` on its own refuses the batch (design §4.2 m4, review m8; review of 9b66ee1fc,
 /// finding 2: a row is measured by what it covers, its list and map elements included).
 fn cuts(batch: &RecordBatch, limit: usize) -> Result<VecDeque<RecordBatch>, TooLarge> {
-    let (sizes, shared) = row_sizes(batch);
-    let total = sizes.iter().fold(shared, |a, b| a.saturating_add(*b));
+    let sizes = row_sizes(batch);
+    let total = sizes.iter().fold(0usize, |a, b| a.saturating_add(*b));
     if total <= limit {
         return Ok(VecDeque::from([batch.clone()]));
     }
     let mut out = VecDeque::new();
-    let (mut start, mut held) = (0, shared);
+    let (mut start, mut held) = (0, 0usize);
     for (row, size) in sizes.iter().enumerate() {
-        if shared.saturating_add(*size) > limit {
+        if *size > limit {
             return Err(TooLarge);
         }
         if row > start && held.saturating_add(*size) > limit {
             out.push_back(batch.slice(start, row - start));
-            (start, held) = (row, shared);
+            (start, held) = (row, 0);
         }
         held = held.saturating_add(*size);
     }
@@ -161,19 +161,20 @@ fn cuts(batch: &RecordBatch, limit: usize) -> Result<VecDeque<RecordBatch>, TooL
     Ok(out)
 }
 
-/// The bytes each row of `batch` covers, and the bytes every cut carries whatever its rows (the
-/// dictionaries' values, counted once). One pass over offsets, no slice per row.
-fn row_sizes(batch: &RecordBatch) -> (Vec<usize>, usize) {
+/// The bytes each row of `batch` covers as the encoder sends it. One pass over offsets, no slice
+/// per row. Nothing is shared between rows: the encoder hydrates dictionaries
+/// ([`FlightDataEncoderBuilder`]'s default `DictionaryHandling::Hydrate`), so a dictionary row
+/// goes out as its value.
+fn row_sizes(batch: &RecordBatch) -> Vec<usize> {
     let mut sizes = vec![0usize; batch.num_rows()];
-    let mut shared = 0usize;
     for column in batch.columns() {
-        add_sizes(column.as_ref(), &mut sizes, &mut shared);
+        add_sizes(column.as_ref(), &mut sizes);
     }
-    (sizes, shared)
+    sizes
 }
 
 /// Adds to `out[i]` the bytes row `i` of `array` covers (`out.len() == array.len()`).
-fn add_sizes(array: &dyn Array, out: &mut [usize], shared: &mut usize) {
+fn add_sizes(array: &dyn Array, out: &mut [usize]) {
     use arrow_array::cast::AsArray;
     use arrow_schema::DataType as D;
     // The validity bitmap is an eighth of a byte a row: rounded into the offsets/values below.
@@ -184,19 +185,19 @@ fn add_sizes(array: &dyn Array, out: &mut [usize], shared: &mut usize) {
         D::LargeBinary => offsets_bytes(array.as_binary::<i64>().value_offsets(), 8, out),
         D::List(_) => {
             let list = array.as_list::<i32>();
-            nested(list.value_offsets(), list.values().as_ref(), 4, out, shared);
+            nested(list.value_offsets(), list.values().as_ref(), 4, out);
         }
         D::LargeList(_) => {
             let list = array.as_list::<i64>();
-            nested(list.value_offsets(), list.values().as_ref(), 8, out, shared);
+            nested(list.value_offsets(), list.values().as_ref(), 8, out);
         }
         D::Map(_, _) => {
             let map = array.as_map();
-            nested(map.value_offsets(), map.entries(), 4, out, shared);
+            nested(map.value_offsets(), map.entries(), 4, out);
         }
         D::Struct(_) => {
             for child in array.as_struct().columns() {
-                add_sizes(child.as_ref(), out, shared);
+                add_sizes(child.as_ref(), out);
             }
         }
         D::FixedSizeList(_, n) => {
@@ -208,16 +209,25 @@ fn add_sizes(array: &dyn Array, out: &mut [usize], shared: &mut usize) {
             // A sliced FixedSizeList slices its values too (arrow-array 60): row 0 starts at 0.
             let values = list.values().slice(0, out.len().saturating_mul(n));
             let mut inner = vec![0usize; values.len()];
-            add_sizes(values.as_ref(), &mut inner, shared);
+            add_sizes(values.as_ref(), &mut inner);
             for (row, size) in out.iter_mut().enumerate() {
                 let elements = &inner[row * n..(row + 1) * n];
                 *size = elements.iter().fold(*size, |a, b| a.saturating_add(*b));
             }
         }
         D::Dictionary(_, _) => {
+            // Hydrated on the wire: a row is its value's bytes (each value measured once).
             let dict = array.as_any_dictionary();
-            add_sizes(dict.keys(), out, shared);
-            *shared = shared.saturating_add(dict.values().get_array_memory_size());
+            let values = dict.values();
+            let mut value_sizes = vec![0usize; values.len()];
+            add_sizes(values.as_ref(), &mut value_sizes);
+            let keys = dict.keys();
+            for (row, (size, key)) in out.iter_mut().zip(dict.normalized_keys()).enumerate() {
+                if keys.is_valid(row) {
+                    let value = value_sizes.get(key).copied().unwrap_or(usize::MAX);
+                    *size = size.saturating_add(value);
+                }
+            }
         }
         D::Null => {}
         D::Boolean => out.iter_mut().for_each(|s| *s = s.saturating_add(1)),
@@ -250,7 +260,6 @@ fn nested<O: arrow_array::OffsetSizeTrait>(
     child: &dyn Array,
     width: usize,
     out: &mut [usize],
-    shared: &mut usize,
 ) {
     let (Some(first), Some(last)) = (offsets.first(), offsets.last()) else {
         return;
@@ -258,7 +267,7 @@ fn nested<O: arrow_array::OffsetSizeTrait>(
     let (first, last) = (first.as_usize(), last.as_usize());
     let covered = child.slice(first, last.saturating_sub(first));
     let mut inner = vec![0usize; covered.len()];
-    add_sizes(covered.as_ref(), &mut inner, shared);
+    add_sizes(covered.as_ref(), &mut inner);
     // Prefix sums: a row's child bytes in one subtraction.
     let mut prefix = Vec::with_capacity(inner.len() + 1);
     prefix.push(0usize);
@@ -268,8 +277,8 @@ fn nested<O: arrow_array::OffsetSizeTrait>(
     }
     for (row, size) in out.iter_mut().enumerate() {
         let (a, b) = (
-            offsets[row].as_usize() - first,
-            offsets[row + 1].as_usize() - first,
+            offsets[row].as_usize().saturating_sub(first),
+            offsets[row + 1].as_usize().saturating_sub(first),
         );
         let elements = prefix[b].saturating_sub(prefix[a]);
         *size = size.saturating_add(width).saturating_add(elements);
@@ -477,8 +486,7 @@ mod tests {
 
     /// The bytes of a cut as `cuts` measures them.
     fn measured(c: &RecordBatch) -> usize {
-        let (sizes, shared) = row_sizes(c);
-        sizes.iter().sum::<usize>() + shared
+        row_sizes(c).iter().sum::<usize>()
     }
 
     /// Ten 30 KB rows ahead of 990 small ones: each cut holds at most the limit, and every row
@@ -613,20 +621,23 @@ mod tests {
             true,
         )]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(list)]).expect("batch");
-        let (sizes, _) = row_sizes(&batch);
+        let sizes = row_sizes(&batch);
         assert!(sizes.iter().all(|s| *s == 32));
-        let (tail, _) = row_sizes(&batch.slice(990, 10));
+        let tail = row_sizes(&batch.slice(990, 10));
         assert_eq!(tail, vec![32; 10]);
         let all = cuts(&batch, 3_200).ok().expect("cut");
         assert_eq!(all.len(), 10);
     }
 
-    /// A dictionary's values count once per cut, not once per row.
-    #[test]
-    fn dictionary_values_count_once_per_cut() {
+    /// A dictionary column goes out hydrated (the encoder's default), so a row is measured as its
+    /// value: 20,000 keys over four 1 KiB strings are cut into pieces of at most the cut size on
+    /// the wire, not into one ~20 MB message (review of 40489d958, finding 3).
+    #[tokio::test]
+    async fn a_dictionary_column_is_cut_by_its_hydrated_rows() {
         use arrow_array::{DictionaryArray, types::Int32Type};
-        let values: Vec<String> = (0..100).map(|i| format!("{i:0100}")).collect();
-        let keys = arrow_array::Int32Array::from_iter_values((0..10_000).map(|i| i % 100));
+        let values: Vec<String> = (0..4).map(|i| format!("{i:01024}")).collect();
+        let keys =
+            arrow_array::Int32Array::from_iter((0..20_000).map(|i| (i % 10 != 0).then_some(i % 4)));
         let dict = DictionaryArray::<Int32Type>::try_new(
             keys,
             Arc::new(StringArray::from_iter_values(values)),
@@ -635,13 +646,42 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
             dict.data_type().clone(),
-            false,
+            true,
         )]));
-        let b = RecordBatch::try_new(schema, vec![Arc::new(dict)]).expect("batch");
-        let (sizes, shared) = row_sizes(&b);
-        assert!(sizes.iter().all(|s| *s == 4), "a row is its key");
-        assert!(shared >= 100 * 100);
-        assert_eq!(cuts(&b, 1 << 20).ok().expect("fits").len(), 1);
+        let b = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(dict)]).expect("batch");
+        let sizes = row_sizes(&b);
+        assert_eq!(
+            sizes[1],
+            4 + 1024,
+            "a valid row is its value's offset and bytes"
+        );
+        assert_eq!(sizes[0], 0, "a null key covers no value");
+        let p = pool(None);
+        let limits = EncodeLimits {
+            batch_bytes: 256 << 10,
+            // Larger than any cut: each cut is one message, so its size is the cut's.
+            data_bytes: 64 << 20,
+        };
+        let out = encode_results(schema, source(vec![Ok(b)]), consumer(&p), limits);
+        let pieces: Vec<FlightData> = out.map(|p| p.expect("piece")).collect().await;
+        assert!(
+            pieces.len() > 20,
+            "cut into many messages: {}",
+            pieces.len()
+        );
+        for piece in &pieces {
+            assert!(
+                piece.data_body.len() <= 2 * limits.batch_bytes,
+                "message of {} bytes",
+                piece.data_body.len()
+            );
+        }
+        let got = decode(stream::iter(pieces.into_iter().map(Ok)).boxed())
+            .await
+            .expect("decoded");
+        assert_eq!(rows(&got), 20_000);
+        let nulls: usize = got.iter().map(|b| b.column(0).null_count()).sum();
+        assert_eq!(nulls, 2_000);
     }
 
     #[tokio::test]

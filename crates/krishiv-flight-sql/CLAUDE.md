@@ -16,7 +16,7 @@ Paths are relative to this crate.
 - `src/encode.rs` `encode_results` (design §4.2): the `DoGet` pull stream, arrow-flight `FlightDataEncoder` over the
   query's batches; each batch reserved as consumer `flight_sql_responses` until the encoder asks for the next (so
   only after tonic took its last piece); cut by rows past 4 MiB, each row measured by what it covers (`row_sizes`:
-  offsets, list/map children, struct fields, dictionary values once per cut), a row over it alone `KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE`; pieces of 2 MiB; errors end it with `flight_status`
+  offsets, list/map children, struct fields, dictionaries as their hydrated values, as the encoder sends them), a row over it alone `KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE`; pieces of 2 MiB; errors end it with `flight_status`
 - `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
   another owner's id answers as unknown; `HandleLimits` (TTL from the end of the last operation, never while
   `begin`..`end` holds one live; count per session and per owner, bytes per owner:
