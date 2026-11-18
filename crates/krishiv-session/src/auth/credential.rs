@@ -14,6 +14,8 @@ use std::time::SystemTime;
 
 use krishiv_common::secret::SecretString;
 
+pub use super::jose::ExchangeClaims;
+
 /// What kind of user token a session presented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -33,21 +35,6 @@ impl CredentialKind {
             Self::SignedAssertion => "a signed assertion",
         }
     }
-}
-
-/// The validated claims a token exchange depends on (§3.3, review-1 pass 2 N4). `None` is an
-/// absent claim, which is not the same as an empty one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ExchangeClaims {
-    /// The `aud` values (a string claim is one value).
-    pub audiences: Vec<String>,
-    /// The `scope` claim (space-separated, as issued).
-    pub scope: Option<String>,
-    /// The `scp` claim (a string is one value).
-    pub scp: Option<Vec<String>>,
-    /// The configured groups/roles claim.
-    pub groups: Option<Vec<String>>,
 }
 
 impl ExchangeClaims {

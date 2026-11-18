@@ -341,7 +341,7 @@ pub(crate) struct Identity {
     /// signed act-as assertions (P3-T061 I3).
     pub(crate) act: Option<Actor>,
     /// The claims a delegated catalog's token exchange depends on (P3-T067 §3.3).
-    pub(crate) claims: super::ExchangeClaims,
+    pub(crate) claims: ExchangeClaims,
     /// `exp`, whole seconds since the Unix epoch.
     pub(crate) exp: u64,
 }
@@ -455,7 +455,7 @@ pub(crate) fn check_claims(
             _ => None,
         }
     };
-    let exchange = super::ExchangeClaims {
+    let exchange = ExchangeClaims {
         // The string values of `aud`: `audience_ok` above needs only one of them.
         audiences: match claims.0.get("aud") {
             Some(Value::String(s)) => vec![s.clone()],
@@ -699,4 +699,19 @@ pub(crate) fn discovered_jwks_uri(bytes: &[u8], issuer: &str) -> Result<String, 
     doc.opt_str("jwks_uri")?
         .map(str::to_owned)
         .ok_or(JoseError::Invalid("no jwks_uri"))
+}
+
+/// The validated claims a token exchange depends on (§3.3, review-1 pass 2 N4). `None` is an
+/// absent claim, which is not the same as an empty one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExchangeClaims {
+    /// The `aud` values (a string claim is one value).
+    pub audiences: Vec<String>,
+    /// The `scope` claim (space-separated, as issued).
+    pub scope: Option<String>,
+    /// The `scp` claim (a string is one value).
+    pub scp: Option<Vec<String>>,
+    /// The configured groups/roles claim.
+    pub groups: Option<Vec<String>>,
 }
