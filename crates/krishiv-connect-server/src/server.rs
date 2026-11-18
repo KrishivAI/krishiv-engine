@@ -229,7 +229,10 @@ impl ConnectServer {
     /// limits, connection cap, TLS, [`AuthLayer`] and shutdown as the Connect service; each
     /// service keeps its own message-size limits. A later call replaces the earlier routes.
     /// `routes` must not contain the Spark Connect service: `serve` adds it, and a second copy of
-    /// its path is an overlapping route.
+    /// its path is an overlapping route. Shutdown waits `krishiv.server.shutdownTimeout` only for
+    /// the work the session manager tracks (running queries, live operations); a response of an
+    /// added service that registers no operation gets the listener's 5 s close wait, as Connect's
+    /// own non-operation RPCs do. Flight SQL registers an operation per fetch and per command.
     #[must_use]
     pub fn with_routes(mut self, routes: Routes) -> Self {
         self.routes = Some(routes);

@@ -151,7 +151,7 @@ pub use operators::{
     LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, PathRoots, Predicate, Project,
     ProjectItem, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows,
     RowStageSettings, RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
-    SortKey, SortMetrics, SpilledScan, TakeRows, TopN, UnionAlign,
+    SortKey, SortMetrics, SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

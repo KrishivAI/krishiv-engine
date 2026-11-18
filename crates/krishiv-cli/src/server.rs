@@ -554,7 +554,10 @@ fn admin_router(
             // statement arrived (P3-T101 §2 H3).
             let factory = role_sessions(base, config, denials).map_err(|e| e.to_string())?;
             source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
-                factory(caller, Transport::Ui)
+                let session = factory(caller, Transport::Ui)?;
+                // `system.sessions` shows the transport the denials count under.
+                session.set_client_info(Transport::Ui, None, None, None);
+                Ok(session)
             }));
         }
         // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and

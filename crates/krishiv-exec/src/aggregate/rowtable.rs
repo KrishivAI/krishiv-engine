@@ -43,10 +43,13 @@
 //!   an index filled, it grows to the estimate's capacity (at least 2x)
 //!   once the partial duplicates outweigh [`GROW_DUPLICATE_FACTOR`] times
 //!   the larger index (DuckDB 2.0's `RadixHTAdaptivity::TryGrow`), if the
-//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. Every
-//!   [`ADAPT_ROWS`] input rows, it switches to **append** (no lookups)
-//!   when over 95% of the keys are unique. This is DuckDB's thread-local
-//!   abandon (fixed-size thread-local tables,
+//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. After
+//!   [`FIRST_ADAPT_ROWS`] input rows and then every [`ADAPT_ROWS`], it
+//!   switches to **append** (no lookups) when over 95% of the keys are
+//!   unique. Append is permanent, so keys unique only in a driver's first
+//!   rows make partial duplicates after that; the early first decision
+//!   trades that for drivers too small to reach [`ADAPT_ROWS`] (TPC-H q13).
+//!   This is DuckDB's thread-local abandon (fixed-size thread-local tables,
 //!   <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
 //!   `radix_partitioned_hashtable.cpp`) with its capacities: 2^15 slots
 //!   above two threads, 2^18 at two. Growing only every [`ADAPT_ROWS`]
@@ -180,6 +183,11 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 const MAX_SINK_SLOTS: usize = 1 << 19;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
+/// Input rows before a fixed index's first append decision. A driver of a
+/// mid-sized aggregate (TPC-H q13 at SF100: 148M rows, keys repeating ~15
+/// times far apart) otherwise clears its index thousands of times before
+/// 2^20 rows (perf-4, `research/perf-parity/q16-split/`: q13 0.922x cycles).
+pub(crate) const FIRST_ADAPT_ROWS: usize = 1 << 17;
 /// Bytes of partial duplicates per byte of the grown index from which a
 /// full fixed index grows (DuckDB 2.0's `GROWTH_DUPLICATE_BYTES_FACTOR`).
 const GROW_DUPLICATE_FACTOR: usize = 4;
@@ -466,7 +474,7 @@ impl RowTable {
                 sketch: Hll::new(ADAPT_HLL_BITS),
                 rows: 0,
                 pushed: 0,
-                next: ADAPT_ROWS,
+                next: FIRST_ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
                 filled: false,
@@ -808,7 +816,8 @@ impl RowTable {
     }
 
     /// The mode the next apply runs in: a fixed index turns append-only
-    /// every [`ADAPT_ROWS`] input rows if nearly every key is unique, and
+    /// after [`FIRST_ADAPT_ROWS`] input rows, then every [`ADAPT_ROWS`], if
+    /// nearly every key is unique, and
     /// grows after it filled ([`grown_limit`](Self::grown_limit)).
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
@@ -1044,7 +1053,13 @@ impl RowTable {
             a.window = (a.rows, a.pushed);
             a.early = false;
         }
-        if a.rows >= a.next {
+        if a.rows >= a.next && a.rows < ADAPT_ROWS {
+            // The first decision, at FIRST_ADAPT_ROWS, only chooses append:
+            // the early-widening rate keeps its ADAPT_ROWS window (an empty
+            // table counts nearly every early row as new; TPC-DS q22 widens
+            // best at the end).
+            a.next = ADAPT_ROWS;
+        } else if a.rows >= a.next {
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
             a.early = !grew && rate >= EARLY_RATE;
@@ -1671,12 +1686,25 @@ fn buckets_for(cap: usize) -> usize {
     }
 }
 
+/// Reserves `part`'s rows and accumulators for `groups` groups, plus one
+/// merge chunk of `chunk` rows (at most `groups`).
+fn reserve_part(part: &mut Part, groups: usize, chunk: usize, stride: usize) {
+    let n = groups.saturating_add(groups.min(chunk));
+    part.rows.reserve(n.saturating_mul(stride));
+    for a in &mut part.accs {
+        a.reserve(n);
+    }
+}
+
 /// One final-phase task: radix partitions `parts` of every input table.
 #[derive(Debug, Clone)]
 pub(crate) struct FinalTask {
     pub(crate) parts: Range<usize>,
     /// Estimated groups (merged sketches, capped by the rows).
     pub(crate) groups: usize,
+    /// The estimate of each partition of `parts`, in order (`groups` is
+    /// their sum), for [`RowTable::presize_parts`].
+    pub(crate) part_groups: Vec<usize>,
 }
 
 /// Groups per final-phase task the radix bits aim for: a task's index and
@@ -1731,8 +1759,16 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
         .map(|start| {
             let parts = start..start + width;
             let rows: usize = est[parts.clone()].iter().map(|e| e.0).sum();
-            let groups = est[parts.clone()].iter().map(|e| e.1).sum();
-            (rows, FinalTask { parts, groups })
+            let part_groups: Vec<usize> = est[parts.clone()].iter().map(|e| e.1).collect();
+            let groups = part_groups.iter().sum();
+            (
+                rows,
+                FinalTask {
+                    parts,
+                    groups,
+                    part_groups,
+                },
+            )
         })
         .filter(|(rows, _)| *rows > 0)
         .map(|(_, t)| t)
@@ -1763,6 +1799,52 @@ impl RowTable {
     /// join's size rule, [`FLAT_MAX_BYTES`].
     fn salted_merge(groups: usize) -> bool {
         buckets_for(groups).saturating_mul(BUCKET_BYTES) > FLAT_MAX_BYTES
+    }
+
+    /// Reserves the row pages and accumulators of a merge table's
+    /// partitions `start..start + groups.len()` for `groups[i]` groups each,
+    /// so they are allocated once instead of growing by doubling (q18 at
+    /// SF100: the merge's doubling was 47% of `RawVec::finish_grow`'s
+    /// cycles, mostly page faults; `research/perf-parity/q18-presize-s0`).
+    /// A one-partition table takes the sum. Each page also gets room for
+    /// one merge chunk of `chunk` rows (at most its own estimate):
+    /// [`apply_merge`](Self::apply_merge) reserves a whole chunk as new
+    /// rows, which past an exact page would double it at the end. Long
+    /// string keys (the heap) still grow as they come: their size is not
+    /// estimated.
+    pub(crate) fn presize_parts(&mut self, start: usize, groups: &[usize], chunk: usize) {
+        let stride = self.stride;
+        if let [only] = self.parts.as_mut_slice() {
+            reserve_part(only, groups.iter().sum(), chunk, stride);
+            return;
+        }
+        for (part, &n) in self.parts.iter_mut().skip(start).zip(groups) {
+            reserve_part(part, n, chunk, stride);
+        }
+    }
+
+    /// The bytes [`presize_parts`](Self::presize_parts) adds to an empty
+    /// table.
+    pub(crate) fn projected_parts(&self, groups: &[usize], chunk: usize) -> usize {
+        // Per partition, as `presize_parts` reserves (an accumulator's
+        // capacity rounds up per vector).
+        let sum: usize = groups.iter().sum();
+        let one = [sum];
+        let each: &[usize] = if self.parts.len() == 1 { &one } else { groups };
+        let Some(empty) = self.parts.first() else {
+            return 0;
+        };
+        each.iter()
+            .map(|&g| {
+                let n = g.saturating_add(g.min(chunk));
+                let accs: usize = empty
+                    .accs
+                    .iter()
+                    .map(|a| a.projected(n, None, None).saturating_sub(a.size()))
+                    .sum();
+                n.saturating_mul(self.stride).saturating_add(accs)
+            })
+            .sum()
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).

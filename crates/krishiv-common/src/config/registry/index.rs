@@ -336,6 +336,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.delta.snapshotCache.maxBytes",
+        &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
@@ -382,6 +386,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.agg.distinctCountAtMerge",
         &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    ),
+    (
+        "krishiv.iceberg.commit.maxIntervening",
+        &ICEBERG_COMMIT_MAX_INTERVENING,
     ),
     (
         "krishiv.optimizer.ndvSampling.enabled",

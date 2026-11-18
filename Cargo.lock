@@ -3160,6 +3160,7 @@ dependencies = [
  "chrono",
  "delta_kernel",
  "futures",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
@@ -3544,6 +3545,7 @@ dependencies = [
  "http",
  "insta",
  "krishiv-common",
+ "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
@@ -3576,6 +3578,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "twox-hash",
+ "url",
 ]
 
 [[package]]

@@ -402,12 +402,15 @@ async fn flight_requests_are_labelled_flight_sql_at_every_site() {
     let r = single(&take(), "foreign create");
     assert!(r.contains("surface=flight-sql "), "{r}");
     assert!(r.contains("refused an id another principal holds"), "{r}");
-    manager
+    // Another owner's id answers as an unknown one, never SESSION_CLOSED.
+    let e = manager
         .get_with(&bob, SESSION, Surface::FlightSql)
         .expect_err("alice's id");
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_NOT_FOUND");
     let r = single(&take(), "foreign get");
     assert!(r.contains("surface=flight-sql "), "{r}");
-    manager.get(&bob, SESSION, None).expect_err("alice's id");
+    let e = manager.get(&bob, SESSION, None).expect_err("alice's id");
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_NOT_FOUND");
     let r = single(&take(), "foreign get on Connect");
     assert!(r.contains("surface=connect "), "{r}");
 

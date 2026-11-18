@@ -681,27 +681,37 @@ fn the_editors_denials_count_under_the_ui_surface() {
         .expect("run id")
         .to_owned();
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    let status = loop {
         let status = http_get_as(
             &server.admin,
             &format!("/api/internal/sql/{run}"),
             Some(token),
         );
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
         if !status.contains("\"running\"") && !status.contains("\"queued\"") {
-            break;
+            break status;
         }
         assert!(Instant::now() < deadline, "the run did not end: {status}");
         std::thread::sleep(Duration::from_millis(100));
-    }
+    };
+    // The run ended refused by the role, and that refusal is the one denial counted.
+    assert!(status.contains(r#""state":"failed""#), "{status}");
+    assert!(
+        status.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"),
+        "{status}"
+    );
     let scrape = http_get_as(&server.admin, "/metrics", Some(token));
     let denied: Vec<&str> = scrape
         .lines()
         .filter(|l| l.starts_with("krishiv_auth_denied_total{"))
         .collect();
-    assert!(
-        denied
-            .iter()
-            .any(|l| l.contains(r#"surface="ui""#) && !l.ends_with(" 0")),
+    let ui: Vec<&&str> = denied
+        .iter()
+        .filter(|l| l.contains(r#"surface="ui""#) && !l.ends_with(" 0"))
+        .collect();
+    assert_eq!(
+        ui,
+        [&r#"krishiv_auth_denied_total{surface="ui",privilege="CREATE"} 1"#],
         "{denied:?}"
     );
     assert!(

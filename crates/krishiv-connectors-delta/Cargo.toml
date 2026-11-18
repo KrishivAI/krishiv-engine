@@ -1,12 +1,15 @@
 [package]
 name = "krishiv-connectors-delta"
 description = "Delta Lake connector"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+keywords.workspace = true
+categories.workspace = true
+publish = true
 
 [lints]
 workspace = true
@@ -26,6 +29,9 @@ arrow-select.workspace = true
 delta_kernel = { workspace = true, features = ["internal-api"] }
 bytes.workspace = true
 chrono.workspace = true
+# The zone database krishiv-kernels already bundles (same features): partition timestamps'
+# zone names (chrono-tz is banned by ADR 0028).
+jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
 krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }

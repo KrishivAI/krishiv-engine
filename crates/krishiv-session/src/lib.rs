@@ -61,6 +61,7 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+mod delta;
 pub mod egress;
 mod execute_immediate;
 mod explain;
