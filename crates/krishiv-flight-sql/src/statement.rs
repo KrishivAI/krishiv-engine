@@ -8,7 +8,7 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -148,33 +148,34 @@ pub(crate) struct Marks {
 }
 
 /// What the sweep shares with a `DoGet` stream (design §4.2, M3 of v3): since when tonic owes the
-/// stream a poll (it was handed a piece and has not asked again), and the stream's marks. A reader
-/// idle past `fetchIdleTimeout` loses its marks to the sweep (its query is cancelled; its
-/// operation, response budget and call are released) and the stream ends `DEADLINE_EXCEEDED`.
-/// The clock runs only while tonic owes a poll, never while the engine computes the next batch.
+/// stream a poll (it was handed a piece and has not asked again), and the stream's live part, its
+/// encoder (the query stream and the reserved source batch) and its marks. A reader idle past
+/// `fetchIdleTimeout` loses the live part to the sweep (its query is cancelled; its batch, pool
+/// reservation, operation, response budget and call are released: review m4) and the stream
+/// ends `DEADLINE_EXCEEDED`. The clock runs only while tonic owes a poll, never while the engine
+/// computes the next batch. A poll and an expiry are serialized by the `live` mutex, so a reader
+/// that resumed is never expired (review m3).
 pub(crate) struct FetchCell {
     epoch: Instant,
     /// Milliseconds after `epoch` plus one since tonic owes a poll; 0 while it does not.
     owed_since: AtomicU64,
-    marks: Mutex<Option<Marks>>,
-    expired: AtomicBool,
+    /// `None` once the stream ended or the sweep took it.
+    live: Mutex<Option<Live>>,
+}
+
+/// The part of a `DoGet` the sweep can take: the encoder, dropped first, then the marks.
+pub(crate) struct Live {
+    inner: BoxStream<'static, Result<FlightData, Status>>,
+    marks: Marks,
 }
 
 impl FetchCell {
-    fn new(marks: Marks) -> Self {
+    fn new(inner: BoxStream<'static, Result<FlightData, Status>>, marks: Marks) -> Self {
         Self {
             epoch: Instant::now(),
             owed_since: AtomicU64::new(0),
-            marks: Mutex::new(Some(marks)),
-            expired: AtomicBool::new(false),
+            live: Mutex::new(Some(Live { inner, marks })),
         }
-    }
-
-    fn take(&self) -> Option<Marks> {
-        self.marks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
     }
 
     fn owe_from(&self, now: Instant) {
@@ -183,9 +184,9 @@ impl FetchCell {
         self.owed_since.store(ms + 1, Ordering::Release);
     }
 
-    /// Takes the marks of a stream idle over `timeout` at `now` (dropped by the caller, outside
-    /// any lock); `None` when it is not idle or already ended.
-    pub(crate) fn expire(&self, now: Instant, timeout: Duration) -> Option<Marks> {
+    /// Takes the live part of a stream idle over `timeout` at `now` (dropped by the caller,
+    /// outside any lock); `None` when it is not idle, is being polled, or already ended.
+    pub(crate) fn expire(&self, now: Instant, timeout: Duration) -> Option<Live> {
         let since = self.owed_since.load(Ordering::Acquire);
         if since == 0 {
             return None;
@@ -194,15 +195,22 @@ impl FetchCell {
         if now.saturating_duration_since(at) < timeout {
             return None;
         }
-        let marks = self.take()?;
-        self.expired.store(true, Ordering::Release);
-        Some(marks)
+        // Held by a poll: the reader is not idle.
+        let mut live = match self.live.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        // A poll between the load and the lock cleared the clock.
+        if self.owed_since.load(Ordering::Acquire) != since {
+            return None;
+        }
+        live.take()
     }
 }
 
-/// A `DoGet` stream holding its marks (in its [`FetchCell`]) until it ends or is dropped.
+/// A `DoGet` stream whose live part (in its [`FetchCell`]) is held until it ends or is dropped.
 struct Guarded {
-    inner: BoxStream<'static, Result<FlightData, Status>>,
     cell: Arc<FetchCell>,
     timeout: Duration,
     done: bool,
@@ -216,33 +224,45 @@ impl Stream for Guarded {
         if this.done {
             return Poll::Ready(None);
         }
+        let mut guard = this
+            .cell
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         // tonic asked: it owes nothing now.
         this.cell.owed_since.store(0, Ordering::Release);
-        if this.cell.expired.load(Ordering::Acquire) {
+        let Some(live) = guard.as_mut() else {
+            // The sweep took it: the reader was idle past the timeout.
+            drop(guard);
             this.done = true;
             let e: KrishivError = KrishivFlightSqlFetchIdle {
                 timeout: format!("{:?}", this.timeout),
             }
             .into();
             return Poll::Ready(Some(Err(flight_status(&e))));
-        }
-        let next = this.inner.as_mut().poll_next(cx);
-        match &next {
-            Poll::Ready(Some(Ok(_))) => this.cell.owe_from(Instant::now()),
+        };
+        let next = live.inner.as_mut().poll_next(cx);
+        let ended = match &next {
+            Poll::Ready(Some(Ok(_))) => {
+                this.cell.owe_from(Instant::now());
+                None
+            }
             Poll::Ready(None) => {
-                this.done = true;
-                if let Some(m) = this.cell.take() {
-                    m.op.finish();
-                }
+                live.marks.op.finish();
+                guard.take()
             }
             Poll::Ready(Some(Err(_))) => {
-                this.done = true;
-                if let Some(m) = this.cell.take() {
-                    m.op.fail();
-                }
+                live.marks.op.fail();
+                guard.take()
             }
-            Poll::Pending => {}
+            Poll::Pending => None,
+        };
+        drop(guard);
+        if ended.is_some() {
+            this.done = true;
         }
+        // Released outside the lock.
+        drop(ended);
         next
     }
 }
@@ -613,15 +633,17 @@ impl FlightSqlServer {
             Kind::Pending => return Err(flight_status(&not_found())),
         };
         let encoded = encode_results(schema, batches, consumer, limits);
-        let cell = Arc::new(FetchCell::new(Marks {
-            op,
-            _fetch: fetch,
-            _budget: budget,
-            _call: call,
-        }));
+        let cell = Arc::new(FetchCell::new(
+            encoded,
+            Marks {
+                op,
+                _fetch: fetch,
+                _budget: budget,
+                _call: call,
+            },
+        ));
         self.watch_fetch(&cell);
         let stream = Guarded {
-            inner: encoded,
             cell,
             timeout: inner.config.fetch_idle_timeout,
             done: false,

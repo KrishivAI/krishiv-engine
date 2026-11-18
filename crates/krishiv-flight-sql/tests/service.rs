@@ -472,13 +472,16 @@ async fn stalled_reader_cancelled_after_idle_timeout() {
         .await
         .expect("first message")
         .expect("schema");
-    // The reader stops: tonic fills the HTTP/2 window and then owes the stream a poll.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let swept_at = Instant::now() + Duration::from_secs(1);
-    h.flight.sweep_at(swept_at);
+    // The reader stops: once tonic has filled the HTTP/2 window it owes the stream a poll, which
+    // may take a while under load, so the sweep is repeated until it expires the fetch (m11).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.flight.session_count() != 0 {
+        assert!(Instant::now() < deadline, "the fetch never went idle");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        h.flight.sweep_at(Instant::now() + Duration::from_secs(1));
+    }
     // Its query was cancelled and its session released; the stream ends with the typed error
     // after what was already buffered.
-    wait_sessions(&h, 0).await;
     let end = loop {
         match stream.message().await {
             Ok(Some(_)) => {}
