@@ -899,24 +899,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
-#[test]
-fn derived_keys_above_defaults_on_and_parses() {
-    let mut c = Config::new();
-    assert_eq!(
-        c.get(&DERIVED_KEYS_ABOVE).and_then(ConfigValue::as_bool),
-        Some(true)
-    );
-    c.set("krishiv.optimizer.derivedKeysAbove", "false")
-        .unwrap();
-    assert_eq!(
-        c.get(&DERIVED_KEYS_ABOVE).and_then(ConfigValue::as_bool),
-        Some(false)
-    );
-    assert!(
-        c.set("krishiv.optimizer.derivedKeysAbove", "maybe")
-            .is_err()
-    );
-}
+mod derived_keys;
 
 #[test]
 fn group_key_code_defaults_off_and_parses() {
