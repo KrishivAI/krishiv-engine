@@ -1987,3 +1987,41 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
 }
+
+#[test]
+fn flight_sql_entries_default_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&FLIGHT_SQL_ENABLED).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        c.get(&FLIGHT_SQL_HANDLE_TTL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(600))
+    );
+    for (entry, default) in [
+        (&FLIGHT_SQL_MAX_HANDLES_PER_SESSION, 64),
+        (&FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL, 1024),
+        (&FLIGHT_SQL_MAX_BATCH_ROWS, 10_000),
+        (&FLIGHT_SQL_MAX_SCHEMA_TABLES, 1000),
+    ] {
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_int), Some(default));
+    }
+    assert_eq!(
+        c.get(&FLIGHT_SQL_METADATA_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(60))
+    );
+    c.set("krishiv.flightSql.handleTtl", "30s").unwrap();
+    assert_eq!(
+        c.get(&FLIGHT_SQL_HANDLE_TTL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(30))
+    );
+    assert!(
+        c.set("krishiv.flightSql.maxHandlesPerSession", "0")
+            .is_err()
+    );
+    assert!(c.set("krishiv.flightSql.enabled", "maybe").is_err());
+}

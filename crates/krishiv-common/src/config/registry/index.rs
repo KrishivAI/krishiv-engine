@@ -46,6 +46,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
@@ -65,6 +66,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.flightSql.handleTtl", &FLIGHT_SQL_HANDLE_TTL),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
@@ -95,6 +97,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
+    ("krishiv.flightSql.maxBatchRows", &FLIGHT_SQL_MAX_BATCH_ROWS),
     ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
@@ -174,6 +177,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_SMJ_BUFFER_BYTES,
     ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
+    (
+        "krishiv.flightSql.maxSchemaTables",
+        &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    ),
+    (
+        "krishiv.flightSql.metadataTimeout",
+        &FLIGHT_SQL_METADATA_TIMEOUT,
+    ),
     (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
@@ -378,6 +389,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     ),
     (
+        "krishiv.flightSql.maxHandlesPerSession",
+        &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    ),
+    (
         "krishiv.io.objectStore.allowedPrefixes",
         &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     ),
@@ -472,6 +487,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.closedTombstones",
         &CONNECT_SESSION_TOMBSTONES,
+    ),
+    (
+        "krishiv.flightSql.maxHandlesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",

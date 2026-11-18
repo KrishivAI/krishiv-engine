@@ -92,6 +92,18 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" : {
+    "message" : [
+      "Cannot create a new Arrow Flight SQL handle: <limitName> allows at most <limit>. Close prepared statements and fetch or cancel statement tickets you no longer need, or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" : {
+    "message" : [
+      "The result schema of this Arrow Flight SQL ticket changed since GetFlightInfo (a table it reads was altered). Call GetFlightInfo again for a new ticket."
+    ],
+    "sqlState" : "55000"
+  },
   "KRISHIV_GRANTS_STORE_FAILURE" : {
     "message" : [
       "The grants store cannot be <operation>: <reason>. No grant was changed and access is denied until an administrator restores the store."

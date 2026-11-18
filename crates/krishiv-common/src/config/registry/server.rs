@@ -363,3 +363,66 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
      admin API through DNS rebinding. Unset: only the loopback names.",
     None,
 );
+
+/// `krishiv.flightSql.enabled` (P3-T101).
+pub static FLIGHT_SQL_ENABLED: ConfigEntry = startup(
+    "krishiv.flightSql.enabled",
+    ValueType::Bool,
+    ConfigValue::Bool(true),
+    "Whether `krishiv server` serves Arrow Flight SQL on its Spark Connect port (P3-T101), when the binary is built with the `flight-sql` feature. Off: the Flight SQL paths answer `UNIMPLEMENTED`.",
+    None,
+);
+
+/// `krishiv.flightSql.handleTtl` (P3-T101).
+pub static FLIGHT_SQL_HANDLE_TTL: ConfigEntry = startup(
+    "krishiv.flightSql.handleTtl",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(600)),
+    "How long an Arrow Flight SQL statement or prepared-statement handle stays fetchable after its last use; its session's release ends it sooner.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandlesPerSession` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLES_PER_SESSION: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandlesPerSession",
+    ValueType::PositiveInt,
+    ConfigValue::Int(64),
+    "The most Arrow Flight SQL handles (statements and prepared statements) one session holds; past it a new one is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandlesPerPrincipal` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandlesPerPrincipal",
+    ValueType::PositiveInt,
+    ConfigValue::Int(1024),
+    "The most Arrow Flight SQL handles one principal holds across its sessions; past it a new one is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxBatchRows` (P3-T101).
+pub static FLIGHT_SQL_MAX_BATCH_ROWS: ConfigEntry = startup(
+    "krishiv.flightSql.maxBatchRows",
+    ValueType::PositiveInt,
+    ConfigValue::Int(10000),
+    "The most parameter rows one Arrow Flight SQL prepared update binds; more is `INVALID_ARGUMENT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxSchemaTables` (P3-T101).
+pub static FLIGHT_SQL_MAX_SCHEMA_TABLES: ConfigEntry = startup(
+    "krishiv.flightSql.maxSchemaTables",
+    ValueType::PositiveInt,
+    ConfigValue::Int(1000),
+    "The most tables an Arrow Flight SQL `GetTables` with `include_schema` loads schemas for; a listing over it is `INVALID_ARGUMENT` (narrow the pattern).",
+    None,
+);
+
+/// `krishiv.flightSql.metadataTimeout` (P3-T101).
+pub static FLIGHT_SQL_METADATA_TIMEOUT: ConfigEntry = startup(
+    "krishiv.flightSql.metadataTimeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(60)),
+    "The time limit of one Arrow Flight SQL metadata listing (`GetTables` and the others); past it the call is `DEADLINE_EXCEEDED`.",
+    None,
+);
