@@ -23,7 +23,9 @@
 //!   removed twice and counted once, the second as a duplicate
 //!   (`deleted-duplicate-files`, `:542-552`).
 //! - **Delete manifests**, after the data manifests: a live delete file is
-//!   removed when its path is one of [`Removals::delete_files`], when it is a
+//!   removed when its [`DeleteKey`] (location, referenced data file and
+//!   content offset: one Puffin file holds the DVs of many data files) is one
+//!   of [`Removals::delete_files`], when it is a
 //!   DV (Puffin) of a data file removed above (`removeDanglingDeletesFor`,
 //!   `isDanglingDV`, `:499-501`), or when its data sequence number is above 0
 //!   and below the smallest data sequence number of the filtered data
@@ -31,8 +33,10 @@
 //!   `min_sequence_number`, from the table's `last-sequence-number`,
 //!   `MergingSnapshotProducer.java:1025-1034`): such a delete file applies
 //!   to no live data file.
-//! - **Missing files** (`failMissingDeletePaths`, `:282-304`): every path of
-//!   [`Removals`] must have been removed from some manifest, else
+//! - **Missing files** (`failMissingDeletePaths`, `:282-304`): every data
+//!   file path and every delete file key of [`Removals`] must have been
+//!   removed from some manifest (a DV replaced concurrently is missing even
+//!   when its Puffin file still holds other live DVs), else
 //!   [`FilterError::Missing`] with Java's "Missing required files to delete:
 //!   %s"; the commit loop turns it into `KRISHIV_ICEBERG_COMMIT_CONFLICT`.
 //! - **Summary** ([`Removed`]): Java's `SnapshotSummary.UpdateMetrics` for
@@ -61,14 +65,40 @@ use super::merge::{manifest_writer, with_first_row_id};
 use super::scan::read_capped;
 use super::storage::from_iceberg;
 
-/// The files an `OverwriteFiles` removes, by location.
+/// The files an `OverwriteFiles` removes: data files by location, delete
+/// files per entry ([`DeleteKey`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Removals {
     /// Data files (Java's `deleteFile(DataFile)`).
     pub(crate) data_files: BTreeSet<String>,
     /// Delete files (Java's `deleteFiles(_, DeleteFileSet)`: CoW's DVs of
     /// the files it rewrites).
-    pub(crate) delete_files: BTreeSet<String>,
+    pub(crate) delete_files: BTreeSet<DeleteKey>,
+}
+
+/// One delete file to remove, as Java's `DeleteFileSet` tells them apart:
+/// many DVs share one Puffin file (one entry per blob, each with its own
+/// referenced data file and content offset), so a location alone would
+/// remove the DVs of files the write never touched (review 36b2a B1).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct DeleteKey {
+    /// The file's location.
+    pub(crate) path: String,
+    /// The data file a DV or file-scoped position delete applies to.
+    pub(crate) referenced_data_file: Option<String>,
+    /// A DV's blob offset in its Puffin file.
+    pub(crate) content_offset: Option<i64>,
+}
+
+impl DeleteKey {
+    /// The key of the manifest entry `f`.
+    pub(crate) fn of(f: &DataFile) -> Self {
+        Self {
+            path: f.file_path().to_owned(),
+            referenced_data_file: f.referenced_data_file(),
+            content_offset: f.content_offset(),
+        }
+    }
 }
 
 /// What a filter writes through: the table, the write's names, and the
@@ -315,6 +345,7 @@ pub(crate) async fn filter_manifests(
     let mut replaced = 0;
     let mut removed = Removed::default();
     let mut found: HashSet<String> = HashSet::new();
+    let mut found_deletes: HashSet<DeleteKey> = HashSet::new();
     let schema = std::sync::Arc::clone(cx.metadata.current_schema());
     let record = |spec_id: i32, hit: &Hit, removed: &mut Removed| {
         let spec = cx.metadata.partition_spec_by_id(spec_id);
@@ -358,7 +389,7 @@ pub(crate) async fn filter_manifests(
                 continue;
             }
             let hit = rewrite(cx, m, |f, data_sequence| {
-                removals.delete_files.contains(f.file_path())
+                removals.delete_files.contains(&DeleteKey::of(f))
                     || (data_sequence > 0 && data_sequence < min_sequence)
                     || (is_dv(f)
                         && f.referenced_data_file()
@@ -367,7 +398,7 @@ pub(crate) async fn filter_manifests(
             .await?;
             if let Some(hit) = hit {
                 for f in &hit.removed {
-                    found.insert(f.file_path().to_owned());
+                    found_deletes.insert(DeleteKey::of(f));
                 }
                 record(m.partition_spec_id, &hit, &mut removed);
                 *m = hit.manifest;
@@ -378,9 +409,15 @@ pub(crate) async fn filter_manifests(
     let missing: Vec<&str> = removals
         .data_files
         .iter()
-        .chain(&removals.delete_files)
         .filter(|p| !found.contains(p.as_str()))
         .map(String::as_str)
+        .chain(
+            removals
+                .delete_files
+                .iter()
+                .filter(|k| !found_deletes.contains(*k))
+                .map(|k| k.path.as_str()),
+        )
         .collect();
     if !missing.is_empty() {
         return Err(FilterError::Missing(format!(
@@ -465,8 +502,9 @@ async fn rewrite(
                     })?;
                 Some(id)
             }
-            Some(_) => file.first_row_id(),
-            None => None,
+            // An explicit id always wins, also in a manifest without a
+            // `first_row_id`.
+            _ => file.first_row_id(),
         };
         live.push(Live {
             index,
