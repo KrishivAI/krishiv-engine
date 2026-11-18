@@ -129,7 +129,7 @@ Paths are relative to this crate.
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
 - `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
-- `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
+- `src/planner/mod.rs` physical planner (IR to physical plan; `DefaultPlanner::plan` in `planner/build.rs` first runs `krishiv_optimizer::narrow_scan_instances`, so each instance of a shared scan reads only its parent's columns); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/planner/build_project.rs` (S4') an exact, narrowing expression above an inner hash join computed on the build input before its table is built; `krishiv.exec.join.buildProjection`; differential `tests/planner/build_projection.rs`
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
 - `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `rowtable/local.rs` the batch-local key map of a low-cardinality batch (E2), `rowtable/direct.rs` direct-address ids of a tiny key domain (D1, `krishiv.exec.agg.directKeys`), `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)

@@ -65,16 +65,22 @@ pub struct DefaultPlanner;
 
 impl PhysicalPlanner for DefaultPlanner {
     fn plan(&self, plan: &Plan, cx: &PlanningContext) -> Result<PhysicalPlan> {
-        let root = plan.root();
-        if !root.is_resolved() {
+        if !plan.root().is_resolved() {
             return Err(internal("the physical planner needs a resolved plan"));
         }
-        let output = root
+        let output = plan
+            .root()
             .resolved_output()
             .ok_or_else(|| internal("the plan has no resolved output"))?;
         // Planning recurses once per relation; plans nest up to
         // `krishiv_plan::MAX_DEPTH` levels.
         let run = || {
+            // Each instance of a shared scan reads only what its own parent
+            // reads (a shared node is planned once per parent). It recurses
+            // per level too, so it runs on the big stack.
+            let stats = super::table::ProviderStatistics(Arc::clone(&cx.tables));
+            let narrowed = krishiv_optimizer::narrow_scan_instances(plan.root(), Some(&stats));
+            let root = &narrowed;
             // First as a plan with its deterministic shared definitions
             // inlined per reference (as before); the groups no runtime
             // filter reaches are then planned shared (design P2-T198 3.1).

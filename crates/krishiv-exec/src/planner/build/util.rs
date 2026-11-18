@@ -41,10 +41,14 @@ pub(super) fn max_id(root: &LogicalPlan) -> u64 {
 /// The attributes `root` reads: every column an expression of any node (subquery plans included) refers
 /// to, the output of the root, and the whole input of a node that reads its input positionally (a union,
 /// a set operation, a `DISTINCT`). A scan's carrier column (kept only to count rows) is not among them.
-/// A node that renumbers or renames attributes (`Shift`, a CTE reference) can hide a reference, which is
-/// the safe side for its one use, `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: it never refuses a valid query.
+/// A reference above a `Shift` counts below it too (each id less every offset in the plan, a superset),
+/// since each instance of a shared scan reads only its own parent's columns
+/// (`krishiv_optimizer::narrow_scan_instances`). A node that renames attributes (a CTE reference) can
+/// hide a reference, which is the safe side for its one use, `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: it
+/// never refuses a valid query.
 pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
     let mut out: HashSet<AttrId> = HashSet::new();
+    let mut offsets: HashSet<u64> = HashSet::new();
     if let Some(o) = root.resolved_output() {
         out.extend(o.iter().map(|c| c.id));
     }
@@ -64,6 +68,9 @@ pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
                 }
             });
         }
+        if let PlanNode::Shift { offset, .. } = &p.node {
+            offsets.insert(*offset);
+        }
         p.for_each_child(&mut |c| stack.push(c));
         p.for_each_expr(&mut |e| {
             let mut exprs = vec![e.as_ref()];
@@ -78,6 +85,17 @@ pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
                 e.for_each_child(&mut |c| exprs.push(c));
             }
         });
+    }
+    // Nested instances shift by a sum of offsets: repeat until nothing new.
+    let mut fresh: Vec<AttrId> = out.iter().copied().collect();
+    while let Some(id) = fresh.pop() {
+        for k in &offsets {
+            if let Some(below) = id.0.checked_sub(*k)
+                && out.insert(AttrId(below))
+            {
+                fresh.push(AttrId(below));
+            }
+        }
     }
     out
 }

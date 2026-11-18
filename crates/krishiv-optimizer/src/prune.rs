@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ReadSource,
-    ResolvedExpr, Scan, SubqueryKind,
+    AttrId, BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode,
+    ReadSource, ResolvedExpr, Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
@@ -47,6 +47,183 @@ pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> HashMap<*const LogicalPla
         .zip(req)
         .map(|(n, r)| (Arc::as_ptr(n), r))
         .collect()
+}
+
+/// `root` with each instance of a shared table scan reading only what its
+/// own parent reads (study 38 lever A).
+///
+/// A table read several times in one query is one `Scan` node with several
+/// parents, the other instances under `Shift`; pruning keeps the union of
+/// their consumers' columns, since it rewrites a node once. The physical
+/// planner plans a shared node once per parent anyway, so here each parent
+/// edge into a chain of `Filter`s and `Shift`s over a `Scan` gets that chain
+/// rebuilt for the edge's own demand (equal demands share one rebuild).
+///
+/// This runs after optimization, on the plan the physical planner takes: the
+/// optimizer's equal-instance rules (`ShareCte`, the inferred filters' shared
+/// bodies) and its fixed point never see the copies. Only scan column lists
+/// change.
+#[must_use]
+pub fn narrow_scan_instances(
+    root: &Arc<LogicalPlan>,
+    stats: Option<&dyn Statistics>,
+) -> Arc<LogicalPlan> {
+    let graph = Graph::new(root);
+    let req = graph.requirements();
+    let mut pass = Instances {
+        graph: &graph,
+        req: &req,
+        done: HashMap::new(),
+        chains: HashMap::new(),
+        stats,
+    };
+    pass.node(0)
+}
+
+struct Instances<'a> {
+    graph: &'a Graph,
+    req: &'a [Attrs],
+    done: HashMap<usize, Arc<LogicalPlan>>,
+    /// Chains rebuilt for one demand, by node and sorted demand.
+    chains: HashMap<(usize, Vec<AttrId>), Arc<LogicalPlan>>,
+    stats: Option<&'a dyn Statistics>,
+}
+
+impl Instances<'_> {
+    fn node(&mut self, i: usize) -> Arc<LogicalPlan> {
+        if let Some(out) = self.done.get(&i) {
+            return Arc::clone(out);
+        }
+        // What this node reads of each child; a child read twice (a
+        // self-join of one `Arc`) is read for both.
+        let mut edge: HashMap<usize, Option<Attrs>> = HashMap::new();
+        for (c, d) in self.graph.demands(i, &self.req[i]) {
+            match (edge.get_mut(&c), d) {
+                (None, d) => {
+                    edge.insert(c, d);
+                }
+                (Some(Some(have)), Some(d)) => have.extend(d),
+                (Some(have), _) => *have = None,
+            }
+        }
+        let original = Arc::clone(&self.graph.nodes[i]);
+        let rebuilt = original
+            .map_children(|c| {
+                let id = self.graph.id(&c);
+                Ok::<_, std::convert::Infallible>(match edge.get(&id) {
+                    Some(Some(d)) if is_scan_chain(&c) => self.chain(id, d),
+                    _ => self.node(id),
+                })
+            })
+            .and_then(|p| p.map_expressions(|e| Ok(self.subqueries(e))));
+        let out = match rebuilt {
+            Ok(p) => p,
+            Err(never) => match never {},
+        };
+        self.done.insert(i, Arc::clone(&out));
+        out
+    }
+
+    /// The scan chain at node `i` reading only `need` of its output.
+    fn chain(&mut self, i: usize, need: &Attrs) -> Arc<LogicalPlan> {
+        let mut key: Vec<AttrId> = need.iter().copied().collect();
+        key.sort_unstable();
+        if let Some(out) = self.chains.get(&(i, key.clone())) {
+            return Arc::clone(out);
+        }
+        let p = Arc::clone(&self.graph.nodes[i]);
+        let out = match &p.node {
+            PlanNode::Scan(scan) => {
+                let mut output: Vec<BoundColumn> = scan
+                    .output
+                    .iter()
+                    .filter(|c| need.contains(&c.id))
+                    .cloned()
+                    .collect();
+                if output.is_empty() && !reads_rows_without_columns(scan, self.stats) {
+                    output.extend(scan.output.first().cloned());
+                }
+                if output.len() == scan.output.len() {
+                    self.node(i)
+                } else {
+                    replace(
+                        &p,
+                        PlanNode::Scan(Scan {
+                            output,
+                            ..scan.clone()
+                        }),
+                    )
+                }
+            }
+            PlanNode::Filter { input, .. } => {
+                let mut below = need.clone();
+                p.for_each_expr(&mut |e| references_into(e, &mut below));
+                let input = self.chain(self.graph.id(input), &below);
+                with_input(&p, &input)
+            }
+            PlanNode::Shift { input, offset } => {
+                let below = need.iter().filter_map(|id| id.0.checked_sub(*offset));
+                let below = below.map(AttrId).collect();
+                let input = self.chain(self.graph.id(input), &below);
+                with_input(&p, &input)
+            }
+            _ => self.node(i),
+        };
+        self.chains.insert((i, key), Arc::clone(&out));
+        out
+    }
+
+    fn subqueries(&mut self, e: Arc<Expr>) -> Arc<Expr> {
+        if !crate::expr::has_subquery(&e) {
+            return e;
+        }
+        let out = e.transform_up(&mut |x| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Subquery { kind, plan: old } => {
+                    let plan = self.node(self.graph.id(old));
+                    if Arc::ptr_eq(&plan, old) {
+                        return Ok(x);
+                    }
+                    Arc::new(Expr {
+                        node: ExprNode::Subquery {
+                            kind: kind.clone(),
+                            plan,
+                        },
+                        origin: x.origin,
+                    })
+                }
+                _ => x,
+            })
+        });
+        match out {
+            Ok(v) => v,
+            Err(never) => match never {},
+        }
+    }
+}
+
+/// Whether `p` is a `Scan` under `Filter`s (with no subquery) and `Shift`s
+/// only: a chain whose columns one parent's demand decides.
+fn is_scan_chain(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Scan(_) => true,
+        PlanNode::Filter { input, .. } => {
+            let mut sub = false;
+            subqueries(p, &mut |_, _| sub = true);
+            !sub && is_scan_chain(input)
+        }
+        PlanNode::Shift { input, .. } => is_scan_chain(input),
+        _ => false,
+    }
+}
+
+/// `p` (one child) over `input`; `p` itself when the input is unchanged.
+fn with_input(p: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let out = Arc::clone(p).map_children(|_| Ok::<_, std::convert::Infallible>(Arc::clone(input)));
+    match out {
+        Ok(v) => v,
+        Err(never) => match never {},
+    }
 }
 
 /// An edge to a child relation, with what the parent reads of it (`None`:
@@ -150,7 +327,7 @@ impl Graph {
             }
             PlanNode::Shift { input, offset } => {
                 let need = req.iter().filter_map(|id| id.0.checked_sub(*offset));
-                child(input, Some(need.map(krishiv_plan::AttrId).collect()));
+                child(input, Some(need.map(AttrId).collect()));
             }
             // Inputs match by position: each is read whole.
             PlanNode::Union { inputs, .. } => inputs.iter().for_each(|i| child(i, None)),

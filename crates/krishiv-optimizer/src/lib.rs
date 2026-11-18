@@ -114,6 +114,7 @@ pub use join_order::DP_LIMIT;
 pub use limit::TopN;
 pub use partition_advice::{AdvisedColumn, AdvisedTable, MAX_PARTITIONS, PartitionAdvice, advise};
 pub use plan_stats::PlanStats;
+pub use prune::narrow_scan_instances;
 pub use stats::{
     AttrStats, ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, RelStats, StatSource,
     Statistics, TableStats, estimated_rows,

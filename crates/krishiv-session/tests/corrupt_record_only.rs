@@ -238,8 +238,8 @@ fn run(fmt: &str, file: &str) {
         let text = block_on(df.explain(mode));
         assert!(text.is_ok(), "{fmt}: explain: {text:?}");
     }
-    // KNOWN DIFFERENCES (they never refuse a valid query): Spark raises for a UNION ALL branch or a CTE that
-    // reads only the corrupt column; here the branch / CTE is not seen as such.
+    // Spark raises for a UNION ALL branch or a CTE that reads only the corrupt column; scan-instance narrowing
+    // gives each branch / CTE reference its own scan, so both are seen as such and refused like Spark.
     let union = rows(sql(
         &s,
         "SELECT CAST(a AS STRING) FROM v UNION ALL SELECT _corrupt_record FROM v",
@@ -248,10 +248,14 @@ fn run(fmt: &str, file: &str) {
         &s,
         "WITH c AS (SELECT _corrupt_record FROM v) SELECT * FROM c",
     ));
-    // The check sees the columns the plan references by attribute; a union branch and a CTE body rename them
-    // (positional union inputs; the CTE reference has attributes of its own), so neither is recognised.
-    assert!(union.is_ok(), "{fmt}: known difference, union: {union:?}");
-    assert!(cte.is_ok(), "{fmt}: known difference, cte: {cte:?}");
+    assert!(
+        union.is_err_and(|e| e.0 == QUERY_ONLY),
+        "{fmt}: a union branch of only the corrupt column"
+    );
+    assert!(
+        cte.is_err_and(|e| e.0 == QUERY_ONLY),
+        "{fmt}: a CTE of only the corrupt column"
+    );
     view(&s, fmt, &path, sch2, bad);
     put("renamed.select_bad", rows(sql(&s, "SELECT _bad FROM v")));
     put(
