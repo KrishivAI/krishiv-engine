@@ -29,6 +29,7 @@ use krishiv_connect_server::{Operation, SessionEntry, SessionOwner};
 use krishiv_memory::ConsumerHandle;
 use krishiv_session::auth::Authenticated;
 use krishiv_session::{QueryOptions, Session, SqlOutcome, SqlQuery, StatementClass};
+use krishiv_sql::lexer::{TokenKind, is_keyword};
 use prost::Message;
 use tokio::sync::OwnedSemaphorePermit;
 use tonic::metadata::MetadataMap;
@@ -661,10 +662,9 @@ impl FlightSqlServer {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    /// `CancelFlightInfo` of a statement ticket (design §4.5): the handle's live fetches are
-    /// cancelled and the handle is released.
-    /// `CancelFlightInfo` / `CancelQuery` of one statement handle: `INVALID_HANDLE.FORMAT` for a
-    /// malformed one, one not-found answer for another owner's and an unknown one.
+    /// `CancelFlightInfo` / `CancelQuery` of one statement handle (design §4.5): the handle's live
+    /// operations are cancelled and the handle is released; `INVALID_HANDLE.FORMAT` for a
+    /// malformed handle, one not-found answer for another owner's and an unknown one.
     pub(crate) fn cancel_statement(
         &self,
         caller: &Authenticated,
@@ -714,39 +714,27 @@ fn marks_changed(class: StatementClass, sql: &str) -> bool {
     if matches!(class, StatementClass::Session | StatementClass::Admin) {
         return true;
     }
-    // No copy of the text (up to 1 MiB) and no word list (review n2).
-    let head = skip_comments(sql);
-    let starts_begin = head
-        .get(..5)
-        .is_some_and(|w| w.eq_ignore_ascii_case("BEGIN"))
-        && !head[5..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
-    let mut words = sql.split_ascii_whitespace().peekable();
-    let mut execute_immediate = false;
-    while let Some(w) = words.next() {
-        if w.eq_ignore_ascii_case("EXECUTE")
-            && words
-                .peek()
-                .is_some_and(|n| n.eq_ignore_ascii_case("IMMEDIATE"))
-        {
-            execute_immediate = true;
-            break;
-        }
+    // Spark's own lexing (nested `/* */`, `--` continued by `\`+newline and ended by `\r`,
+    // `EXECUTE/**/IMMEDIATE'...'`), comments skipped; no copy of the text (review n2, review of
+    // 40489d958 finding 4).
+    let tokens = krishiv_sql::lexer::tokenize(sql);
+    let words = tokens
+        .iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Comment | TokenKind::UnclosedComment));
+    let word = |t: &krishiv_sql::lexer::Token, kw: &str| {
+        t.kind == TokenKind::Word && is_keyword(t.span.text(sql), kw)
+    };
+    if words.clone().next().is_some_and(|t| word(t, "BEGIN")) {
+        return true;
     }
-    starts_begin || execute_immediate
-}
-
-/// `sql` after its leading whitespace and comments (`-- ...` to the line's end, `/* ... */`).
-fn skip_comments(mut sql: &str) -> &str {
-    loop {
-        sql = sql.trim_start();
-        if let Some(rest) = sql.strip_prefix("--") {
-            sql = rest.split_once('\n').map_or("", |(_, after)| after);
-        } else if let Some(rest) = sql.strip_prefix("/*") {
-            sql = rest.split_once("*/").map_or("", |(_, after)| after);
-        } else {
-            return sql;
+    let mut previous_execute = false;
+    for t in words {
+        if previous_execute && word(t, "IMMEDIATE") {
+            return true;
         }
+        previous_execute = word(t, "EXECUTE");
     }
+    false
 }
 
 /// What a schema costs a handle (its IPC message, roughly).
@@ -827,9 +815,9 @@ mod tests {
         );
     }
 
-    /// `RESULT_NOT_STORED` carries the inner error's client-safe text (review M2).
     /// Scripts and `EXECUTE IMMEDIATE` mark a provisional session changed, a comment before them
-    /// included; a word that only starts with `BEGIN` does not (review n2).
+    /// included, lexed as Spark does; a word that only starts with `BEGIN` does not (review n2,
+    /// review of 40489d958 finding 4).
     #[test]
     fn marks_changed_sees_scripts_behind_comments() {
         let read = StatementClass::Read;
@@ -839,6 +827,14 @@ mod tests {
             "-- a comment\nBEGIN SELECT 1; END",
             "/* c */ -- d\n BEGIN SELECT 1; END",
             "SELECT 1; execute   Immediate 'SET x = 1'",
+            // Bracketed comments nest (SqlBaseLexer BRACKETED_COMMENT).
+            "/* a /* b */ c */ BEGIN SET x = 1; END",
+            // A `--` comment goes on past `\`+newline, and ends at a bare `\r`.
+            "-- a \\\n still the comment\nBEGIN SET x = 1; END",
+            "-- a\rBEGIN SET x = 1; END",
+            // No whitespace around the words.
+            "EXECUTE IMMEDIATE'SET x = 1'",
+            "EXECUTE/**/IMMEDIATE 'SET x = 1'",
         ] {
             assert!(marks_changed(read, sql), "{sql:?}");
         }
@@ -847,11 +843,15 @@ mod tests {
             "SELECT 'begin'",
             "-- BEGIN\nSELECT 1",
             "EXECUTE x",
+            "/* a /* BEGIN */ c */ SELECT 1",
+            "-- a \\\nBEGIN\nSELECT 1",
+            "SELECT 'EXECUTE IMMEDIATE x'",
         ] {
             assert!(!marks_changed(read, sql), "{sql:?}");
         }
     }
 
+    /// `RESULT_NOT_STORED` carries the inner error's client-safe text (review M2).
     #[test]
     fn result_not_stored_reason_is_redacted() {
         let inner: KrishivError = KrishivSpillIoError {

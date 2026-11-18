@@ -3267,6 +3267,7 @@ dependencies = [
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-session",
+ "krishiv-sql",
  "prost",
  "tempfile",
  "tokio",
