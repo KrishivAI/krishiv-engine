@@ -181,19 +181,6 @@ struct State {
     anonymous: HashMap<[u8; 32], u32>,
     /// The last unregistered version handed out (without the top bit).
     last_anonymous: u32,
-    /// Each inline UDTF registered in the session's library, by the digest of its definition.
-    udtfs: HashMap<[u8; 32], InlineUdtf>,
-}
-
-/// An inline UDTF of the session.
-#[derive(Clone)]
-struct InlineUdtf {
-    /// Its hidden name, lower case (the library's key).
-    key: String,
-    /// Its registration version in the session's library.
-    version: u32,
-    /// Its payload is registered with the session's workers (only after a passed privilege check).
-    payload: bool,
 }
 
 impl fmt::Debug for SessionPython {
@@ -271,54 +258,9 @@ impl SessionPython {
         let name = entry.def.name.to_lowercase();
         let payload = udtf_payload(udtf);
         runtime.register(&name, entry.version, &payload);
-        let mut state = self.lock();
-        // A registration under an inline UDTF's hidden name replaced that library entry: the
-        // cached version is no longer the library's, so the next inline call registers its own
-        // definition again (a new version) instead of resolving to this one.
-        state.udtfs.retain(|_, u| u.key != name);
-        state
+        self.lock()
             .payloads
             .push((name, entry.version, Arc::new(payload)));
-        Ok(())
-    }
-
-    /// Registers the inline UDTF `udtf` under its hidden `name` in `session`'s library, once per
-    /// definition (`digest`), and its payload with `runtime`'s workers when given (and not done yet).
-    fn inline_udtf(
-        &self,
-        session: &Session,
-        digest: [u8; 32],
-        name: &str,
-        udtf: &PythonUdtf,
-        runtime: Option<&Arc<dyn SessionUdfRuntime>>,
-    ) -> Result<(), KrishivError> {
-        let mut state = self.lock();
-        // The cached entry is the library's current one: every registration of this session goes
-        // through `SessionPython` (`register_udtf` drops an entry whose hidden name it takes), so a
-        // cached version that is gone means the library's entry changed and is registered again.
-        let mut known = match state.udtfs.get(&digest) {
-            Some(known) => known.clone(),
-            None => {
-                let entry = session.register_python_udtf(udtf_def(udtf, name.to_owned()))?;
-                InlineUdtf {
-                    key: name.to_lowercase(),
-                    version: entry.version,
-                    payload: false,
-                }
-            }
-        };
-        if let Some(runtime) = runtime
-            && !known.payload
-        {
-            let payload = udtf_payload(udtf);
-            let name = name.to_lowercase();
-            runtime.register(&name, known.version, &payload);
-            state
-                .payloads
-                .push((name, known.version, Arc::new(payload)));
-            known.payload = true;
-        }
-        state.udtfs.insert(digest, known);
         Ok(())
     }
 
@@ -398,7 +340,8 @@ fn def_of(udf: &PythonUdf) -> PythonUdfDef {
     }
 }
 
-/// The library definition of `udtf` under `name`.
+/// The definition of `udtf` under `name` (the library's for `register_table_function`, the encoded call
+/// name's for an inline UDTF).
 fn udtf_def(udtf: &PythonUdtf, name: String) -> PythonUdtfDef {
     PythonUdtfDef {
         name,
@@ -425,7 +368,8 @@ fn udtf_payload(udtf: &PythonUdtf) -> PythonUdf {
 /// The digest of everything that tells two inline UDTFs apart.
 fn udtf_digest(udtf: &PythonUdtf) -> [u8; 32] {
     let mut h = Sha256::new();
-    let return_type = udtf.return_type.as_ref().map(DataType::sql);
+    // The JSON form: every field's nullability and metadata and the element types' nullability.
+    let return_type = udtf.return_type.as_ref().map(DataType::json);
     for part in [
         b"udtf".as_slice(),
         udtf.name.as_bytes(),
@@ -440,17 +384,6 @@ fn udtf_digest(udtf: &PythonUdtf) -> [u8; 32] {
         h.update(part);
     }
     h.finalize().into()
-}
-
-/// The hidden name an inline UDTF of digest `digest` is registered under in its session: the client's
-/// name, then `#` and 128 bits of the digest in hex, so each distinct definition has a name of its own.
-fn udtf_name(name: &str, digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = format!("{name}#");
-    for b in &digest[..16] {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
 }
 
 /// The digest of everything that tells two unregistered UDFs apart.
@@ -477,11 +410,11 @@ pub(crate) struct InlineUdfs<'a> {
     analysis: bool,
     /// Whether the plan holds a Python UDF (an inline call or a relation's).
     seen: bool,
-    /// UDFs new to the session, registered by [`Self::grant`].
-    pending: Vec<([u8; 32], u32, PythonUdf)>,
-    /// The plan's inline UDTFs (digest, hidden name, definition), registered by [`Self::grant`] or
-    /// [`Self::prepare_analysis`].
-    udtfs: Vec<([u8; 32], String, PythonUdtf)>,
+    /// UDFs and UDTFs new to the session (digest, version, the runtime's name, payload), registered by
+    /// [`Self::grant`] (or [`Self::prepare_analysis`] for a UDTF whose `analyze` runs at analysis).
+    pending: Vec<([u8; 32], u32, String, PythonUdf)>,
+    /// The plan holds an inline UDTF without a return type: analyzing it runs its `analyze`.
+    runs_analyze: bool,
 }
 
 impl<'a> InlineUdfs<'a> {
@@ -492,7 +425,7 @@ impl<'a> InlineUdfs<'a> {
             analysis: false,
             seen: false,
             pending: Vec::new(),
-            udtfs: Vec::new(),
+            runs_analyze: false,
         }
     }
 
@@ -519,18 +452,17 @@ impl<'a> InlineUdfs<'a> {
         if !self.seen || self.analysis {
             return Ok(());
         }
+        self.register_pending(session)
+    }
+
+    /// Installs the session's runtime and registers the pending payloads with its workers.
+    fn register_pending(self, session: &Session) -> Result<(), KrishivError> {
         let runtime = self.udfs.grant(session)?;
-        for (digest, name, udtf) in &self.udtfs {
-            self.udfs
-                .inline_udtf(session, *digest, name, udtf, Some(runtime))?;
-        }
-        for (digest, version, udf) in self.pending {
-            runtime.register(&udf.name, version, &udf);
+        for (digest, version, name, udf) in self.pending {
+            runtime.register(&name, version, &udf);
             let mut state = self.udfs.lock();
             state.anonymous.insert(digest, version);
-            state
-                .payloads
-                .push((udf.name.clone(), version, Arc::new(udf)));
+            state.payloads.push((name, version, Arc::new(udf)));
         }
         Ok(())
     }
@@ -538,49 +470,43 @@ impl<'a> InlineUdfs<'a> {
 
 impl InlineUdfs<'_> {
     /// Whether analyzing the plan runs client code: an inline UDTF without a return type, whose
-    /// `analyze` the analyzer calls (ADR 0046 §3b: `Usage` on `System("udf")` before it, then
-    /// [`Self::prepare_analysis`] with `granted`).
+    /// `analyze` the analyzer calls. Its payload must reach the session's workers before the analysis
+    /// ([`Self::prepare_analysis`]), which installs the session's runtime: the caller checks `Usage` on
+    /// `System("udf")` first (ADR 0046 N1: no runtime before the check; the session's own check at
+    /// analysis, S-2, comes after the runtime is installed).
     pub(crate) fn analysis_runs_code(&self) -> bool {
-        self.udtfs.iter().any(|(_, _, u)| u.return_type.is_none())
+        self.runs_analyze
     }
 
-    /// Makes the inline UDTFs of a plan that is only analyzed resolvable: each is registered in the
-    /// session's library under its hidden name (no code runs: its declared result types the call). With
-    /// `granted` (the caller passed the `Usage` check because [`Self::analysis_runs_code`]), their payloads
-    /// also go to the session's workers, so `analyze` can run.
+    /// For a plan that is only analyzed: registers the payloads of its inline UDTFs without a return
+    /// type, so their `analyze` can run. Call only after the `Usage` check when
+    /// [`Self::analysis_runs_code`]. A typed inline UDTF needs nothing: its call name carries its
+    /// definition (`krishiv_session::python_udtf_call_name`), and no library entry, runtime or payload is
+    /// written.
     ///
     /// # Errors
-    /// [`SessionPython::grant`]'s when `granted`, and the session's refusal of a definition.
-    pub(crate) fn prepare_analysis(
-        &self,
-        session: &Session,
-        granted: bool,
-    ) -> Result<(), KrishivError> {
-        let runtime = if granted && !self.udtfs.is_empty() {
-            Some(self.udfs.grant(session)?)
-        } else {
-            None
-        };
-        for (digest, name, udtf) in &self.udtfs {
-            self.udfs
-                .inline_udtf(session, *digest, name, udtf, runtime)?;
+    /// [`SessionPython::grant`]'s.
+    pub(crate) fn prepare_analysis(self, session: &Session) -> Result<(), KrishivError> {
+        if !self.analysis || self.pending.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.register_pending(session)
     }
 
-    /// The version `udf` runs under in this session: the one it was registered with before, or a new
-    /// top-bit version it is registered under once the plan's privilege check passed ([`Self::grant`]).
-    /// Marks the plan as calling client code.
-    fn version_of(&mut self, udf: &PythonUdf) -> Result<u32, KrishivError> {
-        if udf.name.contains('\0') {
-            return Err(KrishivUnsupportedFeature {
-                feature: "Python UDF names holding a NUL character".to_owned(),
-            }
-            .into());
-        }
+    /// The version a UDF or UDTF of digest `key` runs under in this session: the one it was registered
+    /// with before, or a new top-bit version its `payload` is registered under (as `name`) once the plan's
+    /// privilege check passed ([`Self::grant`]). In an analysis, a definition that runs nothing while
+    /// analyzed (`typed`) takes a version from its digest and nothing is recorded. Marks the plan as
+    /// calling client code.
+    fn version(
+        &mut self,
+        key: [u8; 32],
+        typed: bool,
+        name: impl FnOnce() -> String,
+        payload: impl FnOnce() -> PythonUdf,
+    ) -> Result<u32, KrishivError> {
         self.seen = true;
-        let key = digest(udf);
-        if self.analysis {
+        if self.analysis && typed {
             // Typed, never run or registered: a version from the definition's digest, so the plans of two
             // UDFs that differ only in their function never compare or hash equal (Spark's `PythonUDF`
             // compares its `command` bytes).
@@ -591,7 +517,7 @@ impl InlineUdfs<'_> {
         if let Some(v) = state.anonymous.get(&key) {
             return Ok(*v);
         }
-        if let Some(&(_, v, _)) = self.pending.iter().find(|(d, _, _)| *d == key) {
+        if let Some(&(_, v, _, _)) = self.pending.iter().find(|(d, _, _, _)| *d == key) {
             return Ok(v);
         }
         let n = state.last_anonymous.wrapping_add(1);
@@ -604,8 +530,19 @@ impl InlineUdfs<'_> {
         state.last_anonymous = n;
         drop(state);
         let v = n | ANONYMOUS_VERSION_BIT;
-        self.pending.push((key, v, udf.clone()));
+        self.pending.push((key, v, name(), payload()));
         Ok(v)
+    }
+
+    /// [`Self::version`] for a Python UDF (inline or a relation's): nothing runs while it is analyzed.
+    fn version_of(&mut self, udf: &PythonUdf) -> Result<u32, KrishivError> {
+        if udf.name.contains('\0') {
+            return Err(KrishivUnsupportedFeature {
+                feature: "Python UDF names holding a NUL character".to_owned(),
+            }
+            .into());
+        }
+        self.version(digest(udf), true, || udf.name.clone(), || udf.clone())
     }
 }
 
@@ -632,9 +569,12 @@ impl TranslateHost for InlineUdfs<'_> {
         })
     }
 
-    /// An inline UDTF goes by a hidden name of the session, one per distinct definition (by digest),
-    /// registered once the plan's privilege check passed ([`Self::grant`]), or for analysis by
-    /// [`Self::prepare_analysis`]. Marks the plan as calling client code.
+    /// An inline UDTF (relation 38) is called by the session's encoded name of an unregistered UDTF
+    /// (`krishiv_session::python_udtf_call_name`, S-1): no entry in the session's library. Its version is
+    /// allocated as an inline UDF's ([`Self::version`]); its payload goes to the runtime under its name in
+    /// lower case (the plan's `PythonUdfRef` name) once the plan's privilege check passed, or, for one
+    /// without a return type in an analysis, by [`Self::prepare_analysis`]. Marks the plan as calling
+    /// client code.
     fn inline_python_udtf(&mut self, udtf: &PythonUdtf) -> Result<String, KrishivError> {
         if udtf.name.contains('\0') {
             return Err(KrishivUnsupportedFeature {
@@ -642,13 +582,15 @@ impl TranslateHost for InlineUdfs<'_> {
             }
             .into());
         }
-        self.seen = true;
-        let digest = udtf_digest(udtf);
-        let name = udtf_name(&udtf.name, &digest);
-        if !self.udtfs.iter().any(|(d, _, _)| *d == digest) {
-            self.udtfs.push((digest, name.clone(), udtf.clone()));
-        }
-        Ok(name)
+        let typed = udtf.return_type.is_some();
+        self.runs_analyze |= !typed;
+        let version = self.version(
+            udtf_digest(udtf),
+            typed,
+            || udtf.name.to_lowercase(),
+            || udtf_payload(udtf),
+        )?;
+        krishiv_session::python_udtf_call_name(&udtf_def(udtf, udtf.name.clone()), version)
     }
 }
 

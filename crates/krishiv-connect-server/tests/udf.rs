@@ -1658,3 +1658,35 @@ async fn a_clone_runs_the_sources_inline_udtf() {
         .expect("source again");
     assert_eq!(int_rows(&again), want);
 }
+
+/// M1: a typed `AnalyzePlan` of an inline UDTF writes nothing to the session (S-1: its call name carries
+/// its definition). Whoever analyzes it, viewer or admin, no UDTF of its name resolves afterwards and no
+/// worker starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_typed_analyze_plan_of_an_inline_udtf_leaves_no_udtf_behind() {
+    let py = python();
+    let run = start(py.as_deref()).await;
+    for token in [VIEWER, ADMIN] {
+        let message = udtf_message(
+            "range_udtf",
+            pickle_udtf(py.as_deref(), RANGE_ROWS),
+            301,
+            Some("i bigint"),
+            vec![lit_long(3)],
+        );
+        let schema = analyze_schema(&run.channel, inline_udtf(message), token)
+            .await
+            .expect("typed without running it");
+        assert!(schema.result.is_some());
+        let s = execute(&run.channel, sql("SELECT * FROM range_udtf(3)"), token)
+            .await
+            .expect_err("analysis registered nothing");
+        assert_eq!(
+            error_class(&s),
+            "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+            "{s:?}"
+        );
+        release(&run.channel, token).await;
+    }
+    assert_eq!(run.pool.live_workers(), 0);
+}
