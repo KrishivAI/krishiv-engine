@@ -215,18 +215,23 @@ fn a_named_argument_is_an_alias_as_sql_lowers_it() {
         panic!("a named argument: {:?}", args[0]);
     };
     assert_eq!(name, "n");
-    // A plain alias is not a parameter name: refused rather than read as one.
+    // A plain alias is not a parameter name: Spark's `builder` passes it positionally, so the
+    // argument is its child.
     let aliased = expr(ExprType::Alias(Box::new(pb::expression::Alias {
         expr: Some(Box::new(long(3))),
         name: vec!["n".to_owned()],
         metadata: None,
     })));
-    let e = fails(translate_relation_with(
-        &call(udtf(typed(300), vec![aliased])),
-        &c,
-        &mut host,
-    ));
-    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
+    let plan = translate_relation_with(&call(udtf(typed(300), vec![aliased])), &c, &mut host)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let PlanNode::TableFunction { args, .. } = &plan.root().node else {
+        panic!("a table function: {plan}");
+    };
+    assert!(
+        matches!(args[0].node, ExprNode::Literal(_)),
+        "a positional argument: {:?}",
+        args[0]
+    );
 }
 
 #[test]

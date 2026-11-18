@@ -186,8 +186,10 @@ struct State {
 }
 
 /// An inline UDTF of the session.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct InlineUdtf {
+    /// Its hidden name, lower case (the library's key).
+    key: String,
     /// Its registration version in the session's library.
     version: u32,
     /// Its payload is registered with the session's workers (only after a passed privilege check).
@@ -269,7 +271,12 @@ impl SessionPython {
         let name = entry.def.name.to_lowercase();
         let payload = udtf_payload(udtf);
         runtime.register(&name, entry.version, &payload);
-        self.lock()
+        let mut state = self.lock();
+        // A registration under an inline UDTF's hidden name replaced that library entry: the
+        // cached version is no longer the library's, so the next inline call registers its own
+        // definition again (a new version) instead of resolving to this one.
+        state.udtfs.retain(|_, u| u.key != name);
+        state
             .payloads
             .push((name, entry.version, Arc::new(payload)));
         Ok(())
@@ -286,11 +293,15 @@ impl SessionPython {
         runtime: Option<&Arc<dyn SessionUdfRuntime>>,
     ) -> Result<(), KrishivError> {
         let mut state = self.lock();
+        // The cached entry is the library's current one: every registration of this session goes
+        // through `SessionPython` (`register_udtf` drops an entry whose hidden name it takes), so a
+        // cached version that is gone means the library's entry changed and is registered again.
         let mut known = match state.udtfs.get(&digest) {
-            Some(known) => *known,
+            Some(known) => known.clone(),
             None => {
                 let entry = session.register_python_udtf(udtf_def(udtf, name.to_owned()))?;
                 InlineUdtf {
+                    key: name.to_lowercase(),
                     version: entry.version,
                     payload: false,
                 }

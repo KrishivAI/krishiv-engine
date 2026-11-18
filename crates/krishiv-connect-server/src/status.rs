@@ -162,6 +162,11 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ),
         ("CONNECT_INVALID_PLAN.CANNOT_PARSE", SPARK_SQL_EXCEPTION),
         ("CONNECT_INVALID_PLAN.", INVALID_PLAN_INPUT),
+        // `InvalidInputErrors.invalidSchemaTypeNonStruct` (v4.3.0, line 161) is an `InvalidPlanInput`:
+        // the planner's refusal of a Python UDTF's non-struct return type, the only site that raises it in
+        // Krishiv (`krishiv-connect` `python_udtf`). Spark raises the class elsewhere as an
+        // `AnalysisException`; a Krishiv site of that kind needs its own carrier before it is added.
+        ("INVALID_SCHEMA_TYPE_NON_STRUCT", INVALID_PLAN_INPUT),
         // The Interrupt handler throws `SparkSQLException` (v4.3.0 lines 45-61).
         (
             "INVALID_PARAMETER_VALUE.INTERRUPT_TYPE_",

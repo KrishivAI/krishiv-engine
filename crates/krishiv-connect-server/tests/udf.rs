@@ -192,8 +192,18 @@ async fn execute(
     plan: pb::Plan,
     token: &str,
 ) -> Result<Vec<pb::ExecutePlanResponse>, tonic::Status> {
+    execute_in(channel, SESSION, plan, token).await
+}
+
+/// [`execute`] in the session `session`.
+async fn execute_in(
+    channel: &Channel,
+    session: &str,
+    plan: pb::Plan,
+    token: &str,
+) -> Result<Vec<pb::ExecutePlanResponse>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
-        session_id: SESSION.to_owned(),
+        session_id: session.to_owned(),
         user_context: Some(pb::UserContext {
             user_id: "someone".to_owned(),
             ..Default::default()
@@ -1377,7 +1387,11 @@ async fn a_udtf_is_client_code_and_a_viewer_starts_no_worker() {
         let s = execute(&run.channel, sql("SELECT * FROM range_udtf(3)"), token)
             .await
             .expect_err("never registered");
-        assert_ne!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        assert_eq!(
+            error_class(&s),
+            "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+            "{s:?}"
+        );
         // Typing a UDTF with a return type runs no client code: no privilege needed.
         let schema = analyze_schema(&run.channel, inline_udtf(typed()), token)
             .await
@@ -1482,13 +1496,29 @@ async fn a_udtf_with_analyze_and_no_return_type() {
     let Some(pb::analyze_plan_response::Result::Schema(s)) = schema.result else {
         panic!("a schema: {schema:?}");
     };
-    assert!(format!("{s:?}").contains("Struct"), "{s:?}");
+    // `analyze` gave `struct<i: bigint>`: one nullable long field `i`.
+    let Some(Kind::Struct(row)) = s.schema.and_then(|t| t.kind) else {
+        panic!("a struct schema");
+    };
+    let [field] = row.fields.as_slice() else {
+        panic!("one field: {row:?}");
+    };
+    assert_eq!(field.name, "i");
+    assert!(field.nullable);
+    assert!(
+        matches!(
+            field.data_type.as_ref().and_then(|t| t.kind.as_ref()),
+            Some(Kind::Long(_))
+        ),
+        "{field:?}"
+    );
 }
 
 /// The DataFrame-path cases of `python/tests/pyspark_udf/udtf/` that relation 38 runs: `rows/udtf<k>/eval_dataframe`
 /// (`make_repeat(api, kind)(lit(7), lit(3))`) for 300, 301 and 302, each the case's own class from `cases.py`
 /// (cloudpickled by value, as `export_cases.py` pickles it) sent as a stock client sends the call, compared with
-/// PySpark 4.2.0's answer in `goldens.json` (rows sorted, as the case orders them by every column). The other
+/// PySpark 4.2.0's answer in `goldens.json` (rows sorted, as the case orders them by every column; these rows
+/// do not depend on the Spark version, so they stand for 4.3.0 too). The other
 /// DataFrame cases need `t.asTable()` (a `TABLE` argument, refused) or `lateralJoin` (relation 44, not translated).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_dataframe_udtf_goldens_that_relation_38_runs() {
@@ -1574,4 +1604,57 @@ async fn a_table_argument_is_refused() {
         .await
         .expect_err("TABLE arguments are not supported yet");
     assert_eq!(error_class(&s), "KRISHIV_UNSUPPORTED_FEATURE", "{s:?}");
+}
+
+/// A `CloneSession` clone runs the source's inline UDTF: the same relation 38 in the clone gives the same
+/// rows, on the clone's own workers (its runtime holds the source's payloads, `SessionPython::copy_for`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_clone_runs_the_sources_inline_udtf() {
+    const CLONE: &str = "8c1f0e7a-4b2d-4e9a-a3c5-2d7f6b1e9a40";
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    let call = || {
+        inline_udtf(udtf_message(
+            "range_udtf",
+            pickle_udtf(Some(&py), RANGE_ROWS),
+            301,
+            Some("i bigint"),
+            vec![lit_long(3)],
+        ))
+    };
+    let want = (
+        "struct<i:bigint>".to_owned(),
+        vec![vec![Some(0)], vec![Some(1)], vec![Some(2)]],
+    );
+    let source = execute(&run.channel, call(), ADMIN).await.expect("source");
+    assert_eq!(int_rows(&source), want);
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    let cloned = grpc
+        .unary(
+            with_token(
+                pb::CloneSessionRequest {
+                    session_id: SESSION.to_owned(),
+                    new_session_id: Some(CLONE.to_owned()),
+                    client_type: Some("python".to_owned()),
+                    ..Default::default()
+                },
+                ADMIN,
+            ),
+            path("CloneSession"),
+            tonic_prost::ProstCodec::<pb::CloneSessionRequest, pb::CloneSessionResponse>::default(),
+        )
+        .await
+        .expect("clone")
+        .into_inner();
+    assert_eq!(cloned.new_session_id, CLONE);
+    let in_clone = execute_in(&run.channel, CLONE, call(), ADMIN)
+        .await
+        .expect("the clone runs the inline UDTF");
+    assert_eq!(int_rows(&in_clone), want);
+    // The source still runs it after the clone.
+    let again = execute(&run.channel, call(), ADMIN)
+        .await
+        .expect("source again");
+    assert_eq!(int_rows(&again), want);
 }

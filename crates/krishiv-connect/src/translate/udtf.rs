@@ -16,7 +16,7 @@
 //! registers it as a hidden, per-definition UDTF of the session) and becomes [`PlanNode::TableFunction`]
 //! over that name, the node SQL's `FROM f(..)` lowers to, so analysis (including `analyze`) and planning are
 //! SQL's. A `NamedArgumentExpression` argument is an [`ExprNode::Alias`], as SQL lowers `f(n => 3)`; a plain
-//! alias is refused (the analyzer would read it as a parameter name). A `TABLE` argument (`df.asTable()`, a
+//! alias is unwrapped to its child, a positional argument as in Spark's `builder`. A `TABLE` argument (`df.asTable()`, a
 //! `SubqueryExpression` of type `TABLE_ARG`, which also needs `with_relations`) is refused with
 //! `KRISHIV_UNSUPPORTED_FEATURE`.
 
@@ -154,13 +154,13 @@ impl Translator<'_> {
                     })));
                 }
                 _ => {
-                    let e = self.expression(a)?;
-                    if matches!(e.node, ExprNode::Alias { .. }) {
-                        return Err(unsupported_field(
-                            MESSAGE,
-                            "arguments",
-                            "aliased arguments of Python UDTFs",
-                        ));
+                    // A plain alias is an ordinary positional argument in Spark's
+                    // `UserDefinedPythonTableFunction.builder` (only a `NamedArgumentExpression`
+                    // names a parameter): its child is passed, so the analyzer never reads the
+                    // alias as a parameter name.
+                    let mut e = self.expression(a)?;
+                    while let ExprNode::Alias { expr, .. } = &e.node {
+                        e = Arc::clone(expr);
                     }
                     args.push(e);
                 }
