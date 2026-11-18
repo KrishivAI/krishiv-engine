@@ -374,6 +374,28 @@ async fn flight_sql_requires_auth() {
     assert_eq!(h.flight.session_count(), 0);
 }
 
+/// `Authorization: Basic` stays a malformed credential on every surface until owner item 5
+/// (§3.1): the operator's own token as the password is refused before any session work.
+#[tokio::test(flavor = "multi_thread")]
+async fn basic_refused_until_enabled() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let cmd = CommandStatementQuery {
+        query: "SELECT 1".to_owned(),
+        transaction_id: None,
+    };
+    let mut r = Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
+    // base64("ops:" + OPS)
+    r.metadata_mut().insert(
+        "authorization",
+        "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm"
+            .parse()
+            .expect("header"),
+    );
+    let e = h.client.get_flight_info(r).await.expect_err("basic");
+    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
+    assert_eq!(h.flight.session_count(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn handshake_echoes_bearer() {
     let mut h = start(FlightSqlConfig::default()).await;
@@ -575,6 +597,14 @@ async fn flight_sql_refused_while_draining() {
         .expect_err("draining");
     assert_eq!(e.code(), Code::Unavailable, "{e:?}");
     assert_eq!(e.message(), "server shutting down");
+    // ListActions needs no session, but drains too (§2 "Drain": every Flight RPC).
+    let e = h
+        .client
+        .list_actions(authed(arrow_flight::Empty {}, OPS, None))
+        .await
+        .expect_err("draining");
+    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
+    assert_eq!(e.message(), "server shutting down");
     assert_eq!(h.flight.session_count(), 0);
 }
 
@@ -634,6 +664,53 @@ async fn cookie_session_runs_more_statements_than_handle_cap() {
     for t in [ticket(&second), ticket(&third)] {
         fetch(&mut h, OPS, Some(&cookie), t).await.expect("kept");
     }
+}
+
+/// A command at a full handle cap whose every slot is fetching is refused before it runs
+/// (§4.1: the slot is taken first): `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`, and the view it would
+/// have made does not exist.
+#[tokio::test(flavor = "multi_thread")]
+async fn command_at_handle_cap_does_not_run() {
+    let mut h = start(FlightSqlConfig {
+        handles: krishiv_flight_sql::HandleLimits {
+            per_session: 1,
+            ..krishiv_flight_sql::HandleLimits::default()
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let stream = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    wait_busy(&h, 2).await;
+    let e = info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "CREATE TEMPORARY VIEW at_cap AS SELECT 1 AS n",
+    )
+    .await
+    .expect_err("every slot is fetching");
+    assert_eq!(e.code(), Code::ResourceExhausted, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_HANDLE_LIMIT")
+    );
+    drop(stream);
+    wait_busy(&h, 0).await;
+    // The fetch is over, so its handle is idle and gives way to this one.
+    let e = info(&mut h, OPS, Some(&cookie), "SELECT * FROM at_cap")
+        .await
+        .expect_err("the refused command created the view");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("TABLE_OR_VIEW_NOT_FOUND")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1343,21 +1420,27 @@ async fn slow_first_batch_is_not_idle() {
     .expect("info");
     let cookie = cookie.expect("cookie");
     let flight = h.flight.clone();
+    // Each sweep runs a second ahead, past the idle timeout: a sweep that lands while the first
+    // batch is still pending would cancel the fetch if it counted as idle. The check counts the
+    // sweeps that ran during the fetch rather than timing the query (review of 40489d958).
+    let sweeps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&sweeps);
     let sweeper = tokio::spawn(async move {
         loop {
             flight.sweep_at(Instant::now() + Duration::from_secs(1));
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     });
-    let started = Instant::now();
+    let before = sweeps.load(std::sync::atomic::Ordering::Relaxed);
     let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&i)).await;
-    let took = started.elapsed();
+    let during = sweeps.load(std::sync::atomic::Ordering::Relaxed) - before;
     sweeper.abort();
     let batches = batches.expect("the slow query is not cancelled as idle");
     assert_eq!(rows(&batches), 1);
     assert!(
-        took > Duration::from_millis(300),
-        "the first batch came in {took:?}: not slow enough to test the idle clock"
+        during >= 2,
+        "{during} sweeps ran during the fetch: too few to test the idle clock"
     );
 }
 

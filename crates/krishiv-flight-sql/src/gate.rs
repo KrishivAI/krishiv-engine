@@ -220,11 +220,17 @@ impl FlightService for FlightGate {
         FlightService::do_action(&self.0, request).await
     }
 
-    /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either).
+    /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either);
+    /// while the server drains it answers `UNAVAILABLE`, as every Flight RPC does (§2 "Drain").
     async fn list_actions(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
+        if self.0.draining() {
+            return self
+                .0
+                .counted(Command::ListActions, Err(crate::call::shutting_down()));
+        }
         let actions = futures::stream::iter(served_actions().into_iter().map(Ok));
         let stream: Self::ListActionsStream = Box::pin(actions);
         self.0
