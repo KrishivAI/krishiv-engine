@@ -117,6 +117,9 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
+    /// plan reads the clock.
+    pub(crate) query_start: Option<i64>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):

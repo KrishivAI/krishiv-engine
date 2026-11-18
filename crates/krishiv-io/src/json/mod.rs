@@ -141,6 +141,8 @@ impl FileFormat for JsonFormat {
 #[cfg(test)]
 mod corrupt_tests;
 #[cfg(test)]
+mod count_tests;
+#[cfg(test)]
 mod golden_tests;
 #[cfg(test)]
 mod tests;
