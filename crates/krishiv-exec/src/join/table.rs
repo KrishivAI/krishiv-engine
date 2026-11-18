@@ -35,7 +35,7 @@ use krishiv_types::batch::{Batch, Weights};
 use super::keys::{Encoded, KeyRows};
 use crate::error::{Result, internal};
 use crate::hash::{KeyTable, ProbeCount};
-use crate::rows::{IndexChoice, JoinIndex, RowLayout, RowSource};
+use crate::rows::{DirectoryLoad, IndexChoice, JoinIndex, RowLayout, RowSource};
 
 /// End of a chain / no match.
 pub(crate) const NONE: u32 = u32::MAX;
@@ -662,8 +662,12 @@ pub(crate) enum IndexKind {
     Swiss = 1,
     /// The row layout's flat [`JoinIndex`], duplicates chained.
     RowFlat = 2,
-    /// The row layout's salted [`JoinIndex`], duplicates chained.
+    /// The row layout's salted [`JoinIndex`] at the compact load,
+    /// duplicates chained.
     RowSalted = 4,
+    /// The row layout's salted [`JoinIndex`] at the roomy load
+    /// ([`DirectoryLoad::Roomy`]), duplicates chained.
+    RowSaltedRoomy = 8,
 }
 
 impl IndexKind {
@@ -673,6 +677,7 @@ impl IndexKind {
             (Self::Swiss, "swiss+chain"),
             (Self::RowFlat, "row-flat+chain"),
             (Self::RowSalted, "row-salted+chain"),
+            (Self::RowSaltedRoomy, "row-salted-roomy+chain"),
         ]
         .iter()
         .filter(|(k, _)| bits & (*k as u64) != 0)
@@ -718,12 +723,18 @@ impl JoinTable {
     /// Bytes the index over `rows` rows with `key_bytes` bytes of arrow-row
     /// keys takes (reserved before [`build`](Self::build)). Arrow rows: the
     /// key table at worst one key per row, a chain head per key and a link
-    /// per row. Row layout: the [`JoinIndex`] sized for one key per row and
-    /// a link per row (it copies no keys and holds the heads itself).
-    pub(crate) fn index_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
+    /// per row. Row layout: the [`JoinIndex`] sized for one key per row at
+    /// `load` and a link per row (it copies no keys and holds the heads
+    /// itself).
+    pub(crate) fn index_bytes(
+        rows: usize,
+        key_bytes: usize,
+        row_layout: bool,
+        load: DirectoryLoad,
+    ) -> usize {
         if row_layout {
             IndexChoice::Adaptive
-                .bytes(rows)
+                .bytes(rows, load)
                 .saturating_add(rows * size_of::<u32>())
         } else {
             KeyTable::new().projected_size(rows, key_bytes) + rows * 2 * size_of::<u32>()
@@ -736,10 +747,15 @@ impl JoinTable {
     /// old table beside the new one, at most half the final size again.
     /// The caller shrinks the reservation to [`index_memory`](Self::index_memory)
     /// once the table is built.
-    pub(crate) fn index_bytes_estimated(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
-        let base = Self::index_bytes(rows, key_bytes, row_layout);
+    pub(crate) fn index_bytes_estimated(
+        rows: usize,
+        key_bytes: usize,
+        row_layout: bool,
+        load: DirectoryLoad,
+    ) -> usize {
+        let base = Self::index_bytes(rows, key_bytes, row_layout, load);
         if row_layout {
-            base.saturating_add(IndexChoice::Adaptive.bytes(rows) / 2)
+            base.saturating_add(IndexChoice::Adaptive.bytes(rows, load) / 2)
         } else {
             base
         }
@@ -756,19 +772,27 @@ impl JoinTable {
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
     ) -> Result<Self> {
-        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, None)
+        Self::build_with(
+            arena,
+            layout,
+            g_seed,
+            IndexChoice::Adaptive,
+            DirectoryLoad::Compact,
+            None,
+        )
     }
 
     /// [`build`](Self::build) of a row-layout arena sized for about `keys`
-    /// distinct keys (a cardinality estimate): see
-    /// [`JoinIndex::build_expecting`].
+    /// distinct keys (a cardinality estimate), a salted directory at `load`:
+    /// see [`JoinIndex::build_expecting`].
     pub(crate) fn build_expecting(
         arena: RowArena,
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
         keys: Option<usize>,
+        load: DirectoryLoad,
     ) -> Result<Self> {
-        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, keys)
+        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, load, keys)
     }
 
     /// Bytes the index and the chains hold (the arena not included): what a
@@ -864,6 +888,7 @@ impl JoinTable {
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
         choice: IndexChoice,
+        load: DirectoryLoad,
         keys: Option<usize>,
     ) -> Result<Self> {
         let n = arena.len();
@@ -900,6 +925,7 @@ impl JoinTable {
                     keys.unwrap_or(n),
                     g_seed,
                     choice,
+                    load,
                     &mut next,
                 )?,
                 layout: Arc::clone(layout),
@@ -986,10 +1012,10 @@ impl JoinTable {
         match &self.index {
             Index::Arrow { keys, .. } => (keys.len(), keys.buckets(), IndexKind::Swiss),
             Index::Rows { index, .. } => {
-                let kind = if index.is_flat() {
-                    IndexKind::RowFlat
-                } else {
-                    IndexKind::RowSalted
+                let kind = match index.load() {
+                    None => IndexKind::RowFlat,
+                    Some(DirectoryLoad::Compact) => IndexKind::RowSalted,
+                    Some(DirectoryLoad::Roomy) => IndexKind::RowSaltedRoomy,
                 };
                 (index.len(), index.buckets(), kind)
             }
@@ -1070,8 +1096,8 @@ mod tests {
         assert!(!t.is_unique());
         assert_eq!((t.next_of(2), t.next_of(0)), (0, NONE));
         assert_eq!(t.arena().len(), 3);
-        assert!(JoinTable::index_bytes(3, 3, false) > 0);
-        assert!(JoinTable::index_bytes(3, 0, true) > 0);
+        assert!(JoinTable::index_bytes(3, 3, false, DirectoryLoad::Compact) > 0);
+        assert!(JoinTable::index_bytes(3, 0, true, DirectoryLoad::Compact) > 0);
         assert_eq!(t.flat_index(), None);
         assert_eq!(t.arena().weight(0), 1);
         assert!(t.arena().payload(0).is_empty());
@@ -1136,8 +1162,15 @@ mod tests {
                 let arena = RowArena::over_chunks(&schema, &[chunk(a), chunk(b)])
                     .unwrap_or_else(|e| panic!("{e}"));
                 let l = layout.as_ref().filter(|_| rows);
-                let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice, None)
-                    .unwrap_or_else(|e| panic!("{e}"));
+                let t = JoinTable::build_with(
+                    arena,
+                    l,
+                    hashing.g_seed(),
+                    choice,
+                    DirectoryLoad::Compact,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
                 let probe: Vec<u32> = (0..u32::try_from(n).unwrap_or(0))
                     .filter(|&i| keys.is_valid(i as usize))
                     .collect();

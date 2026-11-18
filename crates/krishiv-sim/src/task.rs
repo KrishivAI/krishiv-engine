@@ -12,10 +12,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use krishiv_common::error::{InternalError, KrishivError};
-use krishiv_exec::ExecConfig;
 use krishiv_exec::physical::{
     ExchangeId, ExchangeInput, ScanId, ScanSplits, SplitFileRef, TaskSpec,
 };
+use krishiv_exec::{ExecConfig, JoinDirectoryLoad};
 use krishiv_io::split::{FilePartition, FileSplit};
 use krishiv_io::{ByteRange, StoreId, VersionToken};
 use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilter};
@@ -307,6 +307,9 @@ struct Settings {
     /// `krishiv.exec.coalesceInput`; absent: the default.
     #[prost(bool, optional, tag = "18")]
     coalesce_input: Option<bool>,
+    /// `krishiv.exec.join.directoryLoad`; absent: the default.
+    #[prost(string, optional, tag = "19")]
+    join_directory_load: Option<String>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -339,6 +342,7 @@ impl Settings {
             deterministic_order,
             union_output_partitioning,
             coalesce_input,
+            join_directory_load,
         } = c.clone();
         Self {
             batch_size: wide(batch_size),
@@ -361,6 +365,7 @@ impl Settings {
             agg_direct_keys: Some(agg_direct_keys),
             union_output_partitioning: Some(union_output_partitioning),
             coalesce_input: Some(coalesce_input),
+            join_directory_load: Some(join_directory_load.as_str().to_owned()),
         }
     }
 
@@ -396,6 +401,11 @@ impl Settings {
             coalesce_input: self
                 .coalesce_input
                 .unwrap_or(ExecConfig::default().coalesce_input),
+            join_directory_load: match self.join_directory_load.as_deref() {
+                None => ExecConfig::default().join_directory_load,
+                Some(v) => JoinDirectoryLoad::parse(v)
+                    .ok_or_else(|| internal(format!("a task's directory load {v:?}")))?,
+            },
         })
     }
 }
@@ -612,6 +622,27 @@ mod tests {
         let mut old = Settings::of(&off);
         old.coalesce_input = None;
         assert!(old.config().unwrap().coalesce_input);
+    }
+
+    #[test]
+    fn join_directory_load_round_trips_and_defaults_when_absent() {
+        for load in [JoinDirectoryLoad::Compact, JoinDirectoryLoad::Roomy] {
+            let set = ExecConfig {
+                join_directory_load: load,
+                ..ExecConfig::default()
+            };
+            let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &set).unwrap()).unwrap();
+            assert_eq!(got.join_directory_load, load);
+        }
+        // A descriptor written before tag 19 existed.
+        let mut old = Settings::of(&ExecConfig::default());
+        old.join_directory_load = None;
+        assert_eq!(
+            old.config().unwrap().join_directory_load,
+            JoinDirectoryLoad::Auto
+        );
+        old.join_directory_load = Some("half".to_owned());
+        assert!(old.config().is_err());
     }
 
     #[test]

@@ -103,6 +103,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    ("krishiv.exec.join.directoryLoad", &EXEC_JOIN_DIRECTORY_LOAD),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,

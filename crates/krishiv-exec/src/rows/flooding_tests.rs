@@ -131,7 +131,11 @@ fn crafted_partial_collisions_scatter() {
     let ordinary: Vec<i64> = (0..i64::try_from(N).unwrap_or(0)).collect();
     let crafted_h = hashes(&crafted);
     assert!(crafted_h.iter().all(|h| h & MASK == 0x5A5));
-    assert_eq!(salted_bytes(N), 4096 * 8, "the mask is the directory's");
+    assert_eq!(
+        salted_bytes(N, DirectoryLoad::Compact),
+        4096 * 8,
+        "the mask is the directory's"
+    );
     for seed in [1, 0xDEAD_BEEF, 0x0123_4567_89AB_CDEF] {
         let longest = |keys: &[i64], h: &[u64]| {
             let (index, _) = salted(&layout, keys, &[], 0, seed);
@@ -181,7 +185,10 @@ fn full_collisions_stay_correct_and_bounded() {
             keys.extend((0..i64::try_from(m).unwrap_or(0)).map(|i| 1_000_000 + i));
             let forged: Vec<usize> = (BASE..BASE + m).collect();
             // Same directory size with and without the colliding keys.
-            assert_eq!(salted_bytes(BASE), salted_bytes(BASE + m));
+            assert_eq!(
+                salted_bytes(BASE, DirectoryLoad::Compact),
+                salted_bytes(BASE + m, DirectoryLoad::Compact)
+            );
             let (index, src) = salted(&layout, &keys, &forged, H, seed);
 
             let collided = run(&index, H);
@@ -262,8 +269,115 @@ fn the_directory_holds_its_keys_without_growing() {
         );
         assert_eq!(
             index.buckets(),
-            salted_bytes(n) / 8,
+            salted_bytes(n, DirectoryLoad::Compact) / 8,
             "{n} keys grew the directory"
         );
+    }
+}
+
+/// Slots of each load, from the rules they implement: compact is the next
+/// power of two of 5/4 of the keys (S5), roomy of twice them (the sizing
+/// before S5), both at least 1,024; at SF1000's 145.8 M `orders` keys the
+/// two are 2^28 and 2^29 slots (the q03 regression, perf-2).
+#[test]
+fn compact_and_roomy_directories_are_sized_by_their_load() {
+    let pow2 = |n: usize| n.next_power_of_two().max(1 << 10) * 8;
+    for n in [
+        0_usize,
+        1,
+        7,
+        819,
+        820,
+        1_024,
+        1_639,
+        2_047,
+        2_048,
+        2_049,
+        4_096,
+        100_000,
+        1 << 20,
+    ] {
+        let compact = salted_bytes(n, DirectoryLoad::Compact);
+        let roomy = salted_bytes(n, DirectoryLoad::Roomy);
+        assert_eq!(compact, pow2(n + n.div_ceil(4)), "{n} compact");
+        assert_eq!(roomy, pow2(2 * n), "{n} roomy");
+        assert!(roomy >= compact, "{n}");
+        assert!(roomy <= 2 * compact, "{n}");
+    }
+    assert_eq!(salted_bytes(145_800_000, DirectoryLoad::Compact), 8 << 28);
+    assert_eq!(salted_bytes(145_800_000, DirectoryLoad::Roomy), 8 << 29);
+    for load in [DirectoryLoad::Compact, DirectoryLoad::Roomy] {
+        assert_eq!(salted_bytes(usize::MAX, load), usize::MAX, "{load:?}");
+        // The flat index does not depend on the load.
+        assert_eq!(
+            IndexChoice::Adaptive.bytes(100, load),
+            flat_bytes(100),
+            "{load:?}"
+        );
+        assert_eq!(
+            IndexChoice::Salted.bytes(100, load),
+            salted_bytes(100, load)
+        );
+    }
+}
+
+/// Built for its keys, a directory of either load holds them at its bound
+/// and never grows past what [`IndexChoice::bytes`] reserved, at the key
+/// counts where its rule lands on a power of two; sized from a low estimate
+/// it grows, and ends no larger than the directory sized for every row (the
+/// growth allowance of `JoinTable::index_bytes_estimated` is half that).
+#[test]
+fn both_loads_hold_their_keys_within_their_reservation() {
+    let layout = layout();
+    for (load, num, den, counts) in [
+        (
+            DirectoryLoad::Compact,
+            4,
+            5,
+            [1_639_usize, 1_638, 1_640, 3_277],
+        ),
+        (DirectoryLoad::Roomy, 1, 2, [2_048, 2_047, 2_049, 4_097]),
+    ] {
+        for n in counts {
+            let keys: Vec<i64> = (0..i64::try_from(n).unwrap_or(0)).collect();
+            let enc = encode(&layout, &keys, &[], 0);
+            let all: Vec<usize> = (0..n).collect();
+            let src = Src {
+                rows: enc.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
+                hashes: enc.hashes().to_vec(),
+                stride: layout.stride(),
+            };
+            for expect in [n, 1, n / 3] {
+                let mut next = vec![NO_MATCH; n];
+                let index = JoinIndex::build_expecting(
+                    &layout,
+                    &src,
+                    n,
+                    expect,
+                    7,
+                    IndexChoice::Salted,
+                    load,
+                    &mut next,
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(index.len(), n);
+                assert_eq!(index.load(), Some(load));
+                assert!(
+                    n * den <= index.buckets() * num,
+                    "{load:?}: {n} keys in {}",
+                    index.buckets()
+                );
+                assert!(
+                    index.memory_size() <= IndexChoice::Salted.bytes(n, load),
+                    "{load:?}: {n} keys (expecting {expect}) took {} bytes",
+                    index.memory_size()
+                );
+                if expect == n {
+                    assert_eq!(index.buckets(), salted_bytes(n, load) / 8, "{load:?} {n}");
+                }
+                let ids: Vec<u32> = (0..u32::try_from(n).unwrap_or(0)).collect();
+                check_finds(&layout, &index, &src, &enc, &ids);
+            }
+        }
     }
 }

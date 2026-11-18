@@ -19,12 +19,13 @@ use super::grace::{
 use super::keys::{Encoded, Hashing, any_invalid};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, FilterPublisher, JoinType, Shared, record, unsupported};
+use crate::context::JoinDirectoryLoad;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::output_spill::{OutputSpill, SpillUnread};
-use crate::rows::Hll;
+use crate::rows::{DirectoryLoad, Hll};
 use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -852,19 +853,47 @@ impl BuildSink {
 /// also slices (held through the probe); transient is the rest of the
 /// tails' copy, which replaces chunks dropped once the arena is built
 /// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
-/// `None` if no rows are in memory.
-fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
+/// `None` if no rows are in memory. A salted directory is sized at `load`.
+fn build_need(
+    part: &Part,
+    row_layout: bool,
+    marks: bool,
+    load: DirectoryLoad,
+) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
     // Finalize sizes row-layout indexes from estimates: reserve their growth.
     let rows = part.mem_rows();
-    let mut index = JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), row_layout);
+    let mut index =
+        JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), row_layout, load);
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
     let (copy, kept) = RowArena::reblock_bytes(&part.chunks, 0);
     Some((index.saturating_add(kept), copy.saturating_sub(kept), kept))
+}
+
+/// What a partition's index reserves at the roomy load beyond the compact
+/// one (growth allowance included): 0 for arrow-row keys and for an index
+/// small enough to be flat, which the load does not size.
+fn roomy_extra(part: &Part, row_layout: bool) -> usize {
+    if part.chunks.is_empty() || !row_layout {
+        return 0;
+    }
+    let rows = part.mem_rows();
+    let at = |load| JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), true, load);
+    at(DirectoryLoad::Roomy).saturating_sub(at(DirectoryLoad::Compact))
+}
+
+/// The load a build reserves its indexes at before it asks for more:
+/// roomy only when forced (`auto` starts compact and asks for the
+/// difference, [`roomy_extra`]).
+fn base_load(mode: JoinDirectoryLoad) -> DirectoryLoad {
+    match mode {
+        JoinDirectoryLoad::Roomy => DirectoryLoad::Roomy,
+        JoinDirectoryLoad::Auto | JoinDirectoryLoad::Compact => DirectoryLoad::Compact,
+    }
 }
 
 /// Returns what a built partition's chunks reserved beyond its arena: the
@@ -904,6 +933,12 @@ struct Job {
     kept: usize,
     /// Its estimated distinct keys (row layout, when sketched).
     keys: Option<usize>,
+    /// The load its lasting need was sized at.
+    load: DirectoryLoad,
+    /// Under `auto`, the bytes a roomy directory needs beyond `need`'s
+    /// compact one ([`roomy_extra`]); asked for without waiting once `need`
+    /// is funded.
+    roomy_extra: usize,
 }
 
 /// An estimate of a sketch's distinct count that is rarely low: the
@@ -1214,6 +1249,8 @@ impl Sink for BuildSink {
             // copies never need the build's size again.
             let mut index = ctx.consumer().reservation();
             let mut held_copy = 0;
+            let mode = ctx.query().config().join_directory_load;
+            let load = base_load(mode);
             if s.spill.is_some() {
                 held_copy = loop {
                     // Once memory ran short, every partition goes to disk: the
@@ -1238,7 +1275,10 @@ impl Sink for BuildSink {
                         let c = lock(&g.collect);
                         let rows = g.hashing.rows();
                         let marks = s.join_type.builds_preserved();
-                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
+                        let needs = c
+                            .parts
+                            .iter()
+                            .filter_map(|p| build_need(p, rows, marks, load));
                         needs.fold((0usize, 0usize), |(i, m), (index, copy, _)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
@@ -1261,15 +1301,21 @@ impl Sink for BuildSink {
                     .enumerate()
                     .filter_map(|(i, (p, keys))| {
                         let marks = s.join_type.builds_preserved();
-                        Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
+                        Some((i, build_need(p, g.hashing.rows(), marks, load)?, p, keys))
                     })
                     .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
                         bytes: p.bytes(),
                         kept,
+                        roomy_extra: if mode == JoinDirectoryLoad::Auto {
+                            roomy_extra(p, g.hashing.rows())
+                        } else {
+                            0
+                        },
                         chunks: std::mem::take(&mut p.chunks),
                         need: (lasting, copy),
                         keys,
+                        load,
                     })
                     .collect()
             };
@@ -1321,12 +1367,32 @@ impl Sink for BuildSink {
                     if let Some(Job {
                         part: p,
                         chunks,
-                        need: (index_bytes, copy),
+                        need: (mut index_bytes, copy),
                         keys,
                         kept,
+                        mut load,
+                        roomy_extra,
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
+                        // `auto`: a roomy directory if the pool grants its
+                        // extra bytes now, with what the partitions still
+                        // queued will ask for (a spilling build reserved
+                        // theirs already), never waiting or spilling.
+                        if roomy_extra > 0 {
+                            let queued: usize = if spill {
+                                0
+                            } else {
+                                jobs.iter()
+                                    .map(|j| j.need.0.saturating_add(j.need.1))
+                                    .fold(0, usize::saturating_add)
+                            };
+                            if index.try_grow(roomy_extra.saturating_add(queued)).is_ok() {
+                                index.shrink(queued);
+                                index_bytes = index_bytes.saturating_add(roomy_extra);
+                                load = DirectoryLoad::Roomy;
+                            }
+                        }
                         copying = copying.saturating_add(copy);
                         self.0
                             .counters
@@ -1347,6 +1413,7 @@ impl Sink for BuildSink {
                                         layout,
                                         hashing.g_seed(),
                                         keys,
+                                        load,
                                     )
                                     .and_then(|t| {
                                         if shared.join_type.builds_preserved() {

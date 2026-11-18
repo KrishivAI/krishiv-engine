@@ -115,8 +115,8 @@ pub mod window;
 pub use cancel::CancellationToken;
 pub use console::maybe_init_tokio_console;
 pub use context::{
-    DEFAULT_BATCH_SIZE, DEFAULT_MORSEL_ROWS, ExecConfig, MemoryHandle, OperatorId, QueryContext,
-    QueryId, TaskContext,
+    DEFAULT_BATCH_SIZE, DEFAULT_MORSEL_ROWS, ExecConfig, JoinDirectoryLoad, MemoryHandle,
+    OperatorId, QueryContext, QueryId, TaskContext,
 };
 pub use error::Result;
 pub use exchange_stats::{EXCHANGE_HLL_BITS, ExchangeStats, PartitionStats};

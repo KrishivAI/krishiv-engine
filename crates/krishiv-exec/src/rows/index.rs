@@ -8,7 +8,8 @@
 //!   wins;
 //! - **salted**: a power-of-two directory of `u64` slots, each a 16-bit
 //!   salt plus `row id + 1`, probed linearly at load ≤ 4/5 (DuckDB's
-//!   `ht_entry_t`, with row ids instead of pointers), above that size,
+//!   `ht_entry_t`, with row ids instead of pointers; [`DirectoryLoad`]: a
+//!   roomy directory keeps load ≤ 1/2), above that size,
 //!   where a probe costs one directory miss and reads a row only when its
 //!   salt matches. Its lookups prefetch each chunk's slots, then its first
 //!   salt-matching rows, so the misses overlap; `hashbrown` has no way to
@@ -99,6 +100,8 @@ enum Kind {
 pub struct JoinIndex {
     seed: u64,
     kind: Kind,
+    /// The load the salted directory was sized for.
+    load: DirectoryLoad,
     keys: usize,
 }
 
@@ -123,27 +126,49 @@ pub fn flat_bytes(n: usize) -> usize {
         .saturating_add(16)
 }
 
-/// Load of a salted directory at most `SALTED_LOAD_NUM / SALTED_LOAD_DEN`
-/// (4/5): the directory is the next power of two of 5/4 of its keys
-/// (DuckDB's load factor; study 21 §5: `next_pow2(2 x keys)` landed at
-/// 3.7 slots per key on q21's 145 M-key build at SF1000, a third of its
-/// table's bytes), so a filled one sits between 2/5 and 4/5. The 16-bit
-/// salt keeps a probe from reading a row for all but 1 in 65,536 of the
-/// slots it passes.
-const SALTED_LOAD_NUM: usize = 4;
-const SALTED_LOAD_DEN: usize = 5;
+/// How full a salted directory may get. The 16-bit salt keeps a probe from
+/// reading a row for all but 1 in 65,536 of the slots it passes; what the
+/// load changes is how many slots a probe passes, most of all a probe whose
+/// key is absent, which walks its run to the next empty slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectoryLoad {
+    /// Load ≤ 4/5: the next power of two of 5/4 of the keys (DuckDB's load
+    /// factor; S5, study 21 §5: `next_pow2(2 x keys)` landed at 3.7 slots per
+    /// key on q21's 145 M-key build at SF1000, a third of its table's
+    /// bytes), so a filled one sits between 2/5 and 4/5.
+    #[default]
+    Compact,
+    /// Load ≤ 1/2: the next power of two of twice the keys (the sizing
+    /// before S5). At SF1000 q03's `orders` build (145.8 M keys) sits at
+    /// load 0.27 instead of 0.54, and its mostly-missing probe walked
+    /// shorter runs (perf-2, q03 bisect: +56 ns per probed row compact).
+    Roomy,
+}
 
-/// Slots of a salted directory for `n` keys at load ≤ 4/5.
-fn salted_slots(n: usize) -> usize {
-    n.saturating_add(n.div_ceil(SALTED_LOAD_NUM))
+impl DirectoryLoad {
+    /// The load bound as `(num, den)`: at most `num / den` of the slots hold
+    /// a key.
+    const fn bound(self) -> (usize, usize) {
+        match self {
+            Self::Compact => (4, 5),
+            Self::Roomy => (1, 2),
+        }
+    }
+}
+
+/// Slots of a salted directory for `n` keys at `load`: the next power of two
+/// of the fewest slots `s` with `n * den <= s * num`.
+fn salted_slots(n: usize, load: DirectoryLoad) -> usize {
+    let (num, den) = load.bound();
+    n.saturating_add(n.saturating_mul(den - num).div_ceil(num))
         .checked_next_power_of_two()
         .unwrap_or(usize::MAX)
         .max(MIN_SLOTS)
 }
 
-/// Bytes of a salted directory for `n` keys.
-pub fn salted_bytes(n: usize) -> usize {
-    salted_slots(n).saturating_mul(size_of::<u64>())
+/// Bytes of a salted directory for `n` keys at `load`.
+pub fn salted_bytes(n: usize, load: DirectoryLoad) -> usize {
+    salted_slots(n, load).saturating_mul(size_of::<u64>())
 }
 
 impl IndexChoice {
@@ -156,12 +181,13 @@ impl IndexChoice {
         }
     }
 
-    /// Bytes the index over `rows` rows takes at most (it never grows).
-    pub fn bytes(self, rows: usize) -> usize {
+    /// Bytes the index over `rows` rows takes at most (it never grows); a
+    /// salted directory at `load` (the flat index ignores it).
+    pub fn bytes(self, rows: usize, load: DirectoryLoad) -> usize {
         if self.flat(rows) {
             flat_bytes(rows)
         } else {
-            salted_bytes(rows)
+            salted_bytes(rows, load)
         }
     }
 }
@@ -198,16 +224,31 @@ impl JoinIndex {
         choice: IndexChoice,
         next: &mut [u32],
     ) -> Result<Self> {
-        Self::build_expecting(layout, src, rows, rows, seed, choice, next)
+        Self::build_expecting(
+            layout,
+            src,
+            rows,
+            rows,
+            seed,
+            choice,
+            DirectoryLoad::Compact,
+            next,
+        )
     }
 
     /// [`build`](Self::build), sized for about `keys` distinct keys (a
     /// cardinality estimate, at most `rows`) instead of one per row: the
     /// kind is chosen for `keys`, and the index grows (re-inserting from the
-    /// stored hashes, never reading keys) if the estimate was low.
+    /// stored hashes, never reading keys) if the estimate was low. A salted
+    /// directory keeps `load`; it ends no larger than one sized for `rows`
+    /// keys at that load.
     ///
     /// # Errors
     /// As [`build`](Self::build).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "build's arguments plus the estimate and the load"
+    )]
     pub fn build_expecting(
         layout: &RowLayout,
         src: &impl RowSource,
@@ -215,6 +256,7 @@ impl JoinIndex {
         keys: usize,
         seed: u64,
         choice: IndexChoice,
+        load: DirectoryLoad,
         next: &mut [u32],
     ) -> Result<Self> {
         let expect = keys.clamp(1, rows.max(1));
@@ -248,13 +290,14 @@ impl JoinIndex {
             }
             Kind::Flat(t)
         } else {
-            let len = salted_slots(expect);
+            let (num, den) = load.bound();
+            let len = salted_slots(expect, load);
             let mut slots: Vec<u64> = Vec::new();
             slots.try_reserve_exact(len).map_err(oom)?;
             slots.resize(len, 0);
             let mut mask = len - 1;
             for id in (0..n).filter(|&id| src.indexed(id)) {
-                if (keys + 1) * SALTED_LOAD_DEN > slots.len() * SALTED_LOAD_NUM {
+                if (keys + 1) * den > slots.len() * num {
                     slots = grow_salted(&slots, g_of)?;
                     mask = slots.len() - 1;
                 }
@@ -279,12 +322,25 @@ impl JoinIndex {
             }
             Kind::Salted(slots)
         };
-        Ok(Self { seed, kind, keys })
+        Ok(Self {
+            seed,
+            kind,
+            load,
+            keys,
+        })
     }
 
     /// Whether this index is the flat one.
     pub fn is_flat(&self) -> bool {
         matches!(self.kind, Kind::Flat(_))
+    }
+
+    /// The load the salted directory keeps (`None` for the flat index).
+    pub fn load(&self) -> Option<DirectoryLoad> {
+        match self.kind {
+            Kind::Flat(_) => None,
+            Kind::Salted(_) => Some(self.load),
+        }
     }
 
     /// Buckets of the flat index or slots of the salted directory (its

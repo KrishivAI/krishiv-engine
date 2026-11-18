@@ -1269,8 +1269,15 @@ impl Loading {
         // Blocks that span chunks are copied: reserved, and the part beside
         // chunks that live on (the task's own build chunks) stays reserved.
         let (copy, kept) = RowArena::reblock_bytes(&chunks, self.task.build.chunks.len());
-        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
-            + marks
+        // A grace partition runs because memory ran short: its salted
+        // directory stays compact (`krishiv.exec.join.directoryLoad` picks
+        // the load of the in-memory build only).
+        let need = JoinTable::index_bytes(
+            rows,
+            key_bytes(&chunks),
+            hashing.rows(),
+            crate::rows::DirectoryLoad::Compact,
+        ) + marks
             + headroom
             + copy;
         if self.memory.try_grow(need).is_err() {

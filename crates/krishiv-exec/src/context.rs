@@ -94,6 +94,41 @@ pub struct ExecConfig {
     /// operators of its pipeline that do (`krishiv.exec.coalesceInput`;
     /// Polars item 2, J1).
     pub coalesce_input: bool,
+    /// The load of a hash join build's salted directories
+    /// (`krishiv.exec.join.directoryLoad`).
+    pub join_directory_load: JoinDirectoryLoad,
+}
+
+/// How full a hash join build's salted directory may get
+/// (`krishiv.exec.join.directoryLoad`; perf-2, the S5 q03 regression).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum JoinDirectoryLoad {
+    /// Roomy (load ≤ 1/2) when the query's pool grants its extra bytes at
+    /// once, without waiting or spilling; compact (load ≤ 4/5) otherwise.
+    #[default]
+    Auto,
+    /// Always compact.
+    Compact,
+    /// Always roomy, reserved as the build reserves its compact index.
+    Roomy,
+}
+
+impl JoinDirectoryLoad {
+    /// The config value naming this setting.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Compact => "compact",
+            Self::Roomy => "roomy",
+        }
+    }
+
+    /// The setting a config value names (`None` for any other text).
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::Auto, Self::Compact, Self::Roomy]
+            .into_iter()
+            .find(|l| l.as_str().eq_ignore_ascii_case(value))
+    }
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -122,6 +157,7 @@ impl Default for ExecConfig {
             deterministic_order: false,
             union_output_partitioning: true,
             coalesce_input: true,
+            join_directory_load: JoinDirectoryLoad::Auto,
         }
     }
 }
@@ -182,6 +218,11 @@ impl ExecConfig {
             .get(&krishiv_common::config::EXEC_COALESCE_INPUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let join_directory_load = config
+            .get(&krishiv_common::config::EXEC_JOIN_DIRECTORY_LOAD)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .and_then(JoinDirectoryLoad::parse)
+            .unwrap_or_default();
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -205,6 +246,7 @@ impl ExecConfig {
             join_idle_spill_after,
             union_output_partitioning,
             coalesce_input,
+            join_directory_load,
             ..Self::default()
         }
     }

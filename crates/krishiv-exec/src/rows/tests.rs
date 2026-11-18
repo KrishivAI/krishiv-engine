@@ -608,7 +608,7 @@ fn join_index(
     let index = JoinIndex::build(layout, &src, idx.len(), 0xABCD, choice, &mut next)
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(index.memory_size() > 0);
-    assert!(index.memory_size() <= choice.bytes(idx.len()));
+    assert!(index.memory_size() <= choice.bytes(idx.len(), DirectoryLoad::Compact));
     let p = layout.encode(probe).unwrap_or_else(|e| panic!("{e}"));
     let which: Vec<u32> = (0..u32::try_from(p.len()).unwrap_or(0)).collect();
     let mut heads = Vec::new();
@@ -695,9 +695,9 @@ fn join_index_kinds_agree_on_spark_key_semantics() {
 #[test]
 fn a_large_build_takes_the_salted_directory() {
     let n = 1 << 20;
-    assert!(flat_bytes(n) > FLAT_MAX_BYTES && salted_bytes(n) >= 16 * n);
+    assert!(flat_bytes(n) > FLAT_MAX_BYTES && salted_bytes(n, DirectoryLoad::Compact) >= 16 * n);
     // Sizes saturate instead of overflowing.
-    assert_eq!(salted_bytes(usize::MAX), usize::MAX);
+    assert_eq!(salted_bytes(usize::MAX, DirectoryLoad::Compact), usize::MAX);
     assert_eq!(flat_bytes(usize::MAX), usize::MAX);
     let a: ArrayRef = Arc::new(Int64Array::from_iter_values(
         0..i64::try_from(n).unwrap_or(0),
@@ -1013,8 +1013,17 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
     let which: Vec<u32> = (0..u32::try_from(n).unwrap_or(0)).collect();
     let run = |keys: usize, choice: IndexChoice| {
         let mut next = vec![NO_MATCH; n];
-        let ix = JoinIndex::build_expecting(&layout, &src, n, keys, 9, choice, &mut next)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let ix = JoinIndex::build_expecting(
+            &layout,
+            &src,
+            n,
+            keys,
+            9,
+            choice,
+            DirectoryLoad::Compact,
+            &mut next,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ix.len(), 20_000);
         let mut heads = Vec::new();
         ix.find(&layout, &probe, &which, &src, &mut heads);

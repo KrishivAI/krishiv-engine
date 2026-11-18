@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hash join entries of the configuration registry (`registry.rs`).
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
@@ -69,6 +70,24 @@ pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
           query's memory, like any batch between two operators: each driver holds at most \
           about one batch, and 1 MiB (or a 64th of the memory limit, if less), \
           for each operator that joins its input. Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The load of a hash join's salted directory (perf-2, the S5 q03
+/// regression at SF1000).
+pub static EXEC_JOIN_DIRECTORY_LOAD: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.directoryLoad",
+    value_type: ValueType::Enum(&["auto", "compact", "roomy"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
+    doc: "Internal: how full a large hash join build's directory of keys may be. `compact` \
+          sizes it for at most four keys in five slots, which saves memory; `roomy` for at \
+          most one key in two slots, which makes lookups of absent keys shorter at about \
+          twice the directory's memory. `auto` builds the roomy directory when the query's \
+          memory grants its extra bytes at once, without waiting or spilling, and the \
+          compact one otherwise. Results are the same either way.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
