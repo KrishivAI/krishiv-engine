@@ -3500,6 +3500,7 @@ dependencies = [
  "futures",
  "http",
  "insta",
+ "krishiv-alloc",
  "krishiv-common",
  "krishiv-connectors-delta",
  "krishiv-exec",
