@@ -450,6 +450,30 @@ jobs:
           ICEBERG_REST_IMAGE: apache/iceberg-rest-fixture@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e # 1.10.0
         run: tests/scripts/iceberg_rest_fixture.sh
 
+  # Iceberg write conformance (P3-T028b, PR-53b): Krishiv's append sink writes tables, Spark 4.1.0 + Iceberg 1.12.0
+  # (Docker, apache/spark:4.1.0; the runtime jar from Maven Central) reads them and appends on top, Krishiv reads
+  # the result. The Rust steps are `#[ignore]`d tests, so the PR gate never needs Docker.
+  iceberg-write-conformance:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Krishiv writes, Spark reads and appends, Krishiv reads back
+        run: tests/scripts/iceberg_write_conformance.sh
+
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
   # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each

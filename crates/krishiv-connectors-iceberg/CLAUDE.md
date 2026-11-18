@@ -179,6 +179,13 @@ summaries, partition tuples and metrics (`PruneMode::Conservative` for T027 vali
 Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 `research/p3/t022a-iceberg-spark-types.md` in krishiv-internal).
 
+## Write conformance (PR-53b)
+`write_conformance_tests.rs`: two `#[ignore]`d tests run by `tests/scripts/iceberg_write_conformance.sh` (Docker; nightly job
+`iceberg-write-conformance`): Krishiv's append sink writes `unpart`/`part`/`v3`/`v3part` into a Hadoop-catalog layout,
+Spark 4.1.0 + Iceberg 1.12.0 (`gen_iceberg_write_readback.py`) reads and appends on top, Krishiv compares and reads Spark's
+result. Pending, not stubbed: Krishiv-written MERGE, deletes, DVs (PR-36b units 2-4), Delta (PR-37). See
+`tests/scripts/iceberg_write_conformance.README.md`.
+
 ## Invariants
 - Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; only values iceberg-rust returns
   as Arrow (`inspect` tables) cross, through `krishiv-arrow-bridge`; data batches never do (`design/P3-lakehouse.md`

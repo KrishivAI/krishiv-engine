@@ -39,7 +39,7 @@ use crate::plan::VersionSpec;
 
 /// A catalog holding one table: each request's requirements checked, its
 /// updates applied and the new metadata file written.
-struct Catalog {
+pub(super) struct Catalog {
     state: Mutex<(TableMetadata, String, u32)>,
     /// A request never answers (it is in flight forever) when set.
     hang: AtomicBool,
@@ -48,7 +48,7 @@ struct Catalog {
 }
 
 impl Catalog {
-    fn new(table: &iceberg::table::Table) -> Arc<Self> {
+    pub(super) fn new(table: &iceberg::table::Table) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new((
                 table.metadata().clone(),
@@ -60,11 +60,11 @@ impl Catalog {
         })
     }
 
-    fn location(&self) -> String {
+    pub(super) fn location(&self) -> String {
         self.state.lock().unwrap().1.clone()
     }
 
-    fn metadata(&self) -> TableMetadata {
+    pub(super) fn metadata(&self) -> TableMetadata {
         self.state.lock().unwrap().0.clone()
     }
 }
@@ -161,10 +161,10 @@ impl ExecNode for Write {
 
 /// A source of `batches`, one per driver (so as many drivers as batches),
 /// that never ends after them when `stall`.
-struct PerDriver {
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
-    stall: bool,
+pub(super) struct PerDriver {
+    pub(super) schema: SchemaRef,
+    pub(super) batches: Vec<RecordBatch>,
+    pub(super) stall: bool,
 }
 
 impl Source for PerDriver {
@@ -205,7 +205,7 @@ impl Source for PerDriver {
 }
 
 /// The schema of the rows written into [`ixn_schema`] tables.
-fn input_schema() -> SchemaRef {
+pub(super) fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", A::Int64, true),
         Field::new("x", A::Int32, true),
@@ -214,7 +214,7 @@ fn input_schema() -> SchemaRef {
 }
 
 /// Rows `ids` with `x = id % 3` and `name = n<id>` (a `None` id stays null).
-fn rows(ids: &[Option<i64>]) -> RecordBatch {
+pub(super) fn rows(ids: &[Option<i64>]) -> RecordBatch {
     let names: Vec<String> = ids
         .iter()
         .map(|i| format!("n{}", i.unwrap_or(-1)))
@@ -238,7 +238,7 @@ fn rows(ids: &[Option<i64>]) -> RecordBatch {
     .unwrap()
 }
 
-fn range(from: i64, to: i64) -> RecordBatch {
+pub(super) fn range(from: i64, to: i64) -> RecordBatch {
     rows(&(from..to).map(Some).collect::<Vec<_>>())
 }
 
@@ -284,7 +284,7 @@ fn create(
 }
 
 /// The provider of the table at `location`, committing through `catalog`.
-fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTableProvider {
+pub(super) fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTableProvider {
     let table = env
         .rt
         .block_on(IcebergTable::load(&env.reg, location, "db", "t"))
@@ -293,7 +293,7 @@ fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTablePr
     env.provider(&table, &VersionSpec::Current).unwrap()
 }
 
-fn request(write_id: Option<&str>) -> WriteRequest {
+pub(super) fn request(write_id: Option<&str>) -> WriteRequest {
     let mut r = WriteRequest::new(WriteMode::Append, "`db`.`t`", input_schema());
     r.write_id = write_id.map(str::to_owned);
     r
@@ -302,7 +302,7 @@ fn request(write_id: Option<&str>) -> WriteRequest {
 /// Runs `input` into `sink` to the end (cancelled once `cancel_when`
 /// holds); the result, the query's pool and the runner (whose runtime the
 /// writer tasks run on: keep it while they settle).
-fn run(
+pub(super) fn run(
     env: &Env,
     sink: Arc<dyn Sink>,
     input: Arc<dyn Source>,
