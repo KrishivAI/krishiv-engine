@@ -64,14 +64,17 @@ spark.read.parquet("hf://datasets/cornell-movie-review-data/rotten_tomatoes/trai
 
 | Option | Meaning |
 |---|---|
-| `fs.hf.token` (or the `HF_TOKEN` environment variable) | access token, sent as a bearer header; needed for private datasets |
+| `fs.hf.token` (or the `HF_TOKEN` environment variable) | access token, sent as a bearer header; needed for private datasets. `HF_TOKEN` is used only for the default host: with `fs.hf.endpoint` set, only a per-read `fs.hf.token` is sent |
 | `fs.hf.endpoint` | host to use instead of `https://huggingface.co` |
 
 Name the file: a directory, a glob and Hugging Face's generated Parquet branch (`@~parquet/...`) are not supported yet.
 
 ### `http://` and `https://`
 
-Plain `https://` locations are refused with `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`, the error Spark gives for them.
+Spark has no working `http://` or `https://` file system. When Krishiv has to infer the schema of such a location, it
+refuses it with `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`, the error Spark gives. A read that gives its own schema is not
+refused by that check and goes to the HTTP object store, which needs a server that supports range requests; do not rely on
+it. On the server, `http://` and `https://` locations also need an entry in `allowedPrefixes`.
 Download the file, or use an object store or `hf://`.
 
 ## Try it without a cloud account

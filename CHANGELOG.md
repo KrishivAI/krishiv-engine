@@ -16,9 +16,9 @@ A patch release: packaging, documentation and the fixes found by acceptance test
 
 ### Changed
 
-- **`https://` reads are refused, as in Spark.** The 0.2.0 entry for object stores named `https://` reads; Spark has no
-  working `https://` file system either (`FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`), and Krishiv refuses the location the
-  same way. `hf://datasets/...` reads work in the wheels from PyPI. See the Data sources guide.
+- **`https://` reads that infer their schema are refused, as in Spark.** The 0.2.0 entry for object stores named `https://`
+  reads; Spark has no working `https://` file system either (`FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`), and Krishiv refuses
+  the location the same way when it has to infer the schema (a read with an explicit schema is not refused yet). `hf://datasets/...` reads work in the wheels from PyPI. See the Data sources guide.
 - **`pyarrow>=16` is now a required dependency** of the Python package, so a bare `pip install krishiv` can `collect()` and
   `show()`. `krishiv[pyarrow]` still works as an alias.
 - The PyPI page (`krishiv` and `krishiv-compat`) now has a description (`python/PYPI.md`), keywords, classifiers and project URLs.
