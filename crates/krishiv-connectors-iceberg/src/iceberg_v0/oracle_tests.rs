@@ -229,3 +229,105 @@ fn spark_wrote_structs() {
         want
     );
 }
+
+/// P3-T024 (PR-54a): the Theta sketches Iceberg's `compute_table_stats` wrote (a Puffin statistics file of the
+/// current snapshot) against sketches Krishiv builds from the same columns. Below 4,096 distinct values both
+/// sketches are exact, so the compact blobs are byte-equal (the hash and serialisation gate for the
+/// `datasketches` crate); above that Java's is an Alpha-family sketch and Krishiv's a QuickSelect one, so only
+/// the estimates compare (within 3 RSE each, review B1). Java's `ndv` is the blob's estimate truncated.
+///
+/// Skipped, with a message, while `tests/fixtures/iceberg-1.12.0` lacks the `thetas` tables: the fixtures
+/// are written by Spark in Docker (`tests/scripts/gen_iceberg_fixtures.py`) and were not regenerated on a
+/// host without it.
+#[test]
+fn spark_wrote_theta_sketches_and_krishiv_matches_them() {
+    use crate::plan::theta_value::{new_sketch, sketched, update_column};
+    use arrow_array::Array as _;
+
+    let exp = expected();
+    if exp.get("thetas").is_none() || exp.get("thetas_big").is_none() {
+        eprintln!(
+            "SKIPPED spark_wrote_theta_sketches_and_krishiv_matches_them: EXPECTED.json has no `thetas` \
+             tables; regenerate the fixtures on a Docker host (tests/scripts/gen_iceberg_fixtures.py)"
+        );
+        return;
+    }
+    // One standard error of a k = 4,096 sketch is about 1/sqrt(4096); the bar is 3 of each side.
+    let tolerance = 6.0 / 4096_f64.sqrt();
+    let mut exact = 0;
+    let mut estimated = 0;
+    for name in ["thetas", "thetas_big"] {
+        let o = open_table(name, &exp);
+        let provider =
+            o.rt.block_on(IcebergTableProvider::open(
+                &o.table,
+                &VersionSpec::Current,
+                &Config::new(),
+                4,
+            ))
+            .unwrap();
+        let snapshot_id = provider.snapshot().snapshot_id.unwrap();
+        let file = o
+            .table
+            .table
+            .metadata()
+            .statistics_for_snapshot(snapshot_id)
+            .unwrap_or_else(|| panic!("{name}: no statistics file for snapshot {snapshot_id}"))
+            .clone();
+        let fields = provider.snapshot().fields.clone();
+        let s = provider_session(provider);
+        for f in fields.iter().filter(|f| sketched(&f.ty)) {
+            let col = f.path.root().to_owned();
+            let java =
+                o.rt.block_on(super::puffin_stats::read_sketch(
+                    o.table.table.file_io(),
+                    &file,
+                    f.id,
+                ))
+                .unwrap()
+                .unwrap_or_else(|| panic!("{name}.{col}: no blob"));
+            let mut mine = new_sketch().unwrap();
+            for b in s.run(&format!("SELECT {col} FROM t")).unwrap() {
+                assert!(
+                    update_column(&mut mine, b.column(0).as_ref(), &f.ty),
+                    "{name}.{col}: {:?} as {:?}",
+                    b.column(0).data_type(),
+                    f.ty
+                );
+            }
+            let theirs = java.estimate();
+            let ndv: f64 = file
+                .blob_metadata
+                .iter()
+                .find(|b| b.fields == [f.id])
+                .and_then(|b| b.properties.get("ndv"))
+                .unwrap_or_else(|| panic!("{name}.{col}: no ndv"))
+                .parse::<u64>()
+                .unwrap() as f64;
+            assert_eq!(
+                ndv,
+                theirs.trunc(),
+                "{name}.{col}: the property is the truncated estimate"
+            );
+            if java.is_estimation_mode() || mine.is_estimation_mode() {
+                estimated += 1;
+                assert!(
+                    (mine.estimate() - theirs).abs() <= tolerance * theirs,
+                    "{name}.{col}: Krishiv {} vs Spark {theirs}",
+                    mine.estimate()
+                );
+            } else {
+                exact += 1;
+                assert_eq!(
+                    mine.compact(true).serialize(),
+                    java.serialize(),
+                    "{name}.{col}: compact blobs differ (estimate {theirs})"
+                );
+            }
+        }
+    }
+    assert!(
+        exact > 0 && estimated > 0,
+        "exact {exact}, estimated {estimated}"
+    );
+}

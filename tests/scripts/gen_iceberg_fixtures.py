@@ -22,7 +22,15 @@ and the snapshot ids oldest first, so the test checks what the oracle wrote, nev
 
 Tables: ``basic`` (primitive types, two appends), ``partitioned`` (identity, bucket and day transforms),
 ``pos_deletes`` (merge-on-read DELETE and UPDATE: position delete files), ``dvs`` (format version 3: deletion
-vectors), ``evolved`` (add, rename, drop, promote a column; rows before and after), ``nested`` (struct, array, map).
+vectors), ``evolved`` (add, rename, drop, promote a column; rows before and after), ``nested`` (struct, array, map),
+``thetas`` and ``thetas_big`` (P3-T024, PR-54a: every primitive type Spark writes, nulls, ``-0.0``/NaN, a long string,
+empty strings and a column of only empty strings, then ``CALL system.compute_table_stats`` so the table has a Puffin
+statistics file of Theta sketches; ``thetas_big`` has a column of 20,000 distinct values, past a sketch's 4,096
+entries).
+The Rust test reads the blobs and compares them with sketches Krishiv builds from the same column: byte-equal only
+for columns under 4,096 distinct values (the standard sketch is an Alpha-family one, Krishiv's a QuickSelect one, so
+above that only the estimates are comparable), within 3 RSE otherwise. ``fixed``, ``uuid`` and ``time`` cannot be
+written by Spark.
 Equality deletes are not here: Spark cannot write them (Flink does); PR-25c's own tests cover them.
 """
 
@@ -116,6 +124,33 @@ def create_tables(spark: SparkSession) -> None:
         "(3, named_struct('a', NULL, 'b', 'z'), NULL, NULL)"
     )
 
+    # P3-T024: Theta sketches of every column, written by Iceberg's own `compute_table_stats`. One INSERT each, so
+    # one task builds the whole sketch (and the byte comparison under 4,096 values has one writer's union).
+    sql(
+        "CREATE TABLE o.db.thetas (id BIGINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(10,2), "
+        "dec_big DECIMAL(38,10), dt DATE, ts TIMESTAMP, ts_ntz TIMESTAMP_NTZ, b BOOLEAN, s STRING, "
+        "empties STRING, long_s STRING, bin BINARY, all_null INT) USING iceberg TBLPROPERTIES ('format-version'='2')"
+    )
+    sql(
+        "INSERT INTO o.db.thetas SELECT /*+ COALESCE(1) */ id, CAST(id % 7 AS INT), id * 1000000007, "
+        "CASE WHEN id = 3 THEN CAST('NaN' AS FLOAT) WHEN id = 4 THEN CAST('-0.0' AS FLOAT) "
+        "WHEN id = 5 THEN CAST(0.0 AS FLOAT) ELSE CAST(id AS FLOAT) / 4 END, "
+        "CASE WHEN id = 3 THEN CAST('NaN' AS DOUBLE) WHEN id = 4 THEN CAST('-0.0' AS DOUBLE) "
+        "WHEN id = 5 THEN CAST('0.0' AS DOUBLE) "
+        "ELSE CAST(id AS DOUBLE) / 3 END, "
+        "CAST(id - 50 AS DECIMAL(10,2)) / 7, CAST(id AS DECIMAL(38,10)) * 123456789.123456789, "
+        "DATE'2000-01-01' + CAST(id % 30 AS INT), TIMESTAMP'2020-01-01 00:00:00' + "
+        "make_interval(0, 0, 0, 0, 0, 0, id), "
+        "TIMESTAMP_NTZ'2020-01-01 00:00:00' + make_interval(0, 0, 0, 0, 0, 0, id * 1.5), id % 3 = 0, "
+        "CASE WHEN id % 10 = 0 THEN NULL WHEN id % 10 = 1 THEN '' ELSE concat('v', id % 40) END, "
+        "'', repeat('x', 200 + CAST(id % 5 AS INT)), "
+        "CASE WHEN id % 6 = 0 THEN X'' ELSE unhex(hex(id)) END, CAST(NULL AS INT) FROM range(1, 101)"
+    )
+    sql("CALL o.system.compute_table_stats(table => 'db.thetas')")
+    sql("CREATE TABLE o.db.thetas_big (id BIGINT, s STRING) USING iceberg TBLPROPERTIES ('format-version'='2')")
+    sql("INSERT INTO o.db.thetas_big SELECT /*+ COALESCE(1) */ id, concat('key-', id % 9000) FROM range(1, 20001)")
+    sql("CALL o.system.compute_table_stats(table => 'db.thetas_big')")
+
 
 def typed(value):
     """A JSON-safe, type-tagged rendering (so the Rust test compares values, not Python's ``str``)."""
@@ -134,9 +169,9 @@ def typed(value):
     return str(value)  # decimal, date, timestamp: ISO text, rendered the same way by the Rust side
 
 
-def table_expected(spark: SparkSession, name: str) -> dict:
+def table_expected(spark: SparkSession, name: str, rows: bool = True) -> dict:
     df = spark.sql(f"SELECT * FROM o.db.{name} ORDER BY id")
-    rows = [{k: typed(v) for k, v in r.asDict().items()} for r in df.collect()]
+    rows = [{k: typed(v) for k, v in r.asDict().items()} for r in df.collect()] if rows else []
     snaps = [
         r["snapshot_id"]
         for r in spark.sql(
@@ -170,6 +205,9 @@ def main() -> None:
         for s in out["evolved"]["snapshots"]
     }
     out["evolved"]["as_of"] = json.loads(json.dumps(out["evolved"]["as_of"], default=typed))
+    # The theta tables are compared through their statistics files, not their rows (20,000 of them).
+    for n in ["thetas", "thetas_big"]:
+        out[n] = table_expected(spark, n, rows=False)
     out["_oracle"] = {"spark": spark.version, "iceberg": "1.12.0"}
     with open(os.path.join(WAREHOUSE, "EXPECTED.json"), "w") as f:
         json.dump(out, f, indent=1, sort_keys=True, default=typed)

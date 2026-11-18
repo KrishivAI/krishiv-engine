@@ -1563,6 +1563,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "datasketches"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11c0bd7d22989969a619bae09147b992a6aa7f31dd4f9d9af6345f533744781f"
+
+[[package]]
 name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3148,6 +3154,7 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "datasketches",
  "foldhash",
  "futures",
  "hashbrown 0.17.1",
