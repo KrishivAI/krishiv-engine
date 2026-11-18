@@ -3043,6 +3043,8 @@ dependencies = [
 name = "krishiv-cli"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
+ "arrow-flight",
  "axum",
  "clap",
  "futures",
@@ -3051,6 +3053,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
+ "krishiv-flight-sql",
  "krishiv-functions",
  "krishiv-mcp",
  "krishiv-memory",
@@ -3065,6 +3068,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tonic",
 ]
 
 [[package]]

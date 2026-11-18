@@ -23,7 +23,7 @@ futures = { workspace = true, features = ["std"] }
 getrandom.workspace = true
 prost = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
-tonic.workspace = true
+tonic = { workspace = true, features = ["router"] }
 tracing.workspace = true
 
 [dev-dependencies]

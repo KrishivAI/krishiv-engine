@@ -237,6 +237,12 @@ impl FlightSqlServer {
             .max_decoding_message_size(self.inner.config.max_inbound_message_size)
     }
 
+    /// [`Self::service`] as the routes `ConnectServer::with_routes` takes.
+    #[must_use]
+    pub fn routes(&self) -> tonic::service::Routes {
+        tonic::service::Routes::new(self.service())
+    }
+
     /// The request counters (`krishiv_flight_sql_requests_total`) for the server's scrape.
     #[must_use]
     pub fn requests(&self) -> &Requests {

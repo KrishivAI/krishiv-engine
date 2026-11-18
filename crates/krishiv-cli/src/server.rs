@@ -211,6 +211,43 @@ fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
 }
 
+/// The Flight SQL service for `connect`'s listener and its sweep task, unless
+/// `krishiv.flightSql.enabled` is off (design P3-T101 §2, owner item 6: on by default when
+/// compiled in).
+#[cfg(feature = "flight-sql")]
+fn flight_sql(
+    config: &Config,
+    manager: &Arc<SessionManager>,
+    connect: &ConnectServer,
+    auth: ConnectAuth,
+) -> Result<
+    Option<(
+        krishiv_flight_sql::FlightSqlServer,
+        krishiv_flight_sql::SweepGuard,
+    )>,
+    String,
+> {
+    if !flag(config, &krishiv_common::config::FLIGHT_SQL_ENABLED, true) {
+        return Ok(None);
+    }
+    let info = krishiv_flight_sql::ServerInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        ..krishiv_flight_sql::ServerInfo::default()
+    };
+    let flight = krishiv_flight_sql::FlightSqlServer::new(
+        Arc::clone(manager),
+        Arc::new(auth),
+        connect.draining(),
+        connect.response_budget().clone(),
+        &info,
+        krishiv_flight_sql::FlightSqlConfig::from_config(config),
+    )
+    .map_err(|e| e.to_string())?;
+    let interval = ConnectServerConfig::from_config(config).maintenance_interval;
+    let sweeper = flight.spawn_sweeper(interval);
+    Ok(Some((flight, sweeper)))
+}
+
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
     config
         .get(entry)
@@ -291,15 +328,27 @@ async fn run_listeners(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
     );
-    if authenticated {
-        connect = connect.with_auth(
+    // One `ConnectAuth` per service on the listener, over the one `ServerAuth` (P3-T101 §2).
+    let connect_auth = || {
+        if authenticated {
             ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
-                .with_denials(denials)
-                .with_impersonation(auth),
-        );
+                .with_denials(Arc::clone(&denials))
+                .with_impersonation(Arc::clone(&auth))
+        } else {
+            ConnectAuth::off()
+        }
+    };
+    if authenticated {
+        connect = connect.with_auth(connect_auth());
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
+    }
+    #[cfg(feature = "flight-sql")]
+    let flight = flight_sql(config, &manager, &connect, connect_auth())?;
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, _)) = &flight {
+        connect = connect.with_routes(flight.routes());
     }
 
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -345,6 +394,10 @@ async fn run_listeners(
         ("", "http")
     };
     println!("krishiv server: Spark Connect on sc://{connect_bound}{sc_suffix}");
+    #[cfg(feature = "flight-sql")]
+    if flight.is_some() {
+        println!("krishiv server: Arrow Flight SQL on the same port");
+    }
     println!("krishiv server: admin on {http}://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
@@ -364,6 +417,13 @@ async fn run_listeners(
         .await
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
+    // `serve` closed every session: Flight's table and handles go too (design §16 m7); the sweep
+    // task ends with its guard.
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, sweeper)) = flight {
+        flight.close_all();
+        drop(sweeper);
+    }
     signals.abort();
     if let Some(reloads) = reloads {
         reloads.abort();
