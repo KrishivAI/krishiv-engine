@@ -43,6 +43,7 @@
 
 mod access;
 mod action;
+mod admin_groups;
 mod admin_view;
 mod admission;
 mod analyze;
@@ -119,6 +120,7 @@ mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
