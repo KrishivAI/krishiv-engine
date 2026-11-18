@@ -9,7 +9,7 @@
 //! client closes them), and a handle is in flight from [`Handles::reserve`] until its
 //! `GetFlightInfo` answers ([`Handles::end`]), so a running command's slot is never evicted.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -109,17 +109,42 @@ impl<K, P> Entry<K, P> {
     }
 }
 
-/// What one owner holds: handles and their bytes.
-#[derive(Default, Clone, Copy)]
+/// What one owner holds: its handles and their bytes.
+#[derive(Default)]
 struct Held {
-    count: usize,
+    ids: HashSet<HandleId>,
     bytes: usize,
 }
 
+/// The map and its two indexes, so a cap's eviction, a session's release and its `holds` checks
+/// look only at the scope's own handles, never at every handle of the server (review n5).
 struct Inner<K, P> {
     entries: HashMap<HandleId, Entry<K, P>>,
-    per_session: HashMap<String, usize>,
+    per_session: HashMap<String, HashSet<HandleId>>,
     per_owner: HashMap<K, Held>,
+}
+
+impl<K: Eq + Hash, P> Inner<K, P> {
+    fn session_count(&self, session_id: &str) -> usize {
+        self.per_session.get(session_id).map_or(0, HashSet::len)
+    }
+
+    /// The owner's handle count and bytes.
+    fn held(&self, owner: &K) -> (usize, usize) {
+        self.per_owner
+            .get(owner)
+            .map_or((0, 0), |h| (h.ids.len(), h.bytes))
+    }
+
+    /// The ids of `owner`'s handles (with `session`, of that session only).
+    fn scope(&self, owner: &K, session: Option<&str>) -> Vec<HandleId> {
+        let ids = match session {
+            Some(s) => self.per_session.get(s),
+            None => self.per_owner.get(owner).map(|h| &h.ids),
+        };
+        ids.map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
 }
 
 /// The handles of a server, keyed by [`HandleId`], each with its owner `K` (the session key's
@@ -247,20 +272,20 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         let id = HandleId::random()?;
         let mut inner = self.lock();
         let full = |inner: &Inner<K, P>| {
-            let held = inner.per_owner.get(owner).copied().unwrap_or_default();
-            if inner.per_session.get(session_id).copied().unwrap_or(0) >= self.limits.per_session {
+            let (count, held_bytes) = inner.held(owner);
+            if inner.session_count(session_id) >= self.limits.per_session {
                 Some((
                     "krishiv.flightSql.maxHandlesPerSession",
                     self.limits.per_session,
                     true,
                 ))
-            } else if held.count >= self.limits.per_owner {
+            } else if count >= self.limits.per_owner {
                 Some((
                     "krishiv.flightSql.maxHandlesPerPrincipal",
                     self.limits.per_owner,
                     false,
                 ))
-            } else if held.bytes.saturating_add(bytes) > self.limits.bytes_per_owner {
+            } else if held_bytes.saturating_add(bytes) > self.limits.bytes_per_owner {
                 Some((
                     "krishiv.flightSql.maxHandleBytesPerPrincipal",
                     self.limits.bytes_per_owner,
@@ -286,21 +311,14 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         }
         let mut evicted = Vec::new();
         if full(&inner).is_some() {
-            evicted = self.expire_locked(&mut inner, now);
+            evicted = self.expire_owned(&mut inner, owner, now);
         }
         while let Some((name, limit, in_session)) = full(&inner) {
-            let victim = inner
-                .entries
+            let scope = inner.scope(owner, in_session.then_some(session_id));
+            let victim = scope
                 .iter()
-                .filter(|(_, e)| {
-                    e.live == 0
-                        && !e.prepared
-                        && if in_session {
-                            e.session_id == session_id
-                        } else {
-                            e.owner == *owner
-                        }
-                })
+                .filter_map(|v| inner.entries.get(v).map(|e| (v, e)))
+                .filter(|(_, e)| e.live == 0 && !e.prepared)
                 .min_by_key(|(_, e)| e.idle_since)
                 .map(|(id, _)| *id);
             match victim {
@@ -319,9 +337,13 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
             }
             .into());
         }
-        *inner.per_session.entry(session_id.to_owned()).or_insert(0) += 1;
+        inner
+            .per_session
+            .entry(session_id.to_owned())
+            .or_default()
+            .insert(id);
         let held = inner.per_owner.entry(owner.clone()).or_default();
-        held.count += 1;
+        held.ids.insert(id);
         held.bytes = held.bytes.saturating_add(bytes);
         inner.entries.insert(
             id,
@@ -363,14 +385,16 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
                 .into());
             }
         };
-        let held = inner.per_owner.get(owner).copied().unwrap_or_default();
-        let need = held.bytes.saturating_sub(old).saturating_add(bytes);
+        let (_, held_bytes) = inner.held(owner);
+        let need = held_bytes.saturating_sub(old).saturating_add(bytes);
         // Evictable: the owner's idle statement handles, oldest first.
         let mut victims: Vec<(Instant, HandleId, usize)> = inner
-            .entries
-            .iter()
-            .filter(|(v, e)| **v != *id && e.owner == *owner && e.live == 0 && !e.prepared)
-            .map(|(v, e)| (e.idle_since, *v, e.bytes))
+            .scope(owner, None)
+            .into_iter()
+            .filter(|v| v != id)
+            .filter_map(|v| inner.entries.get(&v).map(|e| (v, e)))
+            .filter(|(_, e)| e.live == 0 && !e.prepared)
+            .map(|(v, e)| (e.idle_since, v, e.bytes))
             .collect();
         victims.sort_unstable_by_key(|(at, _, _)| *at);
         let mut over = need.saturating_sub(cap);
@@ -463,16 +487,14 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
     #[must_use]
     pub fn held_by_session(&self, session_id: &str) -> (usize, usize) {
         let inner = self.lock();
-        let held = inner.per_session.get(session_id).copied().unwrap_or(0);
-        if held == 0 {
+        let Some(ids) = inner.per_session.get(session_id) else {
             return (0, 0);
-        }
-        let prepared = inner
-            .entries
-            .values()
-            .filter(|e| e.prepared && e.session_id == session_id)
+        };
+        let prepared = ids
+            .iter()
+            .filter(|id| inner.entries.get(id).is_some_and(|e| e.prepared))
             .count();
-        (held, prepared)
+        (ids.len(), prepared)
     }
 
     /// Removes every handle of session `session_id` (its release, sweep or close); returns how
@@ -480,11 +502,10 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
     pub fn remove_session(&self, session_id: &str) -> usize {
         let mut inner = self.lock();
         let ids: Vec<HandleId> = inner
-            .entries
-            .iter()
-            .filter(|(_, e)| e.session_id == session_id)
-            .map(|(id, _)| *id)
-            .collect();
+            .per_session
+            .get(session_id)
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default();
         for id in &ids {
             Self::remove_locked(&mut inner, id);
         }
@@ -524,13 +545,19 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         self.len() == 0
     }
 
-    fn expire_locked(&self, inner: &mut Inner<K, P>, now: Instant) -> Vec<String> {
+    /// Removes `owner`'s handles past their TTL (another owner's wait for the sweep: a cap is
+    /// per owner, so theirs make no room here); returns their sessions.
+    fn expire_owned(&self, inner: &mut Inner<K, P>, owner: &K, now: Instant) -> Vec<String> {
         let ttl = self.limits.ttl;
         let ids: Vec<HandleId> = inner
-            .entries
-            .iter()
-            .filter(|(_, e)| e.is_expired(ttl, now))
-            .map(|(id, _)| *id)
+            .scope(owner, None)
+            .into_iter()
+            .filter(|id| {
+                inner
+                    .entries
+                    .get(id)
+                    .is_some_and(|e| e.is_expired(ttl, now))
+            })
             .collect();
         ids.iter()
             .filter_map(|id| Self::remove_locked(inner, id).map(|(session, _)| session))
@@ -539,16 +566,16 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
 
     fn remove_locked(inner: &mut Inner<K, P>, id: &HandleId) -> Option<(String, P)> {
         let e = inner.entries.remove(id)?;
-        if let Some(n) = inner.per_session.get_mut(&e.session_id) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
+        if let Some(ids) = inner.per_session.get_mut(&e.session_id) {
+            ids.remove(id);
+            if ids.is_empty() {
                 inner.per_session.remove(&e.session_id);
             }
         }
         if let Some(held) = inner.per_owner.get_mut(&e.owner) {
-            held.count = held.count.saturating_sub(1);
+            held.ids.remove(id);
             held.bytes = held.bytes.saturating_sub(e.bytes);
-            if held.count == 0 {
+            if held.ids.is_empty() {
                 inner.per_owner.remove(&e.owner);
             }
         }
@@ -581,6 +608,37 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(h.remove(&"alice", &id), Some(("s1".to_owned(), 7)));
         assert!(h.is_empty());
+    }
+
+    /// The indexes (review n5): a full owner's insert expires and evicts only its own handles;
+    /// another owner's stale handle waits for the sweep. Counts stay right through removals.
+    #[test]
+    fn a_cap_touches_only_its_own_scope_and_the_indexes_stay_consistent() {
+        let h: Handles<&str, u32> = Handles::new(limits(2, 2));
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let bob = h.insert(&"bob", "b1", 9, 0, false, t0).unwrap().id;
+        let first = h.insert(&"alice", "a1", 1, 0, false, t0).unwrap().id;
+        h.insert(&"alice", "a2", 2, 0, true, t0).unwrap();
+        // All stale at 20 s; alice is full (2 of 2): her expired handles go (TTL expiry spares
+        // no prepared handle, only cap eviction does), bob's stays for the sweep.
+        let third = h.insert(&"alice", "a1", 3, 0, false, at(20)).unwrap();
+        let mut evicted = third.evicted;
+        evicted.sort();
+        assert_eq!(evicted, vec!["a1".to_owned(), "a2".to_owned()]);
+        assert_eq!(h.get(&"alice", &first, at(20)), None);
+        assert_eq!(h.len(), 2, "bob's stale handle is the sweep's");
+        assert_eq!(h.held_by_session("a2"), (0, 0));
+        assert_eq!(h.held_by_session("a1"), (1, 0));
+        assert_eq!(h.sweep(at(20), |_| true), 1, "bob's");
+        assert_eq!(h.get(&"bob", &bob, at(20)), None);
+        assert_eq!(h.remove_session("a1"), 1);
+        assert!(h.is_empty());
+        assert_eq!(h.held_by_session("a1"), (0, 0));
+        // All indexes empty again: a fresh owner gets its whole cap.
+        for s in ["x1", "x2"] {
+            h.insert(&"alice", s, 0, 0, false, at(21)).unwrap();
+        }
     }
 
     #[test]
