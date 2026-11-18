@@ -164,27 +164,28 @@ impl Drop for HoldGuard {
 
 /// A profile read back from the store.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StoredProfile {
+#[non_exhaustive]
+pub struct StoredProfile {
     /// The query's id in `system.queries`.
-    pub(crate) query_id: String,
+    pub query_id: String,
     /// When the query ended, in milliseconds since the Unix epoch.
-    pub(crate) finished_at_ms: i64,
+    pub finished_at_ms: i64,
     /// `finished`, `failed`, `cancelled` or `denied`.
-    pub(crate) state: String,
+    pub state: String,
     /// The Spark error class of a failed query.
-    pub(crate) error_class: Option<String>,
+    pub error_class: Option<String>,
     /// The principal that ran it.
-    pub(crate) principal: String,
+    pub principal: String,
     /// The statement, redacted as `system.queries` shows it.
-    pub(crate) sql: Option<String>,
+    pub sql: Option<String>,
     /// Wall time, in nanoseconds.
-    pub(crate) duration_ns: i64,
+    pub duration_ns: i64,
     /// The profile document's major version.
-    pub(crate) profile_version: i64,
+    pub profile_version: i64,
     /// The profile document's minor version.
-    pub(crate) profile_minor: i64,
+    pub profile_minor: i64,
     /// The profile document (`krishiv.query-profile` JSON), as [`QueryProfile::from_json`] reads it.
-    pub(crate) profile: String,
+    pub profile: String,
 }
 
 /// The writer side: a bounded queue to the thread that writes segments.
@@ -573,7 +574,7 @@ fn trim_listed(segments: &[(PathBuf, u64)], max_bytes: u64) -> std::io::Result<(
 ///
 /// # Errors
 /// The directory cannot be read.
-pub(crate) fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivError> {
+pub fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivError> {
     let segments =
         list_segments(dir).map_err(|e| internal(format!("history {}: {e}", dir.display())))?;
     let mut out = Vec::new();
