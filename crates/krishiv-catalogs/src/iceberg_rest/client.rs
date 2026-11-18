@@ -132,6 +132,52 @@ fn check_prefix(
     }
 }
 
+/// Most `/v1/config` answers one catalog keeps (one per principal and claims on a delegated
+/// catalog).
+pub(crate) const MAX_CONFIGS: usize = 4096;
+
+/// The `/v1/config` answers of one catalog, least recently used out past [`MAX_CONFIGS`].
+#[derive(Debug, Default)]
+pub(crate) struct ConfigCache {
+    entries: HashMap<Option<String>, (Arc<Server>, u64)>,
+    tick: u64,
+}
+
+impl ConfigCache {
+    fn get(&mut self, key: &Option<String>) -> Option<Arc<Server>> {
+        self.tick += 1;
+        let tick = self.tick;
+        self.entries.get_mut(key).map(|(s, used)| {
+            *used = tick;
+            Arc::clone(s)
+        })
+    }
+
+    /// Stores `fetched` unless a racing caller stored one first (that one wins), evicting the
+    /// least recently used entry when full.
+    fn insert(&mut self, key: Option<String>, fetched: Arc<Server>) -> Arc<Server> {
+        if let Some(s) = self.get(&key) {
+            return s;
+        }
+        if self.entries.len() >= MAX_CONFIGS
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(k, _)| k.clone())
+        {
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(key, (Arc::clone(&fetched), self.tick));
+        fetched
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// What the server's `/v1/config` settled.
 #[derive(Debug)]
 struct Server {
@@ -147,10 +193,11 @@ pub struct RestClient {
     http: Transport,
     tokens: Tokens,
     policy: Arc<dyn LocationPolicy + Send + Sync>,
-    /// `/v1/config` by who fetched it: `None` for the catalog's own identity (every mode but a
-    /// delegated catalog without an actor client), else the caller's identity key, so one user's
-    /// answer never shapes another user's calls (T067 §3.5).
-    server: Mutex<HashMap<Option<String>, Arc<Server>>>,
+    /// `/v1/config` by who fetched it: `None` for the catalog's own identity (every mode but
+    /// delegated), else the caller's principal key and claims fingerprint, so one user's answer
+    /// never shapes another user's calls (T067 §3.5); least recently used out past
+    /// [`MAX_CONFIGS`].
+    server: Mutex<ConfigCache>,
 }
 
 impl std::fmt::Debug for RestClient {
@@ -208,7 +255,7 @@ impl RestClient {
             http,
             tokens,
             policy,
-            server: Mutex::new(HashMap::new()),
+            server: Mutex::new(ConfigCache::default()),
         })
     }
 
@@ -292,16 +339,21 @@ impl RestClient {
         }
     }
 
-    /// The server's configuration, fetched on first use. It is the catalog's own (fetched with the
-    /// catalog's identity: its token or client credentials, a delegated catalog's actor client),
-    /// except on a delegated catalog with no actor client, where it is fetched and kept per caller
-    /// identity: the Iceberg REST spec authenticates `/v1/config` like any call, and the user's
-    /// token is the only one such a catalog has.
+    /// The server's configuration, fetched on first use. For every mode but `delegated` it is the
+    /// catalog's own, fetched with the catalog's token. A delegated catalog has no identity of its
+    /// own at the catalog (the server's actor token is for the IdP only and never reaches the
+    /// catalog host): `/v1/config` is fetched with the caller's own delegated token (exchanged or
+    /// forwarded), as the Iceberg REST spec authenticates it like any call, and kept per
+    /// principal (without groups) and exchange claims.
     fn server(&self, caller: &RestCaller, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
-        let catalog_caller = RestCaller::server();
-        let (key, tokens, caller) = match self.tokens.catalog_identity() {
-            Some(t) => (None, t, &catalog_caller),
-            None => (caller.identity.clone(), &self.tokens, caller),
+        let key = if self.tokens.is_delegated() {
+            match (&caller.principal, &caller.subject) {
+                (Some(p), Some(s)) => Some(format!("{}:{p}|{:02x?}", p.len(), s.claims)),
+                // Refused by the token source before anything is sent.
+                _ => caller.identity.clone(),
+            }
+        } else {
+            None
         };
         let slot = || {
             self.server
@@ -309,7 +361,7 @@ impl RestClient {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         };
         if let Some(s) = slot().get(&key) {
-            return Ok(Arc::clone(s));
+            return Ok(s);
         }
         // Fetched without the lock, so a stalled `/v1/config` holds no other caller; when two callers race, the
         // first answer stored wins.
@@ -320,7 +372,7 @@ impl RestClient {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
             let value = self
-                .get_with(tokens, caller, &url, &[], deadline, &[])?
+                .get(caller, &url, &[], deadline, &[])?
                 .ok_or(RestError::Status {
                     status: 404,
                     kind: Some("NoSuchWarehouseException".to_owned()),
@@ -359,12 +411,7 @@ impl RestClient {
             })
         };
         let fetched = Arc::new(fetch().map_err(fail)?);
-        let mut slot = slot();
-        // Per-identity entries are bounded: past the cap they are fetched again.
-        if slot.len() >= 4096 {
-            slot.clear();
-        }
-        Ok(Arc::clone(slot.entry(key).or_insert(fetched)))
+        Ok(slot().insert(key, fetched))
     }
 
     /// The server's merged configuration (after the first call).
@@ -680,6 +727,29 @@ mod tests {
             join(&base, &["v1", "config"]).unwrap().as_str(),
             "http://127.0.0.1:8181/v1/config"
         );
+    }
+
+    /// Review 58b1-r2 N3: past the cap the least recently used answer goes, not all of them.
+    #[test]
+    fn the_config_cache_evicts_the_least_recently_used() {
+        let server = || {
+            Arc::new(Server {
+                prefix: None,
+                separator: DEFAULT_NAMESPACE_SEPARATOR.to_owned(),
+                config: CatalogConfig::default(),
+            })
+        };
+        let mut cache = ConfigCache::default();
+        for i in 0..MAX_CONFIGS {
+            cache.insert(Some(i.to_string()), server());
+        }
+        // Touch the oldest: the second oldest is the one evicted.
+        assert!(cache.get(&Some("0".to_owned())).is_some());
+        cache.insert(Some("new".to_owned()), server());
+        assert_eq!(cache.len(), MAX_CONFIGS);
+        assert!(cache.get(&Some("0".to_owned())).is_some());
+        assert!(cache.get(&Some("1".to_owned())).is_none());
+        assert!(cache.get(&Some("new".to_owned())).is_some());
     }
 
     #[test]

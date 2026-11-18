@@ -740,7 +740,10 @@ impl DeclaredView {
 impl crate::Session {
     /// The declared catalogs as this session's principal sees them.
     pub(crate) fn declared_catalogs(&self) -> DeclaredView {
-        // The statement's own request first, else the session's latest RPC.
+        // The statement's own request first, else the session's latest RPC. A statement handle
+        // that outlives its RPC (a long operation) keeps that token, secret-typed and wiped on
+        // drop, until the handle goes: the snapshot is the design's (one credential per query),
+        // and once the token expires no new exchange is made with it.
         let inbound = self.request_inbound.clone().or_else(|| {
             self.state
                 .inbound

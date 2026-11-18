@@ -279,7 +279,9 @@ impl SparkConnectService for ConnectService {
         )?;
         observe(&entry, request.client_type.as_deref());
         let _gate = entry.shared().await;
-        analyze::analyze_plan(&entry, &request, &self.limits)
+        let options = krishiv_session::QueryOptions::new()
+            .inbound_credential(caller.method, caller.credential.clone());
+        analyze::analyze_plan(&entry, &request, &self.limits, &options)
             .await
             .map(Response::new)
             .map_err(|e| entry.errors().status(&e))

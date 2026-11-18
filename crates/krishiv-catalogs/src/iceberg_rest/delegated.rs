@@ -26,7 +26,9 @@
 //!   no groups (kind, tenant, name, `delegated_by`), so varying groups is no way around them. Past
 //!   either a call is `KRISHIV_CATALOG_LIMIT_EXCEEDED`. Only a request sent to the IdP counts.
 //! - **Audit.** Every exchange attempt writes one `krishiv::audit` record (an actor token that
-//!   cannot be fetched included): catalog, principal, `delegated_by`, outcome; never a token.
+//!   cannot be fetched included): catalog, principal, `delegated_by`, outcome; never a token. A
+//!   failed actor fetch is repeated from memory for 30 s, so no caller drives the server's client
+//!   grant at the IdP. The actor token is sent to the token endpoint only, never to the catalog.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -177,6 +179,9 @@ struct State {
     distinct: HashMap<String, HashMap<[u8; 16], Instant>>,
     /// Fingerprint of a whole refused subject token -> when it was refused.
     refused: HashMap<[u8; 16], Instant>,
+    /// The last failure to fetch the actor token, and when: repeated for 30 s without asking the
+    /// IdP again, so user calls cannot drive the server's client grant (§3.3).
+    actor_failed: Option<(Instant, RestError)>,
 }
 
 impl State {
@@ -264,11 +269,6 @@ impl Delegated {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The actor's client-credentials source, if the catalog has one.
-    pub(crate) fn actor(&self) -> Option<&Tokens> {
-        self.actor.as_ref()
-    }
-
     pub(crate) fn refreshable(&self) -> bool {
         !self.forward
     }
@@ -339,13 +339,21 @@ impl Delegated {
         };
         // The actor first: a server whose own client is refused spends no user's budget.
         let actor = match &self.actor {
-            Some(a) => match a.token(&RestCaller::server(), http, deadline) {
-                Ok(t) => t,
-                Err(e) => {
-                    audit("failed");
-                    return Err(e);
+            Some(a) => {
+                if let Some((at, e)) = &self.state().actor_failed
+                    && now.saturating_duration_since(*at) < REFUSED_FOR
+                {
+                    return Err(e.clone());
                 }
-            },
+                match a.token(&RestCaller::server(), http, deadline) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        audit("failed");
+                        self.state().actor_failed = Some((Instant::now(), e.clone()));
+                        return Err(e);
+                    }
+                }
+            }
             None => None,
         };
         self.admit(principal, subject.claims, now)?;

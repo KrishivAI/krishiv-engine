@@ -476,3 +476,23 @@ fn exchanged_token_without_expires_in_ends_with_its_subject() {
     let exchanges = server.seen().iter().filter(|s| path(s) == "/token").count();
     assert_eq!(exchanges, 1, "no exchange for an expired subject token");
 }
+
+/// Review 58b1-r2 N3: a delegated catalog's `/v1/config` is kept per principal without its
+/// groups and per exchange claims, fetched with that caller's own exchanged token.
+#[test]
+fn delegated_config_is_kept_per_principal_and_claims() {
+    let server = delegated_server();
+    let catalog = limited_catalog(&server, 20);
+    let t = ident(&["db"], "t");
+    let _ = load_as(&catalog, &caller_with(&["g1"], "s", 3600), &t);
+    let _ = load_as(&catalog, &caller_with(&["g2"], "s", 3600), &t);
+    let _ = load_as(&catalog, &caller_with(&["g1"], "narrower", 3600), &t);
+    let configs: Vec<_> = server
+        .seen()
+        .iter()
+        .filter(|s| path(s) == "/v1/config")
+        .map(|s| s.header("authorization").unwrap_or("").to_owned())
+        .collect();
+    // Other groups, same claims: the same entry; other claims: a fetch of its own.
+    assert_eq!(configs, ["Bearer x-alice-jwt", "Bearer x-alice-jwt"]);
+}

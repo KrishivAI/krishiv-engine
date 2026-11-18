@@ -203,13 +203,9 @@ impl Tokens {
         }
     }
 
-    /// The source of the catalog's own identity: itself for every server-identity mode, a
-    /// delegated catalog's actor client, or `None` (a delegated catalog without one).
-    pub(crate) fn catalog_identity(&self) -> Option<&Tokens> {
-        match self {
-            Self::Delegated(d) => d.actor(),
-            _ => Some(self),
-        }
+    /// Whether the catalog sees end users (no identity of its own at the catalog).
+    pub(crate) fn is_delegated(&self) -> bool {
+        matches!(self, Self::Delegated(_))
     }
 
     /// Whether a 401 is worth one retry with a new token.

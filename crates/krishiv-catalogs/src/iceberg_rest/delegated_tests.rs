@@ -182,8 +182,9 @@ fn delegated_exchange_sends_subject_actor_audience() {
     for b in bearers(&server) {
         assert_eq!(b, "Bearer x0-lake");
     }
-    // `/v1/config` is the catalog's own, fetched with the server's client (review 58b1-r1 m5).
-    assert_eq!(config_bearers(&server), ["Bearer actor-token"]);
+    // `/v1/config` goes with the user's exchanged token too: the server's actor token is for the
+    // IdP only and never reaches the catalog (review 58b1-r2 N1).
+    assert_eq!(config_bearers(&server), ["Bearer x0-lake"]);
 }
 
 fn config_bearers(server: &Server) -> Vec<String> {
@@ -334,10 +335,8 @@ fn delegated_refused_for_static_token_session() {
             ErrorClass::KrishivCatalogDelegationUnavailable
         );
     }
-    // At most the catalog's own configuration was read (with the server's client): no exchange,
-    // no catalog call as anyone.
-    assert!(exchange_forms(&server).is_empty());
-    assert!(bearers(&server).is_empty(), "{:?}", server.seen());
+    // Nothing was sent at all: no actor token, no exchange, no catalog call as anyone.
+    assert!(server.seen().is_empty(), "{:?}", server.seen());
 }
 
 #[test]
@@ -532,17 +531,13 @@ fn an_exchanged_token_is_never_shown() {
 }
 
 /// An IdP that refuses the server's own client: when `actor_refused`, its client-credentials
-/// grant succeeds once (a token that lives no time) and is refused from then on; otherwise the
-/// exchange is refused with `invalid_client`.
+/// grant; otherwise the exchange itself, with `invalid_client`.
 fn client_refusing_idp(actor_refused: bool) -> Server {
-    let grants = Arc::new(AtomicUsize::new(0));
     serve(move |r| match path(r) {
         "/token" => {
             let f = form(r);
             match field(&f, "grant_type") {
-                Some("client_credentials")
-                    if actor_refused && grants.fetch_add(1, Ordering::SeqCst) > 0 =>
-                {
+                Some("client_credentials") if actor_refused => {
                     Reply::Json(401, r#"{"error": "invalid_client"}"#.into())
                 }
                 Some("client_credentials") => Reply::Json(
@@ -575,17 +570,76 @@ fn actor_refusal_is_the_catalogs_failure() {
     // Not remembered against the user's token: both calls reached the IdP.
     assert_eq!(exchange_forms(&server).len(), 2);
 
-    // The actor token is refused after the configuration was read: no exchange is sent and no
-    // budget is spent (were it charged first, the second call would hit the limit of one).
+    // The actor token is refused: no exchange is sent, no budget is spent (with a limit of one,
+    // a charge would turn the second call into `LIMIT_EXCEEDED`), and the refusal is remembered
+    // for 30 s, so user calls send the IdP one client-credentials request, not one each
+    // (review 58b1-r2 N2).
     let server = client_refusing_idp(true);
     let one = DelegationLimits {
         max_exchanges_per_minute: 1,
         max_distinct_exchanges_per_minute: 20,
     };
     let client = delegated(&server, "lake", false, one);
-    for _ in 0..3 {
-        let e = list(&client, &alice).unwrap_err();
+    for i in 0..3 {
+        let who = user("alice", Some(subject(&format!("t{i}"), i, &[], HOUR)));
+        let e = list(&client, &who).unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure, "{e}");
     }
     assert!(exchange_forms(&server).is_empty());
+    let grants = server
+        .seen()
+        .iter()
+        .filter(|s| field(&form(s), "grant_type") == Some("client_credentials"))
+        .count();
+    assert_eq!(grants, 1, "a failing actor client is backed off");
+    assert!(
+        server.seen().iter().all(|s| path(s) == "/token"),
+        "nothing reached the catalog"
+    );
+}
+
+/// Review 58b1-r2 N1: a catalog that accepts only exchanged tokens (its audience), as Polaris or
+/// Lakekeeper validating `aud` do. The server's actor token never reaches the catalog host.
+#[test]
+fn actor_token_never_sent_to_catalog() {
+    let server = serve(move |r| match path(r) {
+        "/token" => {
+            let f = form(r);
+            match field(&f, "grant_type") {
+                Some("client_credentials") => Reply::Json(
+                    200,
+                    r#"{"access_token": "actor-token", "token_type": "bearer", "expires_in": 3600}"#
+                        .into(),
+                ),
+                _ => Reply::Json(
+                    200,
+                    r#"{"access_token": "x-user", "token_type": "bearer", "expires_in": 3600}"#
+                        .into(),
+                ),
+            }
+        }
+        _ if r.header("authorization") == Some("Bearer x-user") => {
+            if path(r) == "/v1/config" {
+                Reply::Json(200, CONFIG.into())
+            } else {
+                Reply::Json(200, r#"{"namespaces": []}"#.into())
+            }
+        }
+        _ => Reply::Json(401, "{}".into()),
+    });
+    let client = delegated(&server, "lake", false, DelegationLimits::default());
+    list(
+        &client,
+        &user("alice", Some(subject("alice-jwt", 1, &[], HOUR))),
+    )
+    .unwrap();
+    let actor_at_catalog = server
+        .seen()
+        .iter()
+        .filter(|s| path(s) != "/token")
+        .any(|s| s.header("authorization") == Some("Bearer actor-token"));
+    assert!(!actor_at_catalog, "{:?}", server.seen());
+    // Only the exchange carried it.
+    let f = &exchange_forms(&server)[0];
+    assert_eq!(field(f, "actor_token"), Some("actor-token"));
 }
