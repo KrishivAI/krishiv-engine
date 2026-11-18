@@ -69,6 +69,8 @@ struct Harness {
     stop: Option<oneshot::Sender<()>>,
     /// `serve`'s task: it ends once shutdown has waited for the running operations.
     served: tokio::task::JoinHandle<Result<(), krishiv_common::error::KrishivError>>,
+    /// The listener's `maxResponseBytes`, shared by Connect operations and Flight fetches.
+    budget: krishiv_connect_server::execute::ResponseBudget,
     _dir: tempfile::TempDir,
 }
 
@@ -108,6 +110,7 @@ async fn start_with(
     )
     .expect("flight server");
     let draining = server.draining();
+    let budget = server.response_budget().clone();
     let server = server.with_routes(Routes::new(flight.service()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -128,6 +131,7 @@ async fn start_with(
         client: FlightServiceClient::new(channel),
         stop: Some(stop),
         served,
+        budget,
         _dir: dir,
     }
 }
@@ -1115,4 +1119,51 @@ async fn command_doget_waited_for_at_shutdown() {
     let batches = read_to_end(stream).await.expect("the stored rows");
     assert!(rows(&batches) > 100, "{} rows", rows(&batches));
     served_then_closed(h).await;
+}
+
+/// Stalled readers hold their share of `maxResponseBytes` (§16 M1): once two fetches hold the
+/// whole budget, a third `DoGet` waits before it answers, and goes on when one of them ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn stalled_readers_wait_at_the_response_budget() {
+    // Each fetch reserves `batch_bytes + data_bytes` = 500 MiB of the default 1 GiB.
+    let mut h = start(FlightSqlConfig {
+        encode: krishiv_flight_sql::EncodeLimits {
+            batch_bytes: 400 << 20,
+            data_bytes: 100 << 20,
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let cap = h.budget.cap();
+    assert!((1000 << 20..1500 << 20).contains(&cap), "budget {cap}");
+    let (i, cookie) = info(&mut h, OPS, None, LONG).await.expect("info");
+    let cookie = cookie.expect("cookie");
+    let a = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    let b = open_fetch(&mut h, Some(&cookie), ticket(&i)).await;
+    assert_eq!(h.budget.available(), cap - 2 * (500 << 20));
+    let mut client = h.client.clone();
+    let third = tokio::spawn({
+        let request = authed(ticket(&i), OPS, Some(&cookie));
+        async move { client.do_get(request).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !third.is_finished(),
+        "a third fetch answered past the budget"
+    );
+    drop(a);
+    let mut c = tokio::time::timeout(Duration::from_secs(10), third)
+        .await
+        .expect("the third fetch goes on once a reader ends")
+        .expect("task")
+        .expect("do_get")
+        .into_inner();
+    c.message().await.expect("first message").expect("schema");
+    drop((b, c));
+    wait_busy(&h, 0).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.budget.available() != cap {
+        assert!(Instant::now() < deadline, "the budget was not given back");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
