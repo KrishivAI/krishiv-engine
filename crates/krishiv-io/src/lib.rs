@@ -70,10 +70,10 @@ pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
     FileRef, Held, InferKey, InferredSchemas, IoConfig, IoContext, IoCounters, IoScheduler,
-    LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore,
-    PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy, StoreRegistry, StoreSettings,
-    Tail, VersionToken, infer_schema_cached, is_server_scoped_option, parse_object_url,
-    query_registry, register, register_with_options,
+    KeyFact, KeyFactKey, KeyFacts, LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore,
+    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
+    StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached, is_server_scoped_option,
+    parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 /// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.

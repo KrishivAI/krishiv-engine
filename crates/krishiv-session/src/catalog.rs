@@ -45,6 +45,7 @@ use krishiv_plan::{
 use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
+mod key_facts;
 mod ndv_sampling;
 mod scans;
 mod script_results;
@@ -513,6 +514,11 @@ pub(crate) struct FileScans {
     pub(crate) runtime: tokio::runtime::Handle,
     /// The session's relation store, which holds the data of local relations.
     pub(crate) relations: Arc<krishiv_memory::RelationStore>,
+    /// The session's memory pool (under the runtime's root and
+    /// `krishiv.session.memoryLimit`): plan-time work that holds memory, the
+    /// key counts, reserves from a child of it, since the query's own pool
+    /// exists only once planning is done.
+    pub(crate) memory: Arc<dyn krishiv_memory::MemoryPool>,
 }
 
 impl FileScans {
@@ -735,6 +741,14 @@ impl QueryCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .any(|t| matches!(&**t, TempTable::Files { .. }))
+    }
+
+    /// Every file table opened for the query, in opening order.
+    fn opened_tables(&self) -> Vec<(FilesKey, Arc<FileTable>)> {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn opened(&self, key: &FilesKey) -> Option<Arc<FileTable>> {
