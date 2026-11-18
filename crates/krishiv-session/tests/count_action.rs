@@ -163,3 +163,74 @@ fn count_of_a_json_converts_no_value_as_spark() {
         assert_eq!(rows(read(mode, "true")), 1, "{mode}");
     }
 }
+
+/// A partitioned directory of gzip CSV and JSON files counts with no data
+/// column: `count()`, `count(*)` with `count(p)`, and a count under a filter
+/// on the partition column.
+#[test]
+fn partitioned_gzip_text_files_count_with_no_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("v", DataType::Int32, true),
+        Field::new("p", DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            // No NULL: a CSV row whose only data column is NULL is a blank
+            // line, which no reader counts.
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2, 2])),
+        ],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    for format in ["csv", "json"] {
+        let path = dir.path().join(format);
+        let path = path.to_str().unwrap().to_owned();
+        block_on(
+            s.table("t")
+                .write()
+                .partition_by(["p"])
+                .format(format)
+                .option("compression", "gzip")
+                .save(&path),
+        )
+        .unwrap();
+        let gz = walk(dir.path().join(format).as_path())
+            .iter()
+            .filter(|f| f.ends_with(".gz"))
+            .count();
+        assert!(gz >= 2, "{format}: {gz} gzip files");
+        let df = s.read().format(format).load([path.as_str()]);
+        assert_eq!(block_on(df.count()).unwrap(), 5, "{format}");
+        let only_p = df.filter_expr("p = 2").unwrap();
+        assert_eq!(block_on(only_p.count()).unwrap(), 3, "{format}");
+        let sql = format!("SELECT count(*), count(p) FROM {format}.`{path}`");
+        let b = block_on(block_on(s.sql(&sql)).unwrap().collect()).unwrap();
+        let col = |i: usize| {
+            b[0].column(i)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap()
+                .value(0)
+        };
+        assert_eq!((col(0), col(1)), (5, 5), "{format}");
+    }
+}
+
+/// Every file name under `dir`.
+fn walk(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    // An unreadable entry is left out: the caller's assertion counts files.
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+    out
+}

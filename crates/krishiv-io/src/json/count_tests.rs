@@ -5,7 +5,14 @@
 //! and a `FAILFAST` count fails only on those. A `multiLine` file is one
 //! record, its first value (rows, count, corrupt text and inference). Expected
 //! results from a Spark 4.2.0 run of the same files (`spark.read.schema(..)
-//! .option("mode", m).json(p)`, local mode, 2026-11-18).
+//! .option("mode", m).json(p)`, local mode, 2026-11-18). In Spark's source:
+//! `JacksonParser.parse` reads one root token and, for an empty schema,
+//! converts no field (`convertObject` over no field writers); the line reader
+//! (`TextInputJsonDataSource`) parses one root per line and the whole-file
+//! reader (`MultiLineJsonDataSource.readFile`) one per file, with the whole
+//! file as the bad record's text; `JsonInferSchema` infers from the same
+//! roots. pyspark 3.5.5, 4.0.1 and 4.1.0 give the same counts, rows and
+//! inferred schema on these files (`probe7.py`, 2026-11-18).
 
 use std::sync::Arc;
 

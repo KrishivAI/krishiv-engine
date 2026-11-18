@@ -609,13 +609,18 @@ fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a A
 /// without tokenizing, as Spark's `UnivocityParser` with column pruning) or
 /// JSON (records parsed, no value converted: as Spark's `JacksonParser` with
 /// an empty schema, a `DROPMALFORMED` read drops only the records that are not
-/// JSON), or a table (a temporary view over files, a catalog table) whose
+/// JSON objects), or a table (a temporary view over files, a catalog table) whose
 /// provider says so through `stats` ([`Statistics::reads_rows_without_columns`]).
 /// Any other source, or one whose rows on disk are not its rows (deletion
 /// files), keeps one.
+/// The file formats whose readers count rows with no column. A read names its
+/// format by Spark's short name (the format registry resolves no other), so a
+/// fully qualified class name never reaches a `Files` scan.
+const COUNTED_WITHOUT_COLUMNS: &[&str] = &["parquet", "csv", "json"];
+
 fn reads_rows_without_columns(scan: &Scan, stats: Option<&dyn Statistics>) -> bool {
     match &scan.source {
-        ReadSource::Files { format, .. } => ["parquet", "csv", "json"]
+        ReadSource::Files { format, .. } => COUNTED_WITHOUT_COLUMNS
             .iter()
             .any(|f| format.eq_ignore_ascii_case(f)),
         _ => stats.is_some_and(|s| s.reads_rows_without_columns(scan)),

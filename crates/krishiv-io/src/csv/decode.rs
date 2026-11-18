@@ -160,6 +160,10 @@ impl CsvDecoder {
             .filter(|c| matches!(c, Out::Data { .. }))
             .count();
         let pruned = opts.column_pruning && required < data.len();
+        // Lines are counted without tokenizing only when nothing is output:
+        // a read of `_metadata.row_index` alone still tokenizes each line, so
+        // it can fail under FAILFAST or `maxCharsPerColumn` where `count()`
+        // does not (Spark has no CSV row index to compare with).
         let bare = pruned && outs.is_empty() && !opts.multi_line;
         let split = units.units.first().map_or(ByteRange::new(0, 0), |u| {
             ByteRange::new(u.bytes.start, u.bytes.end)

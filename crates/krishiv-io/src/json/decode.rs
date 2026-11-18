@@ -891,6 +891,15 @@ impl JsonDecoder {
                     }
                 },
                 Source::Whole { reader, text, pos } => {
+                    // The file is one record: its first value, as Spark's
+                    // `JacksonParser` reads one root from the whole stream;
+                    // whatever follows it is not read. The record's text
+                    // (the corrupt column) is the whole file, as Spark's:
+                    // the text moves into the record, never copied. `pos`
+                    // is 1 once the record has gone out.
+                    if *pos > 0 {
+                        return Ok(Next::End);
+                    }
                     if text.is_none() {
                         if let Some(r) = reader.need() {
                             return Ok(Next::NeedData(r));
@@ -899,26 +908,18 @@ impl JsonDecoder {
                             Some(bytes) => {
                                 let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
                                 *text = Some(self.o.charset.decode(bytes).into_owned());
-                                *pos = 0;
                             }
                             None => return Ok(Next::End),
                         }
                     }
-                    let Some(t) = text.as_deref() else {
+                    let Some(t) = text.take() else {
                         return Ok(Next::End);
                     };
-                    // The file is one record: its first value, as Spark's
-                    // `JacksonParser` reads one root from the whole stream;
-                    // whatever follows it is not read. The record's text
-                    // (the corrupt column) is the whole file, as Spark's.
-                    if *pos > 0 {
-                        return Ok(Next::End);
-                    }
-                    *pos = t.len().max(1);
-                    return Ok(match parse_next(t, 0, self.syntax) {
+                    *pos = 1;
+                    return Ok(match parse_next(&t, 0, self.syntax) {
                         Ok(None) => Next::End,
-                        Ok(Some((top, _))) => Next::Record(Ok(top), t.to_owned()),
-                        Err(reason) => Next::Record(Err(reason), t.to_owned()),
+                        Ok(Some((top, _))) => Next::Record(Ok(top), t),
+                        Err(reason) => Next::Record(Err(reason), t),
                     });
                 }
             }
