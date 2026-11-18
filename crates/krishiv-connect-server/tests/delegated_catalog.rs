@@ -155,7 +155,14 @@ impl Authenticator for TestAuth {
     }
 }
 
-async fn start(base: &str) -> (Channel, oneshot::Sender<()>) {
+/// The session manager `krishiv server` builds, over a runtime declaring the delegated catalog
+/// `lake` at `base`.
+fn manager(
+    base: &str,
+) -> (
+    Arc<SessionManager>,
+    Arc<krishiv_session::auth::DeniedCounts>,
+) {
     let token_endpoint = format!("{base}/token");
     let setup = [
         ("krishiv.catalog.lake.type", "iceberg-rest"),
@@ -185,7 +192,14 @@ async fn start(base: &str) -> (Channel, oneshot::Sender<()>) {
     let denials = Arc::new(krishiv_session::auth::DeniedCounts::new());
     let factory =
         role_sessions(base_session, &Config::new(), Arc::clone(&denials)).expect("factory");
-    let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
+    (
+        Arc::new(SessionManager::new(factory, SessionLimits::default())),
+        denials,
+    )
+}
+
+async fn start(base: &str) -> (Channel, oneshot::Sender<()>) {
+    let (manager, denials) = manager(base);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(manager, ConnectServerConfig::default())
@@ -321,4 +335,60 @@ async fn oidc_session_reaches_delegated_catalog_with_the_exchanged_token() {
             assert!(body.contains("subject_token="), "{body}");
         }
     }
+}
+
+/// Review 58b1-r3 R3: AnalyzePlan reads a delegated catalog with its own request's token, not
+/// with whatever another request of the session stored last.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn analyze_plan_uses_its_own_requests_token() {
+    use krishiv_connect::proto::v4_3::analyze_plan_request::{self as areq, Analyze};
+    let (base, seen) = fake_catalog();
+    let (manager, _) = manager(&base);
+    let credential = |token: &str| {
+        InboundCredential::new(
+            CredentialKind::Oidc,
+            SecretString::new(token),
+            ExchangeClaims::with_audiences(vec!["krishiv".to_owned()]),
+            SystemTime::now() + Duration::from_secs(3600),
+        )
+    };
+    let alice = Authenticated::new(
+        Principal::new("alice", PrincipalKind::User),
+        Some(Role::Operator),
+        Method::Oidc,
+    )
+    .with_credential(Some(credential("alice-jwt")));
+    let entry = manager
+        .get_or_create(&alice, session_of("alice-jwt"), None, "alice")
+        .expect("session");
+    // Another request of the session stored a different token meanwhile.
+    entry
+        .session()
+        .set_inbound_credential(Method::Oidc, Some(credential("stale-jwt")));
+    let request = pb::AnalyzePlanRequest {
+        session_id: session_of("alice-jwt").to_owned(),
+        analyze: Some(Analyze::Schema(Box::new(areq::Schema {
+            plan: Some(sql("SELECT * FROM lake.db.t")),
+        }))),
+        ..Default::default()
+    };
+    let options = krishiv_session::QueryOptions::new()
+        .inbound_credential(Method::Oidc, Some(credential("alice-jwt")));
+    let r = krishiv_connect_server::analyze::analyze_plan(
+        &entry,
+        &request,
+        &krishiv_connect_server::ExecuteLimits::default(),
+        &options,
+    )
+    .await;
+    // Found for alice (and refused until the table provider exists).
+    assert!(r.is_err());
+    let loads: Vec<String> = seen
+        .lock()
+        .expect("seen")
+        .iter()
+        .filter(|(p, _, _)| p == "/v1/namespaces/db/tables/t")
+        .map(|(_, a, _)| a.clone())
+        .collect();
+    assert_eq!(loads, ["Bearer x-alice-jwt"]);
 }

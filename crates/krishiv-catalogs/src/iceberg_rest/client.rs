@@ -242,10 +242,10 @@ impl RestClient {
                 config.limits.request_timeout,
                 config.limits.max_response_bytes,
             )?;
-            Ok((
-                http,
-                Tokens::new(&name, &config.auth, &config.uri, config.limits.max_depth)?,
-            ))
+            let mut tokens =
+                Tokens::new(&name, &config.auth, &config.uri, config.limits.max_depth)?;
+            tokens.set_actor_timeout(config.limits.request_timeout);
+            Ok((http, tokens))
         };
         let (http, tokens) =
             start().map_err(|e| e.into_error(&name, "the catalog client", &config.limits))?;

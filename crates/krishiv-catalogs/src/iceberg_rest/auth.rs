@@ -203,6 +203,13 @@ impl Tokens {
         }
     }
 
+    /// Sets the deadline of a delegated catalog's actor-token fetch (no effect for other modes).
+    pub(crate) fn set_actor_timeout(&mut self, timeout: Duration) {
+        if let Self::Delegated(d) = self {
+            d.set_actor_timeout(timeout);
+        }
+    }
+
     /// Whether the catalog sees end users (no identity of its own at the catalog).
     pub(crate) fn is_delegated(&self) -> bool {
         matches!(self, Self::Delegated(_))

@@ -643,3 +643,79 @@ fn actor_token_never_sent_to_catalog() {
     let f = &exchange_forms(&server)[0];
     assert_eq!(field(f, "actor_token"), Some("actor-token"));
 }
+
+fn client_credentials_requests(server: &Server) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|s| field(&form(s), "grant_type") == Some("client_credentials"))
+        .count()
+}
+
+/// Review 58b1-r3 R1: an actor fetch that fails transiently (a 5xx) is not remembered: the
+/// next call asks the IdP again (only an outright refusal is backed off for 30 s).
+#[test]
+fn a_transient_actor_failure_is_not_backed_off() {
+    let server = serve(|r| match path(r) {
+        "/token" => Reply::Json(503, "{}".into()),
+        _ => Reply::Json(200, CONFIG.into()),
+    });
+    let client = delegated(&server, "lake", false, DelegationLimits::default());
+    for i in 0..3 {
+        let who = user("alice", Some(subject(&format!("t{i}"), i, &[], HOUR)));
+        let e = list(&client, &who).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure, "{e}");
+    }
+    assert_eq!(client_credentials_requests(&server), 3);
+    assert!(exchange_forms(&server).is_empty());
+}
+
+/// Review 58b1-r3 R2: `invalid_client` on an exchange drops the cached actor token, so the next
+/// exchange fetches a new one instead of reusing a revoked token until its own expiry.
+#[test]
+fn a_refused_actor_token_is_dropped_and_fetched_again() {
+    let grants = Arc::new(AtomicUsize::new(0));
+    let n = Arc::clone(&grants);
+    let server = serve(move |r| match path(r) {
+        "/token" => {
+            let f = form(r);
+            match field(&f, "grant_type") {
+                Some("client_credentials") => {
+                    let i = n.fetch_add(1, Ordering::SeqCst);
+                    Reply::Json(
+                        200,
+                        format!(
+                            r#"{{"access_token": "actor-{i}", "token_type": "bearer", "expires_in": 3600}}"#
+                        ),
+                    )
+                }
+                // The IdP revoked the first actor token.
+                _ if field(&f, "actor_token") == Some("actor-0") => {
+                    Reply::Json(401, r#"{"error": "invalid_client"}"#.into())
+                }
+                _ => Reply::Json(
+                    200,
+                    r#"{"access_token": "x-user", "token_type": "bearer", "expires_in": 3600}"#
+                        .into(),
+                ),
+            }
+        }
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(200, r#"{"namespaces": []}"#.into()),
+    });
+    let client = delegated(&server, "lake", false, DelegationLimits::default());
+    let alice = user("alice", Some(subject("alice-jwt", 1, &[], HOUR)));
+    let e = list(&client, &alice).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure, "{e}");
+    list(&client, &alice).unwrap();
+    assert_eq!(
+        grants.load(Ordering::SeqCst),
+        2,
+        "a new actor token was fetched"
+    );
+    let actors: Vec<_> = exchange_forms(&server)
+        .iter()
+        .map(|f| field(f, "actor_token").unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(actors, ["actor-0", "actor-1"]);
+}

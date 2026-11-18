@@ -179,8 +179,9 @@ struct State {
     distinct: HashMap<String, HashMap<[u8; 16], Instant>>,
     /// Fingerprint of a whole refused subject token -> when it was refused.
     refused: HashMap<[u8; 16], Instant>,
-    /// The last failure to fetch the actor token, and when: repeated for 30 s without asking the
-    /// IdP again, so user calls cannot drive the server's client grant (§3.3).
+    /// The last refusal of the actor token (400/401/403), and when: repeated for 30 s without
+    /// asking the IdP again, so user calls cannot drive the server's client grant (§3.3). A
+    /// timeout or a 5xx is not kept: one blip must not refuse everyone.
     actor_failed: Option<(Instant, RestError)>,
 }
 
@@ -217,6 +218,8 @@ pub(crate) struct Delegated {
     actor: Option<Tokens>,
     max_depth: usize,
     limits: DelegationLimits,
+    /// The deadline of one actor-token fetch, its own (not what is left of a caller's call).
+    actor_timeout: Duration,
     state: Mutex<State>,
 }
 
@@ -261,12 +264,18 @@ impl Delegated {
             actor,
             max_depth,
             limits,
+            actor_timeout: Duration::from_secs(30),
             state: Mutex::new(State::default()),
         }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sets the deadline of one actor-token fetch (the catalog's `request_timeout`).
+    pub(crate) fn set_actor_timeout(&mut self, timeout: Duration) {
+        self.actor_timeout = timeout;
     }
 
     pub(crate) fn refreshable(&self) -> bool {
@@ -345,11 +354,16 @@ impl Delegated {
                 {
                     return Err(e.clone());
                 }
-                match a.token(&RestCaller::server(), http, deadline) {
+                // Its own deadline: a caller's nearly spent one must not fail the actor.
+                let started = Instant::now();
+                let own = started.checked_add(self.actor_timeout).unwrap_or(started);
+                match a.token(&RestCaller::server(), http, own) {
                     Ok(t) => t,
                     Err(e) => {
                         audit("failed");
-                        self.state().actor_failed = Some((Instant::now(), e.clone()));
+                        if matches!(e, RestError::TokenRefused { .. }) {
+                            self.state().actor_failed = Some((Instant::now(), e.clone()));
+                        }
                         return Err(e);
                     }
                 }
@@ -358,6 +372,13 @@ impl Delegated {
         };
         self.admit(principal, subject.claims, now)?;
         let outcome = self.exchange(subject, actor.as_ref(), http, deadline);
+        // The IdP refused the server's own client: drop the cached actor token, so the next
+        // exchange fetches a new one (still under the back-off).
+        if let (Err(RestError::TokenRefused { .. }), Some(a), Some(token)) =
+            (&outcome, &self.actor, &actor)
+        {
+            a.invalidate(token);
+        }
         audit(match &outcome {
             Ok(_) => "exchanged",
             Err(RestError::Delegation(_)) => "refused",
