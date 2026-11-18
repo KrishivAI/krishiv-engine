@@ -39,7 +39,7 @@ and `json`, with `.mode(...)` and `.option(key, value)` such as `.option("header
 CSV.
 
 The save modes are `overwrite`, `append`, `error` (the default; an existing path raises `PATH_ALREADY_EXISTS`) and
-`ignore` (an existing path is left as it is, with no error); `errorifexists` is another name for `error`.
+`ignore` (an existing path is left as it is, with no error); `errorifexists` and `default` are other names for `error`.
 
 A write creates a directory, not a single file: `part-*` data files, a `_SUCCESS` marker and a `_krishiv_log/`
 directory that records each commit (see [known differences](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory)).

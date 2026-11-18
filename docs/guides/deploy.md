@@ -75,7 +75,7 @@ they are not an audit trail. Use the counters to see how many refusals happened.
 A Krishiv process bounds the memory its queries use with `krishiv.memory.limit`. When it is not set, the limit is 80% of
 the effective memory limit: the tightest cgroup limit, so a container's own limit counts, else the machine's physical
 memory (2 GiB where neither can be read). Operators spill when they reach it. `EXPLAIN ANALYZE` prints the limit that is
-in effect on its `memory:` line (for example `memory: peak reserved 0 B, limit 48.9 GiB`). `SET krishiv.memory.limit`
+in effect on its `memory:` line (for example `limit 48.9 GiB` on a machine with 61 GiB of memory). `SET krishiv.memory.limit`
 answers `<undefined>` while the key is unset, as Spark's `SET` does for an unset key; set the key to a size to pin it.
 See the [configuration reference](../reference/config/index.md).
 

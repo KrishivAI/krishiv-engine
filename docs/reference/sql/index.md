@@ -28,7 +28,7 @@ Run SQL from Python with `spark.sql("...")`, or mix it with DataFrames: register
   `FORMAT JSON` comes right after `EXPLAIN`; other formats are a syntax error, and `EXPLAIN FORMAT JSON PHYSICAL` is
   reserved (`KRISHIV_UNSUPPORTED_FEATURE`). It is a Krishiv extension (see
   [known differences](../../concepts/known-differences.md)).
-- `SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own read-only catalog, for example
+- `SHOW CATALOGS` lists the built-in catalogs `spark_catalog` and `system`. `system` is Krishiv's own read-only catalog, for example
   `system.queries` (see [resource groups](../../guides/resource-groups.md)); Spark has no such catalog.
 - Behaviour that depends on the Spark release (3.5, 4.0, 4.1, 4.2) is keyed by the session's Spark version.
 - Settings such as ANSI mode are in the [configuration reference](../config/index.md).
