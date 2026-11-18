@@ -9,7 +9,7 @@ description: "Converts a Catalyst binary input value into its corresponding Prot
 Converts a Catalyst binary input value into its corresponding
 Protobuf format result.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.0 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.0 and later.
 
 ## Syntax
 
@@ -21,9 +21,9 @@ to_protobuf(child, messageName, descFilePath, options)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `protobuf_funcs` |
-| Kind | unknown (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.0.0 |
 | In Spark profiles | 4.0 and later |
 | Arguments | [2, 3, 4] |
@@ -39,6 +39,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.0.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

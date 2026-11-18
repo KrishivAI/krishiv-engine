@@ -796,3 +796,81 @@ fn list_range(a: &dyn Array, row: usize) -> Result<(ArrayRef, usize, usize), Kri
 pub fn spark_type_of(ty: &ArrowType, nullable: bool) -> Result<DataType, KrishivError> {
     DataType::from_arrow_field(&Field::new("value", ty.clone(), nullable))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, StringViewArray, StructArray};
+    use krishiv_common::error::ErrorClass;
+    use krishiv_types::{StructField, StructType};
+
+    use super::*;
+
+    const GOLDEN: &[u8] = include_bytes!(
+        "../../../../tests/spark-golden/functions/from_to_protobuf/fixtures/krishiv_golden.desc"
+    );
+    const P2: &[u8] = include_bytes!(
+        "../../../../tests/spark-golden/functions/from_to_protobuf/fixtures/krishiv_golden_p2.desc"
+    );
+
+    fn st(fields: &[(&str, DataType)]) -> StructType {
+        StructType::new(
+            fields
+                .iter()
+                .map(|(n, t)| StructField::new(*n, t.clone(), true)),
+        )
+    }
+
+    fn conv(desc: &[u8], message: &str, s: &StructType) -> Result<EncStruct, KrishivError> {
+        let set = DescriptorSet::parse(desc).unwrap();
+        let msg = set.message(message).unwrap();
+        struct_conv(s, &msg, &mut Vec::new())
+    }
+
+    #[test]
+    fn a_struct_field_the_message_lacks_is_no_sql_type_in_protobuf_schema() {
+        let e = conv(GOLDEN, "Scalars", &st(&[("nope", DataType::Integer)])).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::NoSqlTypeInProtobufSchema);
+    }
+
+    #[test]
+    fn a_missing_required_field_is_protobuf_field_missing_in_sql_schema() {
+        let e = conv(P2, "P2Required", &st(&[("c", DataType::Integer)])).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ProtobufFieldMissingInSqlSchema);
+    }
+
+    #[test]
+    fn two_fields_matching_a_name_ignoring_case_is_protobuf_field_missing() {
+        let e = conv(P2, "CaseClash", &st(&[("abc", DataType::String)])).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ProtobufFieldMissing);
+    }
+
+    #[test]
+    fn the_encoder_reports_the_root_conversion_failure() {
+        let set = DescriptorSet::parse(GOLDEN).unwrap();
+        let input = DataType::from(st(&[("nope", DataType::Integer)]));
+        let e = Encoder::new(&set, "Scalars", &input).err().unwrap();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnableToConvertToProtobufMessageType
+        );
+    }
+
+    #[test]
+    fn a_string_that_is_not_an_enum_name_cannot_convert_to_the_enum() {
+        let set = DescriptorSet::parse(GOLDEN).unwrap();
+        let input = DataType::from(st(&[("color", DataType::String)]));
+        let enc = Encoder::new(&set, "Scalars", &input).unwrap();
+        let ArrowType::Struct(fields) = input.to_arrow() else {
+            panic!("not a struct");
+        };
+        let col: ArrayRef = Arc::new(StringViewArray::from(vec![Some("BLUE")]));
+        let array: ArrayRef = Arc::new(StructArray::new(fields, vec![col], None));
+        let e = enc.encode(&array).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::CannotConvertSqlValueToProtobufEnumType
+        );
+    }
+}
