@@ -95,7 +95,9 @@
             "type": "boolean"
           },
           "gracePeriod": {
-            "$ref": "#/components/schemas/google.protobuf.Duration"
+            "example": "5s",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
           },
           "requestId": {
             "type": "string"

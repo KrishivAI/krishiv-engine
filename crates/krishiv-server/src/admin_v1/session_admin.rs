@@ -687,7 +687,14 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
-            let ops = self.ops_for("Drain")?;
+            let ops = match self.ops_for("Drain") {
+                Ok(ops) => ops,
+                Err(e) => {
+                    // A refused mutation leaves its record, supported or not.
+                    self.log(&call, "Drain", "", false, "failed", &e.error_class);
+                    return Err(e);
+                }
+            };
             self.require(&call, who.manage, Privilege::Manage, "Drain", "cluster")?;
             let grace = match request.grace_period {
                 None => ops.default_grace,
@@ -721,7 +728,14 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
-            let ops = self.ops_for("ResumeServing")?;
+            let ops = match self.ops_for("ResumeServing") {
+                Ok(ops) => ops,
+                Err(e) => {
+                    // A refused mutation leaves its record, supported or not.
+                    self.log(&call, "ResumeServing", "", false, "failed", &e.error_class);
+                    return Err(e);
+                }
+            };
             self.require(
                 &call,
                 who.manage,

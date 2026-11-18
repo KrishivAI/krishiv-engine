@@ -437,6 +437,10 @@ fn schema_of(ty: &str) -> Value {
         // ProtoJSON writes a timestamp as an RFC 3339 string.
         return json!({"type": "string", "format": "date-time"});
     }
+    if ty == "message:google.protobuf.Duration" {
+        // ProtoJSON writes a duration as decimal seconds with an `s` suffix: `"5s"`, `"1.5s"`.
+        return json!({"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$", "example": "5s"});
+    }
     if let Some(name) = ty
         .strip_prefix("message:")
         .or_else(|| ty.strip_prefix("enum:"))
