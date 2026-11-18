@@ -1078,7 +1078,15 @@ fn deduplicate_over_all_columns_is_distinct() {
         PlanNode::Distinct { .. }
     ));
     for bad in [dedup(None, &[], None), dedup(Some(true), &["a"], None)] {
-        assert_eq!(code(&bad), ErrorClass::ConnectInvalidPlanAssertionFailure);
+        let class = code(&bad);
+        assert!(
+            matches!(
+                class,
+                ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
+                    | ErrorClass::ConnectInvalidPlanDeduplicateAllColumnsAndSubset
+            ),
+            "{class:?}"
+        );
     }
     for unsupported in [
         dedup(None, &["a"], None),
@@ -1118,7 +1126,7 @@ fn hint_and_repartition_by_expression() {
     );
     assert_eq!(
         code(&repartition(vec![], None)),
-        ErrorClass::ConnectInvalidPlanAssertionFailure
+        ErrorClass::KrishivUnsupportedFeature
     );
 }
 
@@ -1154,8 +1162,9 @@ fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
     };
     assert_eq!(exprs.len(), 3);
     assert_eq!(code(&unpivot(None)), ErrorClass::KrishivUnsupportedFeature);
-    assert_eq!(
-        code(&unpivot(Some(vec![]))),
-        ErrorClass::ConnectInvalidPlanAssertionFailure
-    );
+    // An empty list is the analyzer's to refuse (UNPIVOT_REQUIRES_VALUE_COLUMNS), as in Spark.
+    assert!(matches!(
+        node(&unpivot(Some(vec![]))),
+        PlanNode::Unpivot { .. }
+    ));
 }
