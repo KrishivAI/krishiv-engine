@@ -179,9 +179,7 @@ def main(src, dst):
                             descFilePath=path,
                             options=opts,
                             binaryDescriptorSet=binary,
-                        ).alias(
-                            "__pb%d" % n
-                        )
+                        ).alias("__pb%d" % n)
                     )
                     out.append(q[pos : m.start()] + "__pb%d" % n)
                     pos = end
