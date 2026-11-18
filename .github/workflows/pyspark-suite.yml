@@ -1,0 +1,123 @@
+name: PySpark Connect suite
+
+# P3-T030 / PR-01: the Spark PySpark Connect test suite against a built `krishiv server`, per Spark version, with the
+# pass-list ratchet (a test that passed in the committed summary may not stop passing). GitHub-hosted runners only
+# (`cargo xtask workflow-lint`). Runs nightly; the committed `tests/pyspark/summary/<version>.json` is the ratchet
+# baseline, and a run that gains passes uploads its summary as an artifact for a PR to commit.
+on:
+  schedule:
+    - cron: "47 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pyspark-suite
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTC_WRAPPER: sccache
+  SCCACHE_CACHE_SIZE: 20G
+
+jobs:
+  build:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-mold
+      - uses: $/.github/actions/setup-rust
+      - name: Pinned tools (sccache)
+        uses: $/.github/actions/install-tool
+        with:
+          tool: sccache@0.18.0
+      - name: Build `krishiv server` (release)
+        run: cargo build --release --locked -p krishiv-cli --features server
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-server
+          path: target/release/krishiv
+          retention-days: 1
+          if-no-files-found: error
+
+  suite:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        spark: ["4.3.0", "4.2.1"]
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-uv
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: krishiv-server
+          path: ${{ runner.temp }}/bin
+      - name: Spark ${{ matrix.spark }} tests (sparse checkout of the tag, Python only)
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch "v${{ matrix.spark }}" --filter=blob:none --sparse \
+            https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set --no-cone /python/
+      - name: Interpreter environment
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" -r tests/pyspark/requirements.txt
+      - name: Collect (fails if the counts drift from the committed summary and manifest)
+        working-directory: tests/scripts
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite collect --version "${{ matrix.spark }}" \
+            --checkout "$RUNNER_TEMP/spark"
+        env:
+          PYTHONPATH: .
+      - name: Run against `krishiv server`
+        working-directory: tests/scripts
+        run: |
+          chmod +x "$RUNNER_TEMP/bin/krishiv"
+          cp ../pyspark/summary/${{ matrix.spark }}.json "$RUNNER_TEMP/previous.json"
+          "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run --version "${{ matrix.spark }}" \
+            --checkout "$RUNNER_TEMP/spark" --port 15002 \
+            --server-cmd "$RUNNER_TEMP/bin/krishiv" server --port 0 --connect-port 15002
+        env:
+          PYTHONPATH: .
+      - name: Pass-list ratchet
+        working-directory: tests/scripts
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite ratchet \
+            --previous "$RUNNER_TEMP/previous.json" --current ../pyspark/summary/${{ matrix.spark }}.json
+        env:
+          PYTHONPATH: .
+      - name: Dashboard
+        if: always()
+        working-directory: tests/scripts
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite report
+          cat ../pyspark/DASHBOARD.md >> "$GITHUB_STEP_SUMMARY"
+        env:
+          PYTHONPATH: .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: pyspark-suite-${{ matrix.spark }}
+          path: |
+            tests/pyspark/summary/${{ matrix.spark }}.json
+            tests/pyspark/results/${{ matrix.spark }}
+          retention-days: 30
