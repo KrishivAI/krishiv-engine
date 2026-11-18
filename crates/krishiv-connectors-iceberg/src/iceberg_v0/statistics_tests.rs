@@ -427,6 +427,7 @@ fn sketch_memory_is_charged_and_a_refusal_drops_the_statistics() {
     let reservation = || Reservation::new(Arc::clone(&pool), pool.register("sketches", None));
     let mut task = TaskSketches::new(Arc::clone(&columns), reservation()).unwrap();
     assert_eq!(pool.reserved(), 3 * SKETCH_BYTES);
+    assert!(format!("{task:?}").contains("TaskSketches"));
     assert!(task.update(&range(0, 10)));
     let before = statistics_skipped_total();
     let refused = TaskSketches::new(Arc::clone(&columns), reservation());
@@ -438,6 +439,7 @@ fn sketch_memory_is_charged_and_a_refusal_drops_the_statistics() {
     // No task (no rows): empty sketches of every column.
     let empty = union_tasks(&columns, Vec::new(), reservation()).unwrap();
     assert_eq!(empty.columns.len(), 3);
+    assert!(format!("{empty:?}").contains("WriteSketches"));
     assert!(empty.columns.iter().all(|(_, _, s)| s.is_empty()));
 }
 
