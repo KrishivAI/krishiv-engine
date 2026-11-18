@@ -169,6 +169,13 @@ fn directories_list_like_spark() {
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    // KN-7: `hf://` has no listing, so a directory or a glob is refused before any request.
+    for path in ["hf://datasets/o/n/dir/", "hf://datasets/o/n/dir/*.parquet"] {
+        let got = env.block_on(r.infer("json", &paths(&[path]), &none));
+        let (kind, param) = class(got);
+        assert_eq!(kind, ErrorClass::KrishivUnsupportedFeature, "{path}");
+        assert!(param.contains("only named files"), "{path}: {param}");
+    }
     // Paths come before the format: a missing path of a format without a
     // reader here is PATH_NOT_FOUND, an existing one of a Spark built-in
     // source without an implementation is unsupported.

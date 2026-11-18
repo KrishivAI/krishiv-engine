@@ -489,6 +489,8 @@ impl FileReads {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
             };
+            // `hf://` has no listing: a directory or a glob is refused with how to name files.
+            krishiv_io::check_hf_file_path(text)?;
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
@@ -1020,7 +1022,10 @@ impl FileReads {
             }
             return Ok(());
         }
-        if !self.io.is_directory(&at.store, &at.path).await? {
+        // `hf://` cannot be asked whether a directory exists (the store has no listing, and the
+        // probe answers 403 with an HTML page): a named file that is not there is not found.
+        let hf = at.display.starts_with("hf://");
+        if hf || !self.io.is_directory(&at.store, &at.path).await? {
             // A catalog table whose location is not made yet (an external
             // table's first write makes it) holds no rows.
             if missing_is_empty {
