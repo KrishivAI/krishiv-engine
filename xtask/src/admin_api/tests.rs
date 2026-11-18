@@ -186,6 +186,25 @@ fn the_openapi_of_a_map_is_an_object() {
     );
 }
 
+#[test]
+fn the_openapi_declares_timestamps_path_and_query_parameters() {
+    let mut d = base();
+    d["messages"]["Resp"]["fields"]["at"] = json!({"number": 9, "type": "message:google.protobuf.Timestamp", "label": "singular", "jsonName": "at", "optional": false, "oneof": null});
+    d["messages"]["Req"]["fields"]["tags"] = json!({"number": 8, "type": "string", "label": "repeated", "jsonName": "tags", "optional": false, "oneof": null});
+    let api = super::openapi_of(&d);
+    assert_eq!(
+        api["components"]["schemas"]["Resp"]["properties"]["at"],
+        json!({"type": "string", "format": "date-time"})
+    );
+    let path = super::path_parameters("/things/{thing_id}:kill");
+    assert_eq!(path[0]["name"], "thing_id");
+    assert_eq!(path[0]["required"], true);
+    let method = json!({"request": "Req"});
+    let query = super::query_parameters(&d, &method, &path);
+    let tags = query.iter().find(|p| p["name"] == "tags");
+    assert_eq!(tags.map(|p| p["explode"].clone()), Some(json!(true)));
+}
+
 fn api() -> Value {
     json!({
         "paths": {"/api/admin/v1/thing": {"get": {"operationId": "Get"}, "post": {"requestBody": {"required": false}}}},
@@ -355,7 +374,7 @@ fn a_removed_field_against_the_base_fails_unless_allowed_while_preview() {
     let source = root.join("crates/krishiv-server/src/admin_v1/mod.rs");
     let text = std::fs::read_to_string(&source)
         .unwrap_or_default()
-        .replace("ADMIN_V1_REVISION: i64 = 1;", "ADMIN_V1_REVISION: i64 = 2;");
+        .replace("ADMIN_V1_REVISION: i64 = 2;", "ADMIN_V1_REVISION: i64 = 3;");
     std::fs::write(&source, &text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(run(root, &["--write"]), Ok(()));
     let err = run(root, &["--base", "base"]).err().unwrap_or_default();

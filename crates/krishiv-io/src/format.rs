@@ -60,6 +60,14 @@ pub trait FileFormat: Send + Sync + 'static {
     /// What this format can do with these options.
     fn capabilities(&self, o: &FormatOptions) -> Capabilities;
 
+    /// The column that receives malformed records under `o` (JSON and CSV:
+    /// `columnNameOfCorruptRecord`), if the format has one. A scan whose read
+    /// schema is only this column is refused (Spark's
+    /// `QUERY_ONLY_CORRUPT_RECORD_COLUMN`).
+    fn corrupt_record_column(&self, _o: &FormatOptions) -> Option<String> {
+        None
+    }
+
     /// The suffix of files it writes, after Spark's `-c000`: e.g.
     /// `.snappy.parquet`, `.csv.gz`.
     fn file_suffix(&self, o: &FormatOptions) -> String;

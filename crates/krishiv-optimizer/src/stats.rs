@@ -107,10 +107,34 @@ pub enum StatSource {
     /// query was planned (P2-T164 U6): exact for a table the sample read
     /// whole, else extrapolated (GEE).
     Sampled,
+    /// A Theta sketch's estimate, read from the table format's statistics (an Iceberg Puffin `ndv`,
+    /// P3-T024): an estimate of the snapshot read, stronger than a sample and weaker than a count
+    /// the provider reports exactly.
+    Sketch,
     /// Reported by the table provider (Parquet footers, table-format
     /// metadata) or supplied with the table.
     #[default]
     Provided,
+}
+
+impl StatSource {
+    /// The name `EXPLAIN` shows for the source of a distinct count.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Guess => "guess",
+            Self::IntegralRange => "integral range",
+            Self::Sampled => "sampled",
+            Self::Sketch => "sketch",
+            Self::Provided => "provided",
+        }
+    }
+}
+
+impl std::fmt::Display for StatSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Statistics of one column.
@@ -144,6 +168,15 @@ pub trait Statistics: Send + Sync + fmt::Debug {
     /// The statistics of the table `scan` reads at its pinned version, when
     /// known.
     fn table(&self, scan: &Scan) -> Option<TableStats>;
+
+    /// Whether the table `scan` reads can be read with no column at all and
+    /// still return its rows: its reader takes each batch's row count from
+    /// the files' own metadata (Parquet row groups), so a `COUNT(*)` reads
+    /// only footers. The default says no, and pruning then keeps one column.
+    fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
+        let _ = scan;
+        false
+    }
 }
 
 /// No statistics: every table is estimated by default.
@@ -177,6 +210,10 @@ pub struct AttrStats {
     pub min: Option<f64>,
     /// An upper bound of the non-null values.
     pub max: Option<f64>,
+    /// Whether `min`/`max` rest on an estimate (a `count`'s maximum is the
+    /// estimated input rows) rather than on statistics or literals: such a
+    /// range may guide costs but proves nothing.
+    pub range_estimated: bool,
     /// Where the distinct count comes from.
     pub source: StatSource,
 }
@@ -190,6 +227,7 @@ impl AttrStats {
             null_frac: 0.0,
             min: None,
             max: None,
+            range_estimated: false,
             source: StatSource::Guess,
         }
     }
@@ -294,7 +332,25 @@ mod tests {
     use krishiv_plan::Literal;
     use krishiv_types::DecimalType;
 
-    use super::number;
+    use super::{StatSource, number};
+
+    /// Weakest first (a combination takes the weakest input's source), each with its `EXPLAIN` name.
+    #[test]
+    fn sources_are_ordered_weakest_first_and_named() {
+        use StatSource as S;
+        let all = [
+            S::Guess,
+            S::IntegralRange,
+            S::Sampled,
+            S::Sketch,
+            S::Provided,
+        ];
+        assert!(all.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(
+            all.map(|s| s.to_string()),
+            ["guess", "integral range", "sampled", "sketch", "provided"]
+        );
+    }
 
     #[test]
     fn literals_compare_on_one_scale() {

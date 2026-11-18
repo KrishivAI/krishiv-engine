@@ -39,6 +39,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Read at build time by krishiv-python (`build_info()["commit"]`) and krishiv-session (`krishiv.build.info`).
+  KRISHIV_GIT_SHA: ${{ github.sha }}
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
   FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud
@@ -80,6 +82,7 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |
@@ -127,7 +130,7 @@ jobs:
         run: |
           if [ "$FLAVOUR" = abi3 ]; then pys="cp311-cp311 cp314-cp314"; else pys="cp314-cp314t"; fi
           for p in $pys; do
-            docker run --rm -v "$PWD:/w" -w /w \
+            docker run --rm -e KRISHIV_GIT_SHA -e GITHUB_ACTIONS -v "$PWD:/w" -w /w \
               quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d \
               bash .github/scripts/wheel-test.sh "/opt/python/$p/bin/python" dist "$FLAVOUR"
           done
@@ -163,6 +166,7 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ env.ABI3_ARGS }} --out ../dist
       - name: The compat wheel has no CPU level marker
         run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
@@ -207,6 +211,7 @@ jobs:
           working-directory: python
           target: aarch64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |

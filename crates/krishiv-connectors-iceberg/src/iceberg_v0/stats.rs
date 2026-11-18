@@ -13,6 +13,11 @@
 //!   every file says it has no NaN (bounds exclude NaN). A string column is
 //!   skipped when a bound may be truncated (`truncate(n)` with a bound of `n`
 //!   or more characters, or an unknown mode), and binary columns always.
+//! - **Distinct counts** (`StatSource::Sketch`): the `ndv` of the Theta blob in the statistics file of
+//!   **the pinned snapshot** (`puffin_stats`; Spark's `compute_table_stats` writes it), for top-level
+//!   primitive columns, as `min(ndv, rows)`. Another snapshot's blob, a non-Theta or multi-field blob
+//!   and an `ndv` of 0 (an empty sketch: a column of nulls or of `""`, which Java does not count) give
+//!   no count. No Puffin I/O here: the metadata carries the number.
 //! - `TableProvider::statistics` takes no filter, so the sums are over every
 //!   live data file of the snapshot (the manifests' own pruning summaries are
 //!   not applied).
@@ -35,6 +40,7 @@ pub(super) fn table_stats(
     index: &DeleteIndex,
     fields: &[SchemaField],
     metrics: &WriterMetrics,
+    ndv: &HashMap<i32, u64>,
 ) -> TableStats {
     let rows: u64 = entries
         .iter()
@@ -57,7 +63,12 @@ pub(super) fn table_stats(
         columns: HashMap::new(),
     };
     for f in fields.iter().filter(|f| f.path.0.len() == 1) {
-        let c = column_stats(entries, f, metrics.mode(f.id));
+        let mut c = column_stats(entries, f, metrics.mode(f.id));
+        // An `ndv` of 0 is an empty sketch, not "no values" (a column of "" is one value).
+        if let Some(&n) = ndv.get(&f.id).filter(|n| **n > 0) {
+            c.distinct = Some(n.min(out.rows));
+            c.source = StatSource::Sketch;
+        }
         if c != ColumnStats::default() {
             out.columns.insert(f.path.root().to_owned(), c);
         }
@@ -187,9 +198,11 @@ pub(super) fn scan_units(entries: &[std::sync::Arc<DataFileEntry>]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use krishiv_io::ColumnPath;
+    use krishiv_optimizer::StatSource;
     use krishiv_plan::Literal;
 
     use super::table_stats;
@@ -249,6 +262,7 @@ mod tests {
             &DeleteIndex::default(),
             &fields,
             &WriterMetrics::default(),
+            &HashMap::new(),
         );
         assert_eq!(s.rows, 15);
         let id = &s.columns["id"];
@@ -267,6 +281,7 @@ mod tests {
             &DeleteIndex::default(),
             &fields,
             &WriterMetrics::default(),
+            &HashMap::new(),
         );
         assert_eq!(s.columns["x"].min, Some(Literal::Double(0.5)));
     }
@@ -301,10 +316,55 @@ mod tests {
         let specs: PartitionSpecs = [(0, PartitionSpecInfo::default())].into();
         let index = DeleteIndex::new(&[dv("a", 4), dv("b", 40)], &specs).unwrap();
         let entries = [data("a"), data("b")];
-        let s = table_stats(&entries, &index, &[], &WriterMetrics::default());
+        let s = table_stats(
+            &entries,
+            &index,
+            &[],
+            &WriterMetrics::default(),
+            &HashMap::new(),
+        );
         assert_eq!(s.rows, 180);
         let index = DeleteIndex::new(&[pos], &specs).unwrap();
-        let s = table_stats(&entries, &index, &[], &WriterMetrics::default());
+        let s = table_stats(
+            &entries,
+            &index,
+            &[],
+            &WriterMetrics::default(),
+            &HashMap::new(),
+        );
         assert_eq!(s.rows, 193);
+    }
+
+    /// A sketch's count is `min(ndv, rows)` from `StatSource::Sketch`; a column without one (or with an
+    /// empty sketch) keeps its manifest statistics and no count.
+    #[test]
+    fn distinct_comes_from_the_snapshots_ndv() {
+        let fields = [
+            field(1, "id", IcebergType::Long),
+            field(2, "x", IcebergType::Long),
+            field(3, "y", IcebergType::Long),
+        ];
+        let entries = [entry(file(10)), entry(file(5))];
+        let ndv = HashMap::from([(1, 12), (2, 100), (3, 0)]);
+        let s = table_stats(
+            &entries,
+            &DeleteIndex::default(),
+            &fields,
+            &WriterMetrics::default(),
+            &ndv,
+        );
+        let id = &s.columns["id"];
+        assert_eq!((id.distinct, id.source), (Some(12), StatSource::Sketch));
+        // Never above the rows.
+        assert_eq!(s.columns["x"].distinct, Some(15));
+        assert!(!s.columns.contains_key("y"));
+        let s = table_stats(
+            &entries,
+            &DeleteIndex::default(),
+            &fields,
+            &WriterMetrics::default(),
+            &HashMap::new(),
+        );
+        assert!(s.columns.is_empty());
     }
 }

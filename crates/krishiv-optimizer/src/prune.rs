@@ -13,20 +13,23 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ResolvedExpr,
-    Scan, SubqueryKind,
+    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ReadSource,
+    ResolvedExpr, Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
+use crate::stats::Statistics;
 
-/// `root` with unused columns pruned.
-pub(crate) fn prune(root: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+/// `root` with unused columns pruned. `stats` says which table scans can be
+/// read with no column at all (see [`reads_rows_without_columns`]).
+pub(crate) fn prune(root: &Arc<LogicalPlan>, stats: Option<&dyn Statistics>) -> Arc<LogicalPlan> {
     let graph = Graph::new(root);
     let req = graph.requirements();
     let mut pass = Rewrite {
         graph: &graph,
         req: &req,
         done: HashMap::new(),
+        stats,
     };
     pass.node(0)
 }
@@ -220,6 +223,8 @@ struct Rewrite<'a> {
     graph: &'a Graph,
     req: &'a [Attrs],
     done: HashMap<usize, Arc<LogicalPlan>>,
+    /// Which table scans can be read with no column.
+    stats: Option<&'a dyn Statistics>,
 }
 
 impl Rewrite<'_> {
@@ -244,7 +249,10 @@ impl Rewrite<'_> {
                     .filter(|c| req.contains(&c.id))
                     .cloned()
                     .collect();
-                if output.is_empty() {
+                // A Parquet scan read for its rows alone (`COUNT(*)`) keeps no
+                // column: the reader counts the rows its row groups declare
+                // and decodes nothing. Other sources keep their first column.
+                if output.is_empty() && !reads_rows_without_columns(scan, self.stats) {
                     output.extend(scan.output.first().cloned());
                 }
                 replace(
@@ -592,5 +600,18 @@ fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a A
             f(kind, plan);
         }
         e.for_each_child(&mut |c| stack.push(c));
+    }
+}
+
+/// Whether `scan` can be read with no column at all: a Parquet read by path,
+/// whose reader takes each batch's row count from its row groups, or a table
+/// (a temporary view over files, a catalog table) whose provider says so
+/// through `stats` ([`Statistics::reads_rows_without_columns`]). A source
+/// that has to decode a column to find its rows (CSV, JSON, text), or whose
+/// rows on disk are not its rows (deletion files), keeps one.
+fn reads_rows_without_columns(scan: &Scan, stats: Option<&dyn Statistics>) -> bool {
+    match &scan.source {
+        ReadSource::Files { format, .. } => format.eq_ignore_ascii_case("parquet"),
+        _ => stats.is_some_and(|s| s.reads_rows_without_columns(scan)),
     }
 }
