@@ -304,7 +304,7 @@ message PythonMapNode {
 message PythonUdtfNode {
   uint32 input = 1;
   PythonRelation udf = 2;
-  // Per argument, in call order: its name (empty for a positional one).
+  // Per argument, in call order: its name (unset for a positional one).
   repeated PythonUdtfArgName arg_names = 3;
   // The `TABLE` argument, if any.
   PythonUdtfTable table = 4;

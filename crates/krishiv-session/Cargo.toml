@@ -45,7 +45,7 @@ regex-lite.workspace = true
 tracing.workspace = true
 # A oneshot channel back from tasks on the session's executor; `rt` to
 # enter the I/O runtime from the thread that reads file footers.
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync"] }
 # OTLP export (`otlp.rs`, feature `telemetry-otlp`).
 http = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true, features = ["trace"] }

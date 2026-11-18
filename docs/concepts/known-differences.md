@@ -246,8 +246,10 @@ analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udt
 - A constant `BINARY` argument reaches `analyze` as `bytes`, Spark's default
   (`spark.sql.execution.pyspark.binaryAsBytes=true`); the setting is not read, so its `false` (`bytearray`) is not
   available.
-- `spark.sql.execution.pythonUDTF.arrow.enabled` has Spark 4.2.0's default (`true`) under every Spark profile; Spark
-  3.5 to 4.1 default to `false`. The client reads it when it defines a bare `@udtf`.
+- `LEFT JOIN LATERAL f(..) ON cond` (and `USING` or `NATURAL`) with a Python UDTF `f` is refused
+  (`KRISHIV_UNSUPPORTED_FEATURE`) until its rows are checked against a Spark run; an inner `JOIN LATERAL f(..) ON
+  cond` runs as Spark runs it, and `LEFT JOIN LATERAL f(..)` without a condition gives Spark's rows (those of the
+  inner join).
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 

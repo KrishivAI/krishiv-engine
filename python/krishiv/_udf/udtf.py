@@ -816,6 +816,7 @@ def _from_java(dt: Any, v: Any) -> Any:
         StructType,
         TimestampNTZType,
         TimestampType,
+        TimeType,
     )
 
     if v is None:
@@ -827,9 +828,15 @@ def _from_java(dt: Any, v: Any) -> Any:
         if isinstance(dt, t):
             return _wrap(v, bits) if kind in ("Integer", "Long") else None
     if isinstance(dt, FloatType):
+        if kind != "Double":
+            return None
+        import math
         import struct
 
-        return struct.unpack("f", struct.pack("f", v))[0] if kind == "Double" else None
+        # Java's `Double.toFloat`: past the float range it is an infinity, not an error.
+        if math.isfinite(v) and abs(v) >= 3.4028235677973366e38:
+            return math.copysign(math.inf, v)
+        return struct.unpack("f", struct.pack("f", v))[0]
     if isinstance(dt, DoubleType):
         return v if kind == "Double" else None
     if isinstance(dt, DecimalType):
@@ -850,7 +857,7 @@ def _from_java(dt: Any, v: Any) -> Any:
         return rounded
     if isinstance(dt, DateType):
         return v if kind == "Integer" else None
-    if isinstance(dt, (TimestampType, TimestampNTZType, DayTimeIntervalType)):
+    if isinstance(dt, (TimestampType, TimestampNTZType, DayTimeIntervalType, TimeType)):
         return v if kind in ("Integer", "Long") else None
     if isinstance(dt, StringType):
         return _java_string(v)

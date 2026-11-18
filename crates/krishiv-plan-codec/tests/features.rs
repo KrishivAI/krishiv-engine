@@ -2643,3 +2643,30 @@ fn a_python_udtf_needs_its_feature() {
         }
     );
 }
+
+/// A `PythonUdtfNode` whose `TABLE` argument is not one struct of named input columns at an argument's place
+/// is corrupt (review R1-8).
+#[test]
+fn a_python_udtf_table_of_uneven_shape_is_corrupt() {
+    fn udtf(m: &mut pb::PhysicalPlan) -> &mut pb::PythonUdtfNode {
+        m.nodes
+            .iter_mut()
+            .find_map(|n| match &mut n.kind {
+                Some(pb::node::Kind::PythonUdtf(u)) => Some(u),
+                _ => None,
+            })
+            .unwrap()
+    }
+    let edits: [fn(&mut pb::PythonUdtfNode); 3] = [
+        |u| {
+            u.table.as_mut().unwrap().names.pop();
+        },
+        |u| u.table.as_mut().unwrap().position = 2,
+        |u| u.table.as_mut().unwrap().partition_child_indexes = vec![2],
+    ];
+    for edit in edits {
+        let mut m = message("python_udtf");
+        edit(udtf(&mut m));
+        corrupt(&m, "a Python UDTF TABLE argument of uneven shape");
+    }
+}

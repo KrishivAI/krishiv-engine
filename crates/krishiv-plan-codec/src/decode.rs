@@ -595,12 +595,25 @@ impl Decoder {
                         .table
                         .as_ref()
                         .map(|t| {
-                            Ok::<_, CodecError>(krishiv_exec::physical::PythonUdtfTable {
+                            let table = krishiv_exec::physical::PythonUdtfTable {
                                 position: usize_of(t.position)?,
                                 columns: usizes(&t.columns)?,
                                 names: t.names.clone(),
                                 partition_child_indexes: usizes(&t.partition_child_indexes)?,
-                            })
+                            };
+                            // One struct of named input columns, at an argument's place.
+                            if table.names.len() != table.columns.len()
+                                || table.position >= p.arg_names.len()
+                                || table
+                                    .partition_child_indexes
+                                    .iter()
+                                    .any(|&i| i >= table.columns.len())
+                            {
+                                return Err(corrupt(
+                                    "a Python UDTF TABLE argument of uneven shape",
+                                ));
+                            }
+                            Ok(table)
                         })
                         .transpose()?,
                     carried: usizes(&p.carried)?,

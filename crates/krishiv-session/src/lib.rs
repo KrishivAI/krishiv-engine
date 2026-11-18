@@ -153,12 +153,12 @@ pub use krishiv_udf_sdk::{
 };
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
-#[cfg(feature = "unstable-ir")]
-pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,
 };
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 #[cfg(feature = "unstable-ir")]
 pub use session::SqlOutcome;

@@ -379,7 +379,7 @@ pub struct PythonUdtfNode {
     pub input: u32,
     #[prost(message, optional, tag = "2")]
     pub udf: ::core::option::Option<PythonRelation>,
-    /// Per argument, in call order: its name (empty for a positional one).
+    /// Per argument, in call order: its name (unset for a positional one).
     #[prost(message, repeated, tag = "3")]
     pub arg_names: ::prost::alloc::vec::Vec<PythonUdtfArgName>,
     /// The `TABLE` argument, if any.

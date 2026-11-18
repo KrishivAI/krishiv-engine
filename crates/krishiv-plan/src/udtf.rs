@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Python table functions (UDTFs, eval types 300, 301 and 302; design
 //! P3-T085 §2, §3.1 and §3.3 "UDTF analyze") as the analyzer sees them: a
-//! registration ([`PythonUdtfEntry`]) and the `analyze` seam's data.
+//! registration ([`ResolvedUdtf`]) and the `analyze` seam's data.
 //!
 //! **Registration.** A UDTF is a session's temporary table function (Spark's
 //! `spark.udtf.register`, `UDTFRegistration.register` at v4.2.0): the
@@ -34,7 +34,7 @@ use crate::PythonUdfRef;
 
 /// A registered Python UDTF, as the analyzer resolves a call of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PythonUdtfEntry {
+pub struct ResolvedUdtf {
     /// The UDTF by name and registration version (a table kind: 300, 301,
     /// 302).
     pub udf: PythonUdfRef,

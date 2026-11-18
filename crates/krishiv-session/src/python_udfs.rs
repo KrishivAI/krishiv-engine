@@ -350,6 +350,8 @@ pub(crate) struct SessionTableFunctions {
     pub(crate) builtins: krishiv_plan::analyzer::BuiltinTableFunctions,
     pub(crate) library: Arc<PythonUdfLibrary>,
     pub(crate) runtime: Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>,
+    /// The session: its policy decides whether this principal may run Python (`Usage` on `System("udf")`).
+    pub(crate) session: crate::Session,
 }
 
 impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
@@ -365,13 +367,18 @@ impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
         self.library.version()
     }
 
-    fn python_udtf(&self, name: &str) -> Option<krishiv_plan::udtf::PythonUdtfEntry> {
-        // One part only: `session.f` and catalog names are not UDTF names.
-        if name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP) {
-            return None;
-        }
-        let PythonUdtfEntry { def, version } = self.library.get_udtf(name)?;
-        Some(krishiv_plan::udtf::PythonUdtfEntry {
+    fn python_udtf(&self, name: &str) -> Option<krishiv_plan::udtf::ResolvedUdtf> {
+        // `session.<encoded>`: an unregistered (inline) UDTF's call, its definition in the name.
+        let (def, version) = match name.split_once(krishiv_plan::TABLE_FUNCTION_NAME_SEP) {
+            Some((q, f)) if q.eq_ignore_ascii_case("session") => decode_anonymous_udtf(f)?,
+            // Other qualified names (catalog functions) are not UDTF names.
+            Some(_) => return None,
+            None => {
+                let PythonUdtfEntry { def, version } = self.library.get_udtf(name)?;
+                (def, version)
+            }
+        };
+        Some(krishiv_plan::udtf::ResolvedUdtf {
             udf: krishiv_plan::PythonUdfRef {
                 name: def.name.to_lowercase(),
                 version,
@@ -394,8 +401,140 @@ impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
             }
             .into());
         };
-        // The runtime runs `analyze` on its own threads; this only waits.
-        futures::executor::block_on(runtime.analyze_udtf(spec))
+        // ADR 0046 §3b: an analysis that runs Python asks `Usage` on `System("udf")` every time, before any
+        // worker starts (a registration was checked when it was made, a call is checked when it runs).
+        let session = self.session.clone();
+        let runtime = Arc::clone(runtime);
+        let spec = spec.clone();
+        let checked = async move {
+            session
+                .authorize_privilege(
+                    &krishiv_plan::analyzer::Securable::System("udf".to_owned()),
+                    krishiv_plan::analyzer::Privilege::Usage,
+                    crate::StatementClass::Session,
+                )
+                .await?;
+            runtime.analyze_udtf(&spec).await
+        };
+        wait_for_analysis(Box::pin(checked))
+    }
+}
+
+/// What starts an unregistered UDTF's encoded name, and separates its fields.
+const ANONYMOUS_UDTF_TAG: &str = "krishiv.python_udtf";
+
+/// The encoded name of an unregistered (inline) UDTF's call: `def` at `version` (whose
+/// [`ANONYMOUS_VERSION_BIT`] must be set), the return type as Spark's JSON (empty without one).
+fn anonymous_udtf_name(def: &PythonUdtfDef, version: u32) -> Result<String, KrishivError> {
+    if version & ANONYMOUS_VERSION_BIT == 0
+        || def.name.contains(ANONYMOUS_MARK)
+        || def.eval_type.kind() != PythonUdfKind::Udtf
+        || def
+            .return_type
+            .as_ref()
+            .is_some_and(|t| !matches!(t, DataType::Struct(_)))
+    {
+        return Err(InternalError {
+            message: format!(
+                "an unregistered Python UDTF call needs a version with the top bit, a table eval type, a struct \
+                 result and a name without NUL (got {version:#x}, {}, {:?})",
+                def.eval_type.code(),
+                def.name
+            ),
+        }
+        .into());
+    }
+    let m = ANONYMOUS_MARK;
+    Ok(format!(
+        "{m}{ANONYMOUS_UDTF_TAG}{m}{version}{m}{}{m}{}{m}{}{m}{}",
+        def.eval_type.code(),
+        u8::from(def.deterministic),
+        def.return_type
+            .as_ref()
+            .map(DataType::json)
+            .unwrap_or_default(),
+        def.name
+    ))
+}
+
+/// The definition and version an encoded UDTF name carries; `None` for any other name.
+fn decode_anonymous_udtf(name: &str) -> Option<(PythonUdtfDef, u32)> {
+    let rest = name.strip_prefix(ANONYMOUS_MARK)?;
+    let mut parts = rest.splitn(6, ANONYMOUS_MARK);
+    if parts.next()? != ANONYMOUS_UDTF_TAG {
+        return None;
+    }
+    let version: u32 = parts.next()?.parse().ok()?;
+    if version & ANONYMOUS_VERSION_BIT == 0 {
+        return None;
+    }
+    let eval_type = PythonEvalType::from_code(parts.next()?.parse().ok()?)?;
+    if eval_type.kind() != PythonUdfKind::Udtf {
+        return None;
+    }
+    let deterministic = match parts.next()? {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    let return_type = match parts.next()? {
+        "" => None,
+        json => Some(DataType::from_json(json).ok()?),
+    };
+    let display = parts.next()?;
+    Some((
+        PythonUdtfDef {
+            name: display.to_owned(),
+            eval_type,
+            return_type,
+            deterministic,
+        },
+        version,
+    ))
+}
+
+/// The table-function name an unregistered (inline) Python UDTF's call goes by: `def` at `version` (whose
+/// [`ANONYMOUS_VERSION_BIT`] must be set) under the `session` qualifier, as a
+/// [`PlanNode::TableFunction`](krishiv_plan::PlanNode)'s `name`. It resolves and runs `analyze` as a
+/// registered UDTF does (`Usage` asked each time) without an entry in the session's library; the runtime
+/// holds its payload under `(def.name` in lower case`, version)`. For Spark Connect's inline UDTFs.
+///
+/// # Errors
+/// `KRISHIV_INTERNAL_ERROR` when `version` lacks the bit, the eval type is not a table kind, the result is
+/// not a struct or the name holds a NUL.
+#[cfg(feature = "unstable-ir")]
+pub fn python_udtf_call_name(def: &PythonUdtfDef, version: u32) -> Result<String, KrishivError> {
+    Ok(format!(
+        "session{}{}",
+        krishiv_plan::TABLE_FUNCTION_NAME_SEP,
+        anonymous_udtf_name(def, version)?
+    ))
+}
+
+/// Waits for `analysis` (analysis is synchronous, `analyze` runs on the runtime's own threads), ending with
+/// the statement's cancel: a cancelled action's error comes back at once and `analysis` is dropped, which
+/// abandons the runtime's call (the pool kills its worker). On a multi-thread runtime the wait leaves the
+/// executor thread to the runtime's other tasks (`block_in_place`).
+fn wait_for_analysis(
+    analysis: futures::future::BoxFuture<
+        'static,
+        krishiv_exec::Result<krishiv_plan::udtf::UdtfAnalysis>,
+    >,
+) -> Result<krishiv_plan::udtf::UdtfAnalysis, KrishivError> {
+    let cancelled = Box::pin(crate::action::cancelled());
+    let both = async move {
+        match futures::future::select(analysis, cancelled).await {
+            futures::future::Either::Left((done, _)) => done,
+            futures::future::Either::Right((reason, _)) => {
+                Err(crate::action::cancelled_error(reason))
+            }
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| futures::executor::block_on(both))
+        }
+        _ => futures::executor::block_on(both),
     }
 }
 
@@ -419,6 +558,33 @@ impl crate::Session {
         self.state.python_udfs.register_udtf(def)
     }
 
+    /// The rows of a call of the unregistered (inline) Python UDTF `def` at `version` (whose top bit,
+    /// [`ANONYMOUS_VERSION_BIT`], must be set) with `args`, lazily: the frame of Spark Connect's
+    /// `CommonInlineUserDefinedTableFunction`. Nothing is registered: the call resolves (and runs `analyze`,
+    /// asking `Usage` on `System("udf")` each time) as a registered UDTF's does, and the runtime holds its
+    /// payload under `(def.name` in lower case`, version)`. A named argument is `col.alias(name)`.
+    ///
+    /// # Errors
+    /// `KRISHIV_INTERNAL_ERROR` when `version` lacks the top bit, `def.eval_type` is not 300, 301 or 302,
+    /// the return type is not a struct or the name holds a NUL.
+    pub fn python_udtf_frame(
+        &self,
+        def: &PythonUdtfDef,
+        version: u32,
+        args: Vec<crate::Column>,
+    ) -> Result<crate::DataFrame, KrishivError> {
+        let name = format!(
+            "session{}{}",
+            krishiv_plan::TABLE_FUNCTION_NAME_SEP,
+            anonymous_udtf_name(def, version)?
+        );
+        let plan = krishiv_plan::LogicalPlan::new(krishiv_plan::PlanNode::TableFunction {
+            name,
+            args: args.into_iter().map(|c| Arc::new(c.expr)).collect(),
+        });
+        Ok(crate::DataFrame::new(self.clone(), Arc::new(plan)))
+    }
+
     /// The table functions a query of this session resolves.
     pub(crate) fn table_functions(&self) -> Arc<dyn krishiv_plan::analyzer::TableFunctionRegistry> {
         Arc::new(SessionTableFunctions {
@@ -430,6 +596,7 @@ impl crate::Session {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
+            session: self.clone(),
         })
     }
 
@@ -479,6 +646,36 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An inline UDTF's encoded name carries its definition, return type nullability included; another
+    /// version or a scalar kind is no UDTF name.
+    #[test]
+    fn an_encoded_udtf_name_round_trips_its_definition() {
+        let rt = DataType::Struct(krishiv_types::StructType::new([
+            krishiv_types::StructField::new("a".to_owned(), DataType::Integer, false),
+        ]));
+        for return_type in [Some(rt), None] {
+            let def = PythonUdtfDef {
+                name: "My.F".to_owned(),
+                eval_type: PythonEvalType::ArrowTableUdf,
+                return_type,
+                deterministic: false,
+            };
+            let name = anonymous_udtf_name(&def, ANONYMOUS_VERSION_BIT | 7).unwrap();
+            assert_eq!(
+                decode_anonymous_udtf(&name),
+                Some((def.clone(), ANONYMOUS_VERSION_BIT | 7))
+            );
+            assert!(anonymous_udtf_name(&def, 7).is_err());
+        }
+        let scalar = PythonUdtfDef {
+            name: "f".to_owned(),
+            eval_type: PythonEvalType::ScalarArrow,
+            return_type: None,
+            deterministic: true,
+        };
+        assert!(anonymous_udtf_name(&scalar, ANONYMOUS_VERSION_BIT).is_err());
+    }
 
     #[test]
     fn an_encoded_name_round_trips_its_definition() {

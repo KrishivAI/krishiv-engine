@@ -327,11 +327,12 @@ pub trait TableFunctionRegistry: Send + Sync {
     fn version(&self) -> u64;
 
     /// The Python UDTF the session registered as `name` (any case), which
-    /// a call resolves to before the built-in table functions (Spark's
-    /// `spark.udtf.register` makes a temporary table function). `name` is
+    /// a call resolves to when no built-in table function has the name
+    /// (Spark's `spark.udtf.register` makes a temporary table function, which
+    /// 4.2.0's `sessionOrder` default resolves after the built-ins). `name` is
     /// the call's name as [`PlanNode::TableFunction`](crate::PlanNode)
     /// carries it. The default has none.
-    fn python_udtf(&self, _name: &str) -> Option<crate::udtf::PythonUdtfEntry> {
+    fn python_udtf(&self, _name: &str) -> Option<crate::udtf::ResolvedUdtf> {
         None
     }
 

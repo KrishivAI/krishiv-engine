@@ -36,6 +36,9 @@ struct Seen {
     analyzed: Vec<Vec<(DataType, bool, bool)>>,
     /// Each prepared call site's UDTF call data.
     calls: Vec<UdtfCall>,
+    /// A `slow` analyze: told when it starts; set when the runtime's future is dropped (the call abandoned).
+    slow_started: Option<std::sync::mpsc::Sender<()>>,
+    slow_dropped: Arc<std::sync::atomic::AtomicBool>,
     /// Each task's input rows.
     tasks: Vec<usize>,
 }
@@ -81,6 +84,24 @@ impl UdfRuntime for Fake {
                 .map(|a| (a.data_type.clone(), a.value.is_some(), a.is_table))
                 .collect(),
         );
+        if spec.name == "slow" {
+            // Never answers; its drop is the call abandoned.
+            struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Dropped {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let mut seen = self.seen.lock().unwrap();
+            let guard = Dropped(Arc::clone(&seen.slow_dropped));
+            if let Some(tx) = seen.slow_started.take() {
+                tx.send(()).unwrap();
+            }
+            return Box::pin(async move {
+                let _guard = guard;
+                std::future::pending::<krishiv_exec::Result<UdtfAnalysis>>().await
+            });
+        }
         let table = spec.args.iter().any(|a| a.is_table);
         let schema = DataType::Struct(StructType::new([StructField::new(
             format!("c{}", spec.args.len()),
@@ -445,4 +466,211 @@ async fn a_udtf_re_registration_is_a_new_version_and_a_fresh_analysis() {
         .register_python_udtf(udtf("bad", PythonEvalType::ScalarArrow, &["a"]))
         .unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
+}
+
+/// A built-in table function resolves before a UDTF of the same name, as Spark 4.2.0's
+/// `spark.sql.functionResolution.sessionOrder` (`second`: builtin, then session) resolves it (review R1-1).
+#[tokio::test]
+async fn a_built_in_table_function_resolves_before_a_udtf_of_its_name() {
+    let (session, seen) = session();
+    for name in ["range", "explode"] {
+        session
+            .register_python_udtf(udtf(name, PythonEvalType::TableUdf, &["a", "i"]))
+            .unwrap();
+    }
+    assert_eq!(
+        rows(&session, "SELECT * FROM range(2)").await.unwrap(),
+        ["0", "1"]
+    );
+    assert_eq!(
+        rows(&session, "SELECT * FROM explode(array(1, 2))")
+            .await
+            .unwrap(),
+        ["1", "2"]
+    );
+    assert!(seen.lock().unwrap().calls.is_empty());
+}
+
+/// `spark.sql.execution.pythonUDTF.arrow.enabled` has its release's default: `false` before 4.2, `true` at
+/// 4.2 (`SQLConf.scala` at v3.5.6, v4.0.0, v4.1.0, v4.2.0), and a set value wins (review R1-2).
+#[tokio::test]
+async fn the_udtf_arrow_default_follows_the_spark_profile() {
+    use krishiv_plan::analyzer::SparkProfile;
+    let key = "spark.sql.execution.pythonUDTF.arrow.enabled";
+    for (profile, want) in [
+        (SparkProfile::V3_5, "false"),
+        (SparkProfile::V4_0, "false"),
+        (SparkProfile::V4_1, "false"),
+        (SparkProfile::V4_2, "true"),
+    ] {
+        let s = Session::builder().profile(profile).build().unwrap();
+        assert_eq!(s.conf().get(key).as_deref(), Some(want), "{profile:?}");
+        let shown = rows(&s, &format!("SET {key}")).await.unwrap();
+        assert_eq!(shown, [format!("{key}|{want}")], "{profile:?}");
+        s.conf().set(key, "true").unwrap();
+        assert_eq!(s.conf().get(key).as_deref(), Some("true"), "{profile:?}");
+    }
+}
+
+/// A slow `analyze` neither holds the statement past its cancel nor keeps running: `interrupt_all` ends the
+/// statement with `OPERATION_CANCELED` and the runtime's call is dropped (review R1-3).
+#[test]
+fn cancelling_a_statement_abandons_its_analyze() {
+    let (session, seen) = session();
+    let (tx, started) = std::sync::mpsc::channel();
+    seen.lock().unwrap().slow_started = Some(tx);
+    let dropped = Arc::clone(&seen.lock().unwrap().slow_dropped);
+    session
+        .register_python_udtf(udtf("slow", PythonEvalType::TableUdf, &[]))
+        .unwrap();
+    let (done, ended) = std::sync::mpsc::channel();
+    let s = session.clone();
+    std::thread::spawn(move || {
+        let out = futures::executor::block_on(s.sql("SELECT * FROM slow(1)"));
+        let _ = done.send(out.map(drop).map_err(|e| e.error_class()));
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("analyze started");
+    session.interrupt_all();
+    let out = ended
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the statement ended");
+    assert_eq!(out, Err(ErrorClass::OperationCanceled));
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "the analyze call was not dropped"
+    );
+}
+
+/// An inner `JOIN LATERAL f(..) ON cond` filters the call's rows by the condition, as Spark 4.2.0 runs it; a
+/// `LEFT JOIN LATERAL f(..) ON cond` is refused (review R1-4).
+#[tokio::test]
+async fn an_inner_lateral_join_with_a_condition_filters_its_rows() {
+    let (session, _) = session();
+    session
+        .register_python_udtf(udtf("repeat", PythonEvalType::TableUdf, &["a", "i"]))
+        .unwrap();
+    session.sql(T).await.unwrap();
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT t.id, f.* FROM t JOIN LATERAL repeat(t.id, t.id - 3) AS f ON f.i > 0"
+        )
+        .await
+        .unwrap(),
+        ["5|5|1"]
+    );
+    let err = rows(
+        &session,
+        "SELECT t.id, f.* FROM t LEFT JOIN LATERAL repeat(t.id, 1) AS f ON f.i > 0",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{err}"
+    );
+}
+
+/// A frame's plan keeps `analyze`'s result: collecting it again does not run `analyze` again (review R1-9).
+#[tokio::test]
+async fn a_planned_frame_does_not_run_analyze_again() {
+    let (session, seen) = session();
+    session
+        .register_python_udtf(udtf("describe", PythonEvalType::TableUdf, &[]))
+        .unwrap();
+    let df = session.sql("SELECT * FROM describe(1)").await.unwrap();
+    let before = seen.lock().unwrap().analyzed.len();
+    df.clone().collect().await.unwrap();
+    df.collect().await.unwrap();
+    assert_eq!(seen.lock().unwrap().analyzed.len(), before);
+}
+
+/// Allows everything but `Usage` on `System("udf")` (running client Python, ADR 0046 §3b).
+struct NoPython;
+
+impl krishiv_session::AccessPolicy for NoPython {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        securable: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<krishiv_session::AccessDecision, KrishivError>>
+    {
+        let python = privilege == krishiv_session::Privilege::Usage
+            && *securable == krishiv_session::Securable::System("udf".to_owned());
+        Box::pin(std::future::ready(Ok(if python {
+            krishiv_session::AccessDecision::Deny {
+                reason: "no Python".to_owned(),
+            }
+        } else {
+            krishiv_session::AccessDecision::Allow
+        })))
+    }
+}
+
+/// An analysis that runs `analyze` asks `Usage` on `System("udf")` every time, also for a registered UDTF
+/// called from SQL: a principal without it is refused and no `analyze` runs (ADR 0046 §3b; S-2).
+#[tokio::test]
+async fn analyze_needs_usage_on_python_every_time() {
+    let session = Session::builder()
+        .principal(krishiv_session::Principal::new(
+            "ana",
+            krishiv_session::PrincipalKind::User,
+        ))
+        .access_policy(Arc::new(NoPython) as Arc<dyn krishiv_session::AccessPolicy>)
+        .build()
+        .unwrap();
+    let fake = Fake::default();
+    let seen = Arc::clone(&fake.seen);
+    session.set_python_udf_runtime(Arc::new(fake));
+    session
+        .register_python_udtf(udtf("describe", PythonEvalType::TableUdf, &[]))
+        .unwrap();
+    let err = rows(&session, "SELECT * FROM describe(1)")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivInsufficientPermissions,
+        "{err}"
+    );
+    assert!(seen.lock().unwrap().analyzed.is_empty());
+}
+
+/// An inline UDTF (Spark Connect's `CommonInlineUserDefinedTableFunction`) runs without an entry in the
+/// session's library: SQL does not find it by name afterwards (S-1).
+#[tokio::test]
+async fn an_inline_udtf_runs_without_a_registration() {
+    let (session, seen) = session();
+    let version = krishiv_session::ANONYMOUS_VERSION_BIT | 1;
+    let def = udtf("repeat", PythonEvalType::TableUdf, &["a", "i"]);
+    let df = session
+        .python_udtf_frame(
+            &def,
+            version,
+            vec![
+                krishiv_session::functions::lit(3),
+                krishiv_session::functions::lit(2),
+            ],
+        )
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    assert_eq!(seen.lock().unwrap().calls.len(), 1);
+    let err = rows(&session, "SELECT * FROM repeat(1, 1)")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::UnresolvableTableValuedFunction,
+        "{err}"
+    );
+    assert!(session.python_udtf_frame(&def, 1, Vec::new()).is_err());
 }

@@ -34,7 +34,7 @@ use krishiv_types::{DataType, StructField, StructType};
 use super::AnalysisError;
 use super::exprs::pretty;
 use super::resolve::{Attr, Env, Rel, Resolver};
-use crate::udtf::{PythonUdtfEntry, UdtfAnalysis, UdtfAnalyzeArg, UdtfAnalyzeSpec};
+use crate::udtf::{ResolvedUdtf, UdtfAnalysis, UdtfAnalyzeArg, UdtfAnalyzeSpec};
 use crate::{
     BoundColumn, Expr, ExprNode, LogicalPlan, NullOrdering, Origin, PlanNode, PythonEvalType,
     ResolvedExpr, SortDirection, SortOrder, SubqueryKind, TableArg, TableArgSpec,
@@ -70,7 +70,7 @@ impl Resolver<'_> {
     pub(super) fn python_udtf_call(
         &mut self,
         p: &Arc<LogicalPlan>,
-        entry: &PythonUdtfEntry,
+        entry: &ResolvedUdtf,
         args: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
@@ -97,7 +97,7 @@ impl Resolver<'_> {
                 plan,
             } = &value.node
             {
-                let t = self.table_argument(plan, spec, env, o)?;
+                let t = self.table_argument(plan, spec, env)?;
                 analyze.push(UdtfAnalyzeArg {
                     data_type: row_type(&t.rel.out),
                     value: None,
@@ -192,7 +192,6 @@ impl Resolver<'_> {
         plan: &Arc<LogicalPlan>,
         spec: &TableArgSpec,
         env: &Arc<Env>,
-        o: Origin,
     ) -> Result<Table, AnalysisError> {
         let rel = self.rel(plan, env)?;
         let mut arg = TableArg {
@@ -218,7 +217,6 @@ impl Resolver<'_> {
                 });
             }
         }
-        let _ = o;
         Ok(Table { rel, arg })
     }
 
@@ -403,13 +401,13 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let array = folded.map_err(|err| AnalysisError::new(err, o))?;
-        let Some(ty) = ty else {
+        // An untyped `NULL`: Spark's `void`.
+        if ty.is_none() {
             return Ok(Some(arrow_array::new_null_array(
                 &arrow_schema::DataType::Null,
                 1,
             )));
-        };
-        let _ = ty;
+        }
         Ok(Some(array))
     }
 }
@@ -455,7 +453,9 @@ impl Resolver<'_> {
         o: Origin,
         l: &Rel,
         r: &Rel,
+        kind: crate::JoinKind,
         condition: &crate::JoinCondition,
+        env: &Arc<Env>,
     ) -> Result<Option<Rel>, AnalysisError> {
         let mut node = &r.plan;
         while let PlanNode::SubqueryAlias { input, .. } = &node.node {
@@ -473,12 +473,18 @@ impl Resolver<'_> {
             return Ok(None);
         };
         check_lateral(udf, o)?;
-        if !matches!(condition, crate::JoinCondition::None) {
-            return Err(super::bind::unsupported(
-                "a join condition on a LATERAL Python table function",
-                o,
-            ));
-        }
+        // An inner join's condition filters the joined rows (Spark 4.2.0 runs `JOIN LATERAL f(..) ON c` so);
+        // an outer one's rows are not verified against a Spark run yet, nor are `USING` and `NATURAL`.
+        let filter = match condition {
+            crate::JoinCondition::None => None,
+            crate::JoinCondition::On(c) if kind == crate::JoinKind::Inner => Some(c),
+            _ => {
+                return Err(super::bind::unsupported(
+                    "LEFT JOIN LATERAL with a join condition, or USING or NATURAL, on a Python table function",
+                    o,
+                ));
+            }
+        };
         let left: std::collections::HashSet<crate::AttrId> = l
             .out
             .iter()
@@ -512,7 +518,34 @@ impl Resolver<'_> {
         let out: Vec<Attr> = l.out.iter().chain(r.out.iter()).cloned().collect();
         let mut rel = self.make(o, node, out, &[l, r]);
         rel.outer = l.outer;
-        Ok(Some(rel))
+        let Some(c) = filter else {
+            return Ok(Some(rel));
+        };
+        let rels = [&rel];
+        let b = self.bind(c, &Self::cx(&rel.out, &rels, env, "Join"))?;
+        if b.ty.data_type != Some(DataType::Boolean) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::JoinConditionIsNotBooleanType {
+                    join_condition: format!(
+                        "\"{}\"",
+                        pretty(&b.shown(), self.ctx.conf.session_zone)
+                    ),
+                    condition_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
+                },
+                o,
+            ));
+        }
+        let out = rel.out.to_vec();
+        let filtered = self.make(
+            o,
+            PlanNode::Filter {
+                input: Arc::clone(&rel.plan),
+                predicate: b.expr,
+            },
+            out,
+            &[&rel],
+        );
+        Ok(Some(filtered))
     }
 }
 
