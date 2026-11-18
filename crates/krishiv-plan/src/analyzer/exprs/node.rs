@@ -1758,9 +1758,9 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Subquery { kind, plan } => {
+                super::super::python_udtf::refuse_table_argument(kind, e.origin)?; // outside a Python UDTF call
                 let env = self.sub_env(cx);
-                // A subquery resolves without the enclosing lambda scopes:
-                // its columns must not bind to enclosing lambda variables.
+                // A subquery resolves without the enclosing lambda scopes, so its columns never bind to them.
                 let saved = std::mem::take(&mut self.lambdas);
                 let rel = self.rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
@@ -1782,15 +1782,7 @@ impl Resolver<'_> {
                         )
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
-                    SubqueryKind::In(_) => (Some(DataType::Boolean), true),
-                    // A `TABLE(...)` argument outside a Python table
-                    // function's call (which takes it before binding).
-                    SubqueryKind::Table(_) => {
-                        return Err(crate::analyzer::bind::unsupported(
-                            "a TABLE argument of this function",
-                            e.origin,
-                        ));
-                    }
+                    SubqueryKind::In(_) | SubqueryKind::Table(_) => (Some(DataType::Boolean), true),
                 };
                 let (kind, plan, values) = match kind {
                     SubqueryKind::In(_) => {

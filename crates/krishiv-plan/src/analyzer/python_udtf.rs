@@ -516,6 +516,17 @@ impl Resolver<'_> {
     }
 }
 
+/// A `TABLE(...)` argument anywhere but a Python table function's call (which takes it before binding).
+pub(super) fn refuse_table_argument(kind: &SubqueryKind, o: Origin) -> Result<(), AnalysisError> {
+    match kind {
+        SubqueryKind::Table(_) => Err(super::bind::unsupported(
+            "a TABLE argument of this function",
+            o,
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Spark's refusal of an Arrow UDTF (302) on the right of `LATERAL`.
 pub(super) fn check_lateral(udf: &crate::PythonUdfRef, o: Origin) -> Result<(), AnalysisError> {
     if udf.eval_type == PythonEvalType::ArrowUdtf {

@@ -1173,28 +1173,6 @@ fn plan_round_trip_is_off_by_default_and_parses() {
     );
 }
 
-/// Spark 4.2.0's default: a bare `@udtf` is Arrow-optimized (the goldens' `defaults`).
-#[test]
-fn the_python_udtf_arrow_entry_defaults_to_spark_4_2_and_has_spark_s_alias() {
-    let mut c = Config::new();
-    assert_eq!(
-        c.get(&PYTHON_UDTF_ARROW_ENABLED)
-            .and_then(ConfigValue::as_bool),
-        Some(true)
-    );
-    c.set("spark.sql.execution.pythonUDTF.arrow.enabled", "false")
-        .unwrap();
-    assert_eq!(
-        c.get(&PYTHON_UDTF_ARROW_ENABLED)
-            .and_then(ConfigValue::as_bool),
-        Some(false)
-    );
-    assert!(
-        c.set("spark.sql.execution.pythonUDTF.arrow.enabled", "maybe")
-            .is_err()
-    );
-}
-
 #[test]
 fn python_udf_entries_parse_and_default() {
     assert_eq!(

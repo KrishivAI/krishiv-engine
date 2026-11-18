@@ -183,3 +183,28 @@ pub static PYTHON_WORKER_ALLOW_FORK: ConfigEntry = ConfigEntry {
     spark_alias: None,
     settable_by: SettableBy::Startup,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::PYTHON_UDTF_ARROW_ENABLED;
+    use crate::config::{Config, ConfigValue};
+
+    /// Spark 4.2.0's default: a bare `@udtf` is Arrow-optimized (the goldens' `defaults`), under Spark's key
+    /// too.
+    #[test]
+    fn the_python_udtf_arrow_entry_defaults_to_spark_4_2() {
+        let mut c = Config::new();
+        let get = |c: &Config| {
+            c.get(&PYTHON_UDTF_ARROW_ENABLED)
+                .and_then(ConfigValue::as_bool)
+        };
+        assert_eq!(get(&c), Some(true));
+        c.set("spark.sql.execution.pythonUDTF.arrow.enabled", "false")
+            .expect("a boolean");
+        assert_eq!(get(&c), Some(false));
+        assert!(
+            c.set("spark.sql.execution.pythonUDTF.arrow.enabled", "maybe")
+                .is_err()
+        );
+    }
+}
