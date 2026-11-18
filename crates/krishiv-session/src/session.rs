@@ -1330,6 +1330,10 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                advice: Arc::new(crate::partition_advice::AdviceCell::new(
+                    self.state.runtime.profile_history.clone(),
+                    Arc::clone(&self.state.runtime.executor),
+                )),
                 catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),

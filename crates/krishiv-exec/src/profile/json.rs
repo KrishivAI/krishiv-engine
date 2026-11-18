@@ -16,8 +16,8 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use super::{
-    PROFILE_FORMAT, PROFILE_MINOR, PROFILE_VERSION, ProfileError, ProfileNode, QueryProfile,
-    QueryUsage,
+    PROFILE_FORMAT, PROFILE_MINOR, PROFILE_VERSION, ProfileError, ProfileNode, ProfileScan,
+    QueryProfile, QueryUsage, ScanColumn,
 };
 use crate::context::OperatorId;
 use crate::metrics::{
@@ -81,6 +81,9 @@ impl QueryProfile {
         }
         if let (Some(t), Some(o)) = (&self.trace, doc.as_object_mut()) {
             o.insert("trace".to_owned(), t.clone());
+        }
+        if let (false, Some(o)) = (self.scans.is_empty(), doc.as_object_mut()) {
+            o.insert("scans".to_owned(), scans_json(&self.scans));
         }
         doc
     }
@@ -182,6 +185,10 @@ impl QueryProfile {
             Some(t) if t.is_object() => Some(t.clone()),
             Some(_) => return Err(ProfileError::new("trace is not an object")),
         };
+        let scans = match o.get("scans") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => scans_of(v)?,
+        };
         Ok(Self {
             plan,
             metrics,
@@ -189,8 +196,60 @@ impl QueryProfile {
             planning,
             trace,
             identity,
+            scans,
         })
     }
+}
+
+fn scans_json(scans: &[ProfileScan]) -> Value {
+    Value::Array(
+        scans
+            .iter()
+            .map(|s| {
+                let mut v = json!({
+                    "table": s.table,
+                    "equality": s.equality.iter().map(|c| {
+                        let mut c_json = json!({ "name": c.name });
+                        if let (Some(d), Some(o)) = (c.distinct, c_json.as_object_mut()) {
+                            o.insert("distinct".to_owned(), d.into());
+                        }
+                        c_json
+                    }).collect::<Vec<_>>(),
+                });
+                if let (Some(rows), Some(o)) = (s.rows, v.as_object_mut()) {
+                    o.insert("rows".to_owned(), rows.into());
+                }
+                v
+            })
+            .collect(),
+    )
+}
+
+fn scans_of(v: &Value) -> R<Vec<ProfileScan>> {
+    let items = v
+        .as_array()
+        .ok_or_else(|| ProfileError::new("scans is not an array"))?;
+    items
+        .iter()
+        .map(|s| {
+            let s = obj(s, "scan")?;
+            let equality = arr(s, "equality")?
+                .iter()
+                .map(|c| {
+                    let c = obj(c, "scan column")?;
+                    Ok(ScanColumn {
+                        name: str_of(c, "name")?.to_owned(),
+                        distinct: opt_u64(c, "distinct")?,
+                    })
+                })
+                .collect::<R<Vec<_>>>()?;
+            Ok(ProfileScan {
+                table: str_of(s, "table")?.to_owned(),
+                rows: opt_u64(s, "rows")?,
+                equality,
+            })
+        })
+        .collect()
 }
 
 /// The plan as a flat list in pre-order, each node naming its inputs by
