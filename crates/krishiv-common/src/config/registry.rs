@@ -36,8 +36,8 @@ pub use lakehouse::{
     ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    DERIVED_KEYS_ABOVE, EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN,
+    SEMI_ANTI_JOIN_ORDER, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter_bloom::{RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER};
@@ -102,6 +102,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_LITERALS,
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
+    &UI_ALLOWED_HOSTS,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -116,6 +117,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SUBQUERY_AS_WINDOW,
     &LATE_PAYLOAD_JOIN,
     &GROUP_KEY_CODE,
+    &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SEMI_ANTI_JOIN_ORDER,
@@ -712,6 +714,24 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(256 << 20)),
     doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
           takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
+pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedHosts",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
+          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
+          another name that resolves to this server cannot read it (DNS rebinding). A server \
+          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
+          `[::1]`. A server bound to another address checks the `Host` header only when this is \
+          set (it already requires authentication, and TLS for bearer methods). The \
+          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",
