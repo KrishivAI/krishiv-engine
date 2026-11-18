@@ -113,6 +113,27 @@ pub trait UdfRuntime: Send + Sync + fmt::Debug {
         }
         .into())
     }
+
+    /// Runs a Python table function's static `analyze` for one call
+    /// (design P3-T085 §3.3 "UDTF analyze"; [`crate::python_udtf`]), off the
+    /// caller: the analyzer awaits the result. The default runs none.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` when this runtime has no such
+    /// `(name, version)` or runs no `analyze`;
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` when `analyze`
+    /// fails or returns something Spark refuses.
+    fn analyze_udtf(
+        &self,
+        spec: &crate::python_udtf::UdtfAnalyzeSpec,
+    ) -> BoxFuture<'static, Result<crate::python_udtf::UdtfAnalysis>> {
+        let err: KrishivError = KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into();
+        Box::pin(std::future::ready(Err(err)))
+    }
 }
 
 /// One prepared call site.

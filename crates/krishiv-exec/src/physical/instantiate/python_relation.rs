@@ -241,6 +241,7 @@ impl Instantiation<'_> {
             output_types: plan.output.iter().map(|c| c.data_type.clone()).collect(),
             output_arrow: Arc::new(Schema::new(client_fields)),
             conf: conf.clone(),
+            udtf: None,
         };
         let udf = self.prepare_relation(&plan.udf, &spec)?;
         let lane = RelationLane {
@@ -396,6 +397,7 @@ impl Instantiation<'_> {
                 output_types: vec![f.data_type.clone()],
                 output_arrow: Arc::new(Schema::new(vec![Field::new(&name, client.clone(), true)])),
                 conf: conf.clone(),
+                udtf: None,
             };
             let spec = match window.and_then(|w| w.get(i)) {
                 Some(&bounded) => {

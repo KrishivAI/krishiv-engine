@@ -31,6 +31,9 @@ pub(crate) struct ConfStore {
     /// The default of `spark.sql.session.timeZone`, read once when the
     /// session is built (see [`local_zone`]).
     local_zone: Arc<str>,
+    /// Whether the catalog declaration keys are startup only (a server runtime, design P3-T067
+    /// §2.2, decisions 1 and 7): set when the session is built, never changed.
+    pub(crate) static_catalogs: bool,
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -100,6 +103,7 @@ impl ConfStore {
             current: RwLock::new((config, 0)),
             initial,
             local_zone: Arc::clone(&self.local_zone),
+            static_catalogs: self.static_catalogs,
         }
     }
 
@@ -108,6 +112,7 @@ impl ConfStore {
             current: RwLock::new((Arc::new(config.clone()), 0)),
             initial: config,
             local_zone: Arc::from(local_zone),
+            static_catalogs: false,
         }
     }
 
@@ -379,7 +384,7 @@ impl RuntimeConf {
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
     /// or `krishiv.sql.session.timeZone`) no zone database entry or offset names.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -429,7 +434,7 @@ impl RuntimeConf {
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -462,9 +467,15 @@ impl RuntimeConf {
     /// assert!(!session.conf().is_modifiable("krishiv.memory.limit"));
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
+    ///
+    /// In a session of a server runtime the catalog declaration keys
+    /// (`krishiv.catalog.<name>.*`, `spark.sql.catalog.*`) are startup only, for every role
+    /// (design P3-T067 §2.2: a session-declared catalog is a client-chosen URL the server
+    /// fetches); an embedded session is unchanged.
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
+            && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
     }
 }
 

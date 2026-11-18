@@ -34,12 +34,16 @@ mod relation;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]
+mod udtf;
+#[cfg(target_os = "linux")]
 mod validate;
 #[cfg(target_os = "linux")]
 pub mod wire;
 #[cfg(target_os = "linux")]
 mod worker;
 
+#[cfg(target_os = "linux")]
+pub use artifacts::PythonArchive;
 #[cfg(target_os = "linux")]
 pub use interpreter::{Interpreter, choose};
 #[cfg(target_os = "linux")]

@@ -453,23 +453,33 @@ impl Session {
         // Spark's catalog-first rule: unless the statement says NAMESPACE, a
         // first part that names a catalog is the catalog.
         let parts = crate::access::ddl_parts(&u.name, &env)?;
-        let canonical = |p: &str| {
+        // A declared catalog counts only when the principal sees it (design P3-T067 §2.4): a
+        // hidden one is a namespace name like any other.
+        let declared = self.declared_catalogs();
+        let canonical = |p: &str| -> Option<String> {
             if crate::system::is_system(p) {
-                Some("system")
+                Some("system".to_owned())
             } else if p.eq_ignore_ascii_case(crate::catalog::CATALOG) {
-                Some(crate::catalog::CATALOG)
+                Some(crate::catalog::CATALOG.to_owned())
             } else {
-                None
+                declared.canonical(p)
             }
         };
         let quoted = |ps: &[String]| format!("`{}`", ps.join("`.`"));
         if u.kind.is_none()
             && let Some(catalog) = parts.first().and_then(|p| canonical(p))
         {
-            match (catalog, &parts[1..]) {
+            match (catalog.as_str(), &parts[1..]) {
                 (_, []) => {
-                    self.state.catalog.use_catalog(catalog);
+                    self.state.catalog.use_catalog(&catalog);
                     return self.empty_frame().await;
+                }
+                (c, _) if c != "system" && c != crate::catalog::CATALOG => {
+                    // A declared catalog's namespaces are its own: `USE cat.ns` arrives with them.
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("USE of a namespace in the declared catalog `{c}`"),
+                    }
+                    .into());
                 }
                 ("system", rest) => {
                     return Err(SchemaNotFound {

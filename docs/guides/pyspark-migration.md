@@ -150,6 +150,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [`mapInPandas` and `mapInArrow` results unlike the declared schema](../concepts/known-differences.md#mapinpandas-and-mapinarrow-results-unlike-the-declared-schema) |
 | [Python UDF workers per session (server mode)](../concepts/known-differences.md#python-udf-workers-per-session-server-mode) |
 | [Python artifacts in server mode](../concepts/known-differences.md#python-artifacts-in-server-mode) |
+| [Python table functions (UDTFs)](../concepts/known-differences.md#python-table-functions-udtfs) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |
 | [`PIVOT` cases Spark answers from undefined state are refused](../concepts/known-differences.md#pivot-cases-spark-answers-from-undefined-state-are-refused) |
 | [Inferred join filters differ from Spark's](../concepts/known-differences.md#inferred-join-filters-differ-from-sparks) |

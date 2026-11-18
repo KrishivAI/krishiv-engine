@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Declared catalogs (design P3-T067 §8, declarations).
 
+use std::sync::Arc;
+
 use krishiv_io::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
 
 use super::*;
@@ -371,13 +373,20 @@ fn s3_tables_warehouse_refused() {
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
-#[test]
-fn glue_endpoint_checked_when_set() {
-    let policy = EgressPolicy::new(
+fn deny() -> Arc<EgressPolicy> {
+    EgressPolicy::new(
         PrivateAddresses::Deny,
         Vec::new(),
         ProviderEndpoints::default(),
-    );
+    )
+}
+
+fn checked(pairs: &[(&str, &str)]) -> Result<CatalogDeclarations, KrishivError> {
+    CatalogDeclarations::parse(pairs.iter().copied(), DeclMode::Server, &ALL, Some(&deny()))
+}
+
+#[test]
+fn glue_endpoint_checked_when_set() {
     let pairs = [
         ("krishiv.catalog.g.type", "glue"),
         (
@@ -385,9 +394,8 @@ fn glue_endpoint_checked_when_set() {
             "http://169.254.169.254",
         ),
     ];
-    let decls = parse(&pairs, DeclMode::Server).unwrap();
-    let scope = policy.scope(decls.catalogs[0].declared_hosts());
-    let e = CatalogDeclarations::parse(pairs, DeclMode::Server, &ALL, Some(&scope)).unwrap_err();
+    assert!(parse(&pairs, DeclMode::Server).is_ok());
+    let e = checked(&pairs).unwrap_err();
     assert!(e.to_string().contains("option.endpoint"), "{e}");
     assert!(!e.to_string().contains("169.254"), "{e}");
     // A private on-premises endpoint is exempt by name for the Glue client.
@@ -395,9 +403,77 @@ fn glue_endpoint_checked_when_set() {
         ("krishiv.catalog.g.type", "glue"),
         ("krishiv.catalog.g.option.endpoint", "http://10.0.0.7:4566"),
     ];
+    let decls = checked(&pairs).unwrap();
+    assert_eq!(
+        decls.catalogs[0]
+            .options
+            .get("endpoint")
+            .map(String::as_str),
+        Some("http://10.0.0.7:4566")
+    );
+}
+
+/// Review 58a1 nit 2: the catalog `uri` and `tokenEndpoint` literals are checked at startup, in
+/// every spelling, by the catalog's own scope (its declared hosts exempt by name, never
+/// link-local), and the error names the key, never the address.
+#[test]
+fn catalog_uri_and_token_endpoint_literals_checked_at_startup() {
+    for uri in [
+        "https://169.254.169.254/api/catalog",
+        "https://2852039166/api/catalog",
+        "https://[::ffff:169.254.169.254]/api",
+        "https://0xa9fea9fe/api",
+    ] {
+        let mut pairs = rest_with(&[]);
+        pairs[1] = ("krishiv.catalog.lake.uri", uri);
+        let e = checked(&pairs).unwrap_err().to_string();
+        assert!(e.contains("krishiv.catalog.lake.uri"), "{uri}: {e}");
+        assert!(!e.contains("169.254") && !e.contains("2852039166"), "{e}");
+    }
+    for endpoint in [
+        "https://169.254.169.254/token",
+        "https://0251.0376.0251.0376/t",
+    ] {
+        let mut pairs = REST.to_vec();
+        pairs.push(("krishiv.catalog.lake.tokenEndpoint", endpoint));
+        let e = checked(&pairs).unwrap_err().to_string();
+        assert!(
+            e.contains("krishiv.catalog.lake.tokenEndpoint"),
+            "{endpoint}: {e}"
+        );
+    }
+    // An on-premises catalog and IdP at private literals are their own declared hosts.
+    let mut pairs = REST.to_vec();
+    pairs[1] = ("krishiv.catalog.lake.uri", "https://10.0.0.5:8181/api");
+    pairs.push((
+        "krishiv.catalog.lake.tokenEndpoint",
+        "https://10.0.0.6/token",
+    ));
+    let decls = checked(&pairs).unwrap();
+    let lake = &decls.catalogs[0];
+    assert_eq!(lake.uri.as_deref(), Some("https://10.0.0.5:8181/api"));
+    match &lake.auth {
+        CatalogAuth::ClientCredentials { token_endpoint, .. } => {
+            assert_eq!(token_endpoint, "https://10.0.0.6/token");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A name is checked when it resolves, not here.
+    assert!(checked(&rest_with(&[])).is_ok());
+}
+
+#[test]
+fn registered_catalog_settings_are_not_declarations() {
+    let mut pairs = rest_with(&[]);
+    pairs.push(("krishiv.catalog.requestTimeout", "5s"));
+    pairs.push(("krishiv.catalog.maxMetadataBytes", "1g"));
     let decls = parse(&pairs, DeclMode::Server).unwrap();
-    let scope = policy.scope(decls.catalogs[0].declared_hosts());
-    assert!(CatalogDeclarations::parse(pairs, DeclMode::Server, &ALL, Some(&scope)).is_ok());
+    assert_eq!(decls.catalogs.len(), 1);
+    assert!(!is_declaration_key("krishiv.catalog.requestTimeout"));
+    assert!(is_declaration_key("krishiv.catalog.lake.type"));
+    assert!(is_declaration_key("spark.sql.catalog.lake"));
+    assert!(is_declaration_key("krishiv.catalog.default"));
+    assert!(!is_declaration_key("spark.sql.ansi.enabled"));
 }
 
 #[test]
@@ -513,4 +589,155 @@ fn a_userinfo_with_delimiters_is_removed_whole() {
         format!("https://{}@host/x", krishiv_common::secret::REDACTED)
     );
     assert_eq!(shown_uri("https://host/x"), "https://host/x");
+}
+
+/// Review 58a2 B1: a catalog key in any letter case is a declaration, parsed like the lowercase
+/// one; nothing a key routes to the declarations is ever dropped.
+#[test]
+fn catalog_key_prefixes_match_in_any_case() {
+    // A blank `tenants` under a mixed-case prefix still fails startup.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("Krishiv.catalog.lake.tenants", ""));
+    assert!(err(&pairs, DeclMode::Server).contains("empty tenant list"));
+    let mut pairs = rest_with(&[]);
+    pairs.push(("KRISHIV.CATALOG.lake.tenants", "acme"));
+    let decls = parse(&pairs, DeclMode::Server).unwrap();
+    assert!(!decls.catalogs[0].visible_to(Some("globex")));
+    // A whole declaration in upper case is parsed, and refused as the lowercase one is.
+    let e = CatalogDeclarations::parse(
+        [
+            ("KRISHIV.CATALOG.h.type", "hive"),
+            ("krishiv.catalog.h.uri", "thrift://m:9083"),
+        ],
+        DeclMode::Server,
+        &[CatalogType::IcebergRest],
+        None,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("`hive`"), "{e}");
+    // Spark's alias in another case.
+    let decls = parse(
+        &[
+            (
+                "Spark.SQL.Catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            ("spark.sql.CATALOG.lake.type", "rest"),
+            (
+                "SPARK.sql.catalog.lake.uri",
+                "https://catalog.example.com/api",
+            ),
+        ],
+        DeclMode::Embedded,
+    )
+    .unwrap();
+    assert_eq!(decls.catalogs[0].kind, CatalogType::IcebergRest);
+    // The default key too.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("Krishiv.Catalog.Default", "lake"));
+    assert_eq!(
+        parse(&pairs, DeclMode::Server).unwrap().default.as_deref(),
+        Some("lake")
+    );
+    // Every key `is_declaration_key` accepts is consumed or refused.
+    for key in [
+        "KRISHIV.CATALOG.requesttimeout",
+        "krishiv.catalog.",
+        "Spark.Sql.Catalog.",
+    ] {
+        assert!(is_declaration_key(key), "{key}");
+        assert!(parse(&[(key, "x")], DeclMode::Server).is_err(), "{key}");
+    }
+}
+
+/// Spark's inline `token` is accepted in embedded mode under any case of the Spark prefix, as
+/// the parser matches that prefix (CodeRabbit #836).
+#[test]
+fn spark_inline_token_accepted_under_mixed_case_prefix() {
+    for prefix in ["spark.sql.catalog.uc", "Spark.SQL.Catalog.uc"] {
+        let class = (prefix.to_owned(), "io.unitycatalog.spark.UCSingleCatalog");
+        let uri = (format!("{prefix}.uri"), "https://uc.example.com");
+        let token = (format!("{prefix}.token"), "inline-token-value");
+        let pairs = [
+            (class.0.as_str(), class.1),
+            (uri.0.as_str(), uri.1),
+            (token.0.as_str(), token.1),
+        ];
+        let decls = parse(&pairs, DeclMode::Embedded).unwrap();
+        match &decls.catalogs[0].auth {
+            CatalogAuth::Token(SecretRef::Inline(s)) => {
+                assert_eq!(s.expose_secret(), "inline-token-value", "{prefix}");
+            }
+            other => panic!("{prefix}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn one_field_under_two_spellings_fails_startup() {
+    // Two spellings of one field would merge, the last one winning silently (review 58a2 N4).
+    for (first, second) in [
+        (
+            "krishiv.catalog.lake.tenants",
+            "KRISHIV.CATALOG.lake.tenants",
+        ),
+        ("krishiv.catalog.lake.uri", "spark.sql.catalog.lake.uri"),
+        ("krishiv.catalog.default", "spark.sql.defaultCatalog"),
+        ("Krishiv.Catalog.Default", "krishiv.catalog.default"),
+    ] {
+        let mut pairs = rest_with(&[]);
+        let value = if first.ends_with(".uri") {
+            // Spark's alias spelling of `uri` needs the class key.
+            pairs.retain(|(k, _)| *k != first);
+            pairs.push((
+                "spark.sql.catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ));
+            "https://catalog.example.com/api"
+        } else if first.ends_with("tenants") {
+            "acme"
+        } else {
+            "lake"
+        };
+        pairs.push((first, value));
+        pairs.push((second, value));
+        let e = parse(&pairs, DeclMode::Server).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_CONFIG_VALUE",
+            "{first} / {second}: {e}"
+        );
+        assert!(
+            e.to_string().contains("set twice"),
+            "{first} / {second}: {e}"
+        );
+    }
+    // Spark's class key in two spellings.
+    let e = parse(
+        &[
+            (
+                "spark.sql.catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            (
+                "Spark.Sql.Catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            ("spark.sql.catalog.lake.type", "rest"),
+            (
+                "spark.sql.catalog.lake.uri",
+                "https://catalog.example.com/api",
+            ),
+        ],
+        DeclMode::Embedded,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("set twice"), "{e}");
+    // The same key given twice keeps its meaning: the last value.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("krishiv.catalog.lake.tenants", "globex"));
+    pairs.push(("krishiv.catalog.lake.tenants", "acme"));
+    let decls = parse(&pairs, DeclMode::Server).unwrap();
+    assert!(decls.catalogs[0].visible_to(Some("acme")));
+    assert!(!decls.catalogs[0].visible_to(Some("globex")));
 }

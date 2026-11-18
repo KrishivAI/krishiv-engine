@@ -13,6 +13,8 @@ ArrowStream.@staticmethod def from_arrow(data: object) -> ArrowStream
 ArrowStream.def __arrow_c_schema__(self) -> object
 ArrowStream.def __arrow_c_stream__(self, requested_schema: object | None=...) -> object
 ArrowStream.def check_error(self) -> None
+ArrowStream.def names(self) -> list[str]
+ArrowStream.def use_placeholder_names(self) -> None
 Column.def add(self, other: Column) -> Column
 Column.def alias(self, name: str) -> Column
 Column.def and_(self, other: Column) -> Column

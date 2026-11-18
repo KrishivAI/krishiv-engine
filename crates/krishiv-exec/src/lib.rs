@@ -84,6 +84,7 @@ mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
+mod input_coalesce;
 mod join;
 mod loops;
 mod map_keys;
@@ -99,6 +100,7 @@ pub mod planner;
 pub mod profile;
 pub mod python_eval;
 pub mod python_relation;
+pub mod python_udtf;
 // Row layout (P2-T157): the join's key index (P2-T158) and the aggregate's
 // row tables (P2-T159); the key-page prototypes inside stay behind the
 // `row-table-prototype` feature.
