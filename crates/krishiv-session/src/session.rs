@@ -65,7 +65,7 @@ use crate::variables::SessionVariables;
 mod context;
 mod lifecycle;
 #[cfg(feature = "unstable-ir")]
-pub use lifecycle::SqlOutcome;
+pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
 mod run_task;
 
@@ -552,8 +552,9 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
             .await
+            .and_then(Ran::into_frame)
             .map(|(df, _)| df)
     }
 
@@ -563,17 +564,21 @@ impl Session {
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
+        queries_only: bool,
+    ) -> Result<Ran, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
+        Box::pin(self.sql_here_inner(query, row, Vec::new(), queries_only)).await
     }
 
+    /// With `queries_only`, a statement that is not a query is not authorized or run: its class
+    /// is returned ([`Ran::NotAQuery`]).
     async fn sql_here_inner(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
+        queries_only: bool,
+    ) -> Result<Ran, KrishivError> {
         let mut env = self.query_env();
         env.row = row;
         let written = query;
@@ -601,6 +606,9 @@ impl Session {
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
         let class = krishiv_sql::classify_with(&statement, &env.parser);
+        if queries_only && !matches!(statement, Statement::Query(_)) {
+            return Ok(Ran::NotAQuery(class));
+        }
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
         let command = !matches!(statement, Statement::Query(_));
@@ -608,7 +616,7 @@ impl Session {
         // Whatever frame the statement returns (a command's result too) shows the statement's
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
-        Ok((df, command))
+        Ok(Ran::Frame(df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -1974,3 +1982,34 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+/// What [`Session::sql_here_marked`] did with a statement.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a return value matched at once; boxing the frame buys nothing"
+)]
+pub(crate) enum Ran {
+    /// Its frame (a query's, analyzed; a command's result, already run) and whether it was a
+    /// command.
+    Frame(DataFrame, bool),
+    /// Not a query, refused before it was authorized or run (`queries_only`), with its class.
+    NotAQuery(krishiv_sql::StatementClass),
+}
+
+impl Ran {
+    /// The frame, or `KRISHIV_FLIGHT_SQL_NOT_A_QUERY` for a refused statement.
+    pub(crate) fn into_frame(self) -> Result<(DataFrame, bool), KrishivError> {
+        match self {
+            Self::Frame(df, command) => Ok((df, command)),
+            Self::NotAQuery(class) => Err(not_a_query(class)),
+        }
+    }
+}
+
+/// `KRISHIV_FLIGHT_SQL_NOT_A_QUERY` (55000) for a statement of `class`.
+pub(crate) fn not_a_query(class: krishiv_sql::StatementClass) -> KrishivError {
+    krishiv_common::error::KrishivFlightSqlNotAQuery {
+        statement_class: class.name().to_owned(),
+    }
+    .into()
+}

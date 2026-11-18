@@ -98,6 +98,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_FLIGHT_SQL_NOT_A_QUERY" : {
+    "message" : [
+      "This Arrow Flight SQL call needs a query, but the statement is not a query (its class is <statementClass>; it may have become a command through a changed ${...} variable). Nothing was run. Send it as a statement update (DoPut) or with GetFlightInfo of a new statement."
+    ],
+    "sqlState" : "55000"
+  },
   "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" : {
     "message" : [
       "The result schema of this Arrow Flight SQL ticket changed since GetFlightInfo (a table it reads was altered). Call GetFlightInfo again for a new ticket."
