@@ -238,14 +238,7 @@ impl MergeOnReadWrite {
         tasks: Vec<TaskOutput>,
         query_id: Option<&str>,
     ) -> Result<TableMetadata, KrishivError> {
-        let t = &self.target;
-        let mut written = Written::new(t.file_io.clone(), &t.registered);
-        for task in &tasks {
-            written
-                .data
-                .extend(task.data.iter().map(|f| f.location.clone()));
-            written.data.extend(task.files.iter().cloned());
-        }
+        let mut written = self.written_by(&tasks);
         match self.commit_inner(tasks, &mut written, query_id).await {
             Ok(m) => Ok(m),
             Err(e) => {
@@ -255,6 +248,28 @@ impl MergeOnReadWrite {
                 Err(e)
             }
         }
+    }
+
+    /// Deletes the files of finished tasks' outputs `tasks` that the
+    /// statement will not commit (another task failed, or the statement was
+    /// cancelled; Java's `PositionDeltaBatchWrite.abort`). Cancellation-safe:
+    /// dropped midway, the files not deleted yet are deleted in the
+    /// background.
+    pub(crate) async fn abort(&self, tasks: Vec<TaskOutput>) {
+        self.written_by(&tasks).delete().await;
+    }
+
+    /// An armed guard over every data and delete file of `tasks`.
+    fn written_by(&self, tasks: &[TaskOutput]) -> Written {
+        let t = &self.target;
+        let mut written = Written::new(t.file_io.clone(), &t.registered);
+        for task in tasks {
+            written
+                .data
+                .extend(task.data.iter().map(|f| f.location.clone()));
+            written.data.extend(task.files.iter().cloned());
+        }
+        written
     }
 
     async fn commit_inner(
@@ -570,23 +585,30 @@ impl MorTask {
 
     /// Ends the task: its data files finished and its delete files written,
     /// absorbing the deletes they replace (module docs). On failure nothing
-    /// it wrote is left.
+    /// it wrote is left; nor when the future is dropped midway (the data
+    /// writer's guard, then one over the finished data files and each delete
+    /// file from before its upload starts, deleting in the background). A
+    /// finished output the statement does not commit goes to
+    /// [`MergeOnReadWrite::abort`].
     ///
     /// # Errors
     /// The data writer's errors; the absorbed deletes' read errors; the
     /// delete files' write errors.
     pub(crate) async fn finish(mut self) -> Result<TaskOutput, KrishivError> {
+        let t = Arc::clone(&self.write.target);
+        let mut guard = Written::new(t.file_io.clone(), &t.registered);
         let mut out = TaskOutput::default();
         if let Some(writer) = self.data.take() {
             out.data = writer.finish().await?;
         }
-        if let Err(e) = self.write_deletes(&mut out).await {
-            let io = &self.write.target.file_io;
-            for p in out.data.iter().map(|f| &f.location).chain(out.files.iter()) {
-                let _ = io.delete(p).await;
-            }
+        guard
+            .data
+            .extend(out.data.iter().map(|f| f.location.clone()));
+        if let Err(e) = self.write_deletes(&mut out, &mut guard).await {
+            guard.delete().await;
             return Err(e);
         }
+        guard.armed = false;
         Ok(out)
     }
 
@@ -598,7 +620,13 @@ impl MorTask {
         }
     }
 
-    async fn write_deletes(&mut self, out: &mut TaskOutput) -> Result<(), KrishivError> {
+    /// Writes the delete files into `out`, each location pushed onto `guard`
+    /// before its upload starts.
+    async fn write_deletes(
+        &mut self,
+        out: &mut TaskOutput,
+        guard: &mut Written,
+    ) -> Result<(), KrishivError> {
         let w = Arc::clone(&self.write);
         let t = &w.target;
         let (io, locate) = w.provider.delete_io();
@@ -645,6 +673,7 @@ impl MorTask {
                 .collect();
             let (bytes, blobs) = dv_puffin(&list, &w.created_by)?;
             out.files.push(location.clone());
+            guard.data.push(location.clone());
             let size = put(&t.file_io, &location, bytes).await?;
             for (d, blob) in touched.iter().zip(blobs) {
                 let f = &d.entry.file;
@@ -681,6 +710,7 @@ impl MorTask {
             );
             let location = locations.location(spec, schema, &partition, &name)?;
             out.files.push(location.clone());
+            guard.data.push(location.clone());
             let file = write_position_deletes(
                 &target,
                 &location,
