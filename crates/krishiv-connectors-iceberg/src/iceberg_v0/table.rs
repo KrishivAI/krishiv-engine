@@ -164,6 +164,7 @@ impl IcebergTable {
         let ident = TableIdent::from_strs([namespace, name]).map_err(from_iceberg)?;
         Self::build(
             storage,
+            file_io,
             Arc::new(metadata),
             metadata_location,
             ident,
@@ -197,6 +198,7 @@ impl IcebergTable {
         .map_err(from_iceberg)?;
         Self::build(
             storage,
+            storage.file_io(),
             Arc::clone(&metadata.0),
             metadata_location,
             ident,
@@ -204,8 +206,12 @@ impl IcebergTable {
         )
     }
 
+    /// The table over `metadata`, read through `file_io` (resolved by the
+    /// registration's name on first use; a `FileIO` that already read through it
+    /// keeps working after the registration is dropped).
     fn build(
         storage: &StorageRegistration,
+        file_io: iceberg::io::FileIO,
         metadata: Arc<TableMetadata>,
         metadata_location: &str,
         ident: TableIdent,
@@ -219,7 +225,7 @@ impl IcebergTable {
             .metadata(metadata)
             .metadata_location(metadata_location)
             .identifier(ident)
-            .file_io(storage.file_io())
+            .file_io(file_io)
             .runtime(storage.runtime()?)
             .readonly(true)
             .build()
