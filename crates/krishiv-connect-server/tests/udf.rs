@@ -1755,12 +1755,6 @@ fn json_rows(responses: &[pb::ExecutePlanResponse]) -> (String, Vec<String>) {
     (schema, rows)
 }
 
-/// A known gap of the pool's LATERAL UDTF runner (opus-B's `python/krishiv/_udf/udtf.py` `_carry`): a carried
-/// left column of type `string_view` (`t.g`) fails pyarrow's `take` (`array_take` has no `string_view`
-/// kernel). The full `dataframe_lateral` goldens must fail with it until it is fixed; when they match, this
-/// check fails, so the gap cannot go stale.
-const LATERAL_STRING_VIEW_GAP: &str = "no kernel matching input types (string_view";
-
 /// The lateral join of `rows/udtf<k>/dataframe_lateral` over the left relation `left` (SQL).
 fn lateral_repeat(python: &Path, repo: &Path, kind: &str, left: &str) -> pb::Plan {
     let id = || col("id");
@@ -1796,8 +1790,8 @@ fn lateral_repeat(python: &Path, repo: &Path, kind: &str, left: &str) -> pb::Pla
 /// left side is the cases' table `t`), compared with PySpark 4.2.0's answer (these rows and the 302 refusal do
 /// not depend on the Spark version).
 /// - 302: `LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED`, as the golden.
-/// - 300 and 301: the full case hits [`LATERAL_STRING_VIEW_GAP`]; the same join with `t`'s string column `g`
-///   left out gives the golden's rows and schema without `g`.
+/// - 300 and 301: the golden's rows and schema, `t`'s `string_view` column `g` carried (the pool repeats a
+///   carried row by slicing, #876).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_lateral_join_udtf_goldens() {
     const T: &str = "SELECT * FROM VALUES (2, 'a', 20), (1, 'a', 10), (4, 'b', CAST(NULL AS INT)), \
@@ -1818,47 +1812,14 @@ async fn the_lateral_join_udtf_goldens() {
             assert_eq!(error_class(&s), condition, "{kind}: {s:?}");
             continue;
         }
-        let s = got.expect_err("the string_view gap (remove it from this test once fixed)");
-        // A long traceback: the status carries the class in the message and the SQLSTATE.
-        assert!(
-            s.message().starts_with("[PYTHON_EXCEPTION]"),
-            "{kind}: {s:?}"
-        );
-        assert_eq!(
-            info(&s).metadata.get("sqlState").map(String::as_str),
-            Some("38000")
-        );
-        assert!(
-            s.message().contains(LATERAL_STRING_VIEW_GAP),
-            "{kind}: {s:?}"
-        );
-        // The join itself: `t` without `g` gives the golden without `g`.
-        let without_g = format!("SELECT id, v FROM ({T})");
-        let responses = execute(
-            &run.channel,
-            lateral_repeat(&py, &repo, kind, &without_g),
-            ADMIN,
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        let responses = got.unwrap_or_else(|e| panic!("{kind}: {e:?}"));
         let (schema, rows) = json_rows(&responses);
-        assert_eq!(
-            schema,
-            want["schema"]
-                .as_str()
-                .expect("schema")
-                .replace("g:string,", ""),
-            "{kind}"
-        );
+        assert_eq!(schema, want["schema"].as_str().expect("schema"), "{kind}");
         let mut want_rows: Vec<String> = want["rows"]
             .as_array()
             .expect("rows")
             .iter()
-            .map(|r| {
-                let mut r = r.as_array().expect("row").clone();
-                r.remove(1);
-                serde_json::Value::Array(r).to_string()
-            })
+            .map(serde_json::Value::to_string)
             .collect();
         want_rows.sort();
         assert_eq!(rows, want_rows, "{kind}");
