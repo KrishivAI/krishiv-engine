@@ -80,6 +80,7 @@ impl QueryStart {
         error: Option<&KrishivError>,
         metrics_on: bool,
         log_id: &str,
+        hints: Option<Vec<crate::system::HintRow>>,
     ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
@@ -108,6 +109,7 @@ impl QueryStart {
                 wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
                 peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
                 error_class: error_class.as_deref(),
+                hints: hints.filter(|_| status == Status::Succeeded),
                 // The most operators one query keeps.
                 operators: metrics
                     .operators
@@ -224,6 +226,28 @@ pub(crate) struct QueryFold {
     pub(crate) _operation: Option<Arc<crate::history::Operation>>,
     /// What the persisted history needs of the query, kept only when `krishiv.history.path` is set.
     pub(crate) history: Option<HistoryJob>,
+    /// What the advisor needs of the query (P3-T073); `None` with `krishiv.advisor.enabled=false`.
+    pub(crate) advisor: Option<AdvisorJob>,
+}
+
+/// The plan tree (with the planner's facts) and thresholds the advisor reads when the query ends.
+pub(crate) struct AdvisorJob {
+    pub(crate) plan: krishiv_exec::profile::ProfileNode,
+    pub(crate) settings: krishiv_exec::profile::HintSettings,
+}
+
+impl AdvisorJob {
+    /// The job for `plan` under the query's configuration, `None` when the advisor is off.
+    pub(crate) fn of(
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        config: &krishiv_common::config::Config,
+    ) -> Option<Self> {
+        let settings = krishiv_exec::profile::HintSettings::from_config(config);
+        settings.enabled.then(|| Self {
+            plan: krishiv_exec::profile::ProfileNode::of(plan),
+            settings,
+        })
+    }
 }
 
 /// The plan and who ran the query, held until the query ends, for the persisted history.
@@ -372,18 +396,30 @@ impl QueryFold {
 
     pub(crate) fn finish(mut self, error: Option<&KrishivError>) {
         self.report_usage();
-        self.record_history(error);
+        // After execution, from the finished metrics: planning is untouched.
+        let found = self.advisor.take().map(|job| {
+            krishiv_exec::profile::hints(&job.plan, &self.query.metrics(), &job.settings)
+        });
+        let hints = found
+            .as_ref()
+            .map(|h| h.iter().map(crate::system::HintRow::of).collect());
+        self.record_history(error, found.unwrap_or_default());
         self.start.fold(
             &self.state,
             &self.query,
             error,
             self.metrics_on,
             &self.log_id,
+            hints,
         );
     }
 
     /// Queues the query's profile for the persisted history: the queue send is all the query pays; the profile is built and written on the history thread.
-    fn record_history(&mut self, error: Option<&KrishivError>) {
+    fn record_history(
+        &mut self,
+        error: Option<&KrishivError>,
+        hints: Vec<krishiv_exec::profile::Hint>,
+    ) {
         // The plan moves into the entry: the one copy of it is the one taken when the query started.
         let (Some(job), Some(store)) = (self.history.take(), &self.state.runtime.profile_history)
         else {
@@ -418,6 +454,7 @@ impl QueryFold {
             identity: job.identity,
             trace: job.trace,
             scans: job.scans,
+            hints,
         };
         match &job.hold {
             Some(hold) => hold.offer(entry, store),

@@ -1866,6 +1866,7 @@ impl Session {
                 _permit: permit,
                 _operation: self.operation.clone(),
                 history: env.history_job(self, &row_id, physical, detailed),
+                advisor: crate::query_fold::AdvisorJob::of(physical, &env.config),
             }),
             None,
         );

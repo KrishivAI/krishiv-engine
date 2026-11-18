@@ -70,6 +70,8 @@
 
 use std::sync::Arc;
 
+use super::explain::{FilterGap, FilterGapReason};
+
 use arrow_schema::DataType;
 use krishiv_common::config::{
     Config, ConfigValue, MEMORY_LIMIT, RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
@@ -294,6 +296,8 @@ pub(crate) struct JoinFilters {
     pub(crate) filters: Vec<JoinFilterPlan>,
     /// `EXPLAIN` text.
     pub(crate) explain: Vec<String>,
+    /// Keys that got no filter, for the advisor (P3-T073).
+    pub(crate) gaps: Vec<FilterGap>,
 }
 
 impl Planner<'_> {
@@ -313,19 +317,30 @@ impl Planner<'_> {
         let mut out = JoinFilters {
             filters: Vec::new(),
             explain: Vec::new(),
+            gaps: Vec::new(),
         };
         let s = self.rf;
-        if !s.enabled {
-            return out;
-        }
+        let gap = |key: usize, e: &Expr, reason| FilterGap {
+            key,
+            probe_key: e.to_string(),
+            reason,
+        };
         let input_type = |id: AttrId| column_type(probe, id);
         for (key, (e, key_type)) in probe_exprs.iter().zip(key_types).enumerate() {
             if !krishiv_io::runtime_filter::supported_key_type(key_type) {
                 continue;
             }
+            if !s.enabled {
+                out.gaps.push(gap(key, e, FilterGapReason::Disabled));
+                continue;
+            }
             let Some(source) = key_source(e, &input_type) else {
+                out.gaps.push(gap(key, e, FilterGapReason::NoScanColumn));
                 continue;
             };
+            if !probe.sites.iter().any(|s| s.attr == source) {
+                out.gaps.push(gap(key, e, FilterGapReason::Blocked));
+            }
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {

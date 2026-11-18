@@ -13,15 +13,21 @@
 //! A profile is plain data owned by the caller. Profiles of one plan run by
 //! several workers merge ([`QueryProfile::merge`]) as their metrics do.
 
+mod facts_json;
 mod json;
 mod scans;
 mod text;
+
+pub mod hints;
+
+pub use hints::{Hint, HintCode, HintSettings, hints};
 
 use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 
 use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
-use crate::planner::ExplainNode;
+use crate::planner::{ExplainNode, NodeFacts};
+use std::sync::Arc;
 
 pub use scans::{ProfileScan, ScanColumn, profile_scans};
 pub use text::TextOptions;
@@ -34,12 +40,12 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values; 7: `hints` and the plan nodes' `facts`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 6;
+pub const PROFILE_MINOR: u64 = 7;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ProfileNode {
     /// The node's pre-order index over the physical plan's
     /// [`roots`](crate::physical::PhysicalPlan::roots), which operators
@@ -53,7 +59,21 @@ pub struct ProfileNode {
     pub detail: String,
     /// Its inputs.
     pub children: Vec<ProfileNode>,
+    /// What the planner knew of the node (minor 7): estimates, statistics, runtime-filter gaps. Equality
+    /// ignores it, so a worker's profile decoded from the plan codec (which carries none) merges.
+    pub facts: Option<Arc<NodeFacts>>,
 }
+
+impl PartialEq for ProfileNode {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id
+            && self.name == o.name
+            && self.detail == o.detail
+            && self.children == o.children
+    }
+}
+
+impl Eq for ProfileNode {}
 
 impl ProfileNode {
     /// The tree of `plan` with node ids.
@@ -68,6 +88,7 @@ impl ProfileNode {
                 name: SHARED_PLAN.to_owned(),
                 detail: format!("#{}", s.id.0),
                 children: vec![annotate(&s.plan, &s.explain, &mut next)],
+                facts: None,
             })
             .collect();
         let root = annotate(plan.root(), plan.explain(), &mut next);
@@ -80,6 +101,7 @@ impl ProfileNode {
             name: WITH_SHARED.to_owned(),
             detail: String::new(),
             children,
+            facts: None,
         }
     }
 
@@ -89,6 +111,7 @@ impl ProfileNode {
             name: e.name.clone(),
             detail: e.detail.clone(),
             children: e.children.iter().map(Self::unmatched).collect(),
+            facts: e.facts.clone(),
         }
     }
 
@@ -123,6 +146,7 @@ fn annotate(p: &PhysNode, e: &ExplainNode, next: &mut u32) -> ProfileNode {
                     name: e.name.clone(),
                     detail: e.detail.clone(),
                     children: vec![annotate(p, inner, next)],
+                    facts: None,
                 },
                 _ => annotate(p, e, next),
             })
@@ -138,6 +162,7 @@ fn annotate(p: &PhysNode, e: &ExplainNode, next: &mut u32) -> ProfileNode {
         name: e.name.clone(),
         detail: e.detail.clone(),
         children,
+        facts: e.facts.clone(),
     }
 }
 
@@ -232,6 +257,9 @@ pub struct QueryProfile {
     /// The tables the query scanned and the columns it compared with values (minor 6): the
     /// `scans` member, the partition advisor's input (T025). Empty for a query that scans no named table.
     pub scans: Vec<ProfileScan>,
+    /// The advisor's hints for the finished query (minor 7): the `hints` member; empty when the advisor is
+    /// off or none was raised. Filled by [`QueryProfile::with_hints`], never by the executor.
+    pub hints: Vec<Hint>,
 }
 
 /// The principal and tags a profile's `usage` names (T136), opaque ids, never credentials.
@@ -255,7 +283,15 @@ impl QueryProfile {
             trace: None,
             identity: None,
             scans: profile_scans(plan, &|_| None),
+            hints: Vec::new(),
         }
+    }
+
+    /// This profile with the advisor's hints computed from it under `settings`.
+    #[must_use]
+    pub fn with_hints(mut self, settings: &HintSettings) -> Self {
+        self.hints = hints(&self.plan, &self.metrics, settings);
+        self
     }
 
     /// The profile for sharing outside the deployment (`--share`, a viewer download): without
