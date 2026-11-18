@@ -184,24 +184,49 @@ fn squash(text: &str) -> Vec<char> {
     v
 }
 
-/// Shown under the examples of a function whose printed answer differs from the one Spark documents.
+/// Shown under the examples of a function whose printed answers differ from Spark's documented ones only in
+/// the last digits of floating-point values.
 const DIFFERS_NOTE: &str = "The last digits of a floating-point result can differ from the value Spark documents. Spark's \
 documented value depends on how it splits the `VALUES` list across partitions; Krishiv prints the value for one \
 partition.\n\n";
 
-/// Whether the engine's captured answer differs from the result Spark documents for the example.
-/// Examples without a documented result, failed examples and volatile ones never differ.
-fn differs_from_spark(captured: Option<&serde_json::Value>, spark: &str) -> bool {
-    let Some(c) = captured else { return false };
+/// How the engine's captured answer differs from the result Spark documents for the example:
+/// `None` when it does not (examples without a documented result, failed examples and volatile ones
+/// never differ), `Some(true)` when only the last digits of floating-point values differ,
+/// `Some(false)` for any other difference.
+fn difference_from_spark(captured: Option<&serde_json::Value>, spark: &str) -> Option<bool> {
+    let c = captured?;
     if spark.trim().is_empty()
         || spark.trim_start().starts_with('+')
         || c.get("volatile").and_then(serde_json::Value::as_bool) == Some(true)
         || c.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
     {
-        return false;
+        return None;
     }
-    let ours = shown_result(Some(c), "");
-    squash(&ours.replace(" | ", "\t")) != squash(spark)
+    let ours = shown_result(Some(c), "").replace(" | ", "\t");
+    if squash(&ours) == squash(spark) {
+        return None;
+    }
+    Some(float_rounding_only(&ours, spark))
+}
+
+/// Whether two results have the same cells in the same order and differ only in floating-point values
+/// that agree to a relative 1e-12 (the last digits of a sum that depends on the order of its terms).
+fn float_rounding_only(ours: &str, spark: &str) -> bool {
+    let (a, b): (Vec<&str>, Vec<&str>) = (
+        ours.split_whitespace().collect(),
+        spark.split_whitespace().collect(),
+    );
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(x, y)| {
+            x == y
+                || match (x.parse::<f64>(), y.parse::<f64>()) {
+                    (Ok(x), Ok(y)) if x.is_finite() && y.is_finite() => {
+                        (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
+                    }
+                    _ => false,
+                }
+        })
 }
 
 /// Every example of every function page as `(id, sql)`.
@@ -405,6 +430,7 @@ fn page(
     m.push('\n');
     if !examples.is_empty() {
         m.push_str("## Examples\n\n");
+        let (mut differing, mut only_rounding) = (false, true);
         for (n, (sql, spark_result)) in examples.iter().enumerate() {
             let id = example_id(&doc.name, n);
             let _ = writeln!(m, "```sql\n-- {}, example {}", doc.name, n + 1);
@@ -412,16 +438,14 @@ fn page(
                 let _ = writeln!(m, "> {l}");
             }
             m.push_str(&shown_result(captured.get(&id), spark_result));
-            if differs_from_spark(captured.get(&id), spark_result) {
+            if let Some(rounding) = difference_from_spark(captured.get(&id), spark_result) {
+                differing = true;
+                only_rounding &= rounding;
                 let _ = writeln!(m, "-- Spark documents: {}", spark_result.replace('\n', " "));
             }
             m.push_str("```\n\n");
         }
-        if examples
-            .iter()
-            .enumerate()
-            .any(|(n, (_, r))| differs_from_spark(captured.get(example_id(&doc.name, n)), r))
-        {
+        if differing && only_rounding {
             m.push_str(DIFFERS_NOTE);
         }
     }
@@ -589,6 +613,31 @@ pub fn run(root: &Path, check: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_float_note_needs_every_difference_to_be_last_digits() {
+        assert!(float_rounding_only("0.7499999999999998", "0.75"));
+        assert!(float_rounding_only(
+            "a\t0.2727272727272726",
+            "a 0.2727272727272727"
+        ));
+        assert!(!float_rounding_only("1", "2"));
+        assert!(!float_rounding_only("0.27", "0.2727272727272727"));
+        assert!(!float_rounding_only("x", "y"));
+        assert!(!float_rounding_only("1 2", "1"));
+    }
+
+    #[test]
+    fn a_captured_difference_says_whether_it_is_rounding() {
+        let ok = |v: &str| serde_json::json!({"ok": true, "rows": [v]});
+        assert_eq!(difference_from_spark(Some(&ok("0.75")), "0.75"), None);
+        assert_eq!(difference_from_spark(None, "0.75"), None);
+        assert_eq!(
+            difference_from_spark(Some(&ok("0.7499999999999998")), "0.75"),
+            Some(true)
+        );
+        assert_eq!(difference_from_spark(Some(&ok("1")), "2"), Some(false));
+    }
     use serde_json::json;
 
     #[test]
@@ -641,13 +690,13 @@ mod tests {
     #[test]
     fn a_changed_answer_differs_but_row_order_and_spacing_do_not() {
         let ok = json!({"ok": true, "rows": ["1", "2"]});
-        assert!(!differs_from_spark(Some(&ok), "2\n1"));
-        assert!(differs_from_spark(Some(&ok), "1\n3"));
-        assert!(!differs_from_spark(None, "1"));
-        assert!(!differs_from_spark(Some(&ok), "  "));
-        assert!(!differs_from_spark(Some(&ok), "+---+"));
-        assert!(!differs_from_spark(Some(&json!({"volatile": true})), "1"));
-        assert!(!differs_from_spark(Some(&json!({"ok": false})), "1"));
+        assert!(difference_from_spark(Some(&ok), "2\n1").is_none());
+        assert!(difference_from_spark(Some(&ok), "1\n3").is_some());
+        assert!(difference_from_spark(None, "1").is_none());
+        assert!(difference_from_spark(Some(&ok), "  ").is_none());
+        assert!(difference_from_spark(Some(&ok), "+---+").is_none());
+        assert!(difference_from_spark(Some(&json!({"volatile": true})), "1").is_none());
+        assert!(difference_from_spark(Some(&json!({"ok": false})), "1").is_none());
     }
 
     #[test]
