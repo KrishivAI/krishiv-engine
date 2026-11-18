@@ -1442,6 +1442,7 @@ impl Session {
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
             quiet_denials: false,
+            spill_failure: Arc::default(),
         }
     }
 
@@ -1642,25 +1643,29 @@ impl Session {
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         let stream = crate::run_site::resolve_sites(stream, env);
-        Ok((self.name_spill_failure(stream), query))
+        Ok((Self::name_spill_failure(stream, env), query))
     }
 
-    /// `stream` with a memory error reported as the spill directory's failure while that directory
-    /// cannot be set up: the query needed to spill and could not (PY-078).
-    fn name_spill_failure(&self, stream: RecordBatchStream) -> RecordBatchStream {
-        let state = Arc::clone(&self.state);
+    /// `stream` with a memory error reported as the query's own spill-directory failure, when the
+    /// query could not set its spill directory up: it needed to spill and could not (PY-078).
+    pub(crate) fn name_spill_failure(
+        stream: RecordBatchStream,
+        env: &QueryEnv,
+    ) -> RecordBatchStream {
+        let failure = Arc::clone(&env.spill_failure);
         Box::pin(futures::StreamExt::map(stream, move |r| {
             r.map_err(|e| {
                 if e.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
                     return e;
                 }
-                let failure = state
-                    .runtime
-                    .spill_failure
+                let found = failure
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone();
-                failure.map_or(e.clone(), |f| f.with_cause(e))
+                match found {
+                    Some(f) => f.with_cause(e),
+                    None => e,
+                }
             })
         }))
     }

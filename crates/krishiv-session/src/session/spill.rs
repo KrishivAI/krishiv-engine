@@ -11,6 +11,8 @@ use super::*;
 /// query's operators and streams are dropped (cancellation included).
 pub(super) struct QuerySpill {
     pub(super) state: Arc<SessionState>,
+    /// Where this query's spill set-up failure is kept for its memory error (PY-078).
+    pub(super) failure: Arc<Mutex<Option<KrishivError>>>,
 }
 
 impl fmt::Debug for QuerySpill {
@@ -36,22 +38,11 @@ impl SpillScopes for QuerySpill {
                     reason: e.to_string(),
                 }
                 .into();
-                *self
-                    .state
-                    .runtime
-                    .spill_failure
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) = Some(failure);
+                *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
                 internal(format!(
                     "cannot set up the spill directory (set `krishiv.spill.dir` to a writable local directory): {e}"
                 ))
             })?;
-            *self
-                .state
-                .runtime
-                .spill_failure
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = None;
             *slot = Some(manager);
         }
         slot.as_ref().map_or_else(

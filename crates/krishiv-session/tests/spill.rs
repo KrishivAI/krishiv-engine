@@ -285,3 +285,23 @@ fn a_spilling_query_with_an_unusable_spill_directory_names_the_directory() {
     assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
     assert!(err.to_string().contains("a_file"), "{err}");
 }
+
+/// PY-078: a write names the directory too, and the failure belongs to the query that had it: the
+/// same session's later query that never spills is unaffected.
+#[test]
+fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("4MB"));
+    let out = tmp.path().join("o");
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let err = block_on(df.write().format("parquet").save(out.to_str().unwrap())).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    let df = block_on(s.sql("SELECT count(*) AS n FROM range(10)")).unwrap();
+    assert_eq!(block_on(df.collect()).unwrap().len(), 1);
+}
