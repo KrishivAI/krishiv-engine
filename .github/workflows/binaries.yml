@@ -27,6 +27,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Read at build time by krishiv-session (the `git_sha` label of `krishiv.build.info`).
+  KRISHIV_GIT_SHA: ${{ github.sha }}
 
 jobs:
   # Not for the pull-request run of this file. The merge queue skips Miri, the fuzz-target build and

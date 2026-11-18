@@ -19,6 +19,8 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+# Theta sketches of the Puffin NDV statistics (single user of the crate).
+datasketches = { workspace = true }
 # Equality delete key sets (hash table of row indices, fast hasher).
 foldhash = { workspace = true }
 futures = { workspace = true }

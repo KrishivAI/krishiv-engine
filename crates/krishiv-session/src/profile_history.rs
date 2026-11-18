@@ -18,6 +18,8 @@
 //! `profile_version`, `profile_minor`, `profile` (the versioned profile JSON of `krishiv-exec`).
 //! `sql` is the statement text as the session redacted it for credentials (ADR 0038), and with
 //! `krishiv.history.literals = mask` (the default) every literal in it and in the profile's plan lines is `?`.
+//! The profile's `scans` member (minor 6) names the tables a query read and the columns it compared with values,
+//! with the table statistics known at planning: the partition advisor's input (T025).
 //! The profile has no result data. A file carries `krishiv.history.schema_version` in its Parquet metadata;
 //! a reader skips a file of a later major version, so a store written by a newer build never misreads.
 
@@ -68,6 +70,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) metrics: QueryMetrics,
     pub(crate) identity: ProfileIdentity,
     pub(crate) trace: Option<serde_json::Value>,
+    /// The tables it scanned, with the statistics known when it was planned (the advisor's input, T025).
+    pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
 }
 
 /// Where a file write's entry waits for its commit: the query ends before the commit does, and a commit that
@@ -186,6 +190,7 @@ pub struct StoredProfile {
 
 /// The writer side: a bounded queue to the thread that writes segments.
 pub(crate) struct ProfileHistory {
+    dir: PathBuf,
     tx: Mutex<Option<SyncSender<Msg>>>,
     failures: Arc<AtomicU64>,
     thread: Mutex<Option<JoinHandle<()>>>,
@@ -234,10 +239,16 @@ impl ProfileHistory {
             .spawn(move || writer.run(&rx))
             .map_err(|e| internal(format!("cannot start the history writer: {e}")))?;
         Ok(Self {
+            dir: dir.to_owned(),
             tx: Mutex::new(Some(tx)),
             failures,
             thread: Mutex::new(Some(thread)),
         })
+    }
+
+    /// The directory of the segments.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Queues `entry`; a full queue drops it and counts a failure.
@@ -385,6 +396,7 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut profile = QueryProfile::new(&e.plan, e.metrics, e.detailed);
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
+    profile.scans = e.scans;
     let mut sql = e.sql;
     if mask {
         // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named

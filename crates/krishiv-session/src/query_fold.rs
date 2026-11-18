@@ -236,6 +236,8 @@ pub(crate) struct HistoryJob {
     pub(crate) hold: Option<Arc<crate::profile_history::HistoryHold>>,
     pub(crate) identity: krishiv_exec::profile::ProfileIdentity,
     pub(crate) trace: Option<serde_json::Value>,
+    /// The tables the query scanned and the columns it compared with values, with their statistics.
+    pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
 }
 
 impl crate::session::QueryEnv {
@@ -248,10 +250,15 @@ impl crate::session::QueryEnv {
         detailed: bool,
     ) -> Option<HistoryJob> {
         session.state.runtime.profile_history.as_ref()?;
+        let scans = krishiv_exec::profile::profile_scans(plan, &|scan| {
+            use krishiv_exec::planner::TableProviderResolver as _;
+            self.catalog.provider(scan).ok()?.statistics()
+        });
         Some(HistoryJob::of(
             session,
             row_id,
             plan,
+            scans,
             self.text.as_deref(),
             detailed,
             self.history_hold.clone(),
@@ -265,6 +272,7 @@ impl HistoryJob {
         session: &crate::session::Session,
         row_id: &str,
         plan: &krishiv_exec::planner::PhysicalPlan,
+        scans: Vec<krishiv_exec::profile::ProfileScan>,
         sql: Option<&str>,
         detailed: bool,
         hold: Option<Arc<crate::profile_history::HistoryHold>>,
@@ -292,6 +300,7 @@ impl HistoryJob {
                     .collect(),
             },
             trace: Some(trace),
+            scans,
         }
     }
 }
@@ -408,6 +417,7 @@ impl QueryFold {
             metrics,
             identity: job.identity,
             trace: job.trace,
+            scans: job.scans,
         };
         match &job.hold {
             Some(hold) => hold.offer(entry, store),
