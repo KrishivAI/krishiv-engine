@@ -18,6 +18,14 @@
 //! `krishiv.server.shutdownTimeout`, closes every session, and returns; the
 //! engine runtime is dropped before `main` exits, which removes the spill
 //! directory. A second signal exits at once with 130.
+//!
+//! Declared catalogs (design P3-T067 §2.2, §2.3): the `krishiv.catalog.<name>.*` and
+//! `spark.sql.catalog.*` settings are read here, never stored as engine configuration, and handed
+//! to the runtime in server mode with the factories this build carries (`iceberg-rest` with the
+//! `catalog-iceberg-rest` feature). The runtime parses and checks them before either listener
+//! binds (types without a factory, literal secrets, endpoint addresses the egress rule refuses,
+//! unresolved references): any refusal stops startup with its error. Sessions can never declare
+//! or change one.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -37,6 +45,8 @@ use krishiv_server::session_guard::SessionGuard;
 use krishiv_session::auth::{
     AuthConfig, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
 };
+use krishiv_session::catalog_decl::{DeclMode, is_declaration_key};
+use krishiv_session::catalog_registry::CatalogSetup;
 use krishiv_session::{EngineRuntime, Session};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -127,6 +137,11 @@ pub(crate) struct Settings {
     pub(crate) config: Config,
     pub(crate) auth: AuthConfig,
     pub(crate) tls: TlsConfig,
+    /// The declared catalogs' setup (declarations are the registry's, not configuration).
+    pub(crate) catalogs: CatalogSetup,
+    /// The settings the engine runtime receives: everything but the listener's own and the
+    /// catalog declarations, the default-catalog key under its one spelling.
+    pub(crate) engine: Vec<(String, String)>,
 }
 
 /// Parses every `--conf` setting: the listener's own (authentication, TLS) into their typed
@@ -144,10 +159,26 @@ pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, Strin
     };
     let auth = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
     let tls = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let mut catalogs = catalog_setup();
+    let mut engine = Vec::new();
     for (k, v) in conf {
         if is_listener_key(k) {
             continue;
         }
+        // Declarations (they may hold secret references) are the registry's, not configuration.
+        if is_declaration_key(k) {
+            catalogs = catalogs.setting(k, v);
+            continue;
+        }
+        // Spark's default-catalog key in any letter case, like the declaration keys (review
+        // 58a2 N3): it names the default to the registry and stays engine configuration under
+        // its one spelling.
+        let k = if k.eq_ignore_ascii_case(SPARK_DEFAULT_CATALOG) {
+            catalogs = catalogs.setting(k, v);
+            SPARK_DEFAULT_CATALOG
+        } else {
+            k.as_str()
+        };
         let warning = config.set(k, v).map_err(|e| e.to_string())?;
         // A Spark Connect setting Krishiv does not read would be ignored
         // silently: refuse it, naming the replacement where there is one.
@@ -159,8 +190,15 @@ pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, Strin
             };
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
+        engine.push((k.to_owned(), v.clone()));
     }
-    Ok(Settings { config, auth, tls })
+    Ok(Settings {
+        config,
+        auth,
+        tls,
+        catalogs,
+        engine,
+    })
 }
 
 /// The address both listeners bind: `--host`, else `krishiv.connect.address`.
@@ -190,9 +228,19 @@ pub(crate) fn check_host(host: IpAddr, settings: &Settings) -> Result<(), String
 fn serve(args: &ServerArgs) -> Result<(), String> {
     let settings = load_settings(&args.conf)?;
     let mut builder = EngineRuntime::builder();
-    for (k, v) in args.conf.iter().filter(|(k, _)| !is_listener_key(k)) {
+    let host = resolve_host(args.host, &settings.config)?;
+    check_host(host, &settings)?;
+    let Settings {
+        config,
+        auth: auth_config,
+        tls: tls_config,
+        catalogs,
+        engine,
+    } = settings;
+    for (k, v) in &engine {
         builder = builder.config(k, v);
     }
+    builder = builder.catalogs(catalogs);
     // The egress policy (design P3-T067 §5.1): a server allows only globally routable
     // destinations unless the admin chose otherwise.
     if !args
@@ -202,13 +250,6 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     {
         builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
-    let host = resolve_host(args.host, &settings.config)?;
-    check_host(host, &settings)?;
-    let Settings {
-        config,
-        auth: auth_config,
-        tls: tls_config,
-    } = settings;
     let tls = ServerTls::new(&tls_config, &auth_config.mtls).map_err(|e| e.to_string())?;
     let auth = ServerAuth::new(&auth_config).map_err(|e| e.to_string())?;
     if host::is_root() && !args.allow_root {
@@ -247,6 +288,14 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     // the tokio runtime ends the tasks that were left.
     drop(tokio);
     result
+}
+
+/// The declared catalogs' setup in server mode, with the factories this build compiles in.
+fn catalog_setup() -> CatalogSetup {
+    let setup = CatalogSetup::new(DeclMode::Server);
+    #[cfg(feature = "catalog-iceberg-rest")]
+    let setup = setup.factory(Arc::new(krishiv_catalogs::declared::IcebergRestFactory));
+    setup
 }
 
 /// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
@@ -507,6 +556,9 @@ fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
     flag(config, &METRICS_ENABLED, false)
         && !(flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback())
 }
+
+/// Spark's default-catalog key (`krishiv.catalog.default` is a declaration key).
+const SPARK_DEFAULT_CATALOG: &str = "spark.sql.defaultCatalog";
 
 /// How long admin requests in flight may take once the server stops.
 const ADMIN_DRAIN: Duration = Duration::from_secs(2);

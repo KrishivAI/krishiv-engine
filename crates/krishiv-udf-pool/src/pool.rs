@@ -512,6 +512,9 @@ impl Pool {
             .prefix("w")
             .tempdir_in(inner.root.path())
             .map_err(|e| internal(format!("cannot make a UDF worker directory: {e}")))?;
+        if let Some(p) = &prepared {
+            link_files(p, private_dir.path())?;
+        }
         let (server_end, worker_end) = rustix::net::socketpair(
             AddressFamily::UNIX,
             SocketType::SEQPACKET,
@@ -644,8 +647,8 @@ impl Pool {
     /// bytes, with `interpreter` (`unpack.py`; in the sandbox when it is on: it reads the archive and writes
     /// only `dest`). The bytes unpacked. Runs on a call thread (it blocks until the program ends, at most
     /// [`UNPACK_TIMEOUT`]); a cancel of `watch` kills the program through its pidfd. Only the program's own
-    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout or a program that
-    /// could not be started or waited for is not.
+    /// refusal or failure is about the archive ([`Failure::lasting`]); a cancel, a timeout (until the set's
+    /// [`artifacts::MAX_TIMEOUTS`]th) or a program that could not be started or waited for is not.
     fn unpack(
         &self,
         interpreter: &Interpreter,
@@ -689,7 +692,7 @@ impl Pool {
             Ok(Ended::Exited(output)) => output,
             Ok(Ended::Cancelled) => return Err(Failure::transient(OperationCanceled {}.into())),
             Ok(Ended::TimedOut) => {
-                return Err(Failure::transient(artifacts::refused(
+                return Err(Failure::timed_out(artifacts::refused(
                     archive,
                     &format!("it could not be unpacked in {} s", UNPACK_TIMEOUT.as_secs()),
                 )));
@@ -722,6 +725,21 @@ impl Pool {
             },
         )))
     }
+}
+
+/// Makes each entry of `prepared`'s files directory reachable from a worker's working directory `dir` (its
+/// own new directory): a symbolic link `dir/<name>` to it. Spark's worker runs in its files directory; this
+/// worker keeps its private directory as its (writable) working directory. Links are made by the server, in a
+/// directory only it has written, so a name cannot collide with or follow anything the client made.
+fn link_files(prepared: &artifacts::Prepared, dir: &Path) -> Result<(), KrishivError> {
+    for name in &prepared.entries {
+        std::os::unix::fs::symlink(prepared.files_dir.join(name), dir.join(name)).map_err(|e| {
+            internal(format!(
+                "cannot link the UDF artifact {name} into a worker directory: {e}"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// The longest an archive artifact's unpacking may take.

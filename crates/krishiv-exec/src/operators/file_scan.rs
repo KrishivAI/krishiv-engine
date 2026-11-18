@@ -325,6 +325,19 @@ impl ScanPushdown for FileScan {
         Arc::clone(&self.table)
     }
 
+    /// Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN` rule: a JSON or CSV read whose referenced data
+    /// columns (partition columns left out; `_metadata` and the row index are not columns of the
+    /// table) are exactly the corrupt-record column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let Some(corrupt) = self.format.corrupt_record_column(&self.format_options) else {
+            return false;
+        };
+        let mut data = referenced
+            .iter()
+            .filter(|n| !self.partition_columns.iter().any(|p| p.name() == **n));
+        data.next().is_some_and(|n| *n == corrupt) && data.next().is_none()
+    }
+
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
         if reads_partition_column(self, filter) {
             return FilterPushdown::Unsupported;
@@ -1941,52 +1954,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod row_level_tests {
-    use arrow_array::BooleanArray;
-
-    use super::*;
-    use crate::operators::expr::FnPredicate;
-
-    fn filter(rows: RowLevel) -> PushedFilter {
-        let predicate: Arc<dyn super::super::expr::Predicate> =
-            Arc::new(FnPredicate(|b: &RecordBatch| {
-                Ok(BooleanArray::from(vec![true; b.num_rows()]))
-            }));
-        PushedFilter {
-            predicate,
-            expr: Some(PushdownExpr::Constant(true)),
-            rows,
-        }
-    }
-
-    #[test]
-    fn a_filter_left_out_that_may_raise_keeps_runtime_filters_off() {
-        let safe = filter(RowLevel::Full);
-        let raising = filter(RowLevel::Prefix(None));
-        // Nothing left out: as `row_level`.
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&safe), 1),
-            RowLevel::Full
-        ));
-        // A safe filter left out changes nothing.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe.clone()], 1),
-            RowLevel::Full
-        ));
-        // A raising filter left out: only the usable prefix may drop rows.
-        let level = scan_row_level(&[safe.clone(), raising.clone()], 1);
-        assert!(
-            matches!(&level, RowLevel::Prefix(Some(PushdownExpr::Constant(true)))),
-            "{level:?}"
-        );
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&raising), 0),
-            RowLevel::Prefix(None)
-        ));
-        // A later raising filter counts too.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe, raising], 1),
-            RowLevel::Prefix(Some(_))
-        ));
-    }
-}
+mod row_level_tests;

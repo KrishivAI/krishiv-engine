@@ -41,6 +41,8 @@ mod evolution_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
+mod oracle_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod rolling_tests;
