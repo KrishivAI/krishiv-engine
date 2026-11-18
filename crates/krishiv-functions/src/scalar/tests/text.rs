@@ -276,6 +276,27 @@ fn concat_ws_skips_nulls() {
     );
 }
 
+/// Spark 4.2: `concat_ws(',', array('a', NULL, 'b'), 'c', CAST(NULL AS array<string>), array())` is `a,b,c`;
+/// a NULL separator gives NULL.
+#[test]
+fn concat_ws_joins_array_elements_and_skips_nulls() {
+    use arrow_array::builder::{ListBuilder, StringBuilder};
+    let mut b = ListBuilder::new(StringBuilder::new());
+    b.values().append_value("a");
+    b.values().append_null();
+    b.values().append_value("b");
+    b.append(true);
+    b.append(false);
+    b.append(true);
+    let arr: ArrayRef = Arc::new(b.finish());
+    let sep = strs(&[Some(","), Some("-"), None]);
+    let word = strs(&[Some("c"), Some("d"), Some("e")]);
+    assert_eq!(
+        text(&run("concat_ws", &[&sep, &arr, &word])),
+        owned(&[Some("a,b,c"), Some("d"), None])
+    );
+}
+
 #[test]
 fn storage_carriers_are_read() {
     let view: ArrayRef = Arc::new(StringViewArray::from(vec![Some("abc"), None]));

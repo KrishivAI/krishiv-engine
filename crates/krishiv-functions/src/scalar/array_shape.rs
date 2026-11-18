@@ -298,6 +298,87 @@ fn reverse(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError>
     rebuild(field, list.values(), &rows, "reverse", MAX_ARRAY_LENGTH)
 }
 
+/// `concat_ws(sep, str | array<str>, ...)` when some argument is an array of strings: the non-NULL
+/// strings and array elements joined by `sep`; NULL only when `sep` is NULL. `None` when no argument
+/// is an array (the string-only kernel binds that case).
+pub(super) fn concat_ws_binding(types: &[DataType]) -> Option<Binding> {
+    let is_list = |t: &DataType| matches!(t, DataType::List(f) if is_text(f.data_type()));
+    if types.len() < 2 || !is_text(&types[0]) || !types[1..].iter().any(is_list) {
+        return None;
+    }
+    if !types[1..].iter().all(|t| is_text(t) || is_list(t)) {
+        return None;
+    }
+    let lists: Vec<bool> = types.iter().map(is_list).collect();
+    Some(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+        concat_ws(x, &lists)
+    }))
+}
+
+/// One `concat_ws` argument, read per row.
+enum Part {
+    Text(StringArray),
+    List(ArrayRef, StringArray),
+}
+
+fn concat_ws(x: &Inputs<'_>, lists: &[bool]) -> Result<ArrayRef, KrishivError> {
+    let seps = x.strings(0)?;
+    let mut parts = Vec::with_capacity(lists.len());
+    for (i, is_list) in lists.iter().enumerate().skip(1) {
+        parts.push(if *is_list {
+            let c = x.column(i)?;
+            let elements = to_utf8(list_of(&c, "concat_ws")?.values().as_ref())?;
+            Part::List(c, elements)
+        } else {
+            Part::Text(x.strings(i)?)
+        });
+    }
+    let mut out: Vec<Option<String>> = Vec::with_capacity(x.rows());
+    let mut total = 0usize;
+    for row in 0..x.rows() {
+        if seps.is_null(row) {
+            out.push(None);
+            continue;
+        }
+        let sep = seps.value(row);
+        let mut text = String::new();
+        let mut first = true;
+        let mut push = |piece: &str| {
+            if !first {
+                text.push_str(sep);
+            }
+            first = false;
+            text.push_str(piece);
+        };
+        for part in &parts {
+            match part {
+                Part::Text(a) => {
+                    if a.is_valid(row) {
+                        push(a.value(row));
+                    }
+                }
+                Part::List(c, elements) => {
+                    let list = list_of(c, "concat_ws")?;
+                    if list.is_valid(row) {
+                        let (start, len) = span(list, row);
+                        for at in start..start + len {
+                            if elements.is_valid(at) {
+                                push(elements.value(at));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        total = total.saturating_add(text.len());
+        if i32::try_from(total).is_err() {
+            return Err(too_long("concat_ws", total));
+        }
+        out.push(Some(text));
+    }
+    Ok(Arc::new(StringArray::from(out)))
+}
+
 /// `slice(arr, start, length)`.
 fn slice(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
     let c = x.column(0)?;

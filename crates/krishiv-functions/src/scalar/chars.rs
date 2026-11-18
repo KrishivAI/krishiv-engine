@@ -66,6 +66,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     {
         return Some((listed, Ok(binding)));
     }
+    if listed == "concat_ws"
+        && let Some(binding) = super::array_shape::concat_ws_binding(
+            &args.iter().map(BindArg::data_type).collect::<Vec<_>>(),
+        )
+    {
+        return Some((listed, Ok(binding)));
+    }
     let shape = shape(args);
     let ansi = opts.ansi;
     let ctx = opts.kernel;

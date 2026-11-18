@@ -10,14 +10,13 @@
 //! Ground truth: Spark 4.2's `stringExpressions.scala`, `maskExpressions.scala`,
 //! `urlExpressions.scala`, the `string-functions.sql`, `try-string-functions.sql`
 //! and `mask-functions.sql` goldens and the `string`/`url` matrix families.
-//! A function that takes an array in Spark (`reverse`, `concat_ws`) takes
-//! strings only here; the analyzer has no array type yet.
+//! `reverse` and `concat_ws` also take arrays.
 
 use krishiv_common::error::{
     DatatypeMismatchInvalidArgValue, DatatypeMismatchNonFoldableInput, KrishivError,
     KrishivUnsupportedFeature,
 };
-use krishiv_types::DataType;
+use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{
     Spec, exact, first_type, int, is_binary, match_inputs, matches, scalar, string, typed,
@@ -39,6 +38,20 @@ fn locate_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         DataType::Integer,
         nullable_of(c, 0) || nullable_of(c, 1),
     ))
+}
+
+/// `concat_ws`'s inputs: a string separator, then strings or arrays of strings.
+fn concat_ws_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let strings = DataType::Array(ArrayType::new(DataType::String, true).into());
+    (0..c.args().len().max(1))
+        .map(|i| {
+            if i > 0 && matches!(c.data_type(i), Some(DataType::Array(_))) {
+                InputType::Exact(strings.clone())
+            } else {
+                exact(DataType::String)
+            }
+        })
+        .collect()
 }
 
 /// `concat_ws`: NULL only when the separator is.
@@ -313,7 +326,12 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Built(InputBuilder(elt_inputs)),
         elt_result,
     ));
-    out.extend(scalar(&["concat_ws"], &one_text, concat_ws_result));
+    // Spark: `concat_ws(sep: string, (string | array<string>)...)`; an atomic is cast to string, an array's elements too.
+    out.extend(scalar(
+        &["concat_ws"],
+        &Inputs::Built(InputBuilder(concat_ws_inputs)),
+        concat_ws_result,
+    ));
     out.extend(scalar(
         &["base64"],
         &Inputs::Expects(vec![exact(DataType::Binary)]),
