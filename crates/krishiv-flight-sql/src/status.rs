@@ -14,6 +14,11 @@ pub const SQL_STATE_KEY: &str = "x-krishiv-sqlstate";
 /// Trailing metadata: the id the server's log knows the full error by.
 pub const ERROR_ID_KEY: &str = "x-krishiv-error-id";
 
+/// The most bytes of a status message (design §6): it travels in `grpc-message`, and grpc-java's
+/// default inbound metadata limit is 8 KiB, so a long echoed statement must not fail the JDBC
+/// driver's transport instead of giving it the SQL error.
+pub const MAX_MESSAGE_BYTES: usize = 2 << 10;
+
 /// `error` as a Flight SQL status: the code of [`code_of`], the message Spark prints
 /// (`[ERROR_CLASS] message SQLSTATE: xxxxx`) of the client-safe form
 /// ([`KrishivError::for_client`]: no cause chain, operator-only parameters redacted), and the
@@ -24,7 +29,10 @@ pub fn flight_status(error: &KrishivError) -> Status {
     let safe = client.error();
     let class = safe.error_class().name();
     let state = safe.sql_state();
-    let mut status = Status::new(code_of(class, state), safe.to_string());
+    // The full error (cause chain, operator detail) is logged under the id the client gets.
+    tracing::warn!(error_id = client.error_id(), error = %error, "flight sql call refused");
+    let message = capped(safe.to_string(), client.error_id());
+    let mut status = Status::new(code_of(class, state), message);
     let metadata = status.metadata_mut();
     if let Ok(v) = MetadataValue::try_from(class) {
         metadata.insert(ERROR_CLASS_KEY, v);
@@ -36,6 +44,23 @@ pub fn flight_status(error: &KrishivError) -> Status {
         metadata.insert(ERROR_ID_KEY, v);
     }
     status
+}
+
+/// `message` cut to [`MAX_MESSAGE_BYTES`] at a character boundary, ending
+/// `... [truncated; error id <id>]` when cut (design §6).
+fn capped(message: String, error_id: &str) -> String {
+    if message.len() <= MAX_MESSAGE_BYTES {
+        return message;
+    }
+    let tail = format!(" ... [truncated; error id {error_id}]");
+    let mut end = MAX_MESSAGE_BYTES.saturating_sub(tail.len());
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = message;
+    out.truncate(end);
+    out.push_str(&tail);
+    out
 }
 
 /// The gRPC code of an error class and SQLSTATE (design §6): specific classes first, then the
@@ -73,7 +98,10 @@ pub fn code_of(class: &str, sql_state: Option<&str>) -> Code {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krishiv_common::error::{KrishivError, KrishivSessionLimit, TableOrViewNotFound};
+    use krishiv_common::error::{
+        KrishivError, KrishivSessionLimit, KrishivSpillIoError, ParseSyntaxError,
+        TableOrViewNotFound,
+    };
 
     #[test]
     fn each_row_of_the_design_table() {
@@ -179,5 +207,47 @@ mod tests {
         }
         .into();
         assert_eq!(flight_status(&e).code(), Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn long_error_message_capped() {
+        let e: KrishivError = ParseSyntaxError {
+            error: format!("'{}'", "é".repeat(4000)),
+            hint: String::new(),
+        }
+        .into();
+        let s = flight_status(&e);
+        let id = s.metadata().get(ERROR_ID_KEY).unwrap().to_str().unwrap();
+        assert!(
+            s.message().len() <= MAX_MESSAGE_BYTES,
+            "{}",
+            s.message().len()
+        );
+        assert!(
+            s.message()
+                .ends_with(&format!(" ... [truncated; error id {id}]")),
+            "{}",
+            s.message()
+        );
+        assert!(s.message().starts_with("[PARSE_SYNTAX_ERROR]"));
+    }
+
+    #[test]
+    fn a_short_message_is_not_cut() {
+        assert_eq!(capped("short".to_owned(), "id"), "short");
+        let exact = "x".repeat(MAX_MESSAGE_BYTES);
+        assert_eq!(capped(exact.clone(), "id"), exact);
+    }
+
+    #[test]
+    fn an_operator_error_is_redacted_in_the_status() {
+        let e: KrishivError = KrishivSpillIoError {
+            operation: "write".into(),
+            path: "/var/spill/tenant-7/x".into(),
+            reason: "disk full".into(),
+        }
+        .into();
+        let s = flight_status(&e);
+        assert!(!s.message().contains("/var/spill"), "{}", s.message());
     }
 }

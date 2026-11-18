@@ -472,45 +472,40 @@ impl FlightSqlServer {
         session: &Session,
         df: krishiv_session::DataFrame,
     ) -> Result<Stored, KrishivError> {
-        let not_stored = |bytes: usize, reason: String| -> KrishivError {
-            KrishivFlightSqlResultNotStored {
+        // The reason is the inner error's client-safe text (review M2): an operator-audience
+        // error (a spill path, a store address) is redacted as it would be on its own; the full
+        // error stays the cause, for the log.
+        let not_stored = |bytes: usize, e: KrishivError| -> KrishivError {
+            KrishivError::from(KrishivFlightSqlResultNotStored {
                 bytes: bytes.to_string(),
-                reason,
-            }
-            .into()
+                reason: client_reason(&e),
+            })
+            .with_cause(e)
         };
         let tz = time_zone(session);
-        let schema = df
-            .schema()
-            .await
-            .map_err(|e| not_stored(0, e.message().to_owned()))?;
-        let rows = df
-            .collect()
-            .await
-            .map_err(|e| not_stored(0, e.message().to_owned()))?;
+        let schema = df.schema().await.map_err(|e| not_stored(0, e))?;
+        let rows = df.collect().await.map_err(|e| not_stored(0, e))?;
         let mut batches = Vec::with_capacity(rows.len());
         for b in &rows {
-            batches.push(
-                spark_batch(b, tz.as_ref()).map_err(|e| not_stored(0, e.message().to_owned()))?,
-            );
+            batches.push(spark_batch(b, tz.as_ref()).map_err(|e| not_stored(0, e))?);
         }
         drop(rows);
-        let schema = spark_schema(&schema, tz.as_ref())
-            .map_err(|e| not_stored(0, e.message().to_owned()))?;
+        let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| not_stored(0, e))?;
         let bytes = rows_bytes(&batches);
         let max = self.inner.config.max_command_result_bytes;
         if bytes > max {
-            return Err(not_stored(
-                bytes,
-                format!("over \"krishiv.flightSql.maxCommandResultBytes\" ({max})"),
-            ));
+            return Err(KrishivFlightSqlResultNotStored {
+                bytes: bytes.to_string(),
+                reason: format!("over \"krishiv.flightSql.maxCommandResultBytes\" ({max})"),
+            }
+            .into());
         }
         let reservation = if bytes > SMALL_RESULT_BYTES {
             let consumer =
                 ConsumerHandle::register(session.runtime().memory(), HANDLES_CONSUMER, None);
             let mut r = consumer.reservation();
             r.try_grow(bytes)
-                .map_err(|e| not_stored(bytes, KrishivError::from(e).message().to_owned()))?;
+                .map_err(|e| not_stored(bytes, KrishivError::from(e)))?;
             Some(r)
         } else {
             None
@@ -708,10 +703,49 @@ fn rows_bytes(batches: &[RecordBatch]) -> usize {
 /// handle limit (§4.1).
 fn bytes_of_command(bytes: usize, e: &KrishivError) -> Option<KrishivError> {
     (e.error_class() == krishiv_common::error::ErrorClass::KrishivFlightSqlHandleLimit).then(|| {
-        KrishivFlightSqlResultNotStored {
+        KrishivError::from(KrishivFlightSqlResultNotStored {
             bytes: bytes.to_string(),
-            reason: e.message().to_owned(),
-        }
-        .into()
+            reason: client_reason(e),
+        })
+        .with_cause(e.clone())
     })
+}
+
+/// An inner error's text as a client may see it ([`KrishivError::for_client`]), for the reason
+/// of `RESULT_NOT_STORED` (review M2).
+fn client_reason(e: &KrishivError) -> String {
+    e.for_client().error().message().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
+
+    /// `RESULT_NOT_STORED` carries the inner error's client-safe text (review M2).
+    #[test]
+    fn result_not_stored_reason_is_redacted() {
+        let inner: KrishivError = KrishivSpillIoError {
+            operation: "write".into(),
+            path: "/var/spill/tenant-7/x".into(),
+            reason: "disk full on host-12".into(),
+        }
+        .into();
+        let reason = client_reason(&inner);
+        for secret in ["/var/spill", "tenant-7", "host-12"] {
+            assert!(!reason.contains(secret), "{reason}");
+        }
+        let limit: KrishivError = krishiv_common::error::KrishivFlightSqlHandleLimit {
+            limit_name: "/var/spill".into(),
+            limit: "1".into(),
+        }
+        .into();
+        let wrapped = bytes_of_command(10, &limit).expect("a handle limit is not stored");
+        assert_eq!(
+            wrapped.error_class(),
+            ErrorClass::KrishivFlightSqlResultNotStored
+        );
+        let shown = flight_status(&wrapped);
+        assert!(shown.message().contains("ran"), "{}", shown.message());
+    }
 }
