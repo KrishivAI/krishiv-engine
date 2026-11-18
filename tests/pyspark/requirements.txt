@@ -1,0 +1,14 @@
+# Interpreter environment of the PySpark Connect suite run (`pyspark` itself comes from the pinned Spark checkout
+# on PYTHONPATH, never from PyPI). pandas 3 dropped names the 4.2/4.3 pandas-on-Spark code imports; keep it below 3.
+pytest==9.2.0
+pytest-timeout==2.4.0
+grpcio==1.80.0
+grpcio-status==1.80.0
+googleapis-common-protos==1.72.0
+protobuf==6.33.5
+pandas==2.3.3
+numpy==2.2.6
+pyarrow==22.0.0
+pyyaml==6.0.3
+zstandard==0.25.0
+py4j==0.10.9.9

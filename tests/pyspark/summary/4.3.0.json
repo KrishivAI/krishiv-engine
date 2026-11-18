@@ -3,28 +3,29 @@
  "counts": {},
  "denominator": {
   "by_reason": {
-   "DEFERRED_TYPE": 15,
-   "LOCAL_SERVER": 26,
-   "OPTIONAL_DEP": 1,
-   "STREAMING_P4": 159,
-   "UNVERIFIED": 93
+   "DEFERRED_TYPE": 19,
+   "LOCAL_SERVER": 30,
+   "OPTIONAL_DEP": 35,
+   "STREAMING_P4": 179,
+   "UNVERIFIED": 106
   },
-  "cap": 613,
-  "collected": 3160,
-  "denominator": 2774,
-  "excluded_share": 0.0958,
-  "manifest": 294,
+  "cap": 634,
+  "collected": 3256,
+  "conditional_skips": 0,
+  "denominator": 2805,
+  "excluded_share": 0.1163,
+  "manifest": 369,
   "oracle_env": 0,
-  "spark_skips": 92,
+  "spark_skips": 82,
   "version": "4.3.0",
   "within_cap": true
  },
  "file_failures": [],
- "not_run": 2774,
+ "not_run": 2805,
  "pass_rate": 0.0,
  "pass_rate_without_client_only": 0.0,
  "passed": 0,
  "passed_ids": [],
- "source": "static",
+ "source": "collected",
  "version": "4.3.0"
 }

@@ -190,3 +190,38 @@ def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
 def test_no_oracle_run_means_no_conditional_skips():
     den, _ = compute("4.3.0", {"a.py::T::t"}, set(), set(), [])
     assert den.conditional_skips == 0
+
+
+def test_parse_collected_keeps_node_ids_relative_to_the_connect_dir():
+    from pyspark_suite.collect import parse_collected
+
+    root = Path("/x/connect")
+    out = "a/b.py::T::t1\n/x/connect/c.py::U::t2\n/elsewhere/d.py::V::t3\ncollected 3 tests\n"
+    out += "x.py::T::t[param]::extra\n\n"
+    assert parse_collected(out, root) == {"a/b.py::T::t1", "c.py::U::t2"}
+
+
+def test_drift_reports_count_and_unmatched_manifest_entries():
+    from pyspark_suite.collect import check_drift
+
+    collected = {"a.py::T::t1", "a.py::T::t2"}
+    entries = [_entry("a.py"), _entry("gone.py"), _entry("other.py", versions=("4.2.1",))]
+    same = check_drift("4.3.0", collected, collected, {"denominator": {"collected": 2}}, [entries[0]])
+    assert not same.drifted
+    d = check_drift("4.3.0", collected, {"a.py::T::t1", "z.py::T::t"}, {"denominator": {"collected": 3}}, entries)
+    assert d.drifted
+    assert d.unmatched_entries == ["gone.py"]  # the 4.2.1-only entry does not apply
+    assert d.census_only == ["z.py::T::t"]
+    assert d.pytest_only == ["a.py::T::t2"]
+    assert check_drift("4.3.0", collected, collected, None, []).drifted  # no committed summary is drift too
+
+
+def test_suite_env_stubs_spark_home(tmp_path, monkeypatch):
+    from pyspark_suite.collect import suite_env
+
+    monkeypatch.setenv("SPARK_HOME", "/real/spark")
+    env = suite_env(tmp_path / "co", tmp_path, port=15002)
+    assert env["SPARK_HOME"] == str(tmp_path / "spark-home")
+    assert (tmp_path / "spark-home" / "bin" / "spark-submit").is_file()
+    assert (tmp_path / "spark-home" / "jars").is_dir()
+    assert env["SPARK_CONNECT_TESTING_REMOTE"] == "sc://127.0.0.1:15002"

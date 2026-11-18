@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI: `python -m pyspark_suite {static,report,run}` (from tests/scripts)."""
+"""CLI: `python -m pyspark_suite {static,collect,run,report}` (from tests/scripts)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from . import manifest as mf
+from .collect import CollectError, check_drift, collect_ids
 from .denominator import compute
 from .junit import oracle_skips
 from .report import dashboard, summarize, write_summary
@@ -34,6 +35,34 @@ def cmd_static(a: argparse.Namespace) -> None:
     print(f"wrote {path}")
 
 
+def _committed(version: str) -> dict | None:
+    path = DATA / "summary" / f"{version}.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def cmd_collect(a: argparse.Namespace) -> None:
+    """`pytest --collect-only` counts; exit 1 on drift from the committed summary and manifest unless `--update`."""
+
+    connect = _connect_dir(a.checkout)
+    if not connect.is_dir():
+        raise SystemExit(f"collect: {connect} is not a directory (wrong --checkout?)")
+    entries = mf.load(DATA / "manifest.toml")
+    census_ids, skipped = census(connect)
+    try:
+        collected = collect_ids(a.checkout)
+    except CollectError as e:
+        raise SystemExit(f"collect: {e}") from e
+    drift = check_drift(a.version, collected, census_ids, _committed(a.version), entries)
+    cond = oracle_skips(a.oracle_junit, a.version) if a.oracle_junit else None
+    den, remaining = compute(a.version, collected, skipped & collected, set(), entries, cond)
+    print(json.dumps(den.as_dict(), indent=1))
+    print("\n".join(drift.lines()))
+    if a.update:
+        print(f"wrote {write_summary(summarize(den, remaining, [], source='collected'), DATA / 'summary')}")
+    elif drift.drifted:
+        raise SystemExit(f"collect: {a.version} drifted from the committed summary/manifest (rerun with --update)")
+
+
 def cmd_run(a: argparse.Namespace) -> None:
     """Run every non-excluded file against a fresh server each; write the summary with real pass counts."""
 
@@ -43,9 +72,17 @@ def cmd_run(a: argparse.Namespace) -> None:
         raise SystemExit("run: --server-cmd needs a command")
     if not connect.is_dir():
         raise SystemExit(f"run: {connect} is not a directory (wrong --checkout?)")
-    collected, skipped = census(connect)
-    if not collected:
+    census_ids, skipped = census(connect)
+    if not census_ids:
         raise SystemExit(f"run: no tests found under {connect}; not overwriting the summary")
+    try:
+        collected = collect_ids(a.checkout)
+    except CollectError as e:
+        raise SystemExit(f"run: {e}") from e
+    drift = check_drift(a.version, collected, census_ids, _committed(a.version), entries)
+    if drift.drifted and not a.allow_drift:
+        raise SystemExit("run: collection drifted from the committed summary/manifest:\n" + "\n".join(drift.lines()))
+    skipped &= collected
     cond = oracle_skips(a.oracle_junit, a.version) if a.oracle_junit else None
     den, remaining = compute(a.version, collected, skipped, set(), entries, cond)
     files = sorted({t.split("::", 1)[0] for t in remaining})
@@ -88,9 +125,16 @@ def main() -> None:
     u.add_argument(
         "--oracle-junit", type=Path, help="dir of JUnit XML from a Spark oracle run: its skips leave the denominator"
     )
+    u.add_argument("--allow-drift", action="store_true", help="run although the collection differs from the summary")
     u.add_argument("--only", action="append", help="run only files starting with this path (repeatable)")
     u.add_argument("--server-cmd", nargs=argparse.REMAINDER, required=True, help="server command, last option")
     u.set_defaults(fn=cmd_run)
+    c = sub.add_parser("collect", help="pytest --collect-only counts; fails on drift from the summary/manifest")
+    c.add_argument("--version", required=True)
+    c.add_argument("--checkout", type=Path, required=True)
+    c.add_argument("--oracle-junit", type=Path, help="dir of JUnit XML from a Spark oracle run")
+    c.add_argument("--update", action="store_true", help="write the collected summary instead of failing on drift")
+    c.set_defaults(fn=cmd_collect)
     r = sub.add_parser("report", help="render DASHBOARD.md from the committed summaries")
     r.set_defaults(fn=cmd_report)
     a = p.parse_args()

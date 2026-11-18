@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from .collect import suite_env
 from .junit import Record, parse
 
 TEST_TIMEOUT_S = 120  # per test, recalibrated at the first measured run
@@ -71,9 +74,8 @@ def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: 
     """One file, one server. A crash or timeout yields a `timeout`/`error` record, never an abort."""
     tests_dir = checkout / "python" / "pyspark" / "sql" / "tests" / "connect"
     xml = out_dir / (rel.replace("/", "__") + ".xml")
-    env = {k: v for k, v in os.environ.items() if k != "SPARK_HOME"}
-    env["PYTHONPATH"] = str(checkout / "python")
-    env["SPARK_CONNECT_TESTING_REMOTE"] = f"sc://127.0.0.1:{port}"
+    scratch = Path(tempfile.mkdtemp(prefix="pyspark-run-"))
+    env = suite_env(checkout, scratch, port)
     cmd = [
         sys.executable,
         "-m",
@@ -89,9 +91,12 @@ def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: 
     ]
     out_dir.mkdir(parents=True, exist_ok=True)
     xml.unlink(missing_ok=True)  # a crash that writes nothing must not pick up the last run's results
-    with server(server_cmd, port):
-        try:
-            subprocess.run(cmd, env=env, timeout=FILE_TIMEOUT_S, check=False)
-        except subprocess.TimeoutExpired:
-            return [Record(version, rel, "<file>", "<file>", "timeout", FILE_TIMEOUT_S * 1000)]
+    try:
+        with server(server_cmd, port):
+            try:
+                subprocess.run(cmd, env=env, timeout=FILE_TIMEOUT_S, check=False)
+            except subprocess.TimeoutExpired:
+                return [Record(version, rel, "<file>", "<file>", "timeout", FILE_TIMEOUT_S * 1000)]
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     return parse(xml, version, rel) if xml.exists() else [Record(version, rel, "<file>", "<file>", "error", 0)]
