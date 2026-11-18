@@ -658,3 +658,176 @@ def test_a_lateral_call_carries_its_input_row_of_any_type(values: list[Any], typ
     assert out.schema.field("g").type == typ
     assert out.column(0).to_pylist() == [values[2], values[2]]
     assert udtf._carry(pa.record_batch([pa.array([], pa.int64())], names=["r"]), cursor, 1).num_rows == 0
+
+
+def lateral_call(return_type: StructType = AB) -> UdtfCall:
+    """One argument (frame column 0); frame column 1 is the input column a LATERAL call carries."""
+    return UdtfCall.of(
+        {
+            "name": "my_udtf",
+            "return_type": return_type.json(),
+            "args": [[0, None]],
+            "passthrough": [1],
+        }
+    )
+
+
+def run_lateral(handler: Any, eval_type: int, frames: list[tuple[Any, ...]]) -> list[list[Any]]:
+    runner = udtf.make_udtf_runner(handler, eval_type, lateral_call())
+    out: list[list[Any]] = []
+    for batch in runner(Source(frames), 0, 0):
+        out.extend(list(r.values()) for r in batch.to_pylist())
+    return out
+
+
+@pytest.mark.parametrize("eval_type", [SQL_TABLE_UDF, SQL_ARROW_TABLE_UDF])
+def test_a_lateral_call_leads_each_row_with_its_input_row_and_terminate_with_the_last(eval_type: int) -> None:
+    Counting.cleaned = []
+    frames = [
+        ("batch", 0, pa.record_batch([pa.array([1, 2]), pa.array(["p", "q"], pa.string_view())], names=["_0", "g"])),
+        ("batch", 0, pa.record_batch([pa.array([3]), pa.array(["r"], pa.string_view())], names=["_0", "g"])),
+        ("end",),
+    ]
+    assert run_lateral(Counting, eval_type, frames) == [
+        ["p", 1, 10],
+        ["q", 2, 20],
+        ["r", 3, 30],
+        ["r", -1, 3],
+    ]
+
+
+def test_a_lateral_terminate_before_any_row_leads_with_nulls() -> None:
+    # An input batch with no rows: `eval` never runs, so `terminate`'s rows lead with NULL input columns.
+    frames = [
+        ("batch", 0, pa.record_batch([pa.array([], pa.int64()), pa.array([], pa.string())], names=["_0", "g"])),
+        ("end",),
+    ]
+    assert run_lateral(Counting, SQL_TABLE_UDF, frames) == [[None, -1, 0]]
+
+
+def test_a_lateral_terminate_with_no_input_batch_at_all_is_an_error() -> None:
+    with pytest.raises(Exception, match="before any input batch"):
+        run_lateral(Counting, SQL_TABLE_UDF, [("end",)])
+
+
+def test_an_arrow_udtf_is_no_lateral_call() -> None:
+    frames = [
+        ("batch", 0, pa.record_batch([pa.array([1]), pa.array(["p"])], names=["_0", "g"])),
+        ("end",),
+    ]
+    with pytest.raises(Exception, match="cannot be a LATERAL call"):
+        run_lateral(Counting, SQL_ARROW_UDTF, frames)
+
+
+def test_java_kind_names_what_pyrolite_unpickles() -> None:
+    import datetime
+    import decimal
+
+    kinds = [
+        (True, "Boolean"),
+        (1, "Integer"),
+        (2**40, "Long"),
+        (2**70, "BigInteger"),
+        (1.5, "Double"),
+        ("s", "String"),
+        (b"b", "byte[]"),
+        (bytearray(b"b"), "byte[]"),
+        (decimal.Decimal("1.5"), "BigDecimal"),
+        (datetime.date(2024, 1, 2), "Calendar"),
+        ((1, 2), "Object[]"),
+        (object, "Object"),
+    ]
+    for value, kind in kinds:
+        assert udtf._java_kind(value) == kind, value
+    assert udtf._java_kind([1]) == "List"
+    assert udtf._java_kind({1: 2}) == "Map"
+
+
+def test_java_narrowing_and_text() -> None:
+    assert udtf._wrap(2**31, 32) == -(2**31)
+    assert udtf._wrap(300, 8) == 44
+    assert udtf._wrap(-1, 16) == -1
+    assert udtf._java_string(True) == "true"
+    assert udtf._java_string(False) == "false"
+    assert udtf._java_string([1, None, "a"]) == "[1, null, a]"
+    assert udtf._java_string({"k": None, "j": 1.0}) == "{k=null, j=1.0}"
+    assert udtf._java_string(7) == "7"
+    doubles = [
+        (float("nan"), "NaN"),
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+        (0.0, "0.0"),
+        (-0.0, "-0.0"),
+        (1.5, "1.5"),
+        (100.0, "100.0"),
+        (1e7, "1.0E7"),
+        (12345678.9, "1.23456789E7"),
+        (-0.0001, "-1.0E-4"),
+        (1e-10, "1.0E-10"),
+    ]
+    for value, text in doubles:
+        assert udtf._java_double(value) == text, value
+
+
+def test_from_java_matches_make_from_java() -> None:
+    import datetime
+    import decimal
+    import math
+
+    from krishiv._udf import types as t
+
+    cases: list[tuple[Any, Any, Any]] = [
+        (t.BooleanType(), True, True),
+        (t.BooleanType(), 1, None),
+        (t.ByteType(), 300, 44),
+        (t.ShortType(), 2**16 + 5, 5),
+        (t.IntegerType(), 2**31, -(2**31)),
+        (t.LongType(), 5, 5),
+        (t.IntegerType(), "1", None),
+        (t.FloatType(), 1.5, 1.5),
+        (t.FloatType(), 1, None),
+        (t.DoubleType(), 2.5, 2.5),
+        (t.DoubleType(), 2, None),
+        (t.DecimalType(5, 2), decimal.Decimal("1.005"), decimal.Decimal("1.01")),
+        (t.DecimalType(5, 2), 1.5, None),
+        (t.DateType(), 19000, 19000),
+        (t.DateType(), datetime.date(2024, 1, 2), None),
+        (t.TimestampType(), 2**40, 2**40),
+        (t.TimestampNTZType(), "x", None),
+        (t.StringType(), 1.0, "1.0"),
+        (t.StringType(), [True], "[true]"),
+        (t.BinaryType(), "é", "é".encode()),
+        (t.BinaryType(), b"ab", b"ab"),
+        (t.BinaryType(), 1, None),
+        (t.ArrayType(t.IntegerType()), [1, "x"], [1, None]),
+        (t.ArrayType(t.IntegerType()), (2,), [2]),
+        (t.ArrayType(t.IntegerType()), 3, None),
+        (t.MapType(t.StringType(), t.LongType()), {"a": 1}, [("a", 1)]),
+        (t.MapType(t.StringType(), t.LongType()), [1], None),
+        (t.StructType([t.StructField("x", t.IntegerType())]), (1,), {"x": 1}),
+        (t.StructType([t.StructField("x", t.IntegerType())]), [1], None),
+        (t.NullType(), 1, None),
+        (t.IntegerType(), None, None),
+    ]
+    for dt, value, expected in cases:
+        assert udtf._from_java(dt, value) == expected, (dt, value)
+    huge = udtf._from_java(t.FloatType(), 1e39)
+    assert math.isinf(huge)
+    assert huge > 0
+
+
+def test_from_java_raises_the_jvm_classes() -> None:
+    import decimal
+
+    from krishiv._udf import types as t
+
+    with pytest.raises(udtf.SparkJvmError) as e:
+        udtf._from_java(t.DecimalType(3, 1), decimal.Decimal("12345.6"))
+    assert e.value.condition == "NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION"
+    assert e.value.parameters["precision"] == "3"
+    assert "NUMERIC_VALUE_OUT_OF_RANGE" in str(e.value)
+    two = t.StructType([t.StructField("x", t.IntegerType()), t.StructField("y", t.IntegerType())])
+    with pytest.raises(udtf.SparkJvmError) as e:
+        udtf._from_java(two, (1,))
+    assert e.value.condition == "STRUCT_ARRAY_LENGTH_MISMATCH"
+    assert e.value.parameters == {"expected": "2", "actual": "1"}

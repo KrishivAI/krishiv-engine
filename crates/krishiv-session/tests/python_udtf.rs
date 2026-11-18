@@ -24,7 +24,9 @@ use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_exec::python_relation::{
     Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, UdfTask,
 };
-use krishiv_exec::python_udtf::{UdtfAnalysis, UdtfAnalyzeSpec, UdtfCall, UdtfOrdering};
+use krishiv_exec::python_udtf::{
+    UdtfAnalysis, UdtfAnalyzeSpec, UdtfCall, UdtfOrdering, UdtfSelect,
+};
 use krishiv_plan::PythonEvalType;
 use krishiv_session::{PythonUdtfDef, Session};
 use krishiv_types::{DataType, StructField, StructType};
@@ -108,6 +110,9 @@ impl UdfRuntime for Fake {
             DataType::Integer,
             true,
         )]));
+        if let Some(bad) = bad_metadata(&spec.name, schema.clone()) {
+            return Box::pin(std::future::ready(Ok(bad)));
+        }
         let analysis = UdtfAnalysis {
             schema,
             pickled: Arc::from(b"pickled".to_vec()),
@@ -126,6 +131,52 @@ impl UdfRuntime for Fake {
         };
         Box::pin(std::future::ready(Ok(analysis)))
     }
+}
+
+/// The `analyze` results Spark 4.2.0 refuses (`PythonUDTFAnalyzeResult.applyToTableArgument`), by the UDTF's
+/// name: each asks a `TABLE` argument for metadata that cannot hold.
+fn bad_metadata(name: &str, schema: DataType) -> Option<UdtfAnalysis> {
+    let base = UdtfAnalysis {
+        schema,
+        pickled: Arc::from(b"pickled".to_vec()),
+        with_single_partition: false,
+        partition_by: Vec::new(),
+        order_by: Vec::new(),
+        select: Vec::new(),
+    };
+    let order = |name: &str| UdtfOrdering {
+        name: name.to_owned(),
+        ascending: true,
+        nulls_first: None,
+    };
+    Some(match name {
+        // One partition and partition keys at once.
+        "single_and_keys" => UdtfAnalysis {
+            with_single_partition: true,
+            partition_by: vec!["g".to_owned()],
+            ..base
+        },
+        // Its own partitioning, on a call that already partitions (`PARTITION BY` in the query).
+        "own_partitioning" => UdtfAnalysis {
+            partition_by: vec!["g".to_owned()],
+            ..base
+        },
+        // An alias inside an ordering string.
+        "aliased_order" => UdtfAnalysis {
+            with_single_partition: true,
+            order_by: vec![order("id AS k")],
+            ..base
+        },
+        // A selected expression that is not a column, without an alias.
+        "unaliased_select" => UdtfAnalysis {
+            select: vec![UdtfSelect {
+                name: "id + 1".to_owned(),
+                alias: String::new(),
+            }],
+            ..base
+        },
+        _ => return None,
+    })
 }
 
 struct Prepared {
@@ -505,6 +556,14 @@ async fn the_udtf_arrow_default_follows_the_spark_profile() {
     ] {
         let s = Session::builder().profile(profile).build().unwrap();
         assert_eq!(s.conf().get(key).as_deref(), Some(want), "{profile:?}");
+        // Krishiv's own key is the same setting as Spark's alias.
+        assert_eq!(
+            s.conf()
+                .get("krishiv.sql.execution.pythonUDTF.arrow.enabled")
+                .as_deref(),
+            Some(want),
+            "{profile:?}"
+        );
         let shown = rows(&s, &format!("SET {key}")).await.unwrap();
         assert_eq!(shown, [format!("{key}|{want}")], "{profile:?}");
         s.conf().set(key, "true").unwrap();
@@ -673,4 +732,44 @@ async fn an_inline_udtf_runs_without_a_registration() {
         "{err}"
     );
     assert!(session.python_udtf_frame(&def, 1, Vec::new()).is_err());
+}
+
+/// Each metadata `analyze` may not ask of a `TABLE` argument is refused at analysis with Spark 4.2.0's class
+/// (`PythonUDTFAnalyzeResult.applyToTableArgument`), and no task runs.
+#[tokio::test]
+async fn analyze_metadata_a_table_argument_cannot_hold_is_refused() {
+    let (session, seen) = session();
+    session.sql(T).await.unwrap();
+    for (name, sql, class) in [
+        (
+            "single_and_keys",
+            "SELECT * FROM single_and_keys(TABLE(t))",
+            ErrorClass::TableValuedFunctionRequiredMetadataInvalid,
+        ),
+        (
+            "own_partitioning",
+            "SELECT * FROM own_partitioning(TABLE(t) PARTITION BY g)",
+            ErrorClass::TableValuedFunctionRequiredMetadataIncompatibleWithCall,
+        ),
+        (
+            "aliased_order",
+            "SELECT * FROM aliased_order(TABLE(t))",
+            ErrorClass::UdtfInvalidAliasInRequestedOrderingStringFromAnalyzeMethod,
+        ),
+        (
+            "unaliased_select",
+            "SELECT * FROM unaliased_select(TABLE(t))",
+            ErrorClass::UdtfInvalidRequestedSelectedExpressionFromAnalyzeMethodRequiresAlias,
+        ),
+    ] {
+        session
+            .register_python_udtf(udtf(name, PythonEvalType::TableUdf, &[]))
+            .unwrap();
+        let err = rows(&session, sql).await.unwrap_err();
+        assert_eq!(err.error_class(), class, "{name}: {err}");
+    }
+    assert!(
+        seen.lock().unwrap().calls.is_empty(),
+        "a refused analysis runs no task"
+    );
 }
