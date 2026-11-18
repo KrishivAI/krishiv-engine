@@ -13,7 +13,8 @@
 //! `KRISHIV_UNSUPPORTED_FEATURE` (Spark passes any code to its worker, which then fails).
 //!
 //! An inline call asks the [`UdfHost`](super::UdfHost) for the name the session resolves it by (the server
-//! registers it as a hidden, per-definition UDTF of the session) and becomes [`PlanNode::TableFunction`]
+//! answers with the session's encoded name of an unregistered UDTF, which carries the definition) and
+//! becomes [`PlanNode::TableFunction`]
 //! over that name, the node SQL's `FROM f(..)` lowers to, so analysis (including `analyze`) and planning are
 //! SQL's. A `NamedArgumentExpression` argument is an [`ExprNode::Alias`], as SQL lowers `f(n => 3)`; a plain
 //! alias is unwrapped to its child, a positional argument as in Spark's `builder`. A `TABLE` argument (`df.asTable()`, a
