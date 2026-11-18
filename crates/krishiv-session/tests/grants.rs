@@ -239,6 +239,24 @@ fn column_grants_cover_grouping_sets_over_their_columns() {
     }
 }
 
+/// A grouping key written for another relation's column of the same name is no reference to the
+/// refused column: the refusal names the table, never `d` (ADR 0048 A1 §3, merge review N2).
+#[test]
+fn a_grouping_key_of_another_relation_names_only_the_table() {
+    let w = World::new();
+    let root = w.admin();
+    ok(&root, "CREATE TABLE g (a INT, d INT) USING parquet");
+    ok(&root, "CREATE TABLE h (d INT) USING parquet");
+    ok(&root, "INSERT INTO g VALUES (1, 2)");
+    ok(&root, "INSERT INTO h VALUES (1)");
+    let ana = w.user("ana");
+    ok(&root, "GRANT SELECT (a) ON g TO user:ana");
+    ok(&root, "GRANT SELECT ON h TO user:ana");
+    let sql = "SELECT h.d, count(struct(s.*)) FROM (SELECT * FROM g) s JOIN h ON s.a = h.d GROUP BY ROLLUP(h.d)";
+    let e = denied(&ana, sql);
+    assert!(e.contains("`g`") && !e.contains("`d`"), "{sql}: {e}");
+}
+
 #[test]
 fn roles_are_transitive_and_cycles_are_refused() {
     let w = World::new();
