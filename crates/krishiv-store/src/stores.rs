@@ -566,7 +566,11 @@ pub fn check_hf_file_path(path: &str) -> Result<()> {
     };
     let is_glob = rest.contains(['*', '?', '[', '{']);
     // `datasets/<org>/<name>[@rev]/<path>`: no path, or a path ending in `/`, is a directory.
-    let is_dir = rest.ends_with('/') || rest.splitn(4, '/').nth(3).is_none_or(str::is_empty);
+    let is_dir = rest.ends_with('/')
+        || rest
+            .splitn(4, '/')
+            .nth(3)
+            .is_none_or(|file| file.split('/').all(|seg| seg.is_empty() || seg == "."));
     if is_glob || is_dir {
         let what = if is_glob { "a glob" } else { "a directory" };
         return Err(unsupported(format!(

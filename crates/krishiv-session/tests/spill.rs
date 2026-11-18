@@ -304,7 +304,8 @@ fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
     assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
     assert!(err.to_string().contains("a_file"), "{err}");
     let df = block_on(s.sql("SELECT count(*) AS n FROM range(10)")).unwrap();
-    assert_eq!(block_on(df.collect()).unwrap().len(), 1);
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got[0].column(0).as_primitive::<Int64Type>().value(0), 10);
 }
 
 /// PY-078 (review): the error keeps the memory error as its cause, shows the OS error once, and
@@ -393,7 +394,12 @@ fn a_frame_run_again_after_the_spill_directory_became_usable_succeeds() {
     std::fs::write(&file, b"x").unwrap();
     let s = session(&file.join("spill"), Some("6m"));
     let df = block_on(s.sql(QUERY)).unwrap();
-    block_on(df.collect()).unwrap_err();
+    let err = block_on(df.collect()).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
     std::fs::remove_file(&file).unwrap();
     let rows: usize = block_on(df.collect())
         .unwrap()

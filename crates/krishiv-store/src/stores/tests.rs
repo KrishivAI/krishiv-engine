@@ -1052,6 +1052,8 @@ fn hf_directories_globs_and_the_parquet_branch_get_clear_errors() {
     for (bad, needle) in [
         ("hf://datasets/acme/tiny/data/", "a directory"),
         ("hf://datasets/acme/tiny/data/*.parquet", "a glob"),
+        ("hf://datasets/acme/tiny/./", "a directory"),
+        ("hf://datasets/acme/tiny//", "a directory"),
         ("hf://datasets/acme/tiny", "a directory"),
         ("hf://datasets/acme/tiny@v2/", "a directory"),
     ] {
