@@ -70,6 +70,15 @@ method) and `krishiv_auth_denied_total` (permission denied, by port and privileg
 `krishiv::audit` log records describe each refusal, but logs are rate limited (`KRISHIV_LOG_RATE`) and best effort:
 they are not an audit trail. Use the counters to see how many refusals happened.
 
+## Memory limit
+
+A Krishiv process bounds the memory its queries use with `krishiv.memory.limit`. When it is not set, the limit is 80% of
+the effective memory limit: the tightest cgroup limit, so a container's own limit counts, else the machine's physical
+memory (2 GiB where neither can be read). Operators spill when they reach it. `EXPLAIN ANALYZE` prints the limit that is
+in effect on its `memory:` line (for example `memory: peak reserved 0 B, limit 48.9 GiB`). `SET krishiv.memory.limit`
+answers `<undefined>` while the key is unset, as Spark's `SET` does for an unset key; set the key to a size to pin it.
+See the [configuration reference](../reference/config/index.md).
+
 ## Distributed
 
 A scheduler and workers run one query across machines. It is in development; the mode is not available yet.
