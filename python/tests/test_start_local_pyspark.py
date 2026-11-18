@@ -21,7 +21,7 @@ pytest.importorskip("grpc")
 def _remote(url: str) -> Any:
     from pyspark.sql import SparkSession as PySparkSession
 
-    return PySparkSession.builder.remote(url).getOrCreate()
+    return PySparkSession.builder.remote(url).create()
 
 
 @pytest.fixture
@@ -73,11 +73,12 @@ def test_pyspark_client_runs_sql(server: Any) -> None:
         spark.stop()
 
 
-def test_a_client_without_the_token_is_refused(server: Any) -> None:
+def test_a_client_without_the_token_is_refused(server: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from pyspark.errors import PySparkException
     from pyspark.sql.connect.session import SparkSession as ConnectSession
 
     # ``use_ssl`` is off and the host is ``localhost``: the token is the only thing missing.
+    monkeypatch.delenv("SPARK_CONNECT_AUTHENTICATE_TOKEN", raising=False)
     bare = f"sc://localhost:{server.port}"
     spark = ConnectSession.builder.remote(bare).create()
     try:

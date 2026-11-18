@@ -130,7 +130,7 @@ impl LocalServer {
     /// Whether the server has not been stopped.
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.thread.is_some()
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
     }
 
     /// Stops the server: drains it, joins its thread (the listener closes and the engine runtime
@@ -200,8 +200,15 @@ fn ipv6_unavailable(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
         ErrorKind::AddrNotAvailable | ErrorKind::Unsupported
-    ) || matches!(e.raw_os_error(), Some(97 /* EAFNOSUPPORT on Linux */))
+    ) || e.raw_os_error() == Some(EAFNOSUPPORT)
 }
+
+/// `EAFNOSUPPORT`: 47 on macOS and the BSDs, 97 on Linux.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+const EAFNOSUPPORT: i32 = 47;
+/// `EAFNOSUPPORT`: 47 on macOS and the BSDs, 97 on Linux.
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+const EAFNOSUPPORT: i32 = 97;
 
 /// A fresh token: 32 random bytes as 64 hex digits.
 fn new_token() -> Result<SecretString, KrishivError> {
@@ -247,14 +254,30 @@ fn run(
             ..ConnectServerConfig::default()
         };
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let serve_one = |listener: StdListener| {
+        // Both sockets are registered with the runtime before the start is reported: a failure
+        // here is the start's error, not a handle that advertises an address nobody serves.
+        let adopt = |l: StdListener| {
+            tokio::net::TcpListener::from_std(l)
+                .map_err(|e| internal(format!("cannot adopt the listener: {e}")))
+        };
+        let adopted =
+            adopt(listener).and_then(|a| listener6.map(adopt).transpose().map(|b| (a, b)));
+        let (listener, listener6) = match adopted {
+            Ok(pair) => pair,
+            Err(e) => {
+                let _ = ready.send(Err(internal(e.to_string())));
+                return Err(e);
+            }
+        };
+        // Each listener has its own `ConnectServer`, so the connection cap and the response
+        // budget apply per listener (twice over for one local server): the owner's own process,
+        // every client authenticated by the same token.
+        let serve_one = |listener: tokio::net::TcpListener| {
             let manager = Arc::clone(&manager);
             let auth = Arc::clone(auth);
             let config = config.clone();
             let mut stop = stop_rx.clone();
             async move {
-                let listener = tokio::net::TcpListener::from_std(listener)
-                    .map_err(|e| internal(format!("cannot adopt the listener: {e}")))?;
                 ConnectServer::new(manager, config)
                     .with_auth(ConnectAuth::new(auth))
                     .serve(listener, async move {
@@ -293,7 +316,7 @@ mod tests {
     fn a_host_without_ipv6_loopback_is_told_apart_from_a_real_bind_failure() {
         assert!(ipv6_unavailable(&Error::from(ErrorKind::AddrNotAvailable)));
         assert!(ipv6_unavailable(&Error::from(ErrorKind::Unsupported)));
-        assert!(ipv6_unavailable(&Error::from_raw_os_error(97)));
+        assert!(ipv6_unavailable(&Error::from_raw_os_error(EAFNOSUPPORT)));
         assert!(!ipv6_unavailable(&Error::from(ErrorKind::PermissionDenied)));
         assert!(!ipv6_unavailable(&Error::from(ErrorKind::AddrInUse)));
     }

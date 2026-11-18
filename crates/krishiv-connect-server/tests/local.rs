@@ -87,18 +87,16 @@ fn start_stop_100_times_leaves_no_port_and_no_thread() {
     let mut warm = LocalServer::start(Session::new().expect("session")).expect("start");
     warm.stop().expect("stop");
     let before = quiesced_threads();
-    let mut ports = Vec::new();
     for _ in 0..100 {
         let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
         assert!(server.is_running());
-        ports.push(server.addr());
+        let addr = server.addr();
         server.stop().expect("stop");
         assert!(!server.is_running());
         server.stop().expect("a second stop is a no-op");
-    }
-    // The port-in-use check: every port the servers held binds again.
-    for addr in ports {
-        TcpListener::bind(addr).unwrap_or_else(|e| panic!("{addr} is still bound: {e}"));
+        // The port-in-use check, right after the stop: a sibling test of this binary may take
+        // the same ephemeral port later, so a check after the loop could meet its listener.
+        drop(TcpListener::bind(addr).unwrap_or_else(|e| panic!("{addr} is still bound: {e}")));
     }
     assert_threads_settle(before, "a server thread outlived stop()");
 }

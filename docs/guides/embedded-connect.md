@@ -13,7 +13,7 @@ import krishiv
 from pyspark.sql import SparkSession  # pip install pyspark-client
 
 with krishiv.start_local() as server:
-    spark = SparkSession.builder.remote(server.url).getOrCreate()
+    spark = SparkSession.builder.remote(server.url).create()
     spark.range(3).show()
     spark.stop()
 ```

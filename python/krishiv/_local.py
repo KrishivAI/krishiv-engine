@@ -69,8 +69,11 @@ class LocalConnect:
 
         Stopping a stopped server does nothing.
         """
-        self._native.stop()
-        _RUNNING.discard(self)
+        try:
+            self._native.stop()
+        finally:
+            # The native stop joins the thread even when it reports a failure: the server is gone.
+            _RUNNING.discard(self)
 
     def __enter__(self) -> LocalConnect:
         return self
