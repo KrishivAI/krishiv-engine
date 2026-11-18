@@ -3258,10 +3258,14 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-memory",
+ "krishiv-session",
+ "prost",
  "tokio",
  "tonic",
+ "tracing",
 ]
 
 [[package]]

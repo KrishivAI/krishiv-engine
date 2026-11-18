@@ -5,18 +5,23 @@
 
 #![forbid(unsafe_code)]
 
+mod call;
 pub mod cookies;
 pub mod encode;
 pub mod handles;
 pub mod metrics;
+pub mod server;
+mod service;
 pub mod sessions;
 pub mod sql_info;
+mod statement;
 pub mod status;
 
 pub use cookies::{SessionCookie, session_cookie, set_session_cookie};
 pub use encode::{EncodeLimits, encode_results};
 pub use handles::{HandleId, HandleLimits, Handles, Inserted};
 pub use metrics::{Command, Outcome, RequestCount, Requests};
+pub use server::{FlightSqlConfig, FlightSqlServer, HANDLES_CONSUMER, SweepGuard};
 pub use sessions::{Exit, Holds, Release, SessionState, Sessions, mint_session_id};
 pub use sql_info::{ServerInfo, sql_info_data};
 pub use status::{code_of, flight_status};
