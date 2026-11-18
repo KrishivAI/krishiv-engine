@@ -1,0 +1,494 @@
+{
+ "_oracle": {
+  "iceberg": "1.12.0",
+  "spark": "4.1.0"
+ },
+ "basic": {
+  "columns": [
+   "id",
+   "i",
+   "s",
+   "d",
+   "dec",
+   "dt",
+   "ts",
+   "b",
+   "bin"
+  ],
+  "delete_files": [],
+  "metadata": "file:/wh/db/basic/metadata/v3.metadata.json",
+  "rows": [
+   {
+    "b": true,
+    "bin": {
+     "binary": "01"
+    },
+    "d": 1.5,
+    "dec": "12.34",
+    "dt": "2024-01-02",
+    "i": 10,
+    "id": 1,
+    "s": "one",
+    "ts": "2024-01-02 03:04:05"
+   },
+   {
+    "b": null,
+    "bin": null,
+    "d": null,
+    "dec": null,
+    "dt": null,
+    "i": null,
+    "id": 2,
+    "s": null,
+    "ts": null
+   },
+   {
+    "b": false,
+    "bin": {
+     "binary": ""
+    },
+    "d": -3.25,
+    "dec": "-0.01",
+    "dt": "1969-12-31",
+    "i": -30,
+    "id": 3,
+    "s": "three, \"quoted\"",
+    "ts": "1969-12-31 23:59:59"
+   },
+   {
+    "b": true,
+    "bin": {
+     "binary": "ff00"
+    },
+    "d": 4.0,
+    "dec": "99999999.99",
+    "dt": "2100-12-31",
+    "i": 40,
+    "id": 4,
+    "s": "\u00fcn\u00ef",
+    "ts": "2100-12-31 00:00:00"
+   }
+  ],
+  "snapshots": [
+   1177817604368906913,
+   6808552524945913311
+  ]
+ },
+ "dvs": {
+  "columns": [
+   "id",
+   "name"
+  ],
+  "delete_files": [
+   {
+    "content": 1,
+    "file_format": "PUFFIN",
+    "record_count": 5
+   },
+   {
+    "content": 1,
+    "file_format": "PUFFIN",
+    "record_count": 4
+   }
+  ],
+  "metadata": "file:/wh/db/dvs/metadata/v4.metadata.json",
+  "rows": [
+   {
+    "id": 3,
+    "name": "n3"
+   },
+   {
+    "id": 5,
+    "name": "n5"
+   },
+   {
+    "id": 6,
+    "name": "n6"
+   },
+   {
+    "id": 7,
+    "name": "n7"
+   },
+   {
+    "id": 9,
+    "name": "n9"
+   },
+   {
+    "id": 10,
+    "name": "n10"
+   },
+   {
+    "id": 11,
+    "name": "n11"
+   },
+   {
+    "id": 13,
+    "name": "n13"
+   },
+   {
+    "id": 14,
+    "name": "n14"
+   },
+   {
+    "id": 15,
+    "name": "n15"
+   },
+   {
+    "id": 17,
+    "name": "n17"
+   },
+   {
+    "id": 18,
+    "name": "n18"
+   },
+   {
+    "id": 19,
+    "name": "n19"
+   },
+   {
+    "id": 21,
+    "name": "n21"
+   },
+   {
+    "id": 22,
+    "name": "n22"
+   },
+   {
+    "id": 23,
+    "name": "n23"
+   },
+   {
+    "id": 25,
+    "name": "n25"
+   },
+   {
+    "id": 26,
+    "name": "n26"
+   },
+   {
+    "id": 27,
+    "name": "n27"
+   },
+   {
+    "id": 29,
+    "name": "n29"
+   },
+   {
+    "id": 30,
+    "name": "n30"
+   }
+  ],
+  "snapshots": [
+   7838456138780762002,
+   4019712819197385769,
+   1831617269533960865
+  ]
+ },
+ "evolved": {
+  "as_of": {
+   "5345116345252587709": [
+    {
+     "extra": null,
+     "id": 1,
+     "renamed": 10
+    },
+    {
+     "extra": null,
+     "id": 2,
+     "renamed": 20
+    },
+    {
+     "extra": "e3",
+     "id": 3,
+     "renamed": 30
+    },
+    {
+     "extra": "e4",
+     "id": 4,
+     "renamed": 9999999999
+    }
+   ],
+   "5861569517582925671": [
+    {
+     "a": 10,
+     "gone": "x",
+     "id": 1
+    },
+    {
+     "a": 20,
+     "gone": "y",
+     "id": 2
+    }
+   ],
+   "7214502247482074652": [
+    {
+     "a": 10,
+     "extra": null,
+     "gone": "x",
+     "id": 1
+    },
+    {
+     "a": 20,
+     "extra": null,
+     "gone": "y",
+     "id": 2
+    },
+    {
+     "a": 30,
+     "extra": "e3",
+     "gone": "z",
+     "id": 3
+    }
+   ]
+  },
+  "columns": [
+   "id",
+   "renamed",
+   "extra"
+  ],
+  "delete_files": [],
+  "metadata": "file:/wh/db/evolved/metadata/v8.metadata.json",
+  "rows": [
+   {
+    "extra": null,
+    "id": 1,
+    "renamed": 10
+   },
+   {
+    "extra": null,
+    "id": 2,
+    "renamed": 20
+   },
+   {
+    "extra": "e3",
+    "id": 3,
+    "renamed": 30
+   },
+   {
+    "extra": "e4",
+    "id": 4,
+    "renamed": 9999999999
+   }
+  ],
+  "snapshots": [
+   5861569517582925671,
+   7214502247482074652,
+   5345116345252587709
+  ]
+ },
+ "nested": {
+  "columns": [
+   "id",
+   "st",
+   "arr",
+   "m"
+  ],
+  "delete_files": [],
+  "metadata": "file:/wh/db/nested/metadata/v2.metadata.json",
+  "rows": [
+   {
+    "arr": [
+     1,
+     2,
+     3
+    ],
+    "id": 1,
+    "m": {
+     "map": [
+      [
+       "k",
+       1
+      ]
+     ]
+    },
+    "st": {
+     "a": 1,
+     "b": "x"
+    }
+   },
+   {
+    "arr": [],
+    "id": 2,
+    "m": {
+     "map": []
+    },
+    "st": null
+   },
+   {
+    "arr": null,
+    "id": 3,
+    "m": null,
+    "st": {
+     "a": null,
+     "b": "z"
+    }
+   }
+  ],
+  "snapshots": [
+   8328747109878585372
+  ]
+ },
+ "partitioned": {
+  "columns": [
+   "id",
+   "region",
+   "ts",
+   "v"
+  ],
+  "delete_files": [],
+  "metadata": "file:/wh/db/partitioned/metadata/v2.metadata.json",
+  "rows": [
+   {
+    "id": 1,
+    "region": "eu",
+    "ts": "2024-03-01 10:00:00",
+    "v": 1
+   },
+   {
+    "id": 2,
+    "region": "eu",
+    "ts": "2024-03-02 10:00:00",
+    "v": 2
+   },
+   {
+    "id": 3,
+    "region": "us",
+    "ts": "2024-03-01 11:00:00",
+    "v": 3
+   },
+   {
+    "id": 4,
+    "region": null,
+    "ts": "2024-03-03 12:00:00",
+    "v": 4
+   },
+   {
+    "id": 5,
+    "region": "us",
+    "ts": "2024-03-02 13:00:00",
+    "v": 5
+   },
+   {
+    "id": 6,
+    "region": "eu",
+    "ts": "2024-03-01 14:00:00",
+    "v": 6
+   }
+  ],
+  "snapshots": [
+   2370325738748312286
+  ]
+ },
+ "pos_deletes": {
+  "columns": [
+   "id",
+   "name",
+   "v"
+  ],
+  "delete_files": [
+   {
+    "content": 1,
+    "file_format": "PARQUET",
+    "record_count": 3
+   },
+   {
+    "content": 1,
+    "file_format": "PARQUET",
+    "record_count": 4
+   }
+  ],
+  "metadata": "file:/wh/db/pos_deletes/metadata/v4.metadata.json",
+  "rows": [
+   {
+    "id": 1,
+    "name": "n1",
+    "v": 10
+   },
+   {
+    "id": 2,
+    "name": "n2",
+    "v": 20
+   },
+   {
+    "id": 4,
+    "name": "n4",
+    "v": 40
+   },
+   {
+    "id": 5,
+    "name": "n5",
+    "v": -1
+   },
+   {
+    "id": 6,
+    "name": "n6",
+    "v": 60
+   },
+   {
+    "id": 8,
+    "name": "n8",
+    "v": 80
+   },
+   {
+    "id": 9,
+    "name": "n9",
+    "v": 90
+   },
+   {
+    "id": 10,
+    "name": "n10",
+    "v": -1
+   },
+   {
+    "id": 12,
+    "name": "n12",
+    "v": 120
+   },
+   {
+    "id": 13,
+    "name": "n13",
+    "v": 130
+   },
+   {
+    "id": 14,
+    "name": "n14",
+    "v": 140
+   },
+   {
+    "id": 15,
+    "name": "n15",
+    "v": -1
+   },
+   {
+    "id": 16,
+    "name": "n16",
+    "v": 160
+   },
+   {
+    "id": 17,
+    "name": "n17",
+    "v": 170
+   },
+   {
+    "id": 18,
+    "name": "n18",
+    "v": 180
+   },
+   {
+    "id": 19,
+    "name": "n19",
+    "v": 190
+   },
+   {
+    "id": 20,
+    "name": "n20",
+    "v": -1
+   }
+  ],
+  "snapshots": [
+   7597934376877267745,
+   7038559486298152412,
+   2230038305909568914
+  ]
+ }
+}

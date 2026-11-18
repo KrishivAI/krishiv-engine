@@ -34,6 +34,7 @@ mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod count;
 mod metadata;
 mod traced;
 
@@ -207,6 +208,10 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
+    /// The statement this frame runs as when it has no analysis of its own yet: set for the
+    /// `count(*)` frame [`Self::count`] builds over a `Session::sql` frame, so its analysis keeps
+    /// the statement's text, class, `system.queries` row and sample salt.
+    statement: Option<Arc<QueryEnv>>,
     /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
     pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -236,6 +241,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: None,
             trace: None,
+            statement: None,
             keep: Vec::new(),
         }
     }
@@ -276,6 +282,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
+            statement: None,
             keep: self.keep.clone(),
         }
     }
@@ -1014,12 +1021,18 @@ impl DataFrame {
         let mut env = self.session.query_env();
         // A fresh analysis is still the same statement: keep what
         // `system.queries` shows of it.
-        if let Some(a) = &cached {
-            env.copy_text_from(&a.env);
-            env.statement_class = a.env.statement_class;
-            env.row = Arc::clone(&a.env.row);
-            env.sample_salt = a.env.sample_salt;
+        if let Some(statement) = cached.as_ref().map(|a| &a.env).or(self.statement.as_ref()) {
+            env.copy_text_from(statement);
+            env.statement_class = statement.statement_class;
+            env.row = Arc::clone(&statement.row);
+            env.sample_salt = statement.sample_salt;
         }
+        // A first analysis as another frame's statement: its errors carry
+        // that statement's SQL span.
+        let text = match (&cached, &self.statement) {
+            (None, Some(statement)) => statement.redacted.clone(),
+            _ => None,
+        };
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
@@ -1029,11 +1042,12 @@ impl DataFrame {
             && a.env.cache_generation == env.cache_generation
             && a.env.functions_version == env.functions_version
             && a.env.policy_version == env.policy_version
+            && env.catalogs_at(&a.analyzed.context.catalog_epochs)
         {
             return Ok(a);
         }
         env.quiet_denials = quiet_denials;
-        self.analyzed_in(env).await
+        self.analyzed_in_with_text(env, text.as_deref()).await
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -1051,12 +1065,17 @@ impl DataFrame {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(a) = cached {
-            let id =
-                self.session
-                    .record_refused(a.env.text.as_deref(), a.env.statement_class, &error);
+        if let Some(statement) = cached
+            .map(|a| Arc::clone(&a.env))
+            .or_else(|| self.statement.clone())
+        {
+            let id = self.session.record_refused(
+                statement.text.as_deref(),
+                statement.statement_class,
+                &error,
+            );
             // Shared with the statement's marker, so `sql` adds no second row.
-            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+            *statement.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
         }
         Err(error)
     }
@@ -1314,28 +1333,6 @@ impl DataFrame {
             out.push(batch?);
         }
         Ok(out)
-    }
-
-    /// The number of result rows.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![3, 1, 2]))]).unwrap();
-    /// # s.register_batches("t", schema, vec![batch])?;
-    /// assert_eq!(futures::executor::block_on(s.table("t").count())?, 3);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// As [`Self::collect`].
-    pub async fn count(&self) -> Result<u64, KrishivError> {
-        let mut stream = self.execute_stream().await?;
-        let mut rows = 0_u64;
-        while let Some(batch) = stream.next().await {
-            rows += batch?.num_rows() as u64;
-        }
-        Ok(rows)
     }
 
     /// Caches this frame's rows (PySpark's `cache`, at
@@ -1910,80 +1907,12 @@ impl GroupedData {
     }
 }
 
-/// Reads files ([`Session::read`]; PySpark's `DataFrameReader`).
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct DataFrameReader {
-    session: Session,
-    format: String,
-    options: BTreeMap<String, OptionValue>,
-}
-
-impl DataFrameReader {
-    pub(crate) fn new(session: Session) -> Self {
-        Self {
-            session,
-            format: "parquet".to_owned(),
-            options: BTreeMap::new(),
-        }
-    }
-
-    /// The file format (default `parquet`, as Spark's
-    /// `spark.sql.sources.default`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().format("parquet").load(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    pub fn format(mut self, format: &str) -> Self {
-        self.format = format.to_owned();
-        self
-    }
-
-    /// A read option; values are typed as secrets where Spark redacts them.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().option("mergeSchema", "false").parquet(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    pub fn option(mut self, key: &str, value: &str) -> Self {
-        self.options
-            .insert(key.to_owned(), OptionValue::from_user(key, value));
-        self
-    }
-
-    /// Reads `paths` in the format.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().load(["/data/t", "/data/u"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn load<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
-        let plan = read_files(&self.format, typed_paths(paths), self.options);
-        DataFrame::new(self.session, Arc::new(plan))
-    }
-
-    /// Reads Parquet files (PySpark's `read.parquet`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.read().parquet(["/data/t"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn parquet<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
-        self.format("parquet").load(paths)
-    }
-}
-
 /// The expressions of `cols`.
 fn exprs(cols: impl IntoIterator<Item = impl Into<Column>>) -> Vec<Arc<Expr>> {
     cols.into_iter().map(|c| Arc::new(c.into().expr)).collect()
 }
 
+mod reader;
+pub use reader::DataFrameReader;
 mod writer;
 pub use writer::{DataFrameWriter, DataFrameWriterV2};

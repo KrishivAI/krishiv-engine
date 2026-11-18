@@ -1036,6 +1036,8 @@ impl Session {
     /// ```
     pub fn clear_cache(&self) {
         self.state.cache.clear();
+        // The key counts' answers (design P2b A5 (d)) are counted again.
+        self.state.io.key_facts().clear();
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
@@ -1061,6 +1063,10 @@ impl Session {
     /// ```
     pub fn refresh_table(&self, name: &str) {
         self.state.cache.invalidate_table(name);
+        // The key facts are keyed by file version, not by table: every one
+        // is counted again (a file rewritten in place within the store's
+        // modification-time resolution keeps its version).
+        self.state.io.key_facts().clear();
     }
 
     /// Drops the cached relations reading files by path (Spark's
@@ -1312,6 +1318,7 @@ impl Session {
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
             relations: Arc::clone(&self.state.relations),
+            memory: Arc::clone(&self.state.memory),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1330,6 +1337,11 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                advice: Arc::new(crate::partition_advice::AdviceCell::new(
+                    self.state.runtime.profile_history.clone(),
+                    Arc::clone(&self.state.runtime.executor),
+                )),
+                catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1371,7 +1383,7 @@ impl Session {
                 }),
             )
             .with_path(catalog.sql_path_snapshot())
-            .in_system(catalog.in_system()),
+            .outside_session(!catalog.in_session_catalog()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1457,7 +1469,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
-                in_system: env.catalog.in_system(),
+                outside_session: !env.catalog.in_session_catalog(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)

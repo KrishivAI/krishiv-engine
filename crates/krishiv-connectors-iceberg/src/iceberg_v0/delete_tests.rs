@@ -457,7 +457,7 @@ pub(super) fn positions(
     }
 }
 
-fn dv(name: &str, p: i32, seq: i64, data: &str, positions: &[u64]) -> File {
+pub(super) fn dv(name: &str, p: i32, seq: i64, data: &str, positions: &[u64]) -> File {
     File {
         name: name.to_owned(),
         p,
