@@ -1166,3 +1166,412 @@ async fn each_call_sends_the_session_conf_current_when_it_runs() {
     let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
     assert_eq!(longs(&r), [Some(1)]);
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Python UDTFs (PR-26c-4, the Connect side): `register_table_function` (command 10) and a DataFrame call of a
+// UDTF object (`common_inline_user_defined_table_function`, relation 38).
+// ---------------------------------------------------------------------------------------------------------
+
+/// Spark Connect's UDTF `command` for `body` (a Python class `F`): the class alone, cloudpickled, as a client
+/// sends it, and the interpreter's `major.minor`.
+fn pickle_udtf(python: Option<&Path>, body: &str) -> (Vec<u8>, String) {
+    let Some(python) = python else {
+        return (
+            format!("not a pickle: {body}").into_bytes(),
+            "3.12".to_owned(),
+        );
+    };
+    let code = format!(
+        "import sys\nfrom pyspark import cloudpickle\nfrom pyspark.sql.types import *\n\
+         from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult\n{body}\n\
+         sys.stdout.buffer.write(cloudpickle.dumps(F))"
+    );
+    let out = Command::new(python)
+        .args(["-c", &code])
+        .output()
+        .expect("run the interpreter");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.stdout, python_ver(python))
+}
+
+fn python_ver(python: &Path) -> String {
+    let version = Command::new(python)
+        .args([
+            "-c",
+            "import sys; print('%d.%d' % sys.version_info[:2], end='')",
+        ])
+        .output()
+        .expect("version");
+    String::from_utf8_lossy(&version.stdout).into_owned()
+}
+
+/// A Python UDTF definition as a client sends it: `return_type` as the string a client passes
+/// (`@udtf(returnType="i bigint")` is an `unparsed` type), none for a UDTF with `analyze`.
+fn udtf_message(
+    name: &str,
+    command: (Vec<u8>, String),
+    eval_type: i32,
+    return_type: Option<&str>,
+    arguments: Vec<pb::Expression>,
+) -> pb::CommonInlineUserDefinedTableFunction {
+    pb::CommonInlineUserDefinedTableFunction {
+        function_name: name.to_owned(),
+        deterministic: false,
+        arguments,
+        function: Some(
+            pb::common_inline_user_defined_table_function::Function::PythonUdtf(pb::PythonUdtf {
+                return_type: return_type.map(|t| pb::DataType {
+                    kind: Some(Kind::Unparsed(pb::data_type::Unparsed {
+                        data_type_string: t.to_owned(),
+                    })),
+                }),
+                eval_type,
+                command: command.0,
+                python_ver: command.1,
+            }),
+        ),
+    }
+}
+
+fn register_udtf(f: pb::CommonInlineUserDefinedTableFunction) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::RegisterTableFunction(Box::new(f))),
+        }))),
+    }
+}
+
+fn inline_udtf(f: pb::CommonInlineUserDefinedTableFunction) -> pb::Plan {
+    root(relation(RelType::CommonInlineUserDefinedTableFunction(f)))
+}
+
+fn lit_long(v: i64) -> pb::Expression {
+    expr(ExprType::Literal(pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+        data_type: None,
+    }))
+}
+
+fn lit_int(v: i32) -> pb::Expression {
+    expr(ExprType::Literal(pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Integer(v)),
+        data_type: None,
+    }))
+}
+
+/// The result's schema (`name:type`, as `simpleString`) and its rows of integer columns, sorted.
+fn int_rows(responses: &[pb::ExecutePlanResponse]) -> (String, Vec<Vec<Option<i64>>>) {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int32Type, Int64Type};
+    let mut schema = String::new();
+    let mut rows = Vec::new();
+    for r in responses {
+        let Some(ResponseType::ArrowBatch(b)) = &r.response_type else {
+            continue;
+        };
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(b.data.to_vec()), None)
+                .expect("ipc");
+        for batch in reader {
+            let batch: RecordBatch = batch.expect("batch");
+            schema = format!(
+                "struct<{}>",
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| format!(
+                        "{}:{}",
+                        f.name(),
+                        match f.data_type() {
+                            arrow_schema::DataType::Int32 => "int".to_owned(),
+                            arrow_schema::DataType::Int64 => "bigint".to_owned(),
+                            // Not an integer column: shown as such, so the comparison fails.
+                            other => other.to_string(),
+                        }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            for i in 0..batch.num_rows() {
+                rows.push(
+                    batch
+                        .columns()
+                        .iter()
+                        .map(|c| {
+                            (!c.is_null(i)).then(|| match c.data_type() {
+                                arrow_schema::DataType::Int32 => {
+                                    i64::from(c.as_primitive::<Int32Type>().value(i))
+                                }
+                                _ => c.as_primitive::<Int64Type>().value(i),
+                            })
+                        })
+                        .collect(),
+                );
+            }
+        }
+    }
+    rows.sort();
+    (schema, rows)
+}
+
+/// `eval(n)` yields `0..n` (row kinds 300 and 301).
+const RANGE_ROWS: &str =
+    "class F:\n    def eval(self, n):\n        for i in range(n):\n            yield (i,)";
+/// The same for `@arrow_udtf` (302): `eval` gets arrays and yields tables.
+const RANGE_ARROW: &str = "import pyarrow as pa\nclass F:\n    def eval(self, n):\n        \
+                           k = n.to_pylist()[0]\n        \
+                           yield pa.table({'i': pa.array(list(range(k)), type=pa.int64())})";
+/// A UDTF with `analyze` and no return type: the result is `i bigint`, given per call.
+const RANGE_ANALYZED: &str = "class F:\n    @staticmethod\n    def analyze(n):\n        \
+                              return AnalyzeResult(StructType().add('i', LongType()))\n    \
+                              def eval(self, n):\n        for i in range(n):\n            yield (i,)";
+
+fn range_body(eval_type: i32) -> &'static str {
+    if eval_type == 302 {
+        RANGE_ARROW
+    } else {
+        RANGE_ROWS
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udtf_is_client_code_and_a_viewer_starts_no_worker() {
+    let py = python();
+    let run = start(py.as_deref()).await;
+    let typed = || {
+        udtf_message(
+            "range_udtf",
+            pickle_udtf(py.as_deref(), RANGE_ROWS),
+            301,
+            Some("i bigint"),
+            vec![lit_long(3)],
+        )
+    };
+    let analyzed = || {
+        udtf_message(
+            "range_udtf",
+            pickle_udtf(py.as_deref(), RANGE_ANALYZED),
+            301,
+            None,
+            vec![lit_long(3)],
+        )
+    };
+    for token in [VIEWER, OPERATOR] {
+        // Command 10: refused by the command's class.
+        let s = execute(&run.channel, register_udtf(typed()), token)
+            .await
+            .expect_err("no client code below admin (ADR 0046 N1)");
+        assert_eq!(s.code(), Code::PermissionDenied);
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        // Relation 38: refused after translation, before anything runs.
+        let s = execute(&run.channel, inline_udtf(typed()), token)
+            .await
+            .expect_err("an inline UDTF is client code");
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        // The refused registration left nothing behind.
+        let s = execute(&run.channel, sql("SELECT * FROM range_udtf(3)"), token)
+            .await
+            .expect_err("never registered");
+        assert_ne!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        // Typing a UDTF with a return type runs no client code: no privilege needed.
+        let schema = analyze_schema(&run.channel, inline_udtf(typed()), token)
+            .await
+            .expect("a typed UDTF is analyzed without running it");
+        assert!(schema.result.is_some());
+        // One with `analyze` runs Python to be typed: `Usage` on `System("udf")` first (ADR 0046 §3b).
+        let s = analyze_schema(&run.channel, inline_udtf(analyzed()), token)
+            .await
+            .expect_err("analyze is client code");
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        release(&run.channel, token).await;
+    }
+    assert_eq!(
+        run.pool.live_workers(),
+        0,
+        "no worker started for a refused caller"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_registers_and_calls_a_udtf_of_each_eval_type() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    for eval_type in [300, 301, 302] {
+        let name = format!("range_{eval_type}");
+        let message = |args| {
+            udtf_message(
+                &name,
+                pickle_udtf(Some(&py), range_body(eval_type)),
+                eval_type,
+                Some("i bigint"),
+                args,
+            )
+        };
+        // A registration answers with no response but the end of the stream.
+        let responses = execute(&run.channel, register_udtf(message(Vec::new())), ADMIN)
+            .await
+            .unwrap_or_else(|e| panic!("{eval_type}: {e:?}"));
+        assert!(
+            responses.iter().all(|r| r.response_type.is_none()
+                || matches!(r.response_type, Some(ResponseType::ResultComplete(_)))),
+            "{responses:?}"
+        );
+        let by_sql = execute(
+            &run.channel,
+            sql(&format!("SELECT * FROM {name}(3)")),
+            ADMIN,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{eval_type}: {e:?}"));
+        let want = (
+            "struct<i:bigint>".to_owned(),
+            vec![vec![Some(0)], vec![Some(1)], vec![Some(2)]],
+        );
+        assert_eq!(int_rows(&by_sql), want, "{eval_type} by SQL");
+        // The same UDTF object called on columns: relation 38 gives the same rows.
+        let inline = execute(&run.channel, inline_udtf(message(vec![lit_long(3)])), ADMIN)
+            .await
+            .unwrap_or_else(|e| panic!("{eval_type}: {e:?}"));
+        assert_eq!(int_rows(&inline), want, "{eval_type} inline");
+        // Sent again (a DataFrame re-run), it keeps its registration and runs again.
+        let again = execute(&run.channel, inline_udtf(message(vec![lit_long(2)])), ADMIN)
+            .await
+            .unwrap_or_else(|e| panic!("{eval_type}: {e:?}"));
+        assert_eq!(int_rows(&again).1.len(), 2);
+    }
+    assert!(run.pool.live_workers() > 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udtf_with_analyze_and_no_return_type() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    let message = |args| {
+        udtf_message(
+            "ranged",
+            pickle_udtf(Some(&py), RANGE_ANALYZED),
+            301,
+            None,
+            args,
+        )
+    };
+    execute(&run.channel, register_udtf(message(Vec::new())), ADMIN)
+        .await
+        .expect("registered");
+    let want = (
+        "struct<i:bigint>".to_owned(),
+        vec![vec![Some(0)], vec![Some(1)]],
+    );
+    let by_sql = execute(&run.channel, sql("SELECT * FROM ranged(2)"), ADMIN)
+        .await
+        .expect("analyze types the call");
+    assert_eq!(int_rows(&by_sql), want);
+    let inline = execute(&run.channel, inline_udtf(message(vec![lit_long(2)])), ADMIN)
+        .await
+        .expect("inline, analyze types the call");
+    assert_eq!(int_rows(&inline), want);
+    // The admin's AnalyzePlan runs `analyze` too.
+    let schema = analyze_schema(&run.channel, inline_udtf(message(vec![lit_long(2)])), ADMIN)
+        .await
+        .expect("typed by analyze");
+    let Some(pb::analyze_plan_response::Result::Schema(s)) = schema.result else {
+        panic!("a schema: {schema:?}");
+    };
+    assert!(format!("{s:?}").contains("Struct"), "{s:?}");
+}
+
+/// The DataFrame-path cases of `python/tests/pyspark_udf/udtf/` that relation 38 runs: `rows/udtf<k>/eval_dataframe`
+/// (`make_repeat(api, kind)(lit(7), lit(3))`) for 300, 301 and 302, each the case's own class from `cases.py`
+/// (cloudpickled by value, as `export_cases.py` pickles it) sent as a stock client sends the call, compared with
+/// PySpark 4.2.0's answer in `goldens.json` (rows sorted, as the case orders them by every column). The other
+/// DataFrame cases need `t.asTable()` (a `TABLE` argument, refused) or `lateralJoin` (relation 44, not translated).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_dataframe_udtf_goldens_that_relation_38_runs() {
+    let Some(py) = python() else { return };
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases = repo.join("python/tests");
+    let goldens: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(cases.join("pyspark_udf/udtf/goldens.json")).expect("goldens"),
+    )
+    .expect("json");
+    let run = start(Some(&py)).await;
+    for kind in ["300", "301", "302"] {
+        let code = format!(
+            "import sys\nsys.path.insert(0, {:?})\nfrom pyspark import cloudpickle\n\
+             from pyspark_udf.udtf import cases\ncloudpickle.register_pickle_by_value(cases)\n\
+             f = cases.make_repeat(cases.Api('pyspark'), {kind:?})\n\
+             assert f.evalType == {kind}, f.evalType\n\
+             sys.stdout.buffer.write(cloudpickle.dumps(f.func))",
+            cases.display().to_string()
+        );
+        // `pyspark.sql.connect` imports `pyspark.testing.sqlutils`, which looks for a Spark home at import time
+        // (a client-only install has none): any directory satisfies it.
+        let out = Command::new(&py)
+            .args(["-c", &code])
+            .env("SPARK_HOME", repo.join("python"))
+            .output()
+            .expect("run the interpreter");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let eval_type: i32 = kind.parse().expect("kind");
+        let message = udtf_message(
+            "Repeat",
+            (out.stdout, python_ver(&py)),
+            eval_type,
+            Some("a int, i int"),
+            vec![lit_int(7), lit_int(3)],
+        );
+        let responses = execute(&run.channel, inline_udtf(message), ADMIN)
+            .await
+            .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        let want = &goldens["cases"][format!("rows/udtf{kind}/eval_dataframe")];
+        let (schema, rows) = int_rows(&responses);
+        assert_eq!(schema, want["schema"].as_str().expect("schema"), "{kind}");
+        let mut want_rows: Vec<Vec<Option<i64>>> = want["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| {
+                r.as_array()
+                    .expect("row")
+                    .iter()
+                    .map(serde_json::Value::as_i64)
+                    .collect()
+            })
+            .collect();
+        want_rows.sort();
+        assert_eq!(rows, want_rows, "{kind}");
+    }
+}
+
+/// A `TABLE` argument (`udtf(df.asTable())`) is refused with `KRISHIV_UNSUPPORTED_FEATURE` before anything is
+/// registered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_table_argument_is_refused() {
+    let run = start(None).await;
+    let table = expr(ExprType::SubqueryExpression(pb::SubqueryExpression {
+        plan_id: 1,
+        subquery_type: pb::subquery_expression::SubqueryType::TableArg as i32,
+        table_arg_options: None,
+        in_subquery_values: Vec::new(),
+    }));
+    let message = udtf_message(
+        "t",
+        pickle_udtf(None, RANGE_ROWS),
+        301,
+        Some("i bigint"),
+        vec![table],
+    );
+    let s = execute(&run.channel, inline_udtf(message), ADMIN)
+        .await
+        .expect_err("TABLE arguments are not supported yet");
+    assert_eq!(error_class(&s), "KRISHIV_UNSUPPORTED_FEATURE", "{s:?}");
+}

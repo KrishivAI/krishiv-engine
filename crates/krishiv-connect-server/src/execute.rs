@@ -641,6 +641,9 @@ async fn execution_plan(
                 RunCommand::RegisterPythonUdf(udf) => {
                     entry.python().register(session, udf)?;
                 }
+                RunCommand::RegisterPythonUdtf(udtf) => {
+                    entry.python().register_udtf(session, &udtf)?;
+                }
                 RunCommand::Checkpoint(spec) => {
                     let Some(input) = input else {
                         return Err(krishiv_common::error::InternalError {
@@ -691,7 +694,10 @@ pub(crate) async fn request_plan(
     let (translated, cached) =
         translate_locals(entry, Input::Plan(plan), decompressed.as_deref(), &mut udfs).await?;
     match translated {
-        Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
+        Translated::Relation(logical) => {
+            analysis_udtfs(&udfs, session).await?;
+            Requested::bind(entry, logical, &cached)
+        }
         // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
         // takes a plan.
         Translated::Command(command) => {
@@ -714,12 +720,33 @@ pub(crate) async fn request_relation(
     let (translated, cached) =
         translate_locals(entry, Input::Relation(relation), None, &mut udfs).await?;
     match translated {
-        Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
+        Translated::Relation(logical) => {
+            analysis_udtfs(&udfs, entry.session()).await?;
+            Requested::bind(entry, logical, &cached)
+        }
         Translated::Command(_) => Err(krishiv_common::error::InternalError {
             message: "a relation translated to a command".to_owned(),
         }
         .into()),
     }
+}
+
+/// The inline Python UDTFs of a plan that is only analyzed, made resolvable (`InlineUdfs::prepare_analysis`).
+/// A UDTF without a return type runs its `analyze` while the plan is analyzed: that is client code, so
+/// the caller needs `Usage` on `System("udf")` first (ADR 0046 §3b, pass-2 minor 8), and its payload then
+/// goes to the session's workers; a typed one runs nothing and needs no privilege.
+///
+/// # Errors
+/// The privilege refusal (`KRISHIV_INSUFFICIENT_PERMISSIONS`) and the registration errors.
+async fn analysis_udtfs(
+    udfs: &InlineUdfs<'_>,
+    session: &krishiv_session::Session,
+) -> Result<(), KrishivError> {
+    let runs_code = udfs.analysis_runs_code();
+    if runs_code {
+        crate::auth::enforce(&crate::auth::client_code(), session).await?;
+    }
+    udfs.prepare_analysis(session, runs_code)
 }
 
 /// What a request translates: a `Plan` (a relation or a command) or a bare `Relation`.

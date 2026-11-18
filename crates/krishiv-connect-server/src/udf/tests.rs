@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUdfNotAvailable};
-use krishiv_connect::translate::{PythonUdf, UdfHost as _};
+use krishiv_connect::translate::{PythonUdf, PythonUdtf, UdfHost as _};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_plan::PythonEvalType;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, Session};
@@ -354,5 +354,160 @@ fn a_relation_udf_needs_the_same_grant_as_an_inline_one() {
             .registered
             .len(),
         1
+    );
+}
+
+fn udtf(name: &str, command: &[u8], return_type: Option<DataType>) -> PythonUdtf {
+    PythonUdtf {
+        name: name.to_owned(),
+        deterministic: false,
+        eval_type: 301,
+        plan_eval_type: PythonEvalType::ArrowTableUdf,
+        return_type,
+        command: command.to_vec(),
+        python_ver: "3.12".to_owned(),
+    }
+}
+
+fn row() -> Option<DataType> {
+    krishiv_types::parse_data_type("struct<a: bigint>").ok()
+}
+
+#[test]
+fn register_table_function_registers_the_udtf_and_its_payload_by_its_lower_case_name() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    python
+        .register_udtf(&s, &udtf("Repeat", b"r", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    python
+        .register_udtf(&s, &udtf("Repeat", b"r2", None))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered,
+        [(0, "repeat".to_owned(), 1), (0, "repeat".to_owned(), 2)]
+    );
+    // Without a pool, refused before anything is registered.
+    let none = SessionPython::new(None, "alice", &s);
+    let e = none
+        .register_udtf(&s, &udtf("x", b"x", row()))
+        .expect_err("no pool");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn inline_udtfs_get_a_hidden_name_per_definition_and_wait_for_the_grant() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    let mut inline = InlineUdfs::execution(&python);
+    let first = inline
+        .inline_python_udtf(&udtf("Repeat", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let again = inline
+        .inline_python_udtf(&udtf("Repeat", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let other = inline
+        .inline_python_udtf(&udtf("Repeat", b"b", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(first, again);
+    assert_ne!(first, other);
+    assert!(first.starts_with("Repeat#"), "{first}");
+    assert!(inline.seen());
+    assert!(!inline.analysis_runs_code());
+    assert!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .is_empty()
+    );
+    inline.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+    let registered = log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .registered
+        .clone();
+    assert_eq!(
+        registered,
+        [(0, first.to_lowercase(), 1), (0, other.to_lowercase(), 1)]
+    );
+    // The same definition in a later plan keeps its registration.
+    let mut later = InlineUdfs::execution(&python);
+    later
+        .inline_python_udtf(&udtf("Repeat", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    later.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .len(),
+        2
+    );
+    // A NUL in the name is refused.
+    let e: KrishivError = InlineUdfs::execution(&python)
+        .inline_python_udtf(&udtf("a\0b", b"a", row()))
+        .expect_err("NUL");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn analysis_types_an_inline_udtf_without_a_payload_until_analyze_needs_one() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    // A typed UDTF: in the library for the analyzer, nothing on the workers, no runtime installed.
+    let mut typed = InlineUdfs::analysis(&python);
+    let name = typed
+        .inline_python_udtf(&udtf("T", b"a", row()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(!typed.analysis_runs_code());
+    typed
+        .prepare_analysis(&s, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .is_empty()
+    );
+    // Running it later registers the payload under the version the analysis gave it.
+    let mut run = InlineUdfs::execution(&python);
+    assert_eq!(
+        run.inline_python_udtf(&udtf("T", b"a", row()))
+            .unwrap_or_else(|e| panic!("{e}")),
+        name
+    );
+    run.grant(&s).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered,
+        [(0, name.to_lowercase(), 1)]
+    );
+    // A UDTF with `analyze` runs client code at analysis: granted, its payload goes to the workers.
+    let mut analyzed = InlineUdfs::analysis(&python);
+    analyzed
+        .inline_python_udtf(&udtf("A", b"z", None))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(analyzed.analysis_runs_code());
+    analyzed
+        .prepare_analysis(&s, true)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered
+            .len(),
+        2
     );
 }

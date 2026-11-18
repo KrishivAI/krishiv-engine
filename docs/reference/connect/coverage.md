@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 11 done, 9 partial, 38 missing, 4 out of scope.
+62 arms: 11 done, 10 partial, 37 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -49,7 +49,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
 | 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
 | 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
-| 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
+| 38 | common_inline_user_defined_table_function | partial | TABLE arguments (SubqueryExpression TABLE_ARG, df.asTable()), aliased arguments, eval types other than 300/301/302 | TableFunction over the session's hidden per-definition name of the UDTF (the host's inline_python_udtf), analyzed and planned as SQL's FROM f(..); named arguments as Alias; Usage on System(udf) before it runs, and before AnalyzePlan when it has no return type (analyze runs Python) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
 | 40 | common_inline_user_defined_data_source | missing |  | the Python data source scan (T040) | P3-T040 | 6 |
 | 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES; a cached_remote_relation inside a subquery or with_relations is recorded by the translator but not spliced by Session::from_plan_over (it walks plan nodes, not expression subqueries): T012 must splice it | P3-T012 | 4 |
@@ -107,7 +107,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 2 done, 2 partial, 10 missing, 6 out of scope.
+20 arms: 2 done, 3 partial, 9 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -120,7 +120,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 7 | streaming_query_command | out of scope |  | P4 |  | 0 |
 | 8 | get_resources_command | missing |  | an empty resource map (single node, no executors) | P3-T012 | 4 |
 | 9 | streaming_query_manager_command | out of scope |  | P4 |  | 0 |
-| 10 | register_table_function | missing |  | Python UDTF (T014) | P3-T014 | 6 |
+| 10 | register_table_function | partial | eval types other than 300/301/302 (Spark passes any to its worker) | Session::register_python_udtf (the eval type as sent; no return type = analyze) plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
 | 11 | streaming_query_listener_bus_command | out of scope |  | P4 |  | 0 |
 | 12 | register_data_source | missing |  | T040 | P3-T040 | 6 |
 | 13 | create_resource_profile_command | missing |  | refusal: Krishiv has no stage-level resource profiles (an unsupported row; no IR) | P3-T012 | 4 |

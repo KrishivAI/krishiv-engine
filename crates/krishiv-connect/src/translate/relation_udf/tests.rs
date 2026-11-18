@@ -38,6 +38,10 @@ impl UdfHost for Host {
             deterministic: udf.deterministic,
         })
     }
+
+    fn inline_python_udtf(&mut self, _: &super::super::PythonUdtf) -> Result<String> {
+        Err(super::super::errors::unsupported("UDTFs in this test host"))
+    }
 }
 
 /// `struct<x: bigint, y: string not null>`.
