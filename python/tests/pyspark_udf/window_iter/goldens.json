@@ -1,0 +1,973 @@
+{
+ "cases": {
+  "iter/arrow_first_only": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "INPUT_NOT_FULLY_CONSUMED",
+     "message": "The input iterator must be fully consumed.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "iter/arrow_plus_one": {
+   "rows": [
+    [
+     1,
+     11
+    ],
+    [
+     2,
+     21
+    ],
+    [
+     3,
+     null
+    ],
+    [
+     4,
+     41
+    ],
+    [
+     5,
+     51
+    ]
+   ],
+   "schema": "struct<id:bigint,r:bigint>"
+  },
+  "iter/arrow_short": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_ROWS_MISMATCH",
+     "message": "The number of output rows (3) must match the number of input rows (5).",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "iter/arrow_twice": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "OUTPUT_EXCEEDS_INPUT_ROWS",
+     "message": "The number of output rows must not exceed the number of input rows.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "iter/pandas_first_only": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "INPUT_NOT_FULLY_CONSUMED",
+     "message": "The input iterator must be fully consumed.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "iter/pandas_not_iterator": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be iterator of pandas.Series, but is iterator of int.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "iter/pandas_plus_one": {
+   "rows": [
+    [
+     1,
+     11
+    ],
+    [
+     2,
+     21
+    ],
+    [
+     3,
+     null
+    ],
+    [
+     4,
+     41
+    ],
+    [
+     5,
+     51
+    ]
+   ],
+   "schema": "struct<id:bigint,r:bigint>"
+  },
+  "iter/pandas_rebatched": {
+   "rows": [
+    [
+     1,
+     20
+    ],
+    [
+     2,
+     40
+    ],
+    [
+     3,
+     null
+    ],
+    [
+     4,
+     80
+    ],
+    [
+     5,
+     100
+    ]
+   ],
+   "schema": "struct<id:bigint,r:bigint>"
+  },
+  "iter/pandas_short": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_ROWS_MISMATCH",
+     "message": "The number of output rows (3) must match the number of input rows (5).",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "iter/pandas_twice": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "OUTPUT_EXCEEDS_INPUT_ROWS",
+     "message": "The number of output rows must not exceed the number of input rows.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "window/arrow/mixed_bounds": {
+   "rows": [
+    [
+     1,
+     5,
+     2,
+     5,
+     2
+    ],
+    [
+     2,
+     5,
+     3,
+     5,
+     2
+    ],
+    [
+     3,
+     5,
+     3,
+     5,
+     2
+    ],
+    [
+     4,
+     5,
+     3,
+     5,
+     1
+    ],
+    [
+     5,
+     5,
+     2,
+     5,
+     0
+    ],
+    [
+     6,
+     2,
+     2,
+     2,
+     1
+    ],
+    [
+     7,
+     2,
+     2,
+     2,
+     0
+    ],
+    [
+     8,
+     1,
+     1,
+     1,
+     0
+    ]
+   ],
+   "schema": "struct<id:bigint,whole:bigint,sliding:bigint,unbounded:bigint,ahead:bigint>"
+  },
+  "window/arrow/ordered_default": {
+   "rows": [
+    [
+     1,
+     1.0,
+     1
+    ],
+    [
+     2,
+     7.0,
+     3
+    ],
+    [
+     3,
+     7.0,
+     3
+    ],
+    [
+     4,
+     7.0,
+     4
+    ],
+    [
+     5,
+     15.0,
+     5
+    ],
+    [
+     6,
+     16.0,
+     1
+    ],
+    [
+     7,
+     48.0,
+     2
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/partition": {
+   "rows": [
+    [
+     1,
+     15.0,
+     5
+    ],
+    [
+     2,
+     15.0,
+     5
+    ],
+    [
+     3,
+     15.0,
+     5
+    ],
+    [
+     4,
+     15.0,
+     5
+    ],
+    [
+     5,
+     15.0,
+     5
+    ],
+    [
+     6,
+     48.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     2
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/range_back": {
+   "rows": [
+    [
+     1,
+     1.0,
+     1
+    ],
+    [
+     2,
+     7.0,
+     3
+    ],
+    [
+     3,
+     7.0,
+     3
+    ],
+    [
+     4,
+     6.0,
+     3
+    ],
+    [
+     5,
+     8.0,
+     1
+    ],
+    [
+     6,
+     16.0,
+     1
+    ],
+    [
+     7,
+     32.0,
+     1
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/rows_ahead": {
+   "rows": [
+    [
+     1,
+     6.0,
+     2
+    ],
+    [
+     2,
+     4.0,
+     2
+    ],
+    [
+     3,
+     8.0,
+     2
+    ],
+    [
+     4,
+     8.0,
+     1
+    ],
+    [
+     5,
+     null,
+     0
+    ],
+    [
+     6,
+     32.0,
+     1
+    ],
+    [
+     7,
+     null,
+     0
+    ],
+    [
+     8,
+     null,
+     0
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/rows_sliding": {
+   "rows": [
+    [
+     1,
+     3.0,
+     2
+    ],
+    [
+     2,
+     7.0,
+     3
+    ],
+    [
+     3,
+     6.0,
+     3
+    ],
+    [
+     4,
+     12.0,
+     3
+    ],
+    [
+     5,
+     8.0,
+     2
+    ],
+    [
+     6,
+     48.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     2
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/rows_to_end": {
+   "rows": [
+    [
+     1,
+     15.0,
+     5
+    ],
+    [
+     2,
+     14.0,
+     4
+    ],
+    [
+     3,
+     12.0,
+     3
+    ],
+    [
+     4,
+     8.0,
+     2
+    ],
+    [
+     5,
+     8.0,
+     1
+    ],
+    [
+     6,
+     48.0,
+     2
+    ],
+    [
+     7,
+     32.0,
+     1
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/arrow/rows_unbounded": {
+   "rows": [
+    [
+     1,
+     15.0,
+     5
+    ],
+    [
+     2,
+     15.0,
+     5
+    ],
+    [
+     3,
+     15.0,
+     5
+    ],
+    [
+     4,
+     15.0,
+     5
+    ],
+    [
+     5,
+     15.0,
+     5
+    ],
+    [
+     6,
+     48.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     2
+    ],
+    [
+     8,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,count:bigint>"
+  },
+  "window/pandas/mixed_bounds": {
+   "rows": [
+    [
+     1,
+     15.0,
+     3.0,
+     5,
+     2
+    ],
+    [
+     2,
+     15.0,
+     7.0,
+     5,
+     2
+    ],
+    [
+     3,
+     15.0,
+     6.0,
+     5,
+     2
+    ],
+    [
+     4,
+     15.0,
+     12.0,
+     5,
+     1
+    ],
+    [
+     5,
+     15.0,
+     8.0,
+     5,
+     0
+    ],
+    [
+     6,
+     48.0,
+     48.0,
+     2,
+     1
+    ],
+    [
+     7,
+     48.0,
+     48.0,
+     2,
+     0
+    ],
+    [
+     8,
+     0.0,
+     0.0,
+     1,
+     0
+    ]
+   ],
+   "schema": "struct<id:bigint,whole:double,sliding:double,unbounded:bigint,ahead:bigint>"
+  },
+  "window/pandas/ordered_default": {
+   "rows": [
+    [
+     1,
+     1.0,
+     1.0,
+     1
+    ],
+    [
+     2,
+     7.0,
+     2.3333333333333335,
+     3
+    ],
+    [
+     3,
+     7.0,
+     2.3333333333333335,
+     3
+    ],
+    [
+     4,
+     7.0,
+     2.3333333333333335,
+     4
+    ],
+    [
+     5,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     6,
+     16.0,
+     16.0,
+     1
+    ],
+    [
+     7,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/partition": {
+   "rows": [
+    [
+     1,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     2,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     3,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     4,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     5,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     6,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/range_back": {
+   "rows": [
+    [
+     1,
+     1.0,
+     1.0,
+     1
+    ],
+    [
+     2,
+     7.0,
+     2.3333333333333335,
+     3
+    ],
+    [
+     3,
+     7.0,
+     2.3333333333333335,
+     3
+    ],
+    [
+     4,
+     6.0,
+     3.0,
+     3
+    ],
+    [
+     5,
+     8.0,
+     8.0,
+     1
+    ],
+    [
+     6,
+     16.0,
+     16.0,
+     1
+    ],
+    [
+     7,
+     32.0,
+     32.0,
+     1
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/rows_ahead": {
+   "rows": [
+    [
+     1,
+     6.0,
+     3.0,
+     2
+    ],
+    [
+     2,
+     4.0,
+     4.0,
+     2
+    ],
+    [
+     3,
+     8.0,
+     8.0,
+     2
+    ],
+    [
+     4,
+     8.0,
+     8.0,
+     1
+    ],
+    [
+     5,
+     0.0,
+     null,
+     0
+    ],
+    [
+     6,
+     32.0,
+     32.0,
+     1
+    ],
+    [
+     7,
+     0.0,
+     null,
+     0
+    ],
+    [
+     8,
+     0.0,
+     null,
+     0
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/rows_sliding": {
+   "rows": [
+    [
+     1,
+     3.0,
+     1.5,
+     2
+    ],
+    [
+     2,
+     7.0,
+     2.3333333333333335,
+     3
+    ],
+    [
+     3,
+     6.0,
+     3.0,
+     3
+    ],
+    [
+     4,
+     12.0,
+     6.0,
+     3
+    ],
+    [
+     5,
+     8.0,
+     8.0,
+     2
+    ],
+    [
+     6,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/rows_to_end": {
+   "rows": [
+    [
+     1,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     2,
+     14.0,
+     4.666666666666667,
+     4
+    ],
+    [
+     3,
+     12.0,
+     6.0,
+     3
+    ],
+    [
+     4,
+     8.0,
+     8.0,
+     2
+    ],
+    [
+     5,
+     8.0,
+     8.0,
+     1
+    ],
+    [
+     6,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     7,
+     32.0,
+     32.0,
+     1
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  },
+  "window/pandas/rows_unbounded": {
+   "rows": [
+    [
+     1,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     2,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     3,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     4,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     5,
+     15.0,
+     3.75,
+     5
+    ],
+    [
+     6,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     7,
+     48.0,
+     24.0,
+     2
+    ],
+    [
+     8,
+     0.0,
+     null,
+     1
+    ]
+   ],
+   "schema": "struct<id:bigint,sum:double,mean:double,count:bigint>"
+  }
+ },
+ "conf": {
+  "spark.sql.execution.arrow.maxRecordsPerBatch": "2",
+  "spark.sql.session.timeZone": "UTC"
+ },
+ "generator": "python/tests/pyspark_udf/window_iter/gen_goldens.py",
+ "pandas": "3.0.6",
+ "pyarrow": "26.0.0",
+ "pyspark": "4.2.0",
+ "spark": "4.2.0"
+}

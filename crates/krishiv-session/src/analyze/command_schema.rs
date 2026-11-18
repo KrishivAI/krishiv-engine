@@ -26,7 +26,7 @@ use krishiv_types::DataType;
 use super::OutputColumn;
 
 /// One result column of a command: its name and whether Spark 4.2.0 declares it nullable. `isTemporary`
-/// is `BOOLEAN`, every other column `STRING`.
+/// and `SHOW GRANTS`'s `grant_option` are `BOOLEAN`, every other column `STRING`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CommandColumn {
     /// The column name.
@@ -54,7 +54,7 @@ impl CommandColumn {
 
     /// Its type in the frame.
     fn data_type(self) -> DataType {
-        if self.name == "isTemporary" {
+        if matches!(self.name, "isTemporary" | "grant_option") {
             DataType::Boolean
         } else {
             DataType::String
@@ -124,8 +124,8 @@ pub(crate) const SET: &[CommandColumn] = &[c("key"), c("value")];
 pub(crate) const SET_VERBOSE: &[CommandColumn] =
     &[c("key"), c("value"), c("meaning"), c("Since version")];
 
-/// The result columns of a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` statement; `None` for any other
-/// statement.
+/// The result columns of a `SHOW` (`SHOW GRANTS` too), `DESCRIBE`, `EXPLAIN`, `SET` or `RESET`
+/// statement; `None` for any other statement.
 pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>> {
     let columns: &[CommandColumn] = match statement {
         Statement::Show(s) => show_columns(&s.kind)?,
@@ -133,6 +133,11 @@ pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>>
         Statement::Explain(_) => EXPLAIN,
         Statement::Set(s) => set_columns(&s.kind)?,
         Statement::Reset(_) => &[],
+        // `SHOW GRANTS` (review #803 n3); the other access-control statements return no rows.
+        Statement::AccessControl(ac) => match ac.command {
+            krishiv_plan::analyzer::access_control::AccessCommand::ShowGrants { .. } => SHOW_GRANTS,
+            _ => return None,
+        },
         _ => return None,
     };
     Some(

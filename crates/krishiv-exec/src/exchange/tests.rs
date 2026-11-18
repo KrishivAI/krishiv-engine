@@ -114,9 +114,10 @@ fn round_robin_places_rows_with_nested_columns_by_the_others() {
         vec![lists],
     )
     .unwrap();
+    // Nothing routable: the rows are spread by position.
     let mut out = Vec::new();
     route(&Partitioning::RoundRobin, &only, 4, &mut out).unwrap();
-    assert_eq!(out, vec![0; 300]);
+    assert_eq!(out, (0..300u32).map(|i| i % 4).collect::<Vec<_>>());
 }
 
 #[test]
@@ -127,11 +128,13 @@ fn rows_without_columns_are_routed_not_dropped() {
         &arrow_array::RecordBatchOptions::new().with_row_count(Some(5)),
     )
     .unwrap();
-    for p in [Partitioning::RoundRobin, hash(vec![])] {
-        let mut out = Vec::new();
-        route(&p, &b, 4, &mut out).unwrap();
-        assert_eq!(out, vec![0; 5]);
-    }
+    // A round-robin spreads them by position; a hash on no key sends them to 0.
+    let mut out = Vec::new();
+    route(&Partitioning::RoundRobin, &b, 4, &mut out).unwrap();
+    assert_eq!(out, vec![0, 1, 2, 3, 0]);
+    let mut out = Vec::new();
+    route(&hash(vec![]), &b, 4, &mut out).unwrap();
+    assert_eq!(out, vec![0; 5]);
 }
 
 #[test]

@@ -53,6 +53,30 @@ When an option is not set, Krishiv falls back to the standard environment variab
 | `fs.azure.account.name` | account name, when the URL is `az://container/path` and does not carry it |
 | `fs.azure.endpoint` | endpoint URL for Azurite (`http://127.0.0.1:10000/<account>`) |
 
+### Hugging Face datasets (`hf://`)
+
+A Krishiv extension, not in Spark: `hf://datasets/<org>/<name>[@revision]/<path>` reads one named file through the
+Hugging Face `resolve` endpoint (`main` unless you write `@revision`).
+
+```python
+spark.read.parquet("hf://datasets/cornell-movie-review-data/rotten_tomatoes/train.parquet").show()
+```
+
+| Option | Meaning |
+|---|---|
+| `fs.hf.token` (or the `HF_TOKEN` environment variable) | access token, sent as a bearer header; needed for private datasets. `HF_TOKEN` is used only for the default host: with `fs.hf.endpoint` set, only a per-read `fs.hf.token` is sent |
+| `fs.hf.endpoint` | host to use instead of `https://huggingface.co` |
+
+Name the file: a directory, a glob and Hugging Face's generated Parquet branch (`@~parquet/...`) are not supported yet.
+
+### `http://` and `https://`
+
+Spark has no working `http://` or `https://` file system. When Krishiv has to infer the schema of such a location, it
+refuses it with `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`, the error Spark gives. A read that gives its own schema is not
+refused by that check and goes to the HTTP object store, which needs a server that supports range requests; do not rely on
+it. On the server, `http://` and `https://` locations also need an entry in `allowedPrefixes`.
+Download the file, or use an object store or `hf://`.
+
 ## Try it without a cloud account
 
 Run MinIO locally, create a bucket as a directory of its data folder, and point `fs.s3a.endpoint` at it:

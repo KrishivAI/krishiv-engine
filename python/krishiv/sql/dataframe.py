@@ -1871,8 +1871,12 @@ class DataFrame:
         """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
+        stream.use_placeholder_names()
         try:
             table = pa.table(stream)
+            # A column name with a NUL cannot cross the C data interface: the stream exports a placeholder name.
+            if table.column_names != (names := stream.names()):
+                table = table.rename_columns(names)
         except Exception:
             # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
             stream.check_error()

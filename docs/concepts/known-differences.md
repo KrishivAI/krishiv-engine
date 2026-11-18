@@ -188,6 +188,55 @@ setting at 1, a scalar Python UDF call while a relation UDF of the same session 
 way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
 waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
 
+A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
+worker the same way, one per UDF of the operator.
+
+A Python UDF over a window keeps each window partition's input rows in memory until the partition's values come
+back from the worker; Spark queues them in a buffer that spills to disk. A partition larger than the query's memory
+fails with the memory pool's error in Krishiv where Spark finishes.
+
+A scalar iterator UDF runs one Python iterator per driver of the operator, not one per Spark partition, so a UDF
+that keeps state across its iterator (a running total, a call count) sees other batch boundaries than in Spark. The
+operator also reads all its input and keeps all its output before the next operator reads any, so a `LIMIT` above
+it does not stop it early.
+
+## Python artifacts in server mode
+
+The Spark Connect server does not hand a session's Python artifacts to its UDF workers yet: pyfiles and archives a
+Connect client adds (`addArtifacts(..., pyfile=True)`, `archive=True`) do not reach the workers, so a UDF that
+imports one fails with Python's import error where Spark finds the module. The worker pool takes them
+(`SessionUdfs::set_artifacts`); the server's forwarding to it is a separate change that follows. Once a session's
+artifacts are set, the pool treats them as below.
+
+Pyfiles go on the workers' `sys.path`, as in Spark: the files directory, then each zip or egg. Archives (zip, jar,
+tar, tar.gz, tgz) are unpacked into the same files directory under their `#alias`, or else their file name, as
+Spark's executor does; an archive's own directory is not on `sys.path` (as in Spark, its packages import as
+`alias.pkg`), and each entry of the files directory is reachable by a path relative to the worker's working
+directory (`./alias/...`), as in Spark. Two differences remain. The working directory is the worker's own writable
+directory, where the entries are links to a read-only directory of the server, so code cannot write into an
+unpacked archive. Spark takes any alias (a fragment like `../x` unpacks outside its directory) and lets a second
+archive of one alias replace the first; Krishiv refuses an empty, hidden (`.`, `..`), over-long (more than 255
+bytes) or `/`-containing alias with `INVALID_ARTIFACT_PATH`, and two artifacts of one name with
+`ARTIFACT_ALREADY_EXISTS`. A tar member that is a link leaving its archive's directory, a device file, or artifacts
+past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
+
+## Python table functions (UDTFs)
+
+The worker pool runs Python UDTF tasks (`@udtf`, `@udtf(useArrow=True)`, `@arrow_udtf`) and their `analyze`, but no
+SQL or Connect query plans a Python UDTF call yet, so none of this is reachable from a query. These differences
+are known for when it is:
+
+- A `@udtf` without Arrow converts its result rows to Arrow as the Arrow-optimized kind does (pyspark's
+  `LocalDataToArrowConversion`; a value that does not convert is `UDTF_ARROW_DATA_CONVERSION_ERROR`). Spark
+  pickles those rows to its JVM, which converts each value (`EvaluatePython.makeFromJava`), so a value of another
+  type than the declared one (a `str` in an `INT` column) may give another result or error than Spark's. No
+  Spark golden pins these cases yet (owed: `python/tests/pyspark_udf/README.md`).
+- `analyze`'s result is limited to 64 MiB (as the worker encodes it, the pickled `AnalyzeResult` as hex); a larger
+  one fails the call with `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`. Spark sets no limit.
+- A constant `BINARY` argument reaches `analyze` as `bytes`, Spark's default
+  (`spark.sql.execution.pyspark.binaryAsBytes=true`); the setting is not read, so its `false` (`bytearray`) is not
+  available.
+
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 
 Spark's `schema_of_variant` merges two objects of the same size whose sorted field names match under the session's

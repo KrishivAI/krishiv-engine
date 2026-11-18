@@ -25,6 +25,12 @@ impl Rewriter {
             ));
         }
         let domain = plan_outer_columns(input);
+        if domain.iter().any(|c| c.data_type.is_collated_string()) && collated_outer_misuse(input) {
+            return Err(unsupported(
+                "a correlation over collated strings compared under another collation",
+                input.origin,
+            ));
+        }
         let visible: HashSet<AttrId> = output(base)?.iter().map(|c| c.id).collect();
         if !domain.iter().all(|c| visible.contains(&c.id)) {
             return Err(unsupported(
@@ -349,9 +355,10 @@ impl Rewriter {
             .iter()
             .zip(&keys)
             .map(|(d, k)| {
-                boolean(
+                keyed_eq(
                     Builtin::EqNullSafe,
-                    vec![col_expr(d, Origin::UNKNOWN), Arc::clone(k)],
+                    col_expr(d, Origin::UNKNOWN),
+                    Arc::clone(k),
                 )
             })
             .collect();
@@ -502,8 +509,11 @@ impl Rewriter {
                 .into_iter()
                 .zip(domain_columns(domain, b));
             for (x, y) in pairs {
-                let args = vec![col_expr(&x, Origin::UNKNOWN), col_expr(&y, Origin::UNKNOWN)];
-                cond.push(boolean(Builtin::EqNullSafe, args));
+                cond.push(keyed_eq(
+                    Builtin::EqNullSafe,
+                    col_expr(&x, Origin::UNKNOWN),
+                    col_expr(&y, Origin::UNKNOWN),
+                ));
             }
         }
         let cond = cond

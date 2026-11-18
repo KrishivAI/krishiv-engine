@@ -1822,3 +1822,147 @@ async fn deterministic_order_runs_one_driver_per_pipeline() {
         assert_released(&root);
     }
 }
+
+/// Records the size of each input batch, passes it on, and lets the driver
+/// join its small inputs (J1).
+struct Sizes(std::sync::Mutex<Vec<usize>>);
+
+impl Operator for Sizes {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        self.0.lock().unwrap().push(input.num_rows());
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+/// J1 (`krishiv.exec.coalesceInput`): under a sink that allows it, the
+/// driver joins a selective filter's 10-row batches into batches of the
+/// batch size before an operator that asks for it, hands the rest on before
+/// the operator's `finish`, and keeps the rows' order; with the key off, or
+/// under a sink that does not allow it, every small batch goes on alone.
+#[tokio::test]
+async fn small_batches_are_joined_before_operators_and_sinks_that_allow_it() {
+    let (config, _) = Config::from_pairs([("krishiv.exec.coalesceInput", "false")]).unwrap();
+    assert!(!ExecConfig::from_config(&config).coalesce_input);
+    assert!(ExecConfig::from_config(&Config::new()).coalesce_input);
+    let runner = QueryRunner::new(executor(2));
+    let root = root(1 << 30);
+    for (id, key, allows) in [(1, true, true), (2, false, true), (3, true, false)] {
+        let q = query(
+            &root,
+            id,
+            ExecConfig {
+                batch_size: 1000,
+                // One morsel: one driver reads every row, in order.
+                morsel_rows: 1 << 20,
+                coalesce_input: key,
+                ..ExecConfig::default()
+            },
+        );
+        let (_, scan) = scan(105_000);
+        let sizes = Arc::new(Sizes(std::sync::Mutex::new(Vec::new())));
+        let filtered = pipe(scan, Filter::new(|v| v % 100 == 0));
+        let plan_input = pipe(filtered, Arc::clone(&sizes) as Arc<dyn Operator>);
+        let buffer = Buffer::new(false, None);
+        buffer.joins_input.store(allows, Ordering::Relaxed);
+        let plan = Arc::new(Break(plan_input, Arc::clone(&buffer), true));
+        let out = run(&runner, plan, &q).await.unwrap();
+        let expected: Vec<i64> = (0..105_000).step_by(100).collect();
+        assert_eq!(values(&out), expected, "case {id}");
+        let seen = sizes.0.lock().unwrap().clone();
+        let sunk = buffer.sunk.load(Ordering::Relaxed);
+        if key && allows {
+            // 100 batches of 10 rows reach the target; the last 50 rows go
+            // on before `finish`. The sink takes the full batch as it is and
+            // the 50 at its end.
+            assert_eq!(seen, [1000, 50], "case {id}");
+            assert_eq!(sunk, 2, "case {id}");
+        } else {
+            assert_eq!(seen, vec![10; 105], "case {id}");
+            assert_eq!(sunk, 105, "case {id}");
+        }
+        assert_released(&root);
+    }
+}
+
+/// Passes the first `n` rows on and then finishes, as a limit does.
+struct TakeN {
+    n: usize,
+    taken: std::sync::Mutex<usize>,
+}
+
+impl Operator for TakeN {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        let mut taken = self.taken.lock().unwrap();
+        let rows = input.num_rows().min(self.n - *taken);
+        *taken += rows;
+        let out = input.slice(0, rows)?;
+        Ok(if *taken == self.n {
+            OperatorOutput::Finished(Some(out))
+        } else {
+            OperatorOutput::NeedMoreInput(Some(out))
+        })
+    }
+}
+
+/// J1: an operator that finishes early (a limit) hands on its last rows,
+/// and the rows a later operator's coalescer then holds still reach that
+/// operator and the sink, in order, before they finish; the rows held before
+/// the finished operator are not wanted and go with its state.
+#[tokio::test]
+async fn rows_held_after_an_operator_that_finishes_early_are_handed_on() {
+    let runner = QueryRunner::new(executor(2));
+    let root = root(1 << 30);
+    for (id, n) in [(1, 5), (2, 555)] {
+        let q = query(
+            &root,
+            id,
+            ExecConfig {
+                batch_size: 1000,
+                morsel_rows: 1 << 20,
+                ..ExecConfig::default()
+            },
+        );
+        let (_, scan) = scan(105_000);
+        let before = Arc::new(Sizes(std::sync::Mutex::new(Vec::new())));
+        let after = Arc::new(Sizes(std::sync::Mutex::new(Vec::new())));
+        let take = Arc::new(TakeN {
+            n,
+            taken: std::sync::Mutex::new(0),
+        });
+        let input = pipe(scan, Filter::new(|v| v % 100 == 0));
+        let input = pipe(input, Arc::clone(&before) as Arc<dyn Operator>);
+        let input = pipe(input, take as Arc<dyn Operator>);
+        let input = pipe(input, Arc::clone(&after) as Arc<dyn Operator>);
+        let buffer = Buffer::new(false, None);
+        buffer.joins_input.store(true, Ordering::Relaxed);
+        let plan = Arc::new(Break(input, Arc::clone(&buffer), true));
+        let out = run(&runner, plan, &q).await.unwrap();
+        let expected: Vec<i64> = (0..105_000).step_by(100).take(n).collect();
+        assert_eq!(values(&out), expected, "case {id}");
+        // The first 1,000 rows are joined before the limit, which keeps `n`
+        // of them; those reach the next operator as one batch.
+        assert_eq!(*before.0.lock().unwrap(), [1000], "case {id}");
+        assert_eq!(*after.0.lock().unwrap(), [n], "case {id}");
+        assert_released(&root);
+    }
+}
