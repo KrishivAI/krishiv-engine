@@ -51,4 +51,13 @@ fn readiness_keys_default_and_validate() {
         c.set("krishiv.server.readiness.failureThreshold", "0")
             .is_err()
     );
+    c.set("krishiv.server.readiness.failureThreshold", "5")
+        .unwrap();
+    assert_eq!(
+        c.get(&SERVER_READINESS_FAILURE_THRESHOLD)
+            .and_then(ConfigValue::as_int),
+        Some(5)
+    );
+    assert!(c.set("krishiv.server.readiness.interval", "soon").is_err());
+    assert!(c.set("krishiv.server.readiness.timeout", "fast").is_err());
 }

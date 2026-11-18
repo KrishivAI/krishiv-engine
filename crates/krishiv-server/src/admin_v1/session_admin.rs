@@ -560,9 +560,8 @@ impl AdminApi for SessionAdmin {
                 "GetReadiness",
                 "system",
             )?;
-            let checks = ops
-                .readiness
-                .report()
+            let (ready, report) = ops.readiness.snapshot();
+            let checks = report
                 .into_iter()
                 .map(|c| ReadinessCheck {
                     name: c.name,
@@ -576,10 +575,7 @@ impl AdminApi for SessionAdmin {
                     consecutive_failures: i32::try_from(c.consecutive_failures).unwrap_or(i32::MAX),
                 })
                 .collect();
-            Ok(GetReadinessResponse {
-                ready: ops.readiness.is_ready(),
-                checks,
-            })
+            Ok(GetReadinessResponse { ready, checks })
         }
         .boxed()
     }
@@ -617,7 +613,7 @@ impl AdminApi for SessionAdmin {
                 None => ops.default_grace,
                 Some(d) => u64::try_from(d.seconds)
                     .ok()
-                    .filter(|_| d.nanos >= 0)
+                    .filter(|_| (0..1_000_000_000).contains(&d.nanos))
                     .map(|s| std::time::Duration::new(s, d.nanos.unsigned_abs()))
                     .filter(|g| (MIN_GRACE..=MAX_GRACE).contains(g))
                     .ok_or_else(|| {

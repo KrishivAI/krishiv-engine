@@ -160,15 +160,20 @@ impl Readiness {
     /// a fresh round in which every one passed.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        if !self.serving.load(Ordering::Acquire) {
+        let serving = self.serving.load(Ordering::Acquire);
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        self.ready_with(serving, last.as_ref())
+    }
+
+    fn ready_with(&self, serving: bool, last: Option<&Round>) -> bool {
+        if !serving {
             return false;
         }
         if self.checks.is_empty() {
             return true;
         }
-        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
         let fresh = self.interval.saturating_mul(STALE_AFTER_INTERVALS);
-        last.as_ref().is_some_and(|r| {
+        last.is_some_and(|r| {
             r.at.elapsed() <= fresh
                 && r.outcomes.iter().zip(&r.streaks).zip(&r.ever_ok).all(
                     |((o, streak), ever_ok)| {
@@ -185,9 +190,17 @@ impl Readiness {
     /// registered check (`unknown` before the first round).
     #[must_use]
     pub fn report(&self) -> Vec<CheckReport> {
+        self.snapshot().1
+    }
+
+    /// `is_ready` and `report` from one observation of the serving flag and one cached round,
+    /// so `ready` always agrees with the checks listed beside it.
+    #[must_use]
+    pub fn snapshot(&self) -> (bool, Vec<CheckReport>) {
+        let serving = self.serving.load(Ordering::Acquire);
         let mut out = vec![CheckReport {
             name: "serving".to_owned(),
-            state: if self.serving.load(Ordering::Acquire) {
+            state: if serving {
                 CheckState::Ok
             } else {
                 CheckState::Failed
@@ -215,7 +228,7 @@ impl Readiness {
                 consecutive_failures: failures,
             });
         }
-        out
+        (self.ready_with(serving, last.as_ref()), out)
     }
 
     /// The outcomes of the last round (empty before the first).

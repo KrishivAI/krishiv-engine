@@ -361,7 +361,9 @@ pub static SERVER_READINESS_FAILURE_THRESHOLD: ConfigEntry = startup(
     ValueType::PositiveInt,
     ConfigValue::Int(3),
     "How many consecutive failures of a readiness check make `/readyz` answer 503; one slow \
-     moment is not a failure. A success recovers at once.",
+     moment is not a failure. The threshold applies after a check has passed once: a required \
+     check that has never passed (authentication keys not yet fetched) fails `/readyz` on its \
+     first failure. A success recovers at once.",
     None,
 );
 
@@ -371,7 +373,7 @@ pub static SERVER_READINESS_REQUIRED: ConfigEntry = startup(
     ValueType::String,
     ConfigValue::String(std::borrow::Cow::Borrowed("")),
     "Comma-separated readiness checks that fail `/readyz` when they fail, besides the always \
-     required `auth`. `warehouse` adds the warehouse object store. Other checks are reported by \
+     required `auth`. Only `auth` is wired today; the warehouse object store check follows. Other checks are reported by \
      the admin API only, because every replica shares them and failing them would remove the \
      whole fleet at once.",
     None,

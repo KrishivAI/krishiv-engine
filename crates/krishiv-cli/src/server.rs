@@ -305,16 +305,27 @@ async fn run_listeners(
             .filter(|n| !n.is_empty())
             .map(str::to_owned),
     );
+    // Only the checks that are wired can be required; a name with no check would never fail.
+    if let Some(unknown) = required.iter().find(|n| n.as_str() != "auth") {
+        return Err(format!(
+            "krishiv.server.readiness.required names `{unknown}`, which has no readiness check yet"
+        ));
+    }
+    let interval = duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10));
+    if interval < Duration::from_secs(1) {
+        return Err("krishiv.server.readiness.interval must be at least 1s".to_owned());
+    }
+    let threshold = config
+        .get(&SERVER_READINESS_FAILURE_THRESHOLD)
+        .and_then(ConfigValue::as_int)
+        .map_or(Ok(3), u32::try_from)
+        .map_err(|_| "krishiv.server.readiness.failureThreshold is too large".to_owned())?;
     let readiness = krishiv_server::readiness::Readiness::with_policy(
         Arc::clone(&ready),
         vec![Arc::new(krishiv_server::readiness::AuthReady(Arc::clone(&auth))) as Arc<_>],
-        duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10)),
+        interval,
         duration(config, &SERVER_READINESS_TIMEOUT, Duration::from_secs(2)),
-        config
-            .get(&SERVER_READINESS_FAILURE_THRESHOLD)
-            .and_then(ConfigValue::as_int)
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(3),
+        threshold,
         required,
     );
     let checker = readiness.spawn();
@@ -414,7 +425,8 @@ async fn run_listeners(
         // `/metrics` is behind the admin token: print it once.
         println!("krishiv server: admin token {token}");
     }
-    ready.store(true, Ordering::Release);
+    // A SIGTERM during start-up may already have started a drain: do not undo its readiness.
+    drainer.mark_serving_unless_draining(&ready);
     let served = connect
         .serve(connect_listener, stopped(stop_rx))
         .await
@@ -670,6 +682,17 @@ impl Drainer {
         self.drain.resume()?;
         self.runtime.set_draining(false);
         Ok(())
+    }
+
+    /// Sets the readiness flag unless a drain has started, serialized with `start`/`resume`.
+    fn mark_serving_unless_draining(&self, ready: &AtomicBool) {
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.drain.status().state == krishiv_server::drain::DrainState::Serving {
+            ready.store(true, Ordering::Release);
+        }
     }
 
     fn load(&self) -> (i64, i64) {
