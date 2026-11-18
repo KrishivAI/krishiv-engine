@@ -30,6 +30,7 @@ use krishiv_types::DataType;
 use super::Result;
 use super::errors::{not_set, unsupported, unsupported_field, unsupported_variant};
 use super::types::data_type;
+use super::udtf::PythonUdtf;
 use crate::proto::v4_3 as pb;
 use crate::proto::v4_3::command::CommandType;
 use crate::proto::v4_3::common_inline_user_defined_function::Function;
@@ -99,6 +100,16 @@ pub trait UdfHost: Send {
     /// # Errors
     /// Whatever the host refuses.
     fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<krishiv_plan::PythonUdfRef>;
+
+    /// The table-function name an inline call of the Python UDTF `udtf`
+    /// (`common_inline_user_defined_table_function`) resolves by: the plan becomes
+    /// `PlanNode::TableFunction` over it, analyzed as SQL's `FROM f(..)`. As for
+    /// [`Self::inline_python_udf`]: a host that runs nothing still answers, and one that will run the
+    /// plan records `udtf` for registration after the plan's privilege check.
+    ///
+    /// # Errors
+    /// Whatever the host refuses.
+    fn inline_python_udtf(&mut self, udtf: &PythonUdtf) -> Result<String>;
 }
 
 /// The host of a translation without one: every Python UDF, inline or in a relation, is refused.
@@ -112,6 +123,8 @@ pub(crate) fn no_host() -> krishiv_common::error::KrishivError {
 pub enum Command {
     /// `register_function` with a Python UDF: register `udf` under its name in the session.
     RegisterPythonUdf(PythonUdf),
+    /// `register_table_function` with a Python UDTF: register `udtf` under its name in the session.
+    RegisterPythonUdtf(PythonUdtf),
     /// `checkpoint_command`: checkpoint the command's relation (translated by the server, which
     /// runs the command) and hold the result under a new id.
     Checkpoint(CheckpointSpec),
@@ -137,12 +150,16 @@ pub struct CheckpointSpec {
 /// Translates a command the server runs itself.
 ///
 /// # Errors
-/// [`python_udf`]'s errors for `register_function`; every other command is refused as
+/// [`python_udf`]'s errors for `register_function`, [`super::python_udtf`]'s for
+/// `register_table_function`; every other command is refused as
 /// [`super::command_not_supported`] refuses it (`INVALID_ONE_OF_FIELD_NOT_SUPPORTED`, or
 /// `INVALID_ONE_OF_FIELD_NOT_SET` for an empty one).
 pub fn translate_command(command: &pb::Command) -> Result<Command> {
     match &command.command_type {
         Some(CommandType::RegisterFunction(fun)) => python_udf(fun).map(Command::RegisterPythonUdf),
+        Some(CommandType::RegisterTableFunction(fun)) => {
+            super::udtf::python_udtf(fun).map(Command::RegisterPythonUdtf)
+        }
         Some(CommandType::CheckpointCommand(c)) => Ok(Command::Checkpoint(CheckpointSpec {
             local: c.local,
             eager: c.eager,

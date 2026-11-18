@@ -27,6 +27,10 @@ impl UdfHost for Recording {
         self.0.push(udf.clone());
         Err(unsupported("relations in this test host"))
     }
+
+    fn inline_python_udtf(&mut self, _: &crate::translate::PythonUdtf) -> Result<String> {
+        Err(unsupported("UDTFs in this test host"))
+    }
 }
 
 fn python(eval_type: i32) -> pb::PythonUdf {

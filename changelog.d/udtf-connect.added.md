@@ -1,0 +1,1 @@
+Python UDTFs over Spark Connect: `spark.udtf.register(...)` and calling a `@udtf` / `@arrow_udtf` object on columns (`my_udtf(lit(1), col("x"))`) run on the server's worker pool, eval types 300, 301 and 302, with or without `analyze`; a `TABLE` argument (`df.asTable()`) is not supported yet.

@@ -90,6 +90,7 @@ impl Translator<'_> {
             RelType::MapPartitions(m) => self.map_partitions(m)?,
             RelType::GroupMap(g) => self.group_map(g)?,
             RelType::CoGroupMap(g) => self.cogroup_map(g)?,
+            RelType::CommonInlineUserDefinedTableFunction(f) => self.inline_udtf(f)?,
             RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
                 self.local_relation(|| super::local::inline_request(l))?,
             )),
