@@ -18,6 +18,9 @@ CTE in both runs (Spark Connect's `spark.sql` does not create temporary views he
 separate ADBC-only pair of statements checks the cookie session: a temporary view created by
 one statement (a command sent as a query, which runs once) is read by the next.
 
+This compares Krishiv over ADBC with Krishiv over Connect (§11: "rows equal to the Connect run");
+it does not prove Spark parity of q1's decimal types, which the TPC-H goldens cover.
+
     uv run --script tests/scripts/flight_sql_adbc.py --addr 127.0.0.1:15002 --token T \
         --data /tmp/lineitem [--ca ca.pem]
 
@@ -151,9 +154,10 @@ def main() -> int:
     problems = []
     if flight.schema.names != connect.schema.names:
         problems.append(f"names: {flight.schema.names} != {connect.schema.names}")
-    for f, c in zip(flight.schema, connect.schema, strict=False):
-        if f.type != c.type:
-            problems.append(f"{f.name}: {f.type} != {c.type}")
+    else:
+        for f, c in zip(flight.schema, connect.schema, strict=True):
+            if f.type != c.type:
+                problems.append(f"{f.name}: {f.type} != {c.type}")
     if flight.to_pylist() != connect.to_pylist():
         problems.append(f"rows:\n  flight  {flight.to_pylist()}\n  connect {connect.to_pylist()}")
     if sum(flight.column("count_order").to_pylist()) == 0 or flight.num_rows < 3:

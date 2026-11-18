@@ -943,3 +943,36 @@ async fn long_doget_outlives_handle_ttl() {
     h.flight.sweep_at(Instant::now() + Duration::from_secs(5));
     assert_eq!(h.flight.handle_count(), 0, "idle past its TTL: gone");
 }
+
+/// An idle ticket past the handle TTL is gone (§4.1).
+#[tokio::test(flavor = "multi_thread")]
+async fn ticket_expires() {
+    let mut h = start(FlightSqlConfig {
+        handles: krishiv_flight_sql::HandleLimits {
+            ttl: Duration::from_millis(100),
+            ..krishiv_flight_sql::HandleLimits::default()
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT 1").await.expect("info");
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(5));
+    let e = fetch(&mut h, OPS, cookie.as_deref(), ticket(&i))
+        .await
+        .expect_err("expired");
+    assert_eq!(e.code(), Code::NotFound, "{e:?}");
+}
+
+/// While the server drains, a call with a stale cookie is `UNAVAILABLE` and creates no session
+/// (§3.2, §2 "Drain").
+#[tokio::test(flavor = "multi_thread")]
+async fn reset_during_shutdown_is_unavailable() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    h.draining.store(true, std::sync::atomic::Ordering::Release);
+    let e = info(&mut h, OPS, Some("stale-session"), "SELECT 1")
+        .await
+        .expect_err("draining");
+    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
+    assert_eq!(h.flight.session_count(), 0);
+    assert_eq!(h.manager.counts().live, 0);
+}
