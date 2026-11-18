@@ -13,6 +13,9 @@ Paths are relative to this crate.
 - `src/handles.rs` `Handles<K, P>` (design §4.1): 128-bit random `HandleId`s bound to an owner and a session, no rows held;
   another owner's id answers as unknown; `HandleLimits` (TTL since last use, per session, per owner:
   `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`, expired handles dropped first); `remove_session`, `sweep(now, alive)`
+- `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
+  name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
+  backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller
 - `src/status.rs` `flight_status` / `code_of` (design §6): a `KrishivError` as the Flight SQL gRPC status, from its
   client-safe form (`KrishivError::for_client`); Spark's message text, trailing metadata `x-krishiv-error-class`,
   `x-krishiv-sqlstate`, `x-krishiv-error-id`. Connect's `status_of` is not used here.
