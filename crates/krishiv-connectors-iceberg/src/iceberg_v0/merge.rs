@@ -282,24 +282,46 @@ async fn write_merged(
     bin: &[&ManifestFile],
 ) -> Result<ManifestFile, KrishivError> {
     let metadata = cx.metadata;
-    let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
-        internal(format!(
-            "a manifest of partition spec {spec_id}, which the table lacks"
-        ))
-    })?;
     let content = bin.first().map_or(ManifestContentType::Data, |m| m.content);
     let version = metadata.format_version();
     let path = format!("{}{}.avro", cx.prefix, cx.next);
     cx.next += 1;
     cx.merged.push(path.clone());
-    let output = cx.io.new_output(&path).map_err(from_iceberg)?;
+    let mut writer = manifest_writer(cx.io, &path, metadata, cx.snapshot_id, spec_id, content)?;
+    for m in bin {
+        copy_entries(cx, m, version, &mut writer).await?;
+    }
+    writer.write_manifest_file().await.map_err(from_iceberg)
+}
+
+/// A writer of a manifest of `content` at `path` for the partition spec
+/// `spec_id` of `metadata`, under the snapshot id `snapshot_id`, in the
+/// table's format version.
+///
+/// # Errors
+/// An internal error for a spec the table lacks or a delete manifest of a
+/// format version 1 table; iceberg-rust's output errors.
+pub(crate) fn manifest_writer(
+    io: &FileIO,
+    path: &str,
+    metadata: &TableMetadata,
+    snapshot_id: i64,
+    spec_id: i32,
+    content: ManifestContentType,
+) -> Result<ManifestWriter, KrishivError> {
+    let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
+        internal(format!(
+            "a manifest of partition spec {spec_id}, which the table lacks"
+        ))
+    })?;
+    let output = io.new_output(path).map_err(from_iceberg)?;
     let builder = ManifestWriterBuilder::new(
         output,
-        Some(cx.snapshot_id),
+        Some(snapshot_id),
         Arc::clone(metadata.current_schema()),
         spec.as_ref().clone(),
     );
-    let mut writer = match (version, content) {
+    Ok(match (metadata.format_version(), content) {
         (FormatVersion::V1, ManifestContentType::Data) => builder.build_v1(),
         (FormatVersion::V2, ManifestContentType::Data) => builder.build_v2_data(),
         (FormatVersion::V2, ManifestContentType::Deletes) => builder.build_v2_deletes(),
@@ -310,11 +332,7 @@ async fn write_merged(
                 "a delete manifest in a format version 1 table".to_owned(),
             ));
         }
-    };
-    for m in bin {
-        copy_entries(cx, m, version, &mut writer).await?;
-    }
-    writer.write_manifest_file().await.map_err(from_iceberg)
+    })
 }
 
 /// The entries of `m` into `writer` (module docs).
