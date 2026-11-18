@@ -23,7 +23,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivUnsupportedFeature,
+    UnsupportedFeatureQueryOnlyCorruptRecordColumn,
+};
 use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
@@ -319,6 +322,8 @@ pub(crate) struct Planner<'a> {
     /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
     /// order.
     pub(super) observers: u32,
+    /// The attributes the whole plan reads (`util::referenced_attrs`), for the corrupt-record-only check.
+    referenced: HashSet<AttrId>,
 }
 
 impl<'a> Planner<'a> {
@@ -356,6 +361,7 @@ impl<'a> Planner<'a> {
             unseeded_samples: 0,
             unobserved: 0,
             observers: 0,
+            referenced: referenced_attrs(root),
         }
     }
 
@@ -1186,6 +1192,16 @@ impl<'a> Planner<'a> {
         let table = factory.table_schema();
         let metadata = crate::operators::scan_metadata(scan);
         let hidden = usize::from(metadata != MetadataCols::default());
+        // Spark refuses a JSON/CSV read of only the corrupt-record column when it plans the scan. A
+        // column the scan keeps only to count rows is not referenced by the plan above it.
+        let referenced: Vec<&str> = scan.output[..scan.output.len() - hidden]
+            .iter()
+            .filter(|c| self.referenced.contains(&c.id))
+            .map(|c| c.name.as_str())
+            .collect();
+        if !self.cx.inspect && factory.only_reads_corrupt_record(&referenced) {
+            return Err(UnsupportedFeatureQueryOnlyCorruptRecordColumn {}.into());
+        }
         let mut projection = Vec::with_capacity(scan.output.len());
         for c in &scan.output[..scan.output.len() - hidden] {
             let field = table

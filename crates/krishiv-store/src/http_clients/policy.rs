@@ -83,13 +83,15 @@ fn apply(
 ) -> object_store::Result<reqwest::ClientBuilder> {
     use ClientConfigKey as K;
     Ok(match key {
-        // Policy clients exist only in server mode, where certificate checks stay on: a store or
-        // catalog endpoint with a certificate the system store does not trust is refused, never
-        // reached without verification (object_store would disable verification here).
+        // Policy clients exist wherever `krishiv.io.egress.privateAddresses=deny`: the server-mode
+        // default, and an embedded runtime that sets it too. Certificate verification stays on in
+        // both: a store or catalog endpoint with a certificate the system store does not trust is
+        // refused, never reached without verification (object_store would disable verification
+        // here).
         K::AllowInvalidCertificates if parse_bool(key, value)? => {
             return Err(generic(format!(
                 "client option {} is refused by the egress policy client: certificate \
-                 verification stays on in server mode",
+                 verification stays on while krishiv.io.egress.privateAddresses=deny",
                 key.as_ref()
             )));
         }
@@ -393,6 +395,52 @@ impl PolicyConnector {
             self.proxy.as_deref(),
             self.answers.clone(),
         )
+    }
+}
+
+impl PolicyConnector {
+    /// The client of a catalog or token endpoint (design P3-T067 §3.4, §5.2): this connector's
+    /// scope and proxy, **no redirect followed** whatever the connector's own mode, `timeout` to
+    /// connect and for the whole request, `https` only unless `allow_http`, and `user_agent`.
+    /// `reqwest` never resolves an address-literal host, so the egress resolver does not see it:
+    /// the caller checks every request's host with [`Self::check_request_host`] before sending.
+    ///
+    /// # Errors
+    /// As [`HttpConnector::connect`].
+    pub fn catalog_client(
+        &self,
+        timeout: Duration,
+        allow_http: bool,
+        user_agent: &str,
+    ) -> object_store::Result<reqwest::Client> {
+        let options = ClientOptions::new()
+            .with_timeout(timeout)
+            .with_connect_timeout(timeout)
+            .with_allow_http(allow_http)
+            .with_config(ClientConfigKey::UserAgent, user_agent);
+        build_policy_client(
+            &options,
+            &self.scope,
+            Redirects::None,
+            self.proxy.as_deref(),
+            self.answers.clone(),
+        )
+    }
+
+    /// Checks the host of one request a non-object_store caller is about to send (what
+    /// the connector's `PolicyService` does for object_store's requests): an address literal in any spelling
+    /// must pass the rule, the provider literals only on a connector that admits them; a host
+    /// no URL parser reads is refused; names pass (the egress resolver checks what they resolve
+    /// to).
+    ///
+    /// # Errors
+    /// [`crate::egress::EgressRefusal::PrivateAddress`] for a refused host.
+    pub fn check_request_host(&self, host: &str) -> Result<(), crate::egress::EgressRefusal> {
+        if self.provider_literals {
+            self.scope.permits_request_literal(host)
+        } else {
+            self.scope.check_redirect(host)
+        }
     }
 }
 

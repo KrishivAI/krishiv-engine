@@ -62,8 +62,9 @@ const NOT_STARTED: &str = "(not started)";
 /// looks at (design P3-T064 §4.5).
 #[derive(Debug, Clone)]
 pub(crate) struct Tagging {
-    /// The name of the principal of the session that runs it.
-    pub(crate) principal: Arc<str>,
+    /// The owner key of the principal of the session that runs it (kind, tenant, name, delegation: `sessions::owner_key`), what
+    /// ownership is decided on, so a same-named principal of another kind or tenant is not it.
+    pub(crate) owner: Arc<str>,
     /// The session's tags, then the request tags as `(tag, "")` pairs (a key appears once).
     pub(crate) tags: Arc<[(String, String)]>,
     /// The request tags among them (exact-match interrupts).
@@ -75,7 +76,7 @@ impl Tagging {
     #[cfg(test)]
     pub(crate) fn none() -> Self {
         Self {
-            principal: Arc::from(""),
+            owner: Arc::from(""),
             tags: Arc::from([]),
             request_tags: Arc::from([]),
         }

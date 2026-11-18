@@ -27,6 +27,13 @@ def test_basic(df: DataFrame) -> None:
     assert obs.get == {"n": 10, "m": 9}
 
 
+def test_metric_name_with_nul(df: DataFrame) -> None:
+    # Exported under a placeholder name over the Arrow C stream, then renamed back.
+    obs = Observation()
+    df.observe(obs, F.count(F.lit(1)).alias("a\x00b")).collect()
+    assert obs.get == {"a\x00b": 10}
+
+
 def test_unnamed_and_unaliased_names(df: DataFrame) -> None:
     obs = Observation()
     df.observe(obs, F.count(F.lit(1)), F.max("id")).collect()

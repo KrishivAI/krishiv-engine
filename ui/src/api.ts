@@ -1,21 +1,23 @@
-// The token comes from the URL the server printed (`/?token=...`); it is kept for the tab and removed from the
-// address bar. Requests send it as a Bearer header; the event stream, which cannot set headers, as `?token=`.
+// The token comes from the URL the server printed (`/?token=...`) once: the page trades it for an HttpOnly,
+// SameSite=Strict session cookie (`POST /api/internal/session`) and removes it from the address bar. No script keeps
+// the token, no request carries it in an address (the event stream sends the cookie), and a request that changes
+// something carries the page's own `X-Krishiv-Csrf` header, which a page on another origin cannot add.
 
-const KEY = "krishiv_ui_token";
-
-export function initToken(): string | null {
+/** Opens the session from the token in the address, if any, and says whether the server accepts this browser. */
+export async function initSession(): Promise<boolean> {
   const url = new URL(window.location.href);
   const fromUrl = url.searchParams.get("token");
   if (fromUrl) {
-    sessionStorage.setItem(KEY, fromUrl);
     url.searchParams.delete("token");
     history.replaceState(null, "", url.pathname + url.search + url.hash);
+    const res = await fetch("/api/internal/session", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fromUrl}`, "X-Krishiv-Csrf": "1" },
+    });
+    return res.ok;
   }
-  return sessionStorage.getItem(KEY);
-}
-
-export function token(): string | null {
-  return sessionStorage.getItem(KEY);
+  const res = await fetch("/api/internal/health", { headers: { "X-Krishiv-Csrf": "1" } });
+  return res.ok;
 }
 
 export class ApiError extends Error {
@@ -29,9 +31,7 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const t = token();
-  const headers: Record<string, string> = t ? { Authorization: `Bearer ${t}` } : {};
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(path, { ...init, headers: { ...(init.headers as Record<string, string>), "X-Krishiv-Csrf": "1" } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new ApiError(res.status, body.error ?? "error", body.message ?? `HTTP ${res.status}`);
@@ -127,4 +127,31 @@ export interface Compare {
   a: Query;
   b: Query;
   delta: Record<string, number>;
+}
+
+export interface CatalogItem {
+  name: string;
+  data_type?: string;
+  comment?: string;
+  is_temporary?: boolean;
+}
+
+export interface Setting {
+  key: string;
+  value: string;
+  redacted: boolean;
+}
+
+export interface Environment {
+  version: string;
+  settings: Setting[];
+}
+
+export interface SqlRun {
+  state: "running" | "finished" | "failed" | "cancelled";
+  columns?: string[];
+  rows?: unknown[][];
+  truncated?: boolean;
+  error?: string;
+  error_class?: string;
 }

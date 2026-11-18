@@ -1330,6 +1330,7 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1371,7 +1372,7 @@ impl Session {
                 }),
             )
             .with_path(catalog.sql_path_snapshot())
-            .in_system(catalog.in_system()),
+            .outside_session(!catalog.in_session_catalog()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1457,7 +1458,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
-                in_system: env.catalog.in_system(),
+                outside_session: !env.catalog.in_session_catalog(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
@@ -1696,7 +1697,7 @@ impl Session {
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
-            principal: Arc::from(self.state.principal.name.as_str()),
+            owner: Arc::from(crate::sessions::owner_key(&self.state.principal).as_str()),
             tags: self.effective_tags().into(),
             request_tags: Arc::clone(&self.request_tags),
         }
