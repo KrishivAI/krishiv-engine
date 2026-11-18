@@ -682,8 +682,10 @@ async fn the_transport_reaches_the_factory_and_system_sessions() {
 #[test]
 fn is_live_does_not_stamp_the_session() {
     use crate::auth::SessionOwner;
+    // The manager has no injectable clock: the margins make a stamping `is_live` fail unless the
+    // thread pauses for longer than the idle timeout between its last poll and the sweep.
     let m = manager(SessionLimits {
-        idle_timeout: Some(Duration::from_millis(1)),
+        idle_timeout: Some(Duration::from_millis(200)),
         ..SessionLimits::default()
     });
     let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
@@ -692,7 +694,7 @@ fn is_live_does_not_stamp_the_session() {
     assert!(!m.is_live(&SessionOwner::of(&bob()), ID), "another owner");
     assert!(!m.is_live(&owner, ID2), "unknown id");
     let since = std::time::Instant::now();
-    while since.elapsed() < Duration::from_millis(5) {
+    while since.elapsed() < Duration::from_millis(300) {
         assert!(m.is_live(&owner, ID));
         std::hint::spin_loop();
     }

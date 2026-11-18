@@ -523,8 +523,9 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
         description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
-                      malformed, wrong or expired credential) or throttled, by listener and \
-                      the method tried. Served only by `krishiv server` with authentication \
+                      malformed, wrong or expired credential) or throttled, by request surface (the \
+                      service the request's path names; Connect and Flight SQL share a \
+                      listener) and the method tried. Served only by `krishiv server` with authentication \
                       configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
@@ -535,7 +536,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
         description: "Access checks of `krishiv server` callers refused with \
-                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
+                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by request surface (where the request \
+                      arrived; Connect and Flight SQL share a listener) and the privilege asked \
                       for. Served only by `krishiv server` with authentication configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
