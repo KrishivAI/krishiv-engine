@@ -113,9 +113,11 @@ impl Session {
         if let Some((e, _)) = scope.body.deferred {
             return Err(e);
         }
+        // Through the analysis's policy, never the session's: a trial analysis installed a
+        // `QuietPolicy`, so a refusal there tells the provider nothing (T063 R2-1).
         for call in &scope.calls {
             krishiv_plan::analyzer::authorize(
-                &*self.state.policy,
+                &*env.analysis.policy,
                 &definer,
                 &function_securable(call),
                 privilege,
@@ -140,8 +142,7 @@ impl Session {
                     .await?;
                 self.authorize_reads_as(&owned.reads.definer_reads, env, &writer, false)
                     .await?;
-                self.authorize_calls_as(&owned.calls, &writer, privilege)
-                    .await?;
+                Self::authorize_calls_as(&owned.calls, env, &writer, privilege).await?;
                 // And the columns it reads, through the column pass the definer's analysis
                 // made (review r11 B1).
                 let krishiv_plan::analyzer::FunctionLookup::Sql(def) =
@@ -193,8 +194,7 @@ impl Session {
                         .await?;
                     self.authorize_reads_as(&under.body.definer_reads, env, &writer, false)
                         .await?;
-                    self.authorize_calls_as(&under.calls, &writer, privilege)
-                        .await?;
+                    Self::authorize_calls_as(&under.calls, env, &writer, privilege).await?;
                 }
                 // And the columns its text reads, through the column pass the definer's
                 // analysis made (review r11 B1).
@@ -320,16 +320,17 @@ impl Session {
             .map_err(|e| e.error)
     }
 
-    /// Asks the policy whether `principal` may call each stored function of `calls`.
+    /// Asks the analysis's policy (`env.analysis.policy`: the session's, or the `QuietPolicy` of a
+    /// trial analysis, T063 R2-1) whether `principal` may call each stored function of `calls`.
     async fn authorize_calls_as(
-        &self,
         calls: &[(String, String)],
+        env: &QueryEnv,
         principal: &Principal,
         privilege: Privilege,
     ) -> Result<(), KrishivError> {
         for call in calls {
             krishiv_plan::analyzer::authorize(
-                &*self.state.policy,
+                &*env.analysis.policy,
                 principal,
                 &function_securable(call),
                 privilege,

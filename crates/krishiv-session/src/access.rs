@@ -654,7 +654,8 @@ impl Session {
     /// function the query's analysis resolved a call to (P3-T062 §2.4: calling a function needs
     /// `Select` on it; there is no `Execute`, Q3). Built-in, temporary and session functions are
     /// not securables. A call inside a definer view's text is asked of the reader too (fails
-    /// closed). Each refusal is the caller's to audit.
+    /// closed). Each refusal is the caller's to audit. Asked through the analysis's policy, so a
+    /// trial analysis's `QuietPolicy` keeps a refusal from the provider (T063 R2-1).
     pub(crate) async fn authorize_function_calls(
         &self,
         env: &QueryEnv,
@@ -664,7 +665,7 @@ impl Session {
             let securable =
                 Securable::Function(vec![crate::catalog::CATALOG.to_owned(), namespace, name]);
             authorize(
-                &*self.state.policy,
+                &*env.analysis.policy,
                 &self.state.principal,
                 &securable,
                 privilege,

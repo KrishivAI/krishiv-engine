@@ -488,21 +488,17 @@ fn explain_shows_no_advice_when_the_definer_reads_are_withheld() {
     let query = "EXPLAIN SELECT sum(id) FROM dv WHERE d = 7";
     // Whoever may see the view's reads sees the advice for `ev` through it.
     assert!(text(&root, query).contains("partition advice: d"));
+    // Bob may read `dv` but not see its definer's reads: EXPLAIN shows him a plan, and no advice
+    // for the table behind the view.
     let bob = w.session("bob", false);
-    match block_on(async { bob.sql(query).await?.collect().await }) {
-        Err(e) => assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_INSUFFICIENT_PERMISSIONS",
-            "{e}"
-        ),
-        Ok(batches) => {
-            let plan = batches
-                .iter()
-                .flat_map(|b| (0..b.num_rows()).map(|i| cell(b.column(0).as_ref(), i)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(!plan.contains("Partition Advice"), "{plan}");
-            assert!(!plan.contains("partition advice"), "{plan}");
-        }
-    }
+    let batches = block_on(async { bob.sql(query).await?.collect().await })
+        .unwrap_or_else(|e| panic!("bob's EXPLAIN is a plan, not a refusal: {e}"));
+    let plan = batches
+        .iter()
+        .flat_map(|b| (0..b.num_rows()).map(|i| cell(b.column(0).as_ref(), i)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!plan.is_empty());
+    assert!(!plan.contains("Partition Advice"), "{plan}");
+    assert!(!plan.contains("partition advice"), "{plan}");
 }
