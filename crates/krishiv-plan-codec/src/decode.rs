@@ -1808,10 +1808,9 @@ fn nested(t: &pb::DataType) -> Result<DataType> {
 
 /// A user-defined type from its JSON form, in the canonical text the encoder writes.
 fn udt(t: &pb::DataType) -> Result<DataType> {
-    match DataType::from_canonical_json(&t.json) {
-        Ok(d @ DataType::Udt(_)) if d.json() == t.json => Ok(d),
-        _ => Err(corrupt("an invalid user-defined type")),
-    }
+    let d = DataType::from_canonical_json(&t.json).ok();
+    d.filter(|d| matches!(d, DataType::Udt(_)) && d.json() == t.json)
+        .ok_or_else(|| corrupt("an invalid user-defined type"))
 }
 
 fn decimal(t: &pb::DataType) -> Result<DecimalType> {
