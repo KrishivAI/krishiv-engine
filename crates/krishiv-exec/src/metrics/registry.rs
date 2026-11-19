@@ -177,7 +177,7 @@ pub const ERROR_CLASS_LABEL: LabelDef = LabelDef {
 /// `surface`: the server listener a request came in on (ADR 0046 §8).
 pub const SURFACE_LABEL: LabelDef = LabelDef {
     name: "surface",
-    values: &["connect", "admin", "metrics", "ui"],
+    values: &["connect", "admin", "metrics", "ui", "flight-sql"],
 };
 
 /// `method`: how a request tried to authenticate.
@@ -509,6 +509,39 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::QueryFold,
     },
     MetricDef {
+        name: "krishiv.delta.log_pool.wait_ms",
+        kind: MetricKind::Gauge,
+        unit: "ms",
+        labels: &[],
+        description: "Milliseconds Delta kernel calls have waited for a slot of the process's \
+                      log pool (`krishiv.delta.logThreads`), summed since the process started \
+                      (a running total); emitted by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.hits",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found the table's snapshot in the engine runtime's \
+                      cache (it is then brought up to date), since the runtime started (a \
+                      running total); emitted by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.misses",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found no cached snapshot and read the log from its \
+                      last checkpoint, since the runtime started (a running total); emitted by \
+                      builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
         name: "krishiv.build.info",
         kind: MetricKind::Gauge,
         unit: "1",
@@ -523,8 +556,9 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
         description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
-                      malformed, wrong or expired credential) or throttled, by listener and \
-                      the method tried. Served only by `krishiv server` with authentication \
+                      malformed, wrong or expired credential) or throttled, by request surface (the \
+                      service the request's path names; Connect and Flight SQL share a \
+                      listener) and the method tried. Served only by `krishiv server` with authentication \
                       configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
@@ -535,7 +569,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
         description: "Access checks of `krishiv server` callers refused with \
-                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
+                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by request surface (where the request \
+                      arrived; Connect and Flight SQL share a listener) and the privilege asked \
                       for. Served only by `krishiv server` with authentication configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,

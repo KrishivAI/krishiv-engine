@@ -178,8 +178,9 @@ impl Session {
 impl Session {
     /// Whether the caller may see what a listing shows, when `statement`'s directory list names it
     /// (review D1): `BROWSE` on the namespace of a `DROP NAMESPACE ... CASCADE` (whose list names the
-    /// namespace's tables), asked as `SHOW TABLES IN` asks it, without an audit record or a denial
-    /// count. Every other statement lists only what its targets already allow.
+    /// namespace's tables), asked as `SHOW TABLES IN` asks it, without an audit record, a denial
+    /// count or a call of the policy's `denied` hook (review R2-1). Every other statement lists
+    /// only what its targets already allow.
     pub(super) async fn listing_allowed_quietly(
         &self,
         statement: &Statement,

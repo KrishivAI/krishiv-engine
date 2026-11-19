@@ -116,6 +116,9 @@ pub struct EngineRuntime {
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
+    /// The Delta snapshot cache of every session of the runtime (ADR 0037; keyed by the
+    /// principal too, so a session never reads a snapshot read under another's credentials).
+    pub(crate) delta: Arc<crate::delta::DeltaCache>,
 }
 
 /// The running queries by worker-local index, and the sessions closed
@@ -176,6 +179,9 @@ impl fmt::Debug for EngineRuntimeBuilder {
             .finish_non_exhaustive()
     }
 }
+
+/// A running query a cancel picked: its context, session number, session id and row id.
+type PickedQuery = (Arc<QueryContext>, u64, Arc<str>, Arc<str>);
 
 impl EngineRuntimeBuilder {
     /// Sets a configuration entry. Runtime-owned keys (cluster scope, and
@@ -391,6 +397,7 @@ impl EngineRuntime {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
+        let delta = Arc::new(crate::delta::DeltaCache::from_config(&config));
         let resource_groups = match config
             .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
             .and_then(krishiv_common::config::ConfigValue::as_str)
@@ -437,6 +444,7 @@ impl EngineRuntime {
             egress,
             catalogs,
             private,
+            delta,
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))
@@ -653,7 +661,7 @@ impl EngineRuntime {
     fn finish_cancel(
         &self,
         reason: CancelReason,
-        mut ids: Vec<QueryId>,
+        mut ids: Vec<(u64, QueryId)>,
         actions: crate::action::ActionsCancelled,
     ) -> (Vec<QueryId>, usize) {
         if !actions.rows.is_empty() {
@@ -661,15 +669,19 @@ impl EngineRuntime {
                 actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
             ids.extend(self.cancel_queries(reason, &|s, q| rows.contains(&(s, q))));
         }
+        // Counted by (session, operation id): the same caller id in two sessions is two queries.
         let mut seen = std::collections::HashSet::new();
-        ids.retain(|id| seen.insert(id.as_str().to_owned()));
+        ids.retain(|(s, id)| seen.insert((*s, id.as_str().to_owned())));
         let ended = ids.len() + actions.ended;
+        let mut out: Vec<QueryId> = ids.into_iter().map(|(_, id)| id).collect();
+        let mut listed: std::collections::HashSet<String> =
+            out.iter().map(|id| id.as_str().to_owned()).collect();
         for id in actions.ids {
-            if seen.insert(id.to_string()) {
-                ids.push(QueryId::minted(id.to_string()));
+            if listed.insert(id.to_string()) {
+                out.push(QueryId::minted(id.to_string()));
             }
         }
-        (ids, ended)
+        (out, ended)
     }
 
     /// Cancels, with `reason`, every query and statement of the runtime whose session number and
@@ -732,9 +744,9 @@ impl EngineRuntime {
         &self,
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
-    ) -> Vec<QueryId> {
+    ) -> Vec<(u64, QueryId)> {
         let mut pending = Vec::new();
-        let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {
+        let picked: Vec<PickedQuery> = {
             let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
             let mut out = Vec::new();
             for l in live.queries.values_mut() {
@@ -745,12 +757,12 @@ impl EngineRuntime {
                     None => {
                         if l.pending.is_none() {
                             l.pending = Some(reason);
-                            pending.push(QueryId::minted(l.id.to_string()));
+                            pending.push((l.session, QueryId::minted(l.id.to_string())));
                         }
                     }
                     Some(q) => {
                         if let Some(q) = q.upgrade() {
-                            out.push((q, Arc::clone(&l.session_id), Arc::clone(&l.id)));
+                            out.push((q, l.session, Arc::clone(&l.session_id), Arc::clone(&l.id)));
                         }
                     }
                 }
@@ -759,9 +771,9 @@ impl EngineRuntime {
         };
         // Cancelled outside the lock: a cancel wakes the query's tasks.
         let mut ids = pending;
-        for (query, session_id, id) in picked {
+        for (query, session, session_id, id) in picked {
             if cancel::apply(&query, reason, None, &self.history, &session_id, &id) {
-                ids.push(QueryId::minted(id.to_string()));
+                ids.push((session, QueryId::minted(id.to_string())));
             }
         }
         ids
@@ -951,6 +963,24 @@ impl EngineRuntime {
                 let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
                 Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
             })?;
+        }
+        #[cfg(feature = "delta")]
+        {
+            use krishiv_connectors_delta::engine::pool::LogPool;
+            let pool = LogPool::process(&self.config);
+            metrics.add_gauge("krishiv.delta.log_pool.wait_ms", Vec::new(), move || {
+                Some(pool.waits().total_ms())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge("krishiv.delta.snapshot_cache.hits", Vec::new(), move || {
+                cache.upgrade().map(|c| c.hits())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge(
+                "krishiv.delta.snapshot_cache.misses",
+                Vec::new(),
+                move || cache.upgrade().map(|c| c.misses()),
+            )?;
         }
         metrics.add_gauge(
             "krishiv.build.info",

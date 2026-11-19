@@ -410,3 +410,19 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
      admin API through DNS rebinding. Unset: only the loopback names.",
     None,
 );
+
+/// `krishiv.workload.resourceGroups.file`.
+pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
+    key: "krishiv.workload.resourceGroups.file",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
+          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
+          the engine starts; a malformed file stops the start with \
+          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};

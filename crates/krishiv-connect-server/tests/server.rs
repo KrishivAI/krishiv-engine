@@ -627,6 +627,81 @@ async fn a_draining_service_refuses_new_work_and_serves_existing_work() {
     assert!(!e.message().contains("shutting down"), "{e:?}");
 }
 
+/// While draining, only an unknown id is the drain's refusal: a closed session keeps its own answer
+/// (`INVALID_HANDLE.SESSION_CLOSED`), and a live one is still served.
+#[tokio::test]
+async fn a_draining_service_maps_only_an_unknown_session_to_draining() {
+    use krishiv_connect_server::service::SparkConnectService;
+    use prost::Message;
+    use tonic::Request;
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let service =
+        krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+    let local = local_caller();
+    let user = || {
+        Some(pb::UserContext {
+            user_id: "someone".to_owned(),
+            ..Default::default()
+        })
+    };
+    let config = |id: &str| {
+        let request = pb::ConfigRequest {
+            session_id: id.to_owned(),
+            user_context: user(),
+            ..Default::default()
+        };
+        krishiv_connect::wire::decode_request::<pb::ConfigRequest>(&request.encode_to_vec())
+            .expect("decode")
+    };
+    let live = "11111111-1111-4111-8111-111111111111";
+    let closed = "22222222-2222-4222-8222-222222222222";
+    let unknown = "33333333-3333-4333-8333-333333333333";
+    manager
+        .get_or_create(&local, live, None, "someone")
+        .expect("live");
+    manager
+        .get_or_create(&local, closed, None, "someone")
+        .expect("closed");
+    let _: pb::ReleaseSessionResponse = service
+        .release_session(Request::new(
+            krishiv_connect::wire::decode_request::<pb::ReleaseSessionRequest>(
+                &release(closed, false).encode_to_vec(),
+            )
+            .expect("decode"),
+        ))
+        .await
+        .expect("release")
+        .into_inner();
+    draining.store(true, Ordering::Release);
+    assert_draining(
+        &service
+            .config(Request::new(config(unknown)))
+            .await
+            .unwrap_err(),
+        "Config on an unknown session",
+    );
+    let e = service
+        .config(Request::new(config(closed)))
+        .await
+        .unwrap_err();
+    assert!(!e.message().contains("shutting down"), "closed: {e:?}");
+    // The status carries the session's own error class (in its ErrorInfo details), not the drain's.
+    assert!(
+        format!("{e:?}").contains("INVALID_HANDLE.SESSION_CLOSED"),
+        "closed: {e:?}"
+    );
+    // A live session is served: the request gets as far as its own (empty) operation.
+    let e = service
+        .config(Request::new(config(live)))
+        .await
+        .unwrap_err();
+    assert!(e.message().contains("OPTYPE_NOT_SET"), "live: {e:?}");
+}
+
 /// A connection cap past the semaphore's capacity is clamped, not a panic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_cap_past_the_semaphore_limit_is_clamped() {

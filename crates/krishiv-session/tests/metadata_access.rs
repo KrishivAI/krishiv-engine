@@ -694,6 +694,47 @@ fn a_withheld_explain_samples_nothing() {
     assert!(!cost.contains("sampled by an earlier query"), "{cost}");
 }
 
+/// A withheld explain counts no key (design P2b A5 (d)): with the key counts on, a later
+/// operator's `EXPLAIN VERBOSE` counts afresh, never "cached".
+#[test]
+fn a_withheld_explain_counts_no_key() {
+    let (policy, s, fixture) = setup(VIEWER);
+    for (k, v) in [
+        ("krishiv.optimizer.payloadAboveAggregate", "true"),
+        ("krishiv.optimizer.discoverKeys", "true"),
+    ] {
+        s.conf().set(k, v).unwrap();
+    }
+    run(
+        &fixture.admin,
+        "CREATE TABLE pc (c_custkey BIGINT, c_name STRING) USING parquet",
+    );
+    run(
+        &fixture.admin,
+        "INSERT INTO pc SELECT id, concat('C', CAST(id AS STRING)) FROM range(1, 201)",
+    );
+    run(
+        &fixture.admin,
+        "CREATE TABLE po (o_custkey BIGINT, o_price DECIMAL(12, 2)) USING parquet",
+    );
+    run(
+        &fixture.admin,
+        "INSERT INTO po SELECT id % 200 + 1, CAST(id % 97 AS DECIMAL(12, 2)) FROM range(2000)",
+    );
+    let sql = "SELECT c_custkey, c_name, sum(o_price) FROM po, pc WHERE o_custkey = c_custkey \
+               GROUP BY c_custkey, c_name";
+    let withheld = text_of(&s, &format!("EXPLAIN {sql}"));
+    assert_withheld(&withheld, "withheld");
+    assert!(!withheld.contains("discoverKeys"), "{withheld}");
+    policy.become_(OPERATOR);
+    let verbose = text_of(&s, &format!("EXPLAIN VERBOSE {sql}"));
+    assert!(
+        verbose.contains("key [c_custkey]: discovered unique"),
+        "{verbose}"
+    );
+    assert!(!verbose.contains("cached unique"), "{verbose}");
+}
+
 /// A withheld explain whose footers do not read: the class stays, the paths (which can carry
 /// partition values) do not.
 #[test]

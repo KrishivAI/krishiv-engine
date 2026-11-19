@@ -222,20 +222,34 @@ past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_A
 
 ## Python table functions (UDTFs)
 
-The worker pool runs Python UDTF tasks (`@udtf`, `@udtf(useArrow=True)`, `@arrow_udtf`) and their `analyze`, but no
-SQL or Connect query plans a Python UDTF call yet, so none of this is reachable from a query. These differences
-are known for when it is:
+Python UDTFs (`@udtf`, `@udtf(useArrow=True)`, `@arrow_udtf`) run on the server's worker pool from SQL (`FROM f(..)`,
+`TABLE(t)` arguments with `PARTITION BY` / `ORDER BY` / `WITH SINGLE PARTITION`, `LATERAL f(..)`), with `analyze` at
+analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udtf/goldens.json`) except:
 
-- A `@udtf` without Arrow converts its result rows to Arrow as the Arrow-optimized kind does (pyspark's
-  `LocalDataToArrowConversion`; a value that does not convert is `UDTF_ARROW_DATA_CONVERSION_ERROR`). Spark
-  pickles those rows to its JVM, which converts each value (`EvaluatePython.makeFromJava`), so a value of another
-  type than the declared one (a `str` in an `INT` column) may give another result or error than Spark's. No
-  Spark golden pins these cases yet (owed: `python/tests/pyspark_udf/README.md`).
+- A UDTF over an input without rows (a `TABLE` argument over an empty relation without `PARTITION BY`, or a
+  `LATERAL` call over an empty left side) whose class has a `terminate` method: Spark 4.2.0 fails with a JVM
+  `NullPointerException` (`EvalPythonUDTFExec` joins `terminate`'s rows with an input row that never came). Krishiv
+  starts no UDTF instance for such an input and returns no rows, as Spark does for `PARTITION BY` over an empty
+  relation.
+- A `@udtf` without Arrow (eval type 300) converts its rows as Spark's JVM does (`EvaluatePython.makeFromJava`: a
+  value of another type than the declared one is NULL, an integer is cut to the column's width, a string column
+  takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
+  `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
+  inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
+  batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
+  (`PYTHON_EXCEPTION`).
+- A constant argument the analyzer does not fold (`array(1, 2)`) reaches `analyze` as no constant (`value` is
+  `None`, `isConstantExpression` false); Spark folds it.
 - `analyze`'s result is limited to 64 MiB (as the worker encodes it, the pickled `AnalyzeResult` as hex); a larger
   one fails the call with `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`. Spark sets no limit.
 - A constant `BINARY` argument reaches `analyze` as `bytes`, Spark's default
   (`spark.sql.execution.pyspark.binaryAsBytes=true`); the setting is not read, so its `false` (`bytearray`) is not
   available.
+- `LEFT JOIN LATERAL f(..) ON cond` (and `USING` or `NATURAL`) with a Python UDTF `f` is refused
+  (`KRISHIV_UNSUPPORTED_FEATURE`) until its rows are checked against a Spark run; an inner `JOIN LATERAL f(..) ON
+  cond` runs as Spark runs it, and `LEFT JOIN LATERAL f(..)` without a condition gives Spark's rows (those of the
+  inner join).
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 
@@ -348,6 +362,23 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+## `remote("local")` is not supported
+
+In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
+needs the full `pyspark` package; `pyspark-client` cannot do it. Krishiv has no JVM and does not accept
+`remote("local")`. Use `krishiv.start_local()`, which starts an in-process Connect server and returns the
+connection string for a stock `pyspark-client` (see [the guide](../guides/embedded-connect.md)). Like Spark's
+local mode, it protects the port with a token made for each start; unlike it, the URL has the host `localhost`
+and the token in the connection string.
+
+## A declared schema on a Delta read
+
+`spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
+`KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
+asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
+the table, and the first action fails.
 
 ## `krishiv server` (Spark Connect)
 

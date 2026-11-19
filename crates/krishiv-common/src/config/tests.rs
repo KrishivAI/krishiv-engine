@@ -924,7 +924,9 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
+mod catalog_delegation;
 mod derived_keys;
+mod iceberg;
 
 #[test]
 fn group_key_code_defaults_off_and_parses() {
@@ -1430,6 +1432,8 @@ fn late_payload_join_defaults_on_and_parses() {
     assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
 }
 
+mod payload_above;
+
 #[test]
 fn history_entries_parse_and_default() {
     let mut c = Config::new();
@@ -1838,23 +1842,6 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     }
 }
 
-/// PR-36a: the open-file cap of an Iceberg write task.
-#[test]
-fn iceberg_write_max_open_files_parses_and_defaults() {
-    let mut c = Config::new();
-    let get = |c: &Config| {
-        c.get(&ICEBERG_WRITE_MAX_OPEN_FILES)
-            .and_then(ConfigValue::as_int)
-    };
-    assert_eq!(get(&c), Some(100));
-    c.set("krishiv.iceberg.write.maxOpenFiles", "7").unwrap();
-    assert_eq!(get(&c), Some(7));
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "0").is_err());
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "-3").is_err());
-    assert!(c.set("krishiv.iceberg.write.maxOpenFiles", "many").is_err());
-    assert_eq!(ICEBERG_WRITE_MAX_OPEN_FILES.scope, Scope::Session);
-}
-
 #[test]
 fn connect_artifact_quotas_parse_and_default() {
     let d = Config::new();
@@ -1994,4 +1981,21 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert_eq!(get(&c), Some(false));
     assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
+}
+
+#[test]
+fn scan_instance_projection_defaults_on_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_SCAN_INSTANCE_PROJECTION)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.scan.instanceProjection", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.scan.instanceProjection", "sometimes")
+            .is_err()
+    );
 }

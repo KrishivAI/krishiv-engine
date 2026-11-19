@@ -146,8 +146,9 @@ impl JwksCache {
     }
 
     /// Replaces the keys with the set in `document`. A document that does not parse, or holds
-    /// no usable key while keys are cached, keeps the old keys (an empty set from a provider in
-    /// trouble must not lock every user out).
+    /// no usable key, is refused: cached keys stay (an empty set from a provider in trouble must
+    /// not lock every user out) and a fresh cache stays "not fetched", so readiness waits for a
+    /// usable set.
     ///
     /// # Errors
     /// The parse error, or `no usable key`.
@@ -155,7 +156,7 @@ impl JwksCache {
         let keys = jose::parse_jwks(document)?;
         let n = keys.len();
         let mut state = self.state();
-        if n == 0 && !state.keys.is_empty() {
+        if n == 0 {
             return Err(JoseError::Invalid("no usable key"));
         }
         state.keys = keys.into();
@@ -197,6 +198,10 @@ pub(crate) struct Oidc {
 
 /// The outcome of one verification.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value per verification, matched at once and never stored"
+)]
 pub(crate) enum Verified {
     /// A valid token.
     Ok(Identity),

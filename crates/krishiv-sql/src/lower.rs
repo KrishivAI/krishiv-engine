@@ -849,6 +849,10 @@ impl Lowerer {
         Ok(plan)
     }
 
+    pub(super) fn sort_order(&mut self, s: &SortItem) -> R<SortOrder> {
+        self.sort_item(s)
+    }
+
     fn sort_item(&mut self, s: &SortItem) -> R<SortOrder> {
         let expr = arc(self.expr(&s.expr)?);
         let asc = s.asc.unwrap_or(true);

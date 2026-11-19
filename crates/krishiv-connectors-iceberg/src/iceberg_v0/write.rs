@@ -89,6 +89,7 @@ use krishiv_io::{Encoder, FileFormat, FormatOptions, IoContext, PinnedStore, Sca
 use krishiv_memory::Reservation;
 
 use super::data_file::{DataLocations, WrittenDataFile, file_name, partition_tuple};
+use super::lineage;
 use super::scan::{iceberg_type, plan_transform, schema_fields};
 use super::storage::Registered;
 #[cfg(test)]
@@ -183,6 +184,8 @@ pub(crate) struct DataFileWriter {
     partition_id: u32,
     attempt_id: u64,
     write_id: String,
+    /// The table's format version (row lineage from 3).
+    format_version: u8,
     /// Files opened so far (the last file's number).
     files: u32,
     /// Open files, oldest-opened first.
@@ -283,12 +286,54 @@ impl DataFileWriter {
             partition_id: ids.partition_id,
             attempt_id: ids.attempt_id,
             write_id: ids.write_id.to_owned(),
+            format_version: metadata.format_version() as u8,
             files: 0,
             open: Vec::new(),
             finished: Vec::new(),
             mem,
             done: false,
         })
+    }
+
+    /// This writer for a copy-on-write rewrite of a v3 table (design note §8
+    /// item 3, [`super::lineage`]): its batches carry `_row_id` and
+    /// `_last_updated_sequence_number` after the table's columns, written
+    /// into every file under their reserved ids as optional longs, so a
+    /// moved row keeps the values it was read with. A null is written as
+    /// null and inherits on read (an inserted row's id, an updated row's
+    /// sequence number). Their metrics follow the table's default mode, as
+    /// Java's `MetricsConfig.columnMode(id)` gives an id outside the table
+    /// schema (`MetricsConfig.java:129-137`).
+    ///
+    /// Call before the first [`Self::write`].
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` on a format v1 or v2 table or one with
+    /// a column of either name; `INTERNAL_ERROR` after a write.
+    pub(crate) fn with_lineage(mut self) -> Result<Self, KrishivError> {
+        lineage::check_table(self.format_version, &self.arrow)?;
+        if self.files > 0 {
+            return Err(internal(
+                "row lineage turned on after a write began".to_owned(),
+            ));
+        }
+        let mut fields: Vec<arrow_schema::FieldRef> = self.arrow.fields().iter().cloned().collect();
+        fields.extend(lineage::lineage_fields());
+        self.arrow = Arc::new(arrow_schema::Schema::new_with_metadata(
+            fields,
+            self.arrow.metadata().clone(),
+        ));
+        for (id, name) in [
+            (lineage::ROW_ID_FIELD_ID, lineage::ROW_ID),
+            (lineage::LAST_UPDATED_FIELD_ID, lineage::LAST_UPDATED),
+        ] {
+            self.columns.push(SchemaField {
+                id,
+                path: krishiv_io::ColumnPath::new(name),
+                ty: IcebergType::Long,
+            });
+        }
+        Ok(self)
     }
 
     /// Writes `batch` (of the table's Arrow schema), each row into its

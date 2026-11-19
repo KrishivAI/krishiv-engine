@@ -4,6 +4,40 @@
 use super::*;
 
 impl Session {
+    /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
+    /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
+    pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
+        if !self.state.runtime.is_draining() {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        self.state.queries.record_failed_row(log_id, &error);
+        Err(error)
+    }
+
+    /// While the server drains, a statement that writes, creates or drops is refused here, before
+    /// its handler changes any catalog or file state (design P3-T066 §5.1): the command handlers
+    /// do their work inside `sql`, so admission at collect would come too late. Queries are
+    /// admitted when they run; `SET`, `USE`, `SHOW`, `DESCRIBE` and session variables change no
+    /// shared state. The refusal leaves a failed `system.queries` row, as a refused query does.
+    pub(crate) fn refuse_changes_while_draining(
+        &self,
+        class: krishiv_sql::StatementClass,
+        redacted: &krishiv_common::redact::RedactedSql,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        use krishiv_sql::StatementClass::{Admin, Ddl, Write};
+        if !self.state.runtime.is_draining() || !matches!(class, Write | Ddl | Admin) {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        let id = self.record_refused(Some(redacted.as_str()), Some(class.name()), &error);
+        *env.row
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        Err(error)
+    }
+
     /// [`Self::sql`] and whether the statement was a command (not a query).
     pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
         self.check_open()?;
@@ -151,14 +185,18 @@ impl Session {
         config: &krishiv_common::config::Config,
         options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
-        let r = self.check_store_options(config, options).await;
+        let r = self
+            .check_store_options(&*self.state.policy, config, options)
+            .await;
         crate::access::audit(self, class, r)
     }
 
-    /// [`Self::authorize_store_options`] without the audit record, for a caller that logs it
-    /// (an analysis, through [`crate::access::audit_read`], silent in a trial).
+    /// [`Self::authorize_store_options`] without the audit record, asking `policy`, for a caller
+    /// that logs it (an analysis, through [`crate::access::audit_read`], silent in a trial, whose
+    /// policy is quiet too).
     pub(crate) async fn check_store_options<'a>(
         &self,
+        policy: &dyn krishiv_plan::analyzer::AccessPolicy,
         config: &krishiv_common::config::Config,
         mut options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
@@ -168,7 +206,7 @@ impl Session {
             return Ok(());
         }
         authorize(
-            &*self.state.policy,
+            policy,
             &self.state.principal,
             &Securable::System("cluster".to_owned()),
             Privilege::Manage,
@@ -572,6 +610,39 @@ impl Session {
                 .locate(path)?
                 .display,
         )
+    }
+
+    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
+    ///
+    /// # Errors
+    /// What [`crate::view_schema::check_read`] raises.
+    pub(super) async fn check_stored_views(
+        &self,
+        reads: &[crate::view_schema::StoredRead],
+        env: &QueryEnv,
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
+        let compensation = crate::view_schema::compensation(&env.config);
+        let mut synced = Vec::new();
+        let mut renames = Vec::new();
+        for read in reads {
+            // A view whose query does not analyze alone is left to the outer query.
+            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
+            else {
+                continue;
+            };
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
+                continue;
+            };
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
+                synced.push((Arc::clone(&read.entry), changed));
+            }
+            renames.extend(check.rename);
+        }
+        Ok((synced, renames))
     }
 }
 

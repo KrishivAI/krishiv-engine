@@ -34,7 +34,7 @@ default = ["collations-icu"]
 # Strictly additive (ADR 0027). Forwarded to crates as they gain code.
 kafka = []
 iceberg = []
-delta = []
+delta = ["krishiv-session/delta"]
 cdc = []
 connect = []
 flight-sql = []

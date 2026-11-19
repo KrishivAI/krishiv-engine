@@ -84,7 +84,9 @@ pub struct CheckReport {
 }
 
 struct Round {
-    at: Instant,
+    /// When each check's verdict was produced, parallel to `outcomes`: freshness is per check,
+    /// so a slow optional check cannot make an old `auth` verdict look new.
+    finished: Vec<Instant>,
     outcomes: Vec<CheckOutcome>,
     /// Consecutive failures per check, parallel to `outcomes`.
     streaks: Vec<u32>,
@@ -103,6 +105,8 @@ pub struct Readiness {
     /// Names of the checks that can fail readiness; `None` means all of them.
     required: Option<Vec<String>>,
     last: Mutex<Option<Round>>,
+    /// Held for a whole round, so rounds never overlap and never publish out of order.
+    round: tokio::sync::Mutex<()>,
 }
 
 impl Readiness {
@@ -123,6 +127,7 @@ impl Readiness {
             failure_threshold: 1,
             required: None,
             last: Mutex::new(None),
+            round: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -147,6 +152,7 @@ impl Readiness {
             failure_threshold: failure_threshold.max(1),
             required: Some(required),
             last: Mutex::new(None),
+            round: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -174,15 +180,19 @@ impl Readiness {
         }
         let fresh = self.interval.saturating_mul(STALE_AFTER_INTERVALS);
         last.is_some_and(|r| {
-            r.at.elapsed() <= fresh
-                && r.outcomes.iter().zip(&r.streaks).zip(&r.ever_ok).all(
-                    |((o, streak), ever_ok)| {
-                        // The threshold forgives a dependency that broke after it worked; one that
-                        // never worked (keys never fetched) is not ready at once.
-                        !self.is_required(o.name)
-                            || (*streak < self.failure_threshold && (*ever_ok || *streak == 0))
-                    },
-                )
+            r.outcomes
+                .iter()
+                .zip(&r.streaks)
+                .zip(&r.ever_ok)
+                .zip(&r.finished)
+                .all(|(((o, streak), ever_ok), at)| {
+                    // The threshold forgives a dependency that broke after it worked; one that
+                    // never worked (keys never fetched) is not ready at once.
+                    !self.is_required(o.name)
+                        || (at.elapsed() <= fresh
+                            && *streak < self.failure_threshold
+                            && (*ever_ok || *streak == 0))
+                })
         })
     }
 
@@ -242,7 +252,9 @@ impl Readiness {
 
     /// Runs every check once (each within the timeout) and stores the round.
     pub async fn run_round(&self) {
+        let _round = self.round.lock().await;
         let mut outcomes = Vec::with_capacity(self.checks.len());
+        let mut finished = Vec::with_capacity(self.checks.len());
         for check in &self.checks {
             let failure = match tokio::time::timeout(self.timeout, check.run()).await {
                 Ok(Ok(())) => None,
@@ -252,6 +264,7 @@ impl Readiness {
             if let Some(reason) = &failure {
                 tracing::warn!(check = check.name(), %reason, "readiness check failed");
             }
+            finished.push(Instant::now());
             outcomes.push(CheckOutcome {
                 name: check.name(),
                 failure,
@@ -278,7 +291,7 @@ impl Readiness {
             })
             .collect();
         *last = Some(Round {
-            at: Instant::now(),
+            finished,
             outcomes,
             streaks,
             ever_ok,
@@ -395,17 +408,20 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    /// Runs on a paused clock: the age of a result is exact, with no real sleeping.
+    #[tokio::test(start_paused = true)]
     async fn a_result_older_than_three_intervals_is_not_ready() {
         let up = Arc::new(AtomicBool::new(true));
         let (r, _) = readiness(vec![Arc::new(Fixed("store", up))], 20);
         r.run_round().await;
         assert!(r.is_ready());
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        tokio::time::advance(Duration::from_millis(59)).await;
+        assert!(r.is_ready(), "inside three intervals");
+        tokio::time::advance(Duration::from_millis(22)).await;
         assert!(!r.is_ready(), "no new round for over three intervals");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_background_checker_keeps_the_result_fresh() {
         let up = Arc::new(AtomicBool::new(true));
         let (r, _) = readiness(vec![Arc::new(Fixed("store", up))], 20);

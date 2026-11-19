@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/payload_above.rs
+assertion_line: 734
+expression: changed
+---
+[
+    (
+        23,
+        1,
+    ),
+    (
+        64,
+        2,
+    ),
+]
