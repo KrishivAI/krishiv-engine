@@ -11,6 +11,7 @@ from krishiv.errors import (
     AnalysisException,
     PySparkException,
     PySparkNotImplementedError,
+    PySparkRuntimeError,
     PySparkTypeError,
     SparkRuntimeException,
 )
@@ -649,3 +650,12 @@ def test_a_source_over_the_byte_limit_fails_before_it_is_read_whole(
     assert params is not None
     assert params["source"] == "Big"
     assert len(pulled) < 10  # stopped at the first batches over the limit
+
+
+def test_no_active_session_message_is_sparks() -> None:
+    error = PySparkRuntimeError(errorClass="NO_ACTIVE_SESSION", messageParameters={})
+    assert error.getCondition() == "NO_ACTIVE_SESSION"
+    assert (
+        error.getMessage()
+        == "No active Spark session found. Please create a new Spark session before running the code."
+    )
