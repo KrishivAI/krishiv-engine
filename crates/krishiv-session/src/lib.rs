@@ -61,6 +61,7 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+mod delta;
 pub mod egress;
 mod execute_immediate;
 mod explain;
@@ -83,11 +84,13 @@ mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_advice;
 mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
 mod profile_history;
+pub use profile_history::{StoredProfile, read_history as read_profile_history};
 mod python_udfs;
 mod query_fold;
 mod recursion;
@@ -152,9 +155,12 @@ pub use krishiv_udf_sdk::{
 };
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+pub use python_udfs::{
+    ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
+    PythonUdtfEntry,
+};
 #[cfg(feature = "unstable-ir")]
-pub use python_udfs::python_udf_call_name;
-pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
+pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 #[cfg(feature = "unstable-ir")]
 pub use session::SqlOutcome;

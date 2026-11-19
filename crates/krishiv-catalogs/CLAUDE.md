@@ -1,7 +1,7 @@
 # krishiv-catalogs
 
 **Layer:** L5 (may depend only on crates in L5 or lower; `cargo xtask layering`).
-**Real code arrives:** P3 (PR-16, T020b, PB-07).
+**Real code:** P3 (PR-16, T020b, PB-07).
 
 ## Purpose
 External catalogs behind `krishiv_plan`'s `Catalog` trait: the embedded SQLite catalog (read-write), the Hive metastore, Iceberg REST and Unity Catalog (read-only). A catalog is
@@ -33,7 +33,22 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   thread of its own with a current-thread runtime (the caller blocks on a `std` channel with the exact deadline, so dropping or
   calling inside a runtime never panics; no redirects, no ambient proxy, `Accept-Encoding: identity` and any other encoding
   refused, body capped while read), `auth.rs` the token source per request (client-credentials token reused until a tenth of its
-  lifetime is left, the lifetime capped at a day; a 401 drops only the token it refused), `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
+  lifetime is left, the lifetime capped at a day; a 401 drops only the token it refused), `delegated.rs` (P3-T067 §3.3,
+  PR-58b) `auth = delegated`: `RestCaller` (identity key, principal, `delegated_by`, `SubjectToken`) taken by the
+  `*_as` client calls; `forward` sends the caller's token only when its validated `aud` names the catalog's audience
+  and never a signed assertion; `exchange` is RFC 8693 (subject, actor = the catalog's client-credentials token or
+  none, audience, scope), cached per (identity key, claims fingerprint) inside the catalog's own source (a token
+  without `expires_in` lives no longer than its subject token, at most a day, and serves only a caller whose subject
+  token is valid), a refused subject token remembered 30 s by its whole-token fingerprint, `maxExchangesPerMinute`
+  per (principal, claims) and `maxDistinctExchangesPerMinute` per principal, the principal keyed without groups
+  (`IdentityKey::limit_key`) and charged only for a request sent to the IdP (`KRISHIV_CATALOG_LIMIT_EXCEEDED`), one
+  `krishiv::audit` record per attempt (a failed actor fetch included); no user token, an expired one or an IdP
+  400/401/403 for the subject is `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` (the OAuth `error` code only), never a
+  fallback to the server identity; `invalid_client`/`unauthorized_client` or an actor that cannot be fetched is the
+  catalog's failure, never remembered against the user, and a failed actor fetch is repeated from memory for 30 s;
+  the actor token goes to the token endpoint only, never to the catalog; `/v1/config` is read with the catalog's own
+  token in every other mode and kept per catalog, and on a delegated catalog with the caller's own delegated token,
+  kept per (principal without groups, claims), least recently used out past 4,096; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
   `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
   `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error), `client.rs` `RestClient`
@@ -41,7 +56,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
   bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
-  `load_credentials` only when advertised), `test_server.rs` a fake HTTP/1.1 server (tests only).
+  `load_credentials` only when advertised), `http_test_server.rs` (crate level, aliased as `test_server` here) a fake HTTP/1.1 server (tests only).
 - `src/sqlite/` (feature `sqlite`; PB-07, ADR 0014 item 6, ADR 0037 `per_query`; `rusqlite` with the bundled C amalgamation, default features off) the embedded catalog:
   `mod.rs` `SqliteCatalog` (`Catalog` + `CatalogWrite`, `open` / `open_in_memory`, `table_details`, `list_namespaces`, `list_tables`; one connection behind a
   mutex, WAL, `synchronous=FULL`, a 10 s busy timeout; one `BEGIN IMMEDIATE` transaction per change, which bumps the epoch only when it changes
@@ -52,16 +67,18 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   `parse_data_type`), `write.rs` the write half (the shared `apply_changes` for `alter_table`, same error classes as `StoreCatalog`), `tests.rs` the shared
   contract suite (`krishiv_plan::analyzer::contract`, in memory and on a file) plus a restart, two connections, threads, two processes and a `kill -9`
   mid-DDL (the test binary re-run as the child). One folding rule, stored in the file (`settings` table; opening it with the other `case_sensitive` is refused; the query's `NameForm` is ignored); `table_details(id, policy)` checks the stored location; `single_part_namespace()` is true; `epoch()` never goes backwards or repeats, also after a read fault. ADR 0028 numbers of `--features sqlite`: 4 new runtime crates (rusqlite 0.43, libsqlite3-sys 0.40 with the bundled SQLite C amalgamation, fallible-iterator, fallible-streaming-iterator; vcpkg is a build-script dependency of libsqlite3-sys), none in the default build; clean build of rusqlite + libsqlite3-sys alone (dev profile, 4 jobs) 29.5 s wall, 24.6 s user, which is the added clean-build time (measured in a scratch crate, not the whole workspace; the release-profile number is not measured). It never touches a table's files: `drop_table` removes the row, `purge` has nothing to purge.
+- `src/unity/` (feature `unity`; PR-16, design `P3-lakehouse.md` §3; no new external dependency: `reqwest`/`serde_json`/`url` and `krishiv-store` as `iceberg_rest`, and no code shared with it, so either feature builds alone) the Unity Catalog read-only client for the OSS UC REST API (v0.7.0, `/api/2.1/unity-catalog`): `config.rs` `UnityConfig` (server URI, one UC catalog, static bearer token as `SecretString`, `http://` only when allowed, `egress` the policy connector, `None` = no rule) and `UnityLimits` (timeout, bytes, depth, listing entries/pages, columns), `transport.rs` the same shape as the Iceberg REST one (own thread, GET only; the client is `PolicyConnector::catalog_client` and the host is checked before every request; no redirects, no ambient proxy, identity encoding, body capped while read), `error.rs` `UnityError` -> `KRISHIV_CATALOG_FAILURE`/`KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages never in the error text), `client.rs` `UnityClient` (`catalogs`, `schemas`, paged `tables`, `tables/{full_name}`; one deadline per call; repeated or over-4-KiB page token, page and entry caps; names that would reshape a URL are refused or absent; a 404 is "absent" only for the exact v0.7.0 codes `TABLE_NOT_FOUND`/`SCHEMA_NOT_FOUND`; `CATALOG_NOT_FOUND`, bare `NOT_FOUND`, `ENDPOINT_NOT_FOUND` and the rest are failures), `catalog.rs` `UnityCatalog` (a read-only `Catalog`: no write half, so `capabilities().writes` is false and the capability check raises `UNSUPPORTED_FEATURE.CATALOG_OPERATION`; only `MANAGED`/`EXTERNAL` tables are read (a view or other type is `UNSUPPORTED_FEATURE.TABLE_OPERATION`, before the location check); `DELTA`/`PARQUET`/`CSV` give `UnityFormat` + a location through `check_location`, every other format, Iceberg included, is `UNSUPPORTED_FEATURE.TABLE_OPERATION`; columns from `type_text` by `position`, partitions by `partition_index`, width counted with nested fields), `tests.rs` recorded-shape responses from a fake server (`src/http_test_server.rs`, shared with `iceberg_rest` tests) incl. the read half of the shared contract suite. Unity's Iceberg REST endpoint (`/api/2.1/unity-catalog/iceberg`) is not built, and whether the OSS image serves it, and the 404 codes against a live server, are unverified until the Docker check.
 - `src/declared.rs` (feature `session`, P3-T067 §2.3) `IcebergRestFactory`, the session registry's `iceberg-rest` factory: a
-  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`; `option.prefix` refused at startup), its
+  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`, or delegated; the built
+  `CallerCatalog` maps each call's `CatalogCaller` to a `RestCaller`; `option.prefix` refused at startup), its
   requests on a `PolicyConnector` scoped to the catalog's declared hosts with no redirects; the `Catalog` resolves names only (a
   missing table is absent, an existing one `KRISHIV_UNSUPPORTED_FEATURE` until the provider exists). `transport.rs` builds no
   `reqwest::Client` of its own: `PolicyConnector::catalog_client` (krishiv-store) and a host check before every request.
 - Not here yet: the metadata mapping and table provider of the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
   table `config` keys reach a store: `s3.endpoint`, signer and refresh endpoints, `remote-signing-config`, delegated-token keys,
   with the endpoint-override case of `catalog_location_confined`; a table's vended `token` for later requests is PR-58b), a fuzz
-  target for the REST response parsers, the write half of the
-  Hive catalog, the Unity Catalog client, the Docker acceptance against a real metastore
+  target for the REST and the Unity Catalog response parsers (§5.6), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
+  Hive catalog, the Docker acceptance against a real metastore and a real Unity Catalog server
   (the default port, transport and SASL are settings and unverified until then).
 
 ## Invariants

@@ -150,6 +150,19 @@ impl StorageHandler for KrishivStorageHandler {
             .iter()
             .map(|m| self.file_meta(m))
             .collect::<KernelResult<Vec<_>>>()?;
+        {
+            let mut seen = self
+                .shared
+                .listed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for m in metas
+                .iter()
+                .filter(|m| m.location.path().ends_with(".json"))
+            {
+                seen.insert(m.location.as_str().to_owned(), (m.size, m.last_modified));
+            }
+        }
         Ok(Box::new(metas.into_iter().map(Ok)))
     }
 

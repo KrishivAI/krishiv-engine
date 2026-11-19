@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ALLOWED_HOSTS, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -43,11 +43,11 @@ use krishiv_connect_server::{
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
 use krishiv_session::auth::{
-    AuthConfig, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
+    AuthConfig, Authenticated, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
 };
 use krishiv_session::catalog_decl::{DeclMode, is_declaration_key};
 use krishiv_session::catalog_registry::CatalogSetup;
-use krishiv_session::{EngineRuntime, Session};
+use krishiv_session::{EngineRuntime, Session, Transport};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -285,6 +285,7 @@ async fn run_listeners(
         authenticated.then(|| Arc::clone(&auth)),
         Arc::clone(&ready),
         admin_bound,
+        tls.is_some(),
     )?;
     let mut connect = ConnectServer::new(
         Arc::clone(&manager),
@@ -387,8 +388,10 @@ fn admin_router(
     auth: Option<Arc<ServerAuth>>,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
+    tls: bool,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
+    let denials = auth.as_ref().map(|a| a.denials());
     let metrics_on = flag(config, &METRICS_ENABLED, false);
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
@@ -434,9 +437,41 @@ fn admin_router(
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
-        let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
+        let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
-        krishiv_server::internal::router_with_ui_guard(Arc::new(source), guard)
+        if let Some(denials) = denials {
+            // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
+            // that caller gets: the same role matrix and path confinement.
+            let base = Session::builder()
+                .runtime(Arc::clone(runtime))
+                .build()
+                .map_err(|e| e.to_string())?;
+            // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
+            // statement arrived (P3-T101 §2 H3).
+            let factory = role_sessions(base, config, denials).map_err(|e| e.to_string())?;
+            source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
+                let session = factory(caller, Transport::Ui)?;
+                // `system.sessions` shows the transport the denials count under.
+                session.set_client_info(Transport::Ui, None, None, None);
+                Ok(session)
+            }));
+        }
+        // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and
+        // `krishiv.ui.allowedHosts`; on another address only when names are configured. The environment variable
+        // `KRISHIV_UI_ALLOWED_HOSTS` adds names to either.
+        let configured = config
+            .get(&UI_ALLOWED_HOSTS)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        let policy = krishiv_server::pages::UiPolicy::for_listener(
+            bound.ip().is_loopback(),
+            configured.split(',').chain(from_env.split(',')),
+        )
+        // The session cookie holds the bearer token: over TLS it never travels in the clear.
+        .secure_cookie(tls);
+        krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
     };

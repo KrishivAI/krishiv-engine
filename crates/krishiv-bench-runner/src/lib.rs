@@ -25,6 +25,10 @@
 //!   kernel's high-water mark, reset before the query through `/proc/self/clear_refs`), `null` where
 //!   unavailable. The peak covers everything the process holds (allocator retention, untracked buffers),
 //!   which is what a memory cap enforces; it starts from what the process already held.
+//!   `"rss_file_bytes"` is the file-backed part of the resident set (`RssFile`, the mapped code of the
+//!   executable and libraries) read after the query: `peak_rss_bytes` minus it is about the peak of
+//!   the process's own memory (less any code first mapped after the peak), which the memory-bound
+//!   tests compare with `rss_bound`, since the code's share depends on the build.
 //!   `"peak_heap_bytes"` is the live heap's peak during the query in a build with the `heap-stats`
 //!   feature (`null` otherwise; the resident set above it is what the allocator keeps), and
 //!   `"peak_untracked_bytes"` the most the live heap grew beyond what the memory pool reserved,
@@ -104,22 +108,33 @@ pub const BUILD_INFO: &str = concat!(
 /// Name of the temporary view a `DUMP` writes from.
 const DUMP_VIEW: &str = "__krishiv_bench_dump";
 
+/// The value of `key` (`"VmRSS:"`, ...) in `/proc/self/status`, in bytes; `None` off Linux or if
+/// unreadable.
+fn status_bytes(key: &str) -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with(key))?;
+    let n: u64 = line[key.len()..]
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse()
+        .ok()?;
+    n.checked_mul(1024)
+}
+
 /// The process's resident set and its high-water mark, in bytes (`VmRSS`, `VmHWM` of
 /// `/proc/self/status`); `None` off Linux or if unreadable.
 #[must_use]
 pub fn rss() -> Option<(u64, u64)> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let kib = |key: &str| -> Option<u64> {
-        let line = status.lines().find(|l| l.starts_with(key))?;
-        let n: u64 = line[key.len()..]
-            .trim()
-            .strip_suffix("kB")?
-            .trim()
-            .parse()
-            .ok()?;
-        n.checked_mul(1024)
-    };
-    Some((kib("VmRSS:")?, kib("VmHWM:")?))
+    Some((status_bytes("VmRSS:")?, status_bytes("VmHWM:")?))
+}
+
+/// The file-backed part of the resident set, in bytes (`RssFile`: the executable's and libraries'
+/// mapped pages); `None` off Linux or if unreadable. An unoptimized build with debug info maps
+/// tens of MiB of code, which the high-water mark counts but no memory limit is about.
+#[must_use]
+pub fn rss_file() -> Option<u64> {
+    status_bytes("RssFile:")
 }
 
 /// Fixed part of the resident-set bound: the program, its runtimes and caches.
@@ -134,7 +149,9 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// pages); the floor what does not scale with the limit. The memory gate checks peak RSS against it
 /// and runs the process in a cgroup with `memory.max` at the bound plus room for the spill files'
 /// page cache, which the cgroup charges but which is not resident memory (64 MiB in the memory-bound
-/// test).
+/// test). The memory-bound tests compare the peak less the mapped code (`rss_file_bytes`): an
+/// unoptimized test build with debug info maps 70+ MiB of it, an amount that varies by build, so
+/// the floor's share for the program is spare there.
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
@@ -510,6 +527,7 @@ impl Runner {
                     limit: self.limit,
                     rss_before: before,
                     peak_rss: peak,
+                    rss_file: rss_file(),
                     peak_heap,
                     peak_untracked,
                     allocations,
@@ -576,6 +594,7 @@ struct Memory {
     limit: Option<u64>,
     rss_before: Option<u64>,
     peak_rss: Option<u64>,
+    rss_file: Option<u64>,
     peak_heap: Option<u64>,
     peak_untracked: Option<u64>,
     allocations: Option<u64>,
@@ -734,13 +753,14 @@ impl Timing {
         let spill_files = ops.clone().map(|o| o.map(|m| m.spill_files).sum::<u64>());
         let spill_bytes = ops.map(|o| o.map(|m| m.spill_write_bytes).sum::<u64>());
         let mem = format!(
-            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{},\"peak_heap_bytes\":{},\"peak_untracked_bytes\":{},\"allocations\":{}}}",
+            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{},\"rss_file_bytes\":{},\"peak_heap_bytes\":{},\"peak_untracked_bytes\":{},\"allocations\":{}}}",
             json_opt(memory.limit),
             json_opt(metrics.map(|m| m.memory.peak_reserved)),
             json_opt(spill_files),
             json_opt(spill_bytes),
             json_opt(memory.rss_before),
             json_opt(memory.peak_rss),
+            json_opt(memory.rss_file),
             json_opt(memory.peak_heap),
             json_opt(memory.peak_untracked),
             json_opt(memory.allocations),

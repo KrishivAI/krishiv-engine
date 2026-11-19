@@ -55,7 +55,10 @@ Paths are relative to this crate.
   are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
-  the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under `connect`, as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
+  the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is
+  `FlightSql`, anything else `Connect`; P3-T101 §2 H2) and passes it to `ConnectAuth::authenticate` (credentials and failure counter,
+  no-role record and denial, act-as records) and into the extensions (`request_surface`, read by `caller`'s refusal log);
+  `tests/flight_surface.rs` checks each site per surface. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under its transport's surface (`connect`, `flight-sql`, or `ui` for the UI editor's sessions, which `krishiv-cli` builds with `Transport::Ui`; they counted under `connect` before P3-T101), as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
   `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
   `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
   `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never
@@ -119,7 +122,10 @@ Paths are relative to this crate.
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT`, `KRISHIV_OPERATION_LIMIT`, `KRISHIV_ARTIFACT_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`; its factory gets the `Authenticated`
-  caller; a new session records transport `connect`, the client's `user_id` (unverified, ADR 0046 §5) and its
+  caller and the `Transport`; a new session records transport `connect` (`get_or_create_with` / `get_with` take the
+  transport / surface for Flight SQL, P3-T101 §2 H3: `system.sessions`, the factory's denial surface, the foreign-id
+  record), `is_live` / `release_owned` (H5: owner-keyed, no access stamp, no foreign-id record, abandoned tombstones only
+  for reattachable operations), `SessionOwner::cap_key` public (H6), the client's `user_id` (unverified, ADR 0046 §5) and its
   server-side id for `system.sessions`): get-or-create / lookup / release, tombstones
   (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance),
   `SESSION_CHANGED` on a changed server-side id, a `krishiv::audit` record (not counted) for a
@@ -132,7 +138,8 @@ Paths are relative to this crate.
   pool without the gate, the clone published only when complete (`Unpublished` closes it otherwise)
 - `src/get_status.rs` `GetStatus` (design §3.12): absent → none, empty → live ∪ ended, ids deduplicated in order,
   unknown → `UNKNOWN`; extensions ignored
-- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
+- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order; `with_routes` (P3-T101 §2 H1) adds further tonic services (Flight SQL, composed by `krishiv-cli`; Connect never depends on Flight) under the same builder limits, TLS, `AuthLayer` and shutdown; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
+- `src/local.rs` `LocalServer` (P3-T016, `krishiv.start_local()`; no failure throttle: every local client is peer 127.0.0.1, so wrong tokens from another process would lock the owner out): a Connect server on `127.0.0.1:0` and `[::1]` (same port; skipped without IPv6: `localhost` may mean `::1`, which no other process may hold) on a thread of its own (current-thread runtime), authenticated by a token made for each start (`spark.connect.authenticate.token`, 64 hex digits, SHA-256 digest compared in constant time by `ServerAuth`), sessions from the base session (`SessionManager::from_base`, no path confinement: the embedded API's rights); `connection_string()` is `sc://localhost:<port>/;token=<token>` (`localhost`, not the IP: pyspark-client sends a token over a plain channel only to that host name); `stop()`/`Drop` drain, join the thread and drop the engine runtime (its compute/I/O pool threads leave just after, `shutdown_background`); `tests/local.rs`
 - `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/analyze_access.rs` (AnalyzePlan under `RolePolicy` viewer/operator), `tests/reattach.rs`
   (replay, reattach, caps, detach, races), `tests/auth.rs`, `tests/tls.rs`, `tests/artifacts.rs` (AddArtifacts,
   ArtifactStatus, FetchErrorDetails, quotas, links, client drops, T-C8), `tests/clone_status.rs` (CloneSession,

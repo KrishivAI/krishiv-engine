@@ -33,6 +33,7 @@ mod filter;
 mod generate;
 mod late_fetch;
 mod limit;
+mod partition_prune;
 mod project;
 mod range;
 mod replicate;
@@ -63,7 +64,7 @@ pub use replicate::ReplicateRows;
 #[cfg(test)]
 pub(crate) use runtime_filter::RowStage;
 pub(crate) use runtime_filter::ScanRows;
-pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub use runtime_filter::{RowStageSettings, RuntimeFilters, SourceRows};
 pub use sample::Sample;
 pub(crate) use scan::scan_metadata;
 pub use scan::{

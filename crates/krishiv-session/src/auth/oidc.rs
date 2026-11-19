@@ -187,6 +187,10 @@ pub(crate) struct Oidc {
 
 /// The outcome of one verification.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value per verification, matched at once and never stored"
+)]
 pub(crate) enum Verified {
     /// A valid token.
     Ok(Identity),

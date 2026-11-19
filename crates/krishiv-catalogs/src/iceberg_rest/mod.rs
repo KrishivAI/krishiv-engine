@@ -11,12 +11,15 @@
 mod auth;
 pub mod client;
 pub mod config;
+pub mod delegated;
+#[cfg(test)]
+mod delegated_tests;
 mod encode;
 pub mod error;
 #[cfg(test)]
 mod fixture_tests;
 #[cfg(test)]
-pub(crate) mod test_server;
+pub(crate) use crate::http_test_server as test_server;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -24,5 +27,6 @@ pub mod types;
 
 pub use client::RestClient;
 pub use config::{ONELAKE_URI, RestAuth, RestConfig, RestLimits};
+pub use delegated::{DelegationLimits, RestCaller, SubjectToken};
 pub use error::{RestError, RestLimit};
 pub use types::{CatalogConfig, LoadedTable, StorageCredential, TableIdent};

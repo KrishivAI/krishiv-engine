@@ -4,7 +4,10 @@
 //! catalog and the table or namespace, with the detail in the log only (cut short). A server's own message, and an
 //! IdP's `error_description`, never reach the error text: either may carry what it should not.
 
-use krishiv_common::error::{KrishivCatalogFailure, KrishivCatalogLimitExceeded, KrishivError};
+use krishiv_common::error::{
+    KrishivCatalogDelegationUnavailable, KrishivCatalogFailure, KrishivCatalogLimitExceeded,
+    KrishivError,
+};
 
 use super::config::RestLimits;
 
@@ -52,6 +55,18 @@ pub enum RestError {
     Protocol(String),
     /// Connecting or reading failed.
     Transport(String),
+    /// A delegated catalog has no usable user token, or the IdP refused the exchange (T067 §3.3). The reason is
+    /// Krishiv's own text: at most an OAuth `error` code, never a token or `error_description`.
+    Delegation(String),
+    /// A token-exchange limit was reached.
+    DelegationLimit {
+        /// What is counted.
+        what: &'static str,
+        /// The limit.
+        value: usize,
+        /// The key that sets it.
+        config: &'static str,
+    },
 }
 
 /// Longest detail a log line carries.
@@ -92,6 +107,8 @@ impl RestError {
             ),
             Self::Protocol(d) => format!("protocol: {}", shortened(d)),
             Self::Transport(d) => format!("transport: {}", shortened(d)),
+            Self::Delegation(d) => format!("delegation: {}", shortened(d)),
+            Self::DelegationLimit { what, value, .. } => format!("limit exceeded: {value} {what}"),
         }
     }
 
@@ -99,6 +116,32 @@ impl RestError {
     /// name). Logs the detail on `krishiv::catalog`.
     #[must_use]
     pub fn into_error(self, catalog: &str, relation: &str, limits: &RestLimits) -> KrishivError {
+        match self {
+            Self::Delegation(reason) => {
+                return KrishivCatalogDelegationUnavailable {
+                    catalog: quoted(catalog),
+                    reason,
+                }
+                .into();
+            }
+            Self::DelegationLimit {
+                what,
+                value,
+                config,
+            } => {
+                return KrishivCatalogLimitExceeded {
+                    source: format!(
+                        "Delegated access to the catalog {} for this user",
+                        quoted(catalog)
+                    ),
+                    limit: what.to_owned(),
+                    value: value.to_string(),
+                    config: format!("a higher `{config}`"),
+                }
+                .into();
+            }
+            _ => {}
+        }
         if let Self::Limit(limit) = self {
             let (what, value, config) = match limit {
                 RestLimit::Bytes => (

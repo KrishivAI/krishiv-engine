@@ -13,14 +13,15 @@ use super::{
     build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
     distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
     partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    scan_instance::EXEC_SCAN_INSTANCE_PROJECTION,
 };
 
 mod python;
 pub use python::{
     ARROW_MAX_RECORDS_PER_BATCH, ARROW_PYSPARK_VALIDATE_SCHEMA, PYTHON_UDF_ARROW_ENABLED,
-    PYTHON_UDF_THREADS, PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES,
-    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
-    PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
+    PYTHON_UDF_THREADS, PYTHON_UDTF_ARROW_ENABLED, PYTHON_WORKER_ALLOW_FORK,
+    PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION,
+    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
 mod access;
 mod lakehouse;
@@ -32,11 +33,14 @@ pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
 };
 pub use lakehouse::{
-    CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
-    ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
+    CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES,
+    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER,
+    DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
     SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
@@ -79,6 +83,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_BUILD_PROJECTION,
+    &EXEC_SCAN_INSTANCE_PROJECTION,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
@@ -102,6 +107,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_LITERALS,
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
+    &UI_ALLOWED_HOSTS,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -115,7 +121,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
     &LATE_PAYLOAD_JOIN,
+    &PAYLOAD_ABOVE_AGGREGATE,
+    &DISCOVER_KEYS,
+    &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SEMI_ANTI_JOIN_ORDER,
@@ -141,11 +151,15 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &DELTA_LOG_THREADS,
+    &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     &CATALOG_MAX_METADATA_BYTES,
     &ICEBERG_MANIFEST_CACHE_BYTES,
     &ICEBERG_WRITE_MAX_OPEN_FILES,
+    &ICEBERG_COMMIT_MAX_INTERVENING,
     &CATALOG_MAX_COLUMNS,
     &CATALOG_REQUEST_TIMEOUT,
+    &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
+    &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -204,6 +218,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ARROW_MAX_RECORDS_PER_BATCH,
     &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
+    &PYTHON_UDTF_ARROW_ENABLED,
     &PYTHON_UDF_THREADS,
     &UDF_SANDBOX,
     &PYTHON_WORKER_EXECUTABLES,
@@ -712,6 +727,24 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(256 << 20)),
     doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
           takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
+pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedHosts",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
+          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
+          another name that resolves to this server cannot read it (DNS rebinding). A server \
+          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
+          `[::1]`. A server bound to another address checks the `Host` header only when this is \
+          set (it already requires authentication, and TLS for bearer methods). The \
+          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

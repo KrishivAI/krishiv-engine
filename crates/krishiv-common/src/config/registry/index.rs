@@ -35,6 +35,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("krishiv.ui.allowedHosts", &UI_ALLOWED_HOSTS),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
@@ -97,6 +98,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.optimizer.discoverKeys", &DISCOVER_KEYS),
     ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
     ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
@@ -256,6 +258,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillScratchReserve",
         &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
+    ("krishiv.optimizer.derivedKeysAbove", &DERIVED_KEYS_ABOVE),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
@@ -310,6 +313,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.delta.snapshotCache.maxBytes",
+        &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ),
+    (
+        "krishiv.exec.scan.instanceProjection",
+        &EXEC_SCAN_INSTANCE_PROJECTION,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
@@ -358,6 +369,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     ),
     (
+        "krishiv.iceberg.commit.maxIntervening",
+        &ICEBERG_COMMIT_MAX_INTERVENING,
+    ),
+    (
         "krishiv.optimizer.ndvSampling.enabled",
         &NDV_SAMPLING_ENABLED,
     ),
@@ -384,6 +399,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.io.parquet.bloomFilter.enabled",
         &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    ),
+    (
+        "krishiv.optimizer.discoverKeys.timeout",
+        &DISCOVER_KEYS_TIMEOUT,
     ),
     (
         "krishiv.runtimeFilter.adaptive.minRows",
@@ -436,6 +455,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.maxSessionsPerPrincipal",
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    ),
+    (
+        "krishiv.optimizer.payloadAboveAggregate",
+        &PAYLOAD_ABOVE_AGGREGATE,
     ),
     (
         "krishiv.optimizer.shareRepeatedSubtrees",
@@ -554,6 +577,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
+        "spark.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     ),
@@ -578,6 +605,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
+        "krishiv.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
+    ),
+    (
         "krishiv.connect.execute.senderMaxStreamDuration",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
     ),
@@ -588,6 +619,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "krishiv.catalog.delegation.maxExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
     ),
     (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
@@ -616,6 +651,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.execute.reattachable.senderMaxStreamSize",
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

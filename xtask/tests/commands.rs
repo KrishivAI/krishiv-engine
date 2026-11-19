@@ -62,7 +62,24 @@ fn init_repo(name: &str) -> Tmp {
     write(&dir, "README.md", "hi\n");
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-q", "-m", "base"]);
+    // The UI assets `budgets` weighs in the repo it is pointed at (an empty directory is invisible to git).
+    std::fs::create_dir_all(dir.join("crates/krishiv-ui-assets/assets")).unwrap();
     dir
+}
+
+/// `budgets --precheck --repo DIR` weighs DIR's UI assets, not the workspace's.
+#[test]
+fn budgets_precheck_checks_the_selected_repos_ui_assets() {
+    let dir = init_repo("budgets-big-assets");
+    let repo = dir.to_str().unwrap();
+    let big = vec![0_u8; 3_000_001];
+    std::fs::write(dir.join("crates/krishiv-ui-assets/assets/index.js"), big).unwrap();
+    let out = xtask(&["budgets", "--precheck", "--repo", repo, "--base", "main"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("UI assets weigh 3000001 bytes"),
+        "{out:?}"
+    );
 }
 
 #[test]
