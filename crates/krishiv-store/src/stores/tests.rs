@@ -1045,3 +1045,37 @@ fn azure_host_kinds_and_inline_oauth_keys() {
         "fs.azure.account.oauth2.client.endpoint"
     ));
 }
+
+/// KN-7: an `hf://` directory or glob is refused with how to name files; `@~parquet` is named.
+#[test]
+fn hf_directories_globs_and_the_parquet_branch_get_clear_errors() {
+    for (bad, needle) in [
+        ("hf://datasets/acme/tiny/data/", "a directory"),
+        ("hf://datasets/acme/tiny/data/*.parquet", "a glob"),
+        ("hf://datasets/acme/tiny/./", "a directory"),
+        ("hf://datasets/acme/tiny//", "a directory"),
+        ("hf://datasets/acme/tiny", "a directory"),
+        ("hf://datasets/acme/tiny@v2/", "a directory"),
+    ] {
+        let e = check_hf_file_path(bad).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        let text = e.to_string();
+        assert!(text.contains(needle), "{bad}: {text}");
+        assert!(text.contains("only named files"), "{bad}: {text}");
+    }
+    for ok in [
+        "hf://datasets/acme/tiny/data/t.parquet",
+        "hf://datasets/acme/tiny@v2/t.parquet",
+        "s3://bucket/dir/",
+        "/local/*.parquet",
+    ] {
+        check_hf_file_path(ok).unwrap();
+    }
+    let e = parse_object_url("hf://datasets/acme/tiny@~parquet/default/train/0000.parquet")
+        .unwrap_err();
+    let text = e.to_string();
+    assert!(
+        text.contains("@~parquet") && text.contains("not readable"),
+        "{text}"
+    );
+}
