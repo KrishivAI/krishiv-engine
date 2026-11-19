@@ -1067,6 +1067,9 @@ message KeyFilterOptions {
   // ignorable: a reader that skips it sizes each Bloom for its keys; filters
   // of several build partitions then merge to their range, and pass more rows.
   optional uint32 bloom_bytes = 9;
+  // ignorable: a reader that skips it loses the Bloom form of a build past
+  // `bloom_max_items` or one that sheds its hashes to spill (a range only).
+  optional uint32 bloom_spill_bytes = 10;
 }
 
 message UnionNode {

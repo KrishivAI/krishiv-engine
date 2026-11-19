@@ -1602,6 +1602,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_fpp: o.bloom_fpp,
             bloom_max_fpp: o.bloom_max_fpp,
             bloom_bytes: o.bloom_bytes,
+            bloom_spill_bytes: o.bloom_spill_bytes,
         },
     })
 }

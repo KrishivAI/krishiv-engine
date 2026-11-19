@@ -52,6 +52,13 @@ pub struct KeyFilterOptions {
     /// is then that size, so the partials' filters OR into the value's.
     /// `None` sizes it for the keys seen.
     pub bloom_bytes: Option<u32>,
+    /// The size in bytes of a fixed Bloom filter a producer of one
+    /// partition may move its keys into once it can no longer hold their
+    /// hashes (past `bloom_max_items`, or a build that spills): its hashes
+    /// are then [drained](KeyFilterBuilder::drain_hashes) into that filter
+    /// as they come, and [`KeyFilterBuilder::finish_with`] publishes it.
+    /// `None`: the Bloom form is lost then (q09 SF1000, perf-1 2026-11-19).
+    pub bloom_spill_bytes: Option<u32>,
 }
 
 impl Default for KeyFilterOptions {
@@ -66,6 +73,7 @@ impl Default for KeyFilterOptions {
             bloom_fpp: 0.01,
             bloom_max_fpp: 0.05,
             bloom_bytes: None,
+            bloom_spill_bytes: None,
         }
     }
 }
@@ -131,6 +139,10 @@ pub struct KeyFilterBuilder {
     distinct: Option<Distinct>,
     /// `None` when no Bloom is collected or too many keys were.
     hashes: Option<Vec<u64>>,
+    /// Some hashes were [drained](Self::drain_hashes) into a filter outside
+    /// this builder: it keeps collecting hashes past `bloom_max_items`, and
+    /// its own hashes alone are no Bloom ([`Self::finish_with`]).
+    drained: bool,
     nulls: bool,
     rows: u64,
 }
@@ -146,6 +158,7 @@ impl KeyFilterBuilder {
         Some(Self {
             class: Class::of(&key_type)?,
             hashes: options.bloom.then(Vec::new),
+            drained: false,
             distinct: Some(Distinct::default()),
             key_type,
             options,
@@ -208,7 +221,12 @@ impl KeyFilterBuilder {
         }
         self.rows += rows.len() as u64;
         self.add_range(&keys, &rows);
-        if self.hashes.is_some() && self.rows > self.options.bloom_max_items {
+        // With a fixed filter to drain into, the owner decides past the cap.
+        if self.hashes.is_some()
+            && !self.drained
+            && self.options.bloom_spill_bytes.is_none()
+            && self.rows > self.options.bloom_max_items
+        {
             self.hashes = None;
         }
         if self.distinct.is_none() && self.hashes.is_none() {
@@ -356,6 +374,40 @@ impl KeyFilterBuilder {
         self.hashes.is_some()
     }
 
+    /// The options this builder collects under.
+    #[must_use]
+    pub fn options(&self) -> KeyFilterOptions {
+        self.options
+    }
+
+    /// Whether the rows collected exceed `bloom_max_items`. Past it a
+    /// builder drops its hashes at its next [`Self::add`] or merge, unless
+    /// it has a fixed filter to drain into
+    /// ([`KeyFilterOptions::bloom_spill_bytes`]): its owner then drains
+    /// or [drops](Self::drop_hashes) them.
+    #[must_use]
+    pub fn past_bloom_cap(&self) -> bool {
+        self.rows > self.options.bloom_max_items
+    }
+
+    /// Whether some hashes went to a filter outside this builder.
+    #[must_use]
+    pub fn is_drained(&self) -> bool {
+        self.drained
+    }
+
+    /// Takes the hashes collected since the last call, for the caller to
+    /// insert into its fixed Bloom filter of
+    /// [`KeyFilterOptions::bloom_spill_bytes`]; from then on the builder
+    /// keeps collecting hashes whatever their count, and only
+    /// [`Self::finish_with`] that filter publishes a Bloom. `None` (and
+    /// nothing changes) when no hashes are collected.
+    pub fn drain_hashes(&mut self) -> Option<Vec<u64>> {
+        let hashes = self.hashes.as_mut()?;
+        self.drained = true;
+        Some(std::mem::take(hashes))
+    }
+
     /// Drops the Bloom filter's hashes and keeps the distinct keys (the
     /// first answer to a failed reservation: the hashes cost 8 bytes per
     /// row, the keys at most the exact set).
@@ -395,13 +447,18 @@ impl KeyFilterBuilder {
                 .then_some(a),
             _ => None,
         };
+        let drained = self.drained || other.drained;
+        let keep = drained
+            || self.options.bloom_spill_bytes.is_some()
+            || self.rows <= self.options.bloom_max_items;
         self.hashes = match (self.hashes.take(), other.hashes) {
-            (Some(mut a), Some(b)) if self.rows <= self.options.bloom_max_items => {
+            (Some(mut a), Some(b)) if keep => {
                 a.extend(b);
                 Some(a)
             }
             _ => None,
         };
+        self.drained = drained;
     }
 
     /// The filter: its row form picked by the distinct key count (see
@@ -412,6 +469,19 @@ impl KeyFilterBuilder {
     /// key was NaN.
     #[must_use]
     pub fn finish(self) -> KeyFilter {
+        self.finish_with(None)
+    }
+
+    /// As [`Self::finish`], for a builder whose hashes were
+    /// [drained](Self::drain_hashes) into `drained` (of
+    /// [`KeyFilterOptions::bloom_spill_bytes`]): the hashes left are added
+    /// to it, and it is the Bloom form unless expected to pass more than
+    /// `bloom_max_fpp` false positives at the rows collected (duplicates
+    /// counted, so the estimate errs high). A drained builder without that
+    /// filter, or one that lost its hashes, publishes no Bloom: either
+    /// would miss keys.
+    #[must_use]
+    pub fn finish_with(self, drained: Option<RuntimeBloom>) -> KeyFilter {
         let range = self.range.filter(|_| !self.nan);
         let members: Option<Vec<(u64, KeyValue)>> =
             self.distinct.map(|d| d.table.into_iter().collect());
@@ -428,10 +498,20 @@ impl KeyFilterBuilder {
             Some(m) if m.len() <= self.options.exact_max_values => {
                 Member::exact(self.class, m).unwrap_or(Member::Range)
             }
-            _ => self
-                .hashes
-                .and_then(|hashes| bloom(&hashes, &self.options))
-                .map_or(Member::Range, Member::Bloom),
+            _ => match (self.hashes, drained) {
+                (Some(hashes), Some(mut b)) if self.drained => {
+                    for h in hashes {
+                        b.insert_hash(h);
+                    }
+                    (b.expected_fpp(self.rows) <= self.options.bloom_max_fpp)
+                        .then_some(b)
+                        .map_or(Member::Range, Member::Bloom)
+                }
+                (Some(hashes), _) if !self.drained => {
+                    bloom(&hashes, &self.options).map_or(Member::Range, Member::Bloom)
+                }
+                _ => Member::Range,
+            },
         };
         KeyFilter {
             range,

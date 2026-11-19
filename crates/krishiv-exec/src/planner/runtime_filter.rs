@@ -64,7 +64,17 @@
 //! keys that holds 869K at SF100). A build whose key rows exceed
 //! `bloom.maxItems` publishes no Bloom form (`KeyFilterBuilder::add` and
 //! `merge` in `krishiv_io::runtime_filter` drop the hashes past it), so a
-//! wrong guess costs only the hashing until then. Whether the scan
+//! wrong guess costs only the hashing until then. Except for such a guessed
+//! build of one partition while `bloom.memoryTier` is on: it gets a fixed
+//! Bloom of the tier's size (`KeyFilterOptions::bloom_spill_bytes`), which
+//! its partials create once one passes the cap, or sheds hashes of at least
+//! a sixteenth of it when the build spills, and then drain their hashes
+//! into; it is published when its expected false-positive rate at the rows
+//! collected is within `bloom_max_fpp` (TPC-H q09 at SF1000: `p_name LIKE
+//! '%green%'`, a lineitem-side build of ~300M keys that always spills, had
+//! only a range on `orders`; `join/build.rs` `Partials::settle`). A Bloom
+//! that drops little is switched off by the scan's adaptive row stage.
+//! Whether the scan
 //! waits for the filter ([`scan_waits`]) still reads the uncapped
 //! estimate. Spark's size guards are not used: they are tuned for clusters.
 
@@ -231,6 +241,19 @@ impl Settings {
         }
         self
     }
+
+    /// The size of the fixed Bloom a guessed build keeps past its cap
+    /// (`KeyFilterOptions::bloom_spill_bytes`): the memory tier, within an
+    /// explicit `bloom.maxBytes`; `None` with the tier off.
+    fn spill_bloom_bytes(&self) -> Option<u32> {
+        let tier = self.memory_tier?;
+        let bytes = if self.at_scale_bytes {
+            tier
+        } else {
+            tier.min(self.bloom_max_bytes)
+        };
+        Some(u32::try_from(bytes).unwrap_or(u32::MAX))
+    }
 }
 
 /// The memory a query may use: `krishiv.memory.limit` (else the root pool's
@@ -340,10 +363,9 @@ impl Planner<'_> {
                 // capped there for the scan-size test and the planned size.
                 // So is a build cut by a predicate the estimator cannot
                 // model (TPC-H q20's `LIKE`: estimated 16M, holds 869K).
+                let guessed = filtered_aggregate(build) || guessed_filter(build);
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
-                let rows = if s.bloom_max_items > 0
-                    && (filtered_aggregate(build) || guessed_filter(build))
-                {
+                let rows = if s.bloom_max_items > 0 && guessed {
                     build_rows.min(s.bloom_max_items as f64)
                 } else {
                     build_rows
@@ -381,6 +403,12 @@ impl Planner<'_> {
                 // Sized at the false-positive rate the producers build with.
                 options.bloom_bytes = (bloom && partitioned)
                     .then(|| planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes));
+                // A guessed build of one partition may hold far more keys
+                // than its capped estimate, and spill: past the cap, or when
+                // it sheds its hashes, it keeps a Bloom of the memory tier.
+                options.bloom_spill_bytes = (bloom && guessed && !partitioned)
+                    .then(|| s.spill_bloom_bytes())
+                    .flatten();
                 out.filters.push(JoinFilterPlan { id, key, options });
             }
         }

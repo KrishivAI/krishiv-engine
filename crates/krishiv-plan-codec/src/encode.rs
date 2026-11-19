@@ -1104,6 +1104,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_fpp,
         bloom_max_fpp,
         bloom_bytes,
+        bloom_spill_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -1118,6 +1119,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_fpp,
             bloom_max_fpp,
             bloom_bytes,
+            bloom_spill_bytes,
         }),
     }
 }

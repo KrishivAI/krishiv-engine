@@ -757,6 +757,80 @@ fn a_build_cut_by_a_guessed_predicate_plans_its_bloom() {
     assert!(!plan.to_string().contains("(bloom)"), "{plan}");
 }
 
+/// The fixed Bloom size of every runtime filter a join in `node` publishes.
+fn spill_bloom_sizes(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<Option<u32>>) {
+    if let krishiv_exec::physical::PhysNode::HashJoin(j) = node {
+        out.extend(
+            j.runtime_filters
+                .iter()
+                .map(|f| f.options.bloom_spill_bytes),
+        );
+    }
+    for c in node.children() {
+        spill_bloom_sizes(c, out);
+    }
+}
+
+/// TPC-H q09's shape at SF1000, scaled down: a build cut by a `LIKE` holds
+/// far more keys than `bloom.maxItems` (2,800 rows against a cap of 400).
+/// Under `bloom.memoryTier` it gets a fixed Bloom of the tier (1/64 of the
+/// memory limit) and keeps the Bloom form past the cap, so it drops more
+/// probe rows than the range alone does without the tier; results match.
+#[test]
+fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 43;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 0));
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 10_000, 4000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    // `key-1%` keeps the keys 1, 10-19, 100-199 and 1000-1999 (about 2,800
+    // rows), estimated at 2,000 (0.2 of 10,000) and capped at 400.
+    let q = "SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64 WHERE s.s LIKE 'key-1%'";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    let scaled: Vec<(&str, &str)> = vec![
+        ("krishiv.memory.limit", "256m"),
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.bloom.maxItems", "400"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+    ];
+    let mut no_tier = scaled.clone();
+    no_tier.push(("krishiv.runtimeFilter.bloom.memoryTier", "false"));
+    configured(&mut t, &no_tier);
+    let plan = t.plan_sql(q).unwrap();
+    let mut sizes = Vec::new();
+    spill_bloom_sizes(plan.plan.root(), &mut sizes);
+    assert!(sizes.iter().all(Option::is_none), "{sizes:?}");
+    let (got, c_off) = run(&plan);
+    assert_eq!(sorted(&got), want);
+    configured(&mut t, &scaled);
+    let plan = t.plan_sql(q).unwrap();
+    let mut sizes = Vec::new();
+    spill_bloom_sizes(plan.plan.root(), &mut sizes);
+    assert!(sizes.contains(&Some(4 << 20)), "{sizes:?}\n{plan}");
+    let (got, c) = run(&plan);
+    assert_eq!(sorted(&got), want);
+    // The range keeps [1, 1999], half of `big`; the Bloom about 28% of it.
+    assert!(
+        c.rows_dropped > c_off.rows_dropped,
+        "{c:?} {c_off:?}\n{plan}"
+    );
+}
+
 /// The `scan_waits` of every runtime filter a join in `node` publishes.
 fn scan_waits(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<bool>) {
     if let krishiv_exec::physical::PhysNode::HashJoin(j) = node {

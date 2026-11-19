@@ -110,6 +110,7 @@ fn without_room_for_the_hashes_the_exact_set_stays() {
         // Room for the keys and half the hashes: never both.
         memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     p.add_keys(&shared, &[Arc::clone(&keys)], None);
     assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
@@ -143,6 +144,7 @@ fn shedding_the_hashes_frees_their_memory_and_keeps_the_keys() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     p.add_keys(&shared, &[Arc::clone(&keys)], None);
     let before = p.memory[0].size();
@@ -181,6 +183,7 @@ fn once_one_partial_sheds_the_others_stop_collecting_hashes() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::clone(lost),
+        spilled: Arc::default(),
     };
     let (mut a, mut b) = (new(&lost), new(&lost));
     let mut other = new(&flag());
@@ -225,6 +228,7 @@ fn a_refused_merged_partial_releases_from_every_reservation() {
         builders: vec![Some(builder)],
         memory: vec![first, merged],
         bloom_lost: flag(),
+        spilled: Arc::default(),
     };
     p.fit();
     assert_eq!(p.hash_bytes(), 0, "the hashes stayed");
@@ -373,6 +377,7 @@ fn a_merge_past_the_bloom_cap_raises_the_flag() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::clone(&lost),
+        spilled: Arc::default(),
     };
     let keys = |from: i64| -> ArrayRef {
         Arc::new(Int64Array::from_iter_values(
@@ -512,6 +517,7 @@ fn memory_pressure_drops_forms_never_fails() {
         )],
         memory: vec![reservation(1024)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     let spec_keys = [Arc::clone(&keys)];
     p.add_keys(&shared, &spec_keys, None);
@@ -539,6 +545,7 @@ fn memory_pressure_drops_forms_never_fails() {
             )],
             memory: vec![reservation(1 << 20)],
             bloom_lost: Arc::default(),
+            spilled: Arc::default(),
         };
         p.add_keys(&shared, &sparse_keys, None);
         publish(&publisher(&f), &shared, p, &mut reservation(held));
@@ -564,6 +571,7 @@ fn memory_pressure_drops_forms_never_fails() {
         )],
         memory: Vec::new(),
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
     p.add_keys(&shared, &[wrong], None);
@@ -572,4 +580,141 @@ fn memory_pressure_drops_forms_never_fails() {
         f.filter.published().snapshot,
         FilterSnapshot::Disabled(_)
     ));
+}
+
+/// A filter with a fixed Bloom (`bloom_spill_bytes`): one partial past
+/// `bloom_max_items` creates and reserves it and drains into it, another
+/// partial then drains too, a spill request (`shed_hashes`) moves the hashes
+/// there instead of dropping them, and the published Bloom passes every key
+/// on the fixed filter's own reservation (q09 SF1000, perf-1 2026-11-19).
+#[test]
+fn a_spilling_build_keeps_its_bloom_in_the_fixed_filter() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = filter();
+    f.options.exact_max_values = 0;
+    f.options.bloom_max_items = 1000;
+    f.options.bloom_spill_bytes = Some(64 << 10);
+    let shared = vec![f.clone()];
+    let lost = flag();
+    let spilled: Arc<[super::SpilledBloom]> = Arc::new([super::SpilledBloom::default()]);
+    let new = || Partials {
+        builders: vec![krishiv_io::KeyFilterBuilder::new(
+            DataType::Int64,
+            f.options,
+        )],
+        memory: vec![reservation(1 << 24)],
+        bloom_lost: Arc::clone(&lost),
+        spilled: Arc::clone(&spilled),
+    };
+    let keys = |from: i64, n: i64| -> ArrayRef {
+        Arc::new(Int64Array::from_iter_values(
+            (from..from + n).map(|i| i * 1_000_003),
+        ))
+    };
+    let (mut a, mut b) = (new(), new());
+    b.add_keys(&shared, &[keys(10_000, 500)], None);
+    assert!(
+        b.hash_bytes() > 0,
+        "drained below the cap with no filter yet"
+    );
+    a.add_keys(&shared, &[keys(0, 2000)], None);
+    assert!(
+        spilled[0].active(),
+        "past the cap the fixed filter was not made"
+    );
+    assert_eq!(a.hash_bytes(), 0, "hashes kept past the cap");
+    assert_eq!(a.memory[0].size(), a.heap_bytes(), "reservation != heap");
+    b.add_keys(&shared, &[keys(20_000, 100)], None);
+    assert_eq!(b.hash_bytes(), 0, "the other partial does not drain");
+    // A spill request moves new hashes to the filter, never drops them.
+    // (Another build, below the cap, whose filter is not made yet.)
+    let other: Arc<[super::SpilledBloom]> = Arc::new([super::SpilledBloom::default()]);
+    let mut c = Partials {
+        spilled: Arc::clone(&other),
+        bloom_lost: flag(),
+        ..new()
+    };
+    // Hashes of under a sixteenth of the filter are shed as before.
+    let mut small = Partials {
+        spilled: Arc::clone(&other),
+        bloom_lost: flag(),
+        ..new()
+    };
+    small.add_keys(&shared, &[keys(40_000, 50)], None);
+    assert!(small.shed_hashes() > 0);
+    assert!(
+        !other[0].active(),
+        "a small build reserved the fixed filter"
+    );
+    assert!(small.bloom_lost[0].load(Ordering::Relaxed));
+    // 800 keys: 6,400 hash bytes, past 64 KiB / 16.
+    c.add_keys(&shared, &[keys(30_000, 800)], None);
+    assert!(c.hash_bytes() > 0 && !other[0].active());
+    assert!(c.shed_hashes() > 0, "nothing shed");
+    assert_eq!(c.hash_bytes(), 0);
+    assert!(other[0].active(), "the spill made no fixed filter");
+    assert!(
+        !c.bloom_lost[0].load(Ordering::Relaxed),
+        "the Bloom was lost"
+    );
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    a.merge(b);
+    let fixed = publish(&publisher(&f), &shared, a, &mut reservation(1 << 20));
+    assert_eq!(
+        fixed.len(),
+        1,
+        "the fixed filter's reservation not handed over"
+    );
+    assert_eq!(fixed[0].size(), 64 << 10);
+    let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+        unreachable!("not published")
+    };
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    for (from, n) in [(0, 2000), (10_000, 500), (20_000, 100)] {
+        let pass = k
+            .evaluate(keys(from, n).as_ref())
+            .unwrap_or_else(|| panic!());
+        assert_eq!(
+            pass.true_count(),
+            usize::try_from(n).unwrap_or(0),
+            "a key of {from} fails"
+        );
+    }
+}
+
+/// Without memory for the fixed filter, past the cap the hashes go and the
+/// other partials are told, as without one; only the range is published.
+#[test]
+fn a_refused_fixed_filter_loses_the_bloom_as_before() {
+    let mut f = filter();
+    f.options.exact_max_values = 0;
+    f.options.bloom_max_items = 1000;
+    f.options.bloom_spill_bytes = Some(1 << 20);
+    let shared = vec![f.clone()];
+    let lost = flag();
+    let spilled: Arc<[super::SpilledBloom]> = Arc::new([super::SpilledBloom::default()]);
+    let mut p = Partials {
+        builders: vec![krishiv_io::KeyFilterBuilder::new(
+            DataType::Int64,
+            f.options,
+        )],
+        // Room for the hashes, not for the 1 MiB filter.
+        memory: vec![reservation(256 << 10)],
+        bloom_lost: Arc::clone(&lost),
+        spilled: Arc::clone(&spilled),
+    };
+    let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        (0..2000).map(|i: i64| i * 1_000_003),
+    ));
+    p.add_keys(&shared, &[keys], None);
+    assert!(!spilled[0].active());
+    assert_eq!(p.hash_bytes(), 0, "hashes kept past the cap");
+    assert!(lost[0].load(std::sync::atomic::Ordering::Relaxed));
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty());
+    let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+        unreachable!("not published")
+    };
+    assert!(k.bloom_bytes().is_none() && k.has_range());
 }
