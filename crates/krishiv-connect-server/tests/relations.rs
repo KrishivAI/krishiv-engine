@@ -203,7 +203,14 @@ async fn a_hint_leaves_the_rows_alone() {
         name: "broadcast".to_owned(),
         parameters: vec![],
     })));
-    assert_eq!(run(&server, hint).await.expect("runs").len(), 3);
+    assert_eq!(
+        run(&server, hint).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100"],
+            &["1", "10", "100"],
+            &["2", "20", "NULL"]
+        ])
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -240,7 +247,14 @@ fn sample(lower: f64, upper: f64) -> pb::Relation {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sample_of_everything_or_nothing_is_exact() {
     let server = start().await;
-    assert_eq!(run(&server, sample(0.0, 1.0)).await.expect("runs").len(), 3);
+    assert_eq!(
+        run(&server, sample(0.0, 1.0)).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100"],
+            &["1", "10", "100"],
+            &["2", "20", "NULL"]
+        ])
+    );
     assert!(
         run(&server, sample(0.0, 0.0))
             .await
@@ -268,6 +282,13 @@ async fn a_seeded_sample_repeats() {
     let first = run(&server, sample(0.0, 0.5)).await.expect("runs");
     let second = run(&server, sample(0.0, 0.5)).await.expect("runs");
     assert_eq!(first, second);
+    // Bernoulli keeps a sub-multiset of the input rows, each at most as often as it occurs.
+    let all = ["1|10|100", "1|10|100", "2|20|NULL"];
+    for row in first.iter().map(|r| r.join("|")) {
+        let kept = first.iter().filter(|r| r.join("|") == row).count();
+        let present = all.iter().filter(|a| **a == row).count();
+        assert!((1..=present).contains(&kept), "{row}: {first:?}");
+    }
 }
 
 fn unpivot(values: Option<Vec<pb::Expression>>) -> pb::Relation {

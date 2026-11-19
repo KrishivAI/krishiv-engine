@@ -92,8 +92,19 @@ fn record_batches_carry_every_row() {
 #[test]
 #[ignore = "needs a running krishiv server"]
 fn to_arrow_returns_an_ipc_stream() {
-    let bytes = session().range(5).unwrap().to_arrow().unwrap();
+    let spark = session();
+    let bytes = spark.range(5).unwrap().to_arrow().unwrap();
     assert!(!bytes.is_empty());
+    // The client has no IPC reader here, so the contents are checked on the same plan's rows.
+    let ids: Vec<Option<i64>> = spark
+        .range(5)
+        .unwrap()
+        .collect()
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0).unwrap().as_i64())
+        .collect();
+    assert_eq!(ids, [Some(0), Some(1), Some(2), Some(3), Some(4)]);
 }
 
 #[test]

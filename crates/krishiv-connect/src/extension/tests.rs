@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use prost::Message as _;
 
 fn any(name: &str, value: Vec<u8>) -> Any {
     Any {
@@ -68,25 +69,50 @@ fn another_package_is_refused_with_a_bounded_printable_name() {
 }
 
 #[test]
-fn a_registered_message_with_bad_bytes_is_refused_by_the_wire_check() {
-    // A length that runs past the end, and a valid length with bytes that are not UTF-8.
-    for bytes in [vec![0x0A, 0x7F], vec![0x0A, 0x01, 0xFF]] {
-        let err = resolve(&any("Echo", bytes), Slot::Relation).unwrap_err();
-        assert_ne!(
-            err.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
-        );
-    }
+fn a_registered_message_with_bad_bytes_is_refused_with_its_own_class() {
+    use krishiv_common::error::ErrorClass;
+    // A length that runs past the end of the message: the wire check.
+    let overrun = resolve(&any("Echo", vec![0x0A, 0x7F]), Slot::Relation).unwrap_err();
+    assert_eq!(
+        overrun.error_class(),
+        ErrorClass::ConnectInvalidPlanCannotParse
+    );
+    assert!(
+        overrun.to_string().contains("runs past the end"),
+        "{overrun}"
+    );
+    // A valid length with bytes that are not UTF-8: passes the wire check, prost refuses it.
+    let utf8 = resolve(&any("Echo", vec![0x0A, 0x01, 0xFF]), Slot::Relation).unwrap_err();
+    assert_eq!(
+        utf8.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert!(utf8.to_string().contains("does not decode"), "{utf8}");
 }
 
 /// prost recurses once per level of an unknown group and this crate builds it without a recursion
 /// limit: a payload of group-start bytes would overflow the stack. It is refused before prost sees it.
 #[test]
 fn nested_groups_in_an_extension_are_refused_without_recursing() {
+    use krishiv_common::error::ErrorClass;
     for slot in [Slot::Relation, Slot::Expression] {
         let hostile = any("Echo", vec![0x13; 4 * 1024 * 1024]);
-        assert!(resolve(&hostile, slot).is_err());
+        let err = resolve(&hostile, slot).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::ConnectInvalidPlanCannotParse);
+        assert!(err.to_string().contains("group"), "{err}");
     }
+}
+
+#[test]
+fn echo_debug_shows_the_length_only() {
+    let shown = format!(
+        "{:?}",
+        Echo {
+            message: "secret".to_owned()
+        }
+    );
+    assert!(!shown.contains("secret"), "{shown}");
+    assert!(shown.contains('6'), "{shown}");
 }
 
 #[test]

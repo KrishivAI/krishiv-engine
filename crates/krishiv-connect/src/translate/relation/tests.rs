@@ -1108,9 +1108,9 @@ fn sample_bounds_must_span_at_most_the_unit_interval() {
         seed: Some(1),
         deterministic_order: false,
     })));
-    assert_ne!(
+    assert_eq!(
         code(&bad_input),
-        ErrorClass::KrishivSampleFractionOutOfRange
+        ErrorClass::ConnectInvalidPlanAssertionFailure
     );
 }
 

@@ -2,7 +2,7 @@
 # A workspace of its own, like fuzz/: apache-spark-connect pulls an older Arrow major while the product workspace
 # is pinned to a later major, so adding it there would fail `cargo deny` (duplicate versions).
 # Run from the repository root against a server on KRISHIV_CONNECT_URL (default sc://127.0.0.1:15002):
-#   cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored
+#   cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored --skip blocked_ --test-threads=1
 [package]
 name = "connect-rust-client"
 version = "0.0.0"

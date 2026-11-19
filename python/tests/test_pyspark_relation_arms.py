@@ -46,7 +46,13 @@ def test_drop_duplicates_equals_distinct(spark: Any) -> None:
 def test_sample_with_seed_repeats_and_whole_fraction_is_everything(spark: Any) -> None:
     df = spark.range(200)
     assert df.sample(fraction=1.0, seed=3).count() == 200
-    assert _rows(df.sample(fraction=0.5, seed=3)) == _rows(df.sample(fraction=0.5, seed=3))
+    half = _rows(df.sample(fraction=0.5, seed=3))
+    assert half == _rows(df.sample(fraction=0.5, seed=3))
+    # Bernoulli keeps each input row at most once, and some but not all of 200 at 0.5.
+    ids = [r[0] for r in half]
+    assert len(set(ids)) == len(ids)
+    assert set(ids) <= set(range(200))
+    assert 0 < len(ids) < 200
 
 
 def test_sample_fraction_above_one_fails(spark: Any) -> None:

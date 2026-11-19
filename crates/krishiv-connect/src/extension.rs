@@ -15,10 +15,7 @@
 //! A Krishiv client learns the capability set from `system.capabilities` or by reading the
 //! [`CAPABILITIES_KEY`] with `Config`.
 
-use krishiv_common::error::{
-    ConnectInvalidPlanAssertionFailure, KrishivError, KrishivUnsupportedFeature,
-};
-use prost::Message as _;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use prost_types::Any;
 
 /// The protobuf package of every extension message.
@@ -30,12 +27,21 @@ pub const TYPE_URL_PREFIX: &str = "type.googleapis.com/krishiv.v1.";
 /// The read-only `Config` key a Krishiv client reads to learn the capabilities (comma separated).
 pub const CAPABILITIES_KEY: &str = "krishiv.v1.capabilities";
 
-/// The worked example (`Echo` in `krishiv.proto`).
+/// The worked example (`Echo` in `krishiv.proto`). Its `Debug` shows the length of the text only.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(skip_debug)]
 pub struct Echo {
     /// The text echoed back.
     #[prost(string, tag = "1")]
     pub message: String,
+}
+
+impl std::fmt::Debug for Echo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Echo")
+            .field("message_len", &self.message.len())
+            .finish()
+    }
 }
 
 /// The slot of a Spark Connect message an extension sits in.
@@ -142,19 +148,9 @@ pub fn resolve(any: &Any, slot: Slot) -> Result<Extension, KrishivError> {
     decode(row, &any.value)
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a flat extension message, checked by `wire::flat_message` (no group, no overrun) first"
-)]
 fn decode(row: &Registration, bytes: &[u8]) -> Result<Extension, KrishivError> {
-    crate::wire::flat_message(bytes)?;
-    let malformed = |_| {
-        KrishivError::from(ConnectInvalidPlanAssertionFailure {
-            message: format!("the {PACKAGE}.{} extension does not decode", row.message),
-        })
-    };
     match row.message {
-        "Echo" => Echo::decode(bytes).map(Extension::Echo).map_err(malformed),
+        "Echo" => crate::wire::decode_echo(bytes).map(Extension::Echo),
         other => Err(unsupported(format!("the {PACKAGE} extension `{other}`"))),
     }
 }

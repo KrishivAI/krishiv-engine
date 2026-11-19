@@ -482,6 +482,8 @@ jobs:
   rust-client:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
     timeout-minutes: 90
     steps:
       - name: Harden the runner (audit egress)
