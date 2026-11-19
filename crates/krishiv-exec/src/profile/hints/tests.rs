@@ -437,3 +437,128 @@ fn a_skew_hint_never_carries_text_from_the_node_detail() {
     assert_eq!(h.len(), 1);
     assert!(!h[0].message.contains("acme_corp"), "{}", h[0].message);
 }
+
+fn settings_with(pairs: &[(&str, &str)]) -> HintSettings {
+    let mut c = Config::default();
+    for (k, v) in pairs {
+        assert!(c.set(k, v).is_ok(), "{k}");
+    }
+    HintSettings::from_config(&c)
+}
+
+#[test]
+fn krishiv_advisor_missing_stats_min_rows_lowers_the_row_floor() {
+    let plan = join_plan(NodeFacts {
+        inputs: vec![input(1.0e6, true, &[]), input(100.0, false, &["small_t"])],
+        ..NodeFacts::default()
+    });
+    let m = join_metrics(10, 10, 1);
+    assert!(hints(&plan, &m, &HintSettings::default()).is_empty());
+    let s = settings_with(&[("krishiv.advisor.missingStats.minRows", "5")]);
+    assert_eq!(s.missing_stats_min_rows, 5);
+    let h = hints(&plan, &m, &s);
+    assert_eq!(h.len(), 1);
+    assert_eq!(h[0].code, HintCode::MissingStatistics);
+}
+
+#[test]
+fn krishiv_advisor_runtime_filter_min_probe_rows_lowers_the_probe_floor() {
+    let plan = gaps(FilterGapReason::NoScanColumn);
+    let m = join_metrics(1_000, 0, 10);
+    assert!(hints(&plan, &m, &HintSettings::default()).is_empty());
+    let s = settings_with(&[("krishiv.advisor.runtimeFilter.minProbeRows", "100")]);
+    assert_eq!(s.runtime_filter_min_probe_rows, 100);
+    let h = hints(&plan, &m, &s);
+    assert_eq!(h.len(), 1);
+    assert_eq!(h[0].code, HintCode::RuntimeFilterOpportunity);
+}
+
+#[test]
+fn krishiv_advisor_runtime_filter_min_drop_percent_lowers_the_drop_floor() {
+    let plan = gaps(FilterGapReason::NoScanColumn);
+    // 30% of the probe rows dropped: under the default 50%.
+    let m = join_metrics(1_000_000, 700_000, 10);
+    assert!(hints(&plan, &m, &HintSettings::default()).is_empty());
+    let s = settings_with(&[("krishiv.advisor.runtimeFilter.minDropPercent", "20")]);
+    assert_eq!(s.runtime_filter_min_drop_percent, 20);
+    assert_eq!(hints(&plan, &m, &s).len(), 1);
+}
+
+#[test]
+fn krishiv_advisor_max_hints_cuts_the_list() {
+    let mb = 1024 * 1024;
+    let mut m = metrics_with_peak(400 * mb);
+    op(&mut m, 1, "HashAggregate", 0, spill(80 * mb));
+    op(&mut m, 5, "HashAggregate", 0, spill(90 * mb));
+    assert_eq!(hints(&agg_plan(), &m, &HintSettings::default()).len(), 2);
+    let s = settings_with(&[("krishiv.advisor.maxHints", "1")]);
+    assert_eq!(s.max_hints, 1);
+    assert_eq!(hints(&agg_plan(), &m, &s).len(), 1);
+}
+
+fn wait_metrics(blocked_ms: u64, compute_ms: u64) -> QueryMetrics {
+    let mut m = QueryMetrics::default();
+    op(
+        &mut m,
+        1,
+        "HashAggregate",
+        0,
+        OperatorMetrics {
+            blocked_on_memory: Duration::from_millis(blocked_ms),
+            compute_time: Duration::from_millis(compute_ms),
+            drivers: 1,
+            ..OperatorMetrics::default()
+        },
+    );
+    m
+}
+
+#[test]
+fn krishiv_advisor_memory_wait_factor_scales_the_compute_comparison() {
+    let m = wait_metrics(150, 100);
+    assert_eq!(hints(&agg_plan(), &m, &HintSettings::default()).len(), 1);
+    let s = settings_with(&[("krishiv.advisor.memoryWait.factor", "2")]);
+    assert!(hints(&agg_plan(), &m, &s).is_empty());
+}
+
+#[test]
+fn krishiv_advisor_memory_wait_min_time_sets_the_time_floor() {
+    let m = wait_metrics(60, 10);
+    assert!(hints(&agg_plan(), &m, &HintSettings::default()).is_empty());
+    let s = settings_with(&[("krishiv.advisor.memoryWait.minTime", "50ms")]);
+    assert_eq!(s.memory_wait_min_time, Duration::from_millis(50));
+    assert_eq!(hints(&agg_plan(), &m, &s).len(), 1);
+}
+
+#[test]
+fn krishiv_advisor_skew_factor_sets_how_lopsided_a_driver_must_be() {
+    let mut m = QueryMetrics::default();
+    op(
+        &mut m,
+        1,
+        "Window",
+        0,
+        OperatorMetrics {
+            drivers: 4,
+            compute_time: Duration::from_millis(1000),
+            max_driver_compute_time: Duration::from_millis(580),
+            ..OperatorMetrics::default()
+        },
+    );
+    assert_eq!(hints(&agg_plan(), &m, &HintSettings::default()).len(), 1);
+    let s = settings_with(&[("krishiv.advisor.skew.factor", "8")]);
+    assert!(hints(&agg_plan(), &m, &s).is_empty());
+}
+
+#[test]
+fn krishiv_advisor_missing_stats_min_q_error_sets_how_wrong_the_estimate_must_be() {
+    let plan = join_plan(NodeFacts {
+        inputs: vec![input(1.0e6, true, &[]), input(1.0e6, false, &["sales_csv"])],
+        ..NodeFacts::default()
+    });
+    // Estimate 1,000,000 against 250,000 actual: q = 4.
+    let m = join_metrics(5_000_000, 5_000_000, 250_000);
+    assert_eq!(hints(&plan, &m, &HintSettings::default()).len(), 1);
+    let s = settings_with(&[("krishiv.advisor.missingStats.minQError", "8")]);
+    assert!(hints(&plan, &m, &s).is_empty());
+}
