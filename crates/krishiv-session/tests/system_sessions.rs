@@ -405,3 +405,49 @@ fn a_draining_runtime_does_not_replay_a_cached_result() {
     assert_eq!(texts(&s, "SELECT CAST(41 + 1 AS STRING)"), ["42"]);
     block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() });
 }
+
+/// The drain deadline counts what it cancels by (session, operation id): two sessions may run a
+/// query under the same client-chosen operation id, and both end (design P3-T066 §5.1).
+#[test]
+fn cancel_all_counts_the_same_operation_id_in_two_sessions_twice() {
+    const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
+    let rt = EngineRuntime::builder().build().unwrap();
+    let mut running = Vec::new();
+    for user in ["alice", "bob"] {
+        let s = session_of(&rt, user);
+        let df = block_on(s.sql_with(
+            "SELECT id FROM range(0, 2000000000)",
+            krishiv_session::QueryOptions::new().operation_id(OP),
+        ))
+        .unwrap();
+        running.push((s, block_on(df.execute_stream()).unwrap()));
+    }
+    assert_eq!(rt.cancel_all(CancelReason::Drain), 2);
+    drop(running);
+}
+
+/// `DROP TABLE` is refused while the server drains before it touches the catalog: the table is
+/// still there after `ResumeServing`.
+#[test]
+fn a_draining_runtime_refuses_drop_table_and_leaves_the_table() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "alice");
+    block_on(async {
+        s.sql("CREATE TABLE drain_drop_t (a INT)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+    });
+    rt.set_draining(true);
+    let Err(err) = block_on(s.sql("DROP TABLE drain_drop_t")) else {
+        panic!("DROP TABLE must be refused while draining");
+    };
+    assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING");
+    rt.set_draining(false);
+    assert_eq!(
+        texts(&s, "SELECT CAST(count(*) AS STRING) FROM drain_drop_t"),
+        ["0"]
+    );
+}

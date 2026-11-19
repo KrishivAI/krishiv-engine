@@ -650,6 +650,11 @@ impl Session {
 
     /// `DROP TABLE [IF EXISTS] name [PURGE]`.
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
+        // Admission comes before the catalog entry or the files go: a refused drop changes nothing
+        // (design P3-T066 §5.1), unlike the frame this returns, which is only an empty result.
+        if self.state.runtime.is_draining() {
+            return Err(krishiv_common::error::KrishivServerDraining {}.into());
+        }
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
         self.drop_named_table(&name, &env, d.if_exists).await?;
