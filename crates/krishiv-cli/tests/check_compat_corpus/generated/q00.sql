@@ -1,4 +1,4 @@
 -- query 0: nope(1)
-SELECT var_pop(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(var_pop)';
-SELECT count_min_sketch(a, b) AS c2 FROM t0 WHERE x IN (1, 2) AND y = 'x(count_min_sketch)';
-SELECT theta_difference(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(theta_difference)';
+SELECT unix_micros(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(unix_micros)';
+SELECT kll_sketch_agg_double(a, b) AS c2 FROM t0 WHERE x IN (1, 2) AND y = 'x(kll_sketch_agg_double)';
+SELECT tuple_difference_theta_double(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(tuple_difference_theta_double)';

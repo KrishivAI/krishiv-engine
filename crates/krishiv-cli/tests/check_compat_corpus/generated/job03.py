@@ -2,7 +2,6 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT right(a) FROM t3")
-df = spark.sql("SELECT ilike(a) FROM t3")
-df = spark.sql("SELECT tuple_sketch_theta_integer(a) FROM t3")
-df = df.select(F.count_min_sketch("a"), F.col("b"))
+df = df.select(F.kll_sketch_agg_double("a"), F.col("b"))
+df = spark.sql("SELECT legacy_fn_9(a) FROM t3")
+df = df.select(F.map_filter("a"), F.col("b"))

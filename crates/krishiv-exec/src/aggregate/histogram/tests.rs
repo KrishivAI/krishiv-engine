@@ -188,7 +188,7 @@ fn the_accumulator_merges_partial_states_like_the_golden() {
         .unwrap();
         // The projection counts the serialized bins of a state batch, twice.
         let states = a.state(&[0]).unwrap();
-        let held = top.projected(0, Some(&states[0]), None);
+        let held = top.projected(0, Some(&states[0]), None, false);
         let bins = states[0]
             .as_any()
             .downcast_ref::<BinaryArray>()
