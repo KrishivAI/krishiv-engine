@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Catalog metadata end to end (design P3-T101 §5, §3.2): `GetCatalogs`, `GetDbSchemas`,
-//! `GetTables`, `GetTableTypes`, the key commands; transient sessions, access as `SHOW`, the
+//! `GetTables`, `GetTableTypes`, the key commands, `GetXdbcTypeInfo`; transient sessions, access as `SHOW`, the
 //! `include_schema` cap.
 
 use arrow_array::{Array, BinaryArray, StringArray};
 use arrow_flight::sql::{
     CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
     CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, XdbcDataType,
 };
 use arrow_schema::{DataType, Schema};
 
@@ -454,4 +455,53 @@ async fn include_schema_over_the_cap_is_invalid_argument() {
         .await
         .expect("one schema");
     assert_eq!(rows(&l.batches), 1);
+}
+
+/// `GetXdbcTypeInfo` (design §5): one row per Spark type, filtered by `data_type`, without a
+/// session.
+#[tokio::test(flavor = "multi_thread")]
+async fn xdbc_type_info_lists_the_spark_types() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let all = listing(
+        &mut h,
+        OPS,
+        None,
+        &CommandGetXdbcTypeInfo { data_type: None },
+    )
+    .await
+    .expect("type info");
+    assert_eq!(all.info_cookie, None);
+    assert_eq!(all.fetch_cookie, None);
+    let names = column(&all.batches, "type_name");
+    for name in [
+        "BOOLEAN",
+        "TINYINT",
+        "SMALLINT",
+        "INT",
+        "BIGINT",
+        "FLOAT",
+        "DOUBLE",
+        "DECIMAL",
+        "STRING",
+        "BINARY",
+        "DATE",
+        "TIMESTAMP",
+        "TIMESTAMP_NTZ",
+        "INTERVAL YEAR TO MONTH",
+        "INTERVAL DAY TO SECOND",
+    ] {
+        assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
+    }
+    let ints = listing(
+        &mut h,
+        OPS,
+        None,
+        &CommandGetXdbcTypeInfo {
+            data_type: Some(XdbcDataType::XdbcInteger as i32),
+        },
+    )
+    .await
+    .expect("filtered type info");
+    assert_eq!(column(&ints.batches, "type_name"), ["INT"]);
+    wait_sessions(&h, 0).await;
 }
