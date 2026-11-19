@@ -888,7 +888,8 @@ def write_edges(spark: SparkSession, out: str) -> None:
     ``replaceWhere``; a NULL written into a ``NOT NULL`` column (top level and nested) through
     the DataFrame writer and SQL; a ``''`` into a ``NOT NULL`` partition column;
     ``maxRecordsPerFile`` (a number, ``0``, ``-1`` and a value that is not one; also through
-    ``insertInto`` and ``saveAsTable`` on a catalog table)."""
+    ``insertInto`` and ``saveAsTable`` on a catalog table); whether ``insertInto`` overwrite reads a
+    ``partitionOverwriteMode`` writer option (it does not: the session configuration decides)."""
     record: dict = {
         "format_version": FORMAT_VERSION,
         "generator": "tests/scripts/gen_delta_fixtures.py",
@@ -1027,7 +1028,37 @@ def write_edges(spark: SparkSession, out: str) -> None:
         ],
     )
     spark.sql("DROP TABLE mrt")
-    for d in (empty, nn, np_, mr, mt):
+    # ``insertInto`` overwrite of a partitioned catalog table: is the overwrite dynamic by a
+    # ``partitionOverwriteMode`` writer option, or by the session configuration only? (review
+    # of 7ba0c47db, nit 2.)
+    om = os.path.join(out, "write-insert-into-overwrite-mode")
+    spark.sql(f"CREATE TABLE iom (id BIGINT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{om}'")
+    spark.sql("INSERT INTO iom VALUES (1, 'a'), (2, 'b')")
+
+    def overwrite_with_option(row_id: int, option: str, conf: str | None):
+        def step(s: SparkSession) -> None:
+            if conf is not None:
+                s.conf.set("spark.sql.sources.partitionOverwriteMode", conf)
+            try:
+                s.sql(f"SELECT CAST({row_id} AS BIGINT) AS id, 'a' AS p").write.mode("overwrite").option(
+                    "partitionOverwriteMode", option
+                ).insertInto("iom")
+            finally:
+                s.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+        return step
+
+    record["insert_into_overwrite_mode"] = run_steps(
+        spark,
+        om,
+        [
+            ("option_dynamic_conf_unset", overwrite_with_option(3, "dynamic", None)),
+            ("insert_b", "INSERT INTO iom VALUES (4, 'b')"),
+            ("option_static_conf_dynamic", overwrite_with_option(5, "static", "dynamic")),
+        ],
+    )
+    spark.sql("DROP TABLE iom")
+    for d in (empty, nn, np_, mr, mt, om):
         shutil.rmtree(d, ignore_errors=True)
     with open(os.path.join(out, "WRITE-EDGES.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
