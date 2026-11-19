@@ -16,14 +16,6 @@
 //! Hashing goes through [`raw_bytes::from_slice`], never a `&[u8]` (Rust's `Hash` for slices adds a length
 //! prefix, which no other implementation hashes).
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fed by PR-54b's sketches on write; PR-54a tests it"
-    )
-)]
-
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
@@ -34,7 +26,7 @@ use arrow_schema::{DataType, TimeUnit};
 use datasketches::hash::value::raw_bytes;
 use datasketches::theta::{ThetaSketch, ThetaSketchBuilder};
 
-use super::bounds::min_be_bytes;
+use super::bounds::min_be_slice;
 use super::types::IcebergType;
 
 /// A sketch as Iceberg's Spark writer builds them: the library's default `k` (4,096) and seed.
@@ -108,18 +100,21 @@ pub(crate) fn for_each_value(
             fixed(array.as_primitive::<Float64Type>(), f, f64::to_le_bytes);
         }
         (T::Decimal { .. }, DataType::Decimal32(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal32Type>().iter().flatten() {
-                f(&min_be_bytes(i128::from(v)));
+                f(min_be_slice(i128::from(v), &mut buf));
             }
         }
         (T::Decimal { .. }, DataType::Decimal64(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal64Type>().iter().flatten() {
-                f(&min_be_bytes(i128::from(v)));
+                f(min_be_slice(i128::from(v), &mut buf));
             }
         }
         (T::Decimal { .. }, DataType::Decimal128(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal128Type>().iter().flatten() {
-                f(&min_be_bytes(v));
+                f(min_be_slice(v, &mut buf));
             }
         }
         (T::String, DataType::Utf8) => {
