@@ -136,28 +136,25 @@ fn an_exists_leg_reads_only_its_keys() {
     assert!(scans.iter().all(|c| !c.contains(&"c".to_owned())), "{plan}");
 }
 
+/// Review finding 3 (dc91ede0f), finding 2 (5724f9c20): an `EXISTS` under an `OR` plans
+/// as a mark (Existence) join, which adds its mark column above the sides; the leg still
+/// reads only its keys.
 #[test]
-fn a_self_join_of_json_reading_the_corrupt_record_column_still_runs() {
-    // The instance under the `Shift` reads its key and `_corrupt_record`; the
-    // corrupt-record-only check must still see that its key is referenced above.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("t.json");
-    std::fs::write(
-        &path,
-        "{\"a\": 1, \"k\": 1}\n{\"a\": 2, \"k\": 1}\n{not json\n",
-    )
-    .unwrap();
-    let path = path.display().to_string();
+fn a_mark_join_leg_reads_only_its_keys() {
     let s = Session::new().unwrap();
-    let (got, _) = both(
+    let (_dir, path) = table(&s);
+    let (got, plan) = both(
         &s,
         &format!(
-            "SELECT count(x._corrupt_record), count(*) FROM json.`{path}` x \
-             JOIN json.`{path}` y ON x.a = y.k WHERE y._corrupt_record IS NULL"
+            "SELECT x.a FROM parquet.`{path}` x WHERE EXISTS \
+             (SELECT 1 FROM parquet.`{path}` y WHERE y.k = x.k AND y.b > x.c) OR x.d = '5'"
         ),
     );
-    // x.a = 1 meets both y rows with k = 1; x's corrupt column is null there.
-    assert_eq!(got, vec!["0,2".to_owned()]);
+    assert!(plan.contains("Existence"), "{plan}");
+    // EXISTS: a row of the same k with 2 a' > 3 a, a' = a + 10 m <= 99, so a <= 59 (60
+    // rows); `d = '5'` adds a = 5, already in.
+    assert_eq!(got.len(), 60, "{plan}");
+    assert!(scan_columns(&plan).contains(&cols(&["b", "k"])), "{plan}");
 }
 
 /// Review finding 2: an instance whose parent reads only `_corrupt_record` would parse
@@ -187,24 +184,35 @@ fn an_instance_reading_only_the_corrupt_record_column_keeps_the_shared_columns()
 }
 
 /// Review finding 3: the demand stops at a node that reads columns other than its
-/// parent's (a window, a generator, a `ROLLUP`'s `Expand`). Each query joins one such
-/// instance with a plain one; the plan builds, the rows are as with the switch off, and
-/// the instance under the node still reads every column the node uses.
+/// parent's (a window, a `ROLLUP`'s `Expand`). Each query joins one such instance with a
+/// plain one; the plan builds, the rows are as with the switch off, and the instance under
+/// the node still reads every column the node uses.
+///
+/// The window cases give the plain side exactly the window's columns (`k`, `b`), so
+/// optimizer pruning adds no projection under the window that would set its own demand
+/// (review of 5724f9c20, finding 1): with the Window arms forwarding the demand, both fail.
 #[test]
 fn the_demand_stops_at_a_window_a_generator_and_an_expand() {
     let s = Session::new().unwrap();
     let (_dir, path) = table(&s);
+    let window = format!(
+        "SELECT x.b, w.r FROM parquet.`{path}` x JOIN \
+         (SELECT k, rank() OVER (PARTITION BY k ORDER BY b) AS r FROM parquet.`{path}`) w \
+         ON x.k = w.k WHERE x.b < 40"
+    );
     let cases = [
-        // The window reads `k` and `b`; the projection above it only `k` and `r`.
+        // A Filter over the window: x has a < 20 (20 rows), each meets the two w rows of
+        // its k ranked 1 and 2.
         (
-            format!(
-                "SELECT x.a, w.r FROM parquet.`{path}` x JOIN \
-                 (SELECT k, rank() OVER (PARTITION BY k ORDER BY b) AS r FROM parquet.`{path}`) w \
-                 ON x.k = w.k WHERE x.a < 20 AND w.r <= 2"
-            ),
+            format!("{window} AND w.r <= 2"),
             cols(&["b", "k"]),
+            Some(40),
         ),
-        // The generator reads `arr`; the projection above it only `k` and `e`.
+        // The window alone: each x row meets the ten w rows of its k.
+        (window, cols(&["b", "k"]), Some(200)),
+        // A regression check only, not a guard of the Generate stop: the analyzer puts
+        // `Project [k, arr AS _generate_arg]` under every `Generate`, and that projection
+        // sets the demand, so SQL never reaches the stop itself.
         (
             format!(
                 "SELECT x.a, g.e FROM parquet.`{path}` x JOIN \
@@ -212,6 +220,7 @@ fn the_demand_stops_at_a_window_a_generator_and_an_expand() {
                  ON x.k = g.k WHERE x.a < 3 AND g.e < 25"
             ),
             cols(&["arr", "k"]),
+            None,
         ),
         // The `Expand` of a `ROLLUP` reads `k`, `b` and `c`.
         (
@@ -221,11 +230,15 @@ fn the_demand_stops_at_a_window_a_generator_and_an_expand() {
                  ON x.k = r.k WHERE x.a < 3 AND r.b IS NULL"
             ),
             cols(&["b", "c", "k"]),
+            None,
         ),
     ];
-    for (sql, used) in cases {
+    for (sql, used, count) in cases {
         let (got, plan) = both(&s, &sql);
         assert!(!got.is_empty(), "{sql}\n{plan}");
+        if let Some(n) = count {
+            assert_eq!(got.len(), n, "{sql}\n{plan}");
+        }
         let scans = scan_columns(&plan);
         assert!(
             scans.iter().any(|c| used.iter().all(|u| c.contains(u))),

@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
-assertion_line: 664
 expression: tpch.plan(q).to_string()
 ---
 Sort [value#16 DESC NULLS LAST]
