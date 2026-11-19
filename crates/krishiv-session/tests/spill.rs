@@ -414,7 +414,6 @@ fn a_frame_run_again_after_the_spill_directory_became_usable_succeeds() {
 #[cfg(unix)]
 #[test]
 fn a_spill_directory_that_became_unwritable_after_it_opened_is_named() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let r = root(&tmp);
     let s = session(&r, Some("6m"));
@@ -435,12 +434,21 @@ fn a_spill_directory_that_became_unwritable_after_it_opened_is_named() {
         .filter(|p| p.is_dir())
         .collect();
     assert!(!dirs.is_empty());
-    for d in &dirs {
-        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o500)).unwrap();
-    }
+    // A regular file where the session directory was: no child directory can be made below it,
+    // for a privileged run as for an unprivileged one.
+    let moved: Vec<_> = dirs
+        .iter()
+        .map(|d| {
+            let to = d.with_extension("moved");
+            std::fs::rename(d, &to).unwrap();
+            std::fs::write(d, b"x").unwrap();
+            to
+        })
+        .collect();
     let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
-    for d in &dirs {
-        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for (d, to) in dirs.iter().zip(&moved) {
+        std::fs::remove_file(d).unwrap();
+        std::fs::rename(to, d).unwrap();
     }
     let err = err.unwrap_err();
     assert_eq!(
