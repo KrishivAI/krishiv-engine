@@ -83,7 +83,9 @@ fn parts(
         3 => {
             if map_of_strings(c.data_type(2)) || matches!(c.data_type(2), Some(DataType::Map(_))) {
                 (None, Some(2))
-            } else if is_string_or_binary(c.data_type(2)) && c.foldable(2) {
+            } else if is_string_or_binary(c.data_type(2))
+                && (c.is_literal(2) || c.is_plain_literal(2))
+            {
                 (Some(2), None)
             } else {
                 (None, None)

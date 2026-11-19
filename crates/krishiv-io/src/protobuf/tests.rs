@@ -113,7 +113,14 @@ fn an_empty_wrapper_element_of_a_repeated_unwrapped_field_stays_a_null() {
     let set = DescriptorSet::parse(TYPES).unwrap();
     let d = super::Decoder::new(&set, "Wkt", opts.iter().copied()).unwrap();
     // Spark says `array<int NOT NULL>`; Krishiv admits the NULL element rather than drop it (README divergence).
-    assert!(d.spark_type().simple_string().contains("i32vs:array<int>"));
+    let DataType::Struct(st) = d.spark_type() else {
+        panic!("not a struct")
+    };
+    let field = st.fields().iter().find(|f| f.name() == "i32vs").unwrap();
+    let DataType::Array(arr) = field.data_type() else {
+        panic!("not an array")
+    };
+    assert!(arr.contains_null());
     let out = d.decode(&[Some(&bytes)]).unwrap();
     let list = out
         .as_struct()

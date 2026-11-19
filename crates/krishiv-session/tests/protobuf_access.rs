@@ -93,8 +93,9 @@ fn a_descriptor_path_outside_the_roots_is_denied_whether_or_not_it_exists() {
     assert_eq!(run(&s, &sql).unwrap(), 1);
 }
 
-/// A descriptor path that is foldable but not a literal (`concat(..)`) passes the argument check and is refused when the
-/// call is built, where Spark would read the file: `KRISHIV_UNSUPPORTED_FEATURE` (recorded in the golden README).
+/// In the 4-argument form a descriptor path that is foldable but not a literal (`concat(..)`) passes the argument check and is
+/// refused when the call is built, where Spark reads the file: `KRISHIV_UNSUPPORTED_FEATURE` (golden README item 13). In the
+/// 3-argument form Spark's constructor takes only a literal, so the call runs as a Java class: `CANNOT_LOAD_PROTOBUF_CLASS`.
 #[test]
 fn a_foldable_non_literal_descriptor_path_is_unsupported_not_read() {
     let tmp = tempfile::tempdir().unwrap();
@@ -103,19 +104,14 @@ fn a_foldable_non_literal_descriptor_path_is_unsupported_not_read() {
     std::fs::write(allowed.join("g.desc"), golden_desc()).unwrap();
     let s = session(&allowed);
     let dir = allowed.to_str().unwrap();
-    for sql in [
-        format!(
-            "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'))"
-        ),
-        format!(
-            "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'), map())"
-        ),
-    ] {
-        let e = run(&s, &sql).unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}: {e}"
-        );
-    }
+    let four = format!(
+        "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'), map())"
+    );
+    let e = run(&s, &four).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    let three = format!(
+        "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'))"
+    );
+    let e = run(&s, &three).unwrap_err();
+    assert_eq!(e.error_class().name(), "CANNOT_LOAD_PROTOBUF_CLASS", "{e}");
 }
