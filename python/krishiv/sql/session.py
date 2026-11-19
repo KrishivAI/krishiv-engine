@@ -27,6 +27,7 @@ from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
+    from krishiv.sql.datasource import DataSourceRegistration
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
@@ -135,6 +136,14 @@ class SparkSession:
     @property
     def read(self) -> DataFrameReader:
         return DataFrameReader(self)
+
+    @property
+    def dataSource(self) -> DataSourceRegistration:
+        """``spark.dataSource.register(cls)``: registers a Python data source class (see
+        :mod:`krishiv.sql.datasource`)."""
+        from krishiv.sql.datasource import DataSourceRegistration
+
+        return DataSourceRegistration(self)
 
     @property
     def udf(self) -> UDFRegistration:

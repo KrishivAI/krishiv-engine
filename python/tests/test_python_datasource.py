@@ -1,0 +1,505 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The Python Data Source API (P3-T040): batch read and write through ``spark.dataSource.register``."""
+
+from __future__ import annotations
+
+from typing import Any, ClassVar
+
+import pytest
+
+from krishiv.errors import PySparkNotImplementedError, PySparkRuntimeError, PySparkTypeError
+from krishiv.sql import SparkSession
+from krishiv.sql.datasource import (
+    CaseInsensitiveDict,
+    DataSource,
+    DataSourceArrowWriter,
+    DataSourceReader,
+    DataSourceWriter,
+    EqualTo,
+    InputPartition,
+    WriterCommitMessage,
+)
+from krishiv.sql.row import Row
+
+pa = pytest.importorskip("pyarrow")
+
+
+@pytest.fixture
+def spark() -> SparkSession:
+    return SparkSession.builder.create()
+
+
+class Fixed(DataSource):
+    """Three partitions of two rows each: (partition, i)."""
+
+    @classmethod
+    def name(cls) -> str:
+        return "fixed"
+
+    def schema(self) -> str:
+        return "p INT, i INT"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        class R(DataSourceReader):
+            def partitions(self) -> list[InputPartition]:
+                return [InputPartition(k) for k in range(3)]
+
+            def read(self, partition: InputPartition) -> Any:
+                for i in range(2):
+                    yield (partition.value, i)
+
+        return R()
+
+
+def rows(df: Any) -> list[tuple[Any, ...]]:
+    return sorted(tuple(r) for r in df.collect())
+
+
+def test_read_tuples_over_partitions(spark: SparkSession) -> None:
+    spark.dataSource.register(Fixed)
+    df = spark.read.format("fixed").load()
+    assert rows(df) == [(p, i) for p in range(3) for i in range(2)]
+    assert [f.name for f in df.schema.fields] == ["p", "i"]
+
+
+def test_name_is_case_insensitive_and_sql_works(spark: SparkSession) -> None:
+    spark.dataSource.register(Fixed)
+    df = spark.read.format("FIXED").load()
+    assert df.filter("i = 1").count() == 3
+    assert df.groupBy("p").count().count() == 3
+    df.createOrReplaceTempView("v")
+    assert spark.sql("SELECT sum(i) FROM v").collect()[0][0] == 3
+
+
+def test_options_are_case_insensitive_and_path_is_an_option(spark: SparkSession) -> None:
+    seen: dict[str, Any] = {}
+
+    class Opts(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            seen.update(self.options)
+            assert self.options["PATH"] == "/some/where"
+
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (1,)
+
+            return R()
+
+    spark.dataSource.register(Opts)
+    spark.read.format("Opts").option("Key", "v").load("/some/where").collect()
+    assert isinstance(seen, dict)
+    assert seen["key"] == "v"
+    assert seen["path"] == "/some/where"
+
+
+def test_case_insensitive_dict() -> None:
+    d = CaseInsensitiveDict({"Path": "x"})
+    assert d["path"] == "x"
+    assert "PATH" in d
+    assert d.get("PaTh") == "x"
+    d["A"] = 1
+    assert list(d) == ["path", "a"]
+
+
+def test_default_name_is_the_class_name_and_schema_of_user(spark: SparkSession) -> None:
+    class Plain(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (7,)
+
+            return R()
+
+    spark.dataSource.register(Plain)
+    assert rows(spark.read.format("Plain").load()) == [(7,)]
+    # a user schema wins over the source's
+    out = spark.read.format("plain").schema("a BIGINT").load()
+    assert out.schema.fields[0].dataType.simpleString() == "bigint"
+    assert rows(out) == [(7,)]
+
+
+def test_read_outputs_rows_lists_and_arrow_batches(spark: SparkSession) -> None:
+    class Mixed(DataSource):
+        def schema(self) -> str:
+            return "a INT, b STRING"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (1, "x")
+                    yield Row(a=2, b="y")
+                    yield [3, "z"]
+                    yield pa.RecordBatch.from_pydict({"a": [4, 5], "b": ["p", "q"]})
+
+            return R()
+
+    spark.dataSource.register(Mixed)
+    assert rows(spark.read.format("Mixed").load()) == [
+        (1, "x"),
+        (2, "y"),
+        (3, "z"),
+        (4, "p"),
+        (5, "q"),
+    ]
+
+
+def test_arrow_batch_is_cast_to_the_declared_schema(spark: SparkSession) -> None:
+    class Cast(DataSource):
+        def schema(self) -> str:
+            return "a BIGINT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield pa.RecordBatch.from_pydict({"x": pa.array([1, 2], type=pa.int32())})
+
+            return R()
+
+    spark.dataSource.register(Cast)
+    assert rows(spark.read.format("Cast").load()) == [(1,), (2,)]
+
+
+def test_empty_iterator_and_missing_partitions_default(spark: SparkSession) -> None:
+    class Empty(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    assert partition.value is None  # the default single partition
+                    return iter(())
+
+            return R()
+
+    spark.dataSource.register(Empty)
+    assert spark.read.format("Empty").load().count() == 0
+
+
+def test_partitions_are_planned_for_every_execution(spark: SparkSession) -> None:
+    calls = {"n": 0}
+
+    class Growing(DataSource):
+        def schema(self) -> str:
+            return "k INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            calls["n"] += 1
+            n = calls["n"]
+
+            class R(DataSourceReader):
+                def partitions(self) -> list[InputPartition]:
+                    return [InputPartition(k) for k in range(n)]
+
+                def read(self, partition: InputPartition) -> Any:
+                    yield (partition.value,)
+
+            return R()
+
+    spark.dataSource.register(Growing)
+    df = spark.read.format("Growing").load()
+    first = df.count()
+    second = df.count()
+    assert second > first  # a second action sees a source that grew
+
+
+def test_reregistering_a_name_replaces_the_class(spark: SparkSession) -> None:
+    spark.dataSource.register(Fixed)
+
+    class Fixed2(Fixed):
+        @classmethod
+        def name(cls) -> str:
+            return "fixed"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (9, 9)
+
+            return R()
+
+    spark.dataSource.register(Fixed2)
+    assert rows(spark.read.format("fixed").load()) == [(9, 9)]
+
+
+def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
+    spark.dataSource.register(Fixed)
+    other = SparkSession.builder.create()
+    with pytest.raises(Exception):  # noqa: B017, PT011 - an unknown format, whatever its class
+        other.read.format("fixed").load().collect()
+
+
+def test_register_refuses_a_non_data_source(spark: SparkSession) -> None:
+    with pytest.raises(PySparkTypeError):
+        spark.dataSource.register(int)  # type: ignore[arg-type]
+
+
+def test_schema_not_implemented_is_the_python_data_source_error(spark: SparkSession) -> None:
+    class NoSchema(DataSource):
+        pass
+
+    spark.dataSource.register(NoSchema)
+    with pytest.raises(PySparkRuntimeError) as e:
+        spark.read.format("NoSchema").load()
+    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert "create" in str(e.value)
+
+
+def test_read_failure_is_the_python_data_source_error(spark: SparkSession) -> None:
+    class Boom(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    raise RuntimeError("disk on fire")
+
+            return R()
+
+    spark.dataSource.register(Boom)
+    df = spark.read.format("Boom").load()
+    with pytest.raises(Exception) as e:  # the engine wraps the planning failure  # noqa: PT011
+        df.collect()
+    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert "disk on fire" in str(e.value)
+
+
+def test_read_returning_a_list_is_invalid(spark: SparkSession) -> None:
+    class ListRead(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    return [(1,)]
+
+            return R()
+
+    spark.dataSource.register(ListRead)
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        spark.read.format("ListRead").load().collect()
+    assert "DATA_SOURCE_INVALID_RETURN_TYPE" in str(e.value)
+
+
+def test_wrong_width_and_bad_row_type(spark: SparkSession) -> None:
+    def source(out: Any) -> type[DataSource]:
+        class S(DataSource):
+            @classmethod
+            def name(cls) -> str:
+                return "s"
+
+            def schema(self) -> str:
+                return "a INT, b INT"
+
+            def reader(self, schema: Any) -> DataSourceReader:
+                class R(DataSourceReader):
+                    def read(self, partition: InputPartition) -> Any:
+                        yield out
+
+                return R()
+
+        return S
+
+    spark.dataSource.register(source((1,)))
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        spark.read.format("s").load().collect()
+    assert "DATA_SOURCE_RETURN_SCHEMA_MISMATCH" in str(e.value)
+    spark.dataSource.register(source("nope"))
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        spark.read.format("s").load().collect()
+    assert "DATA_SOURCE_INVALID_RETURN_TYPE" in str(e.value)
+
+
+def test_partitions_must_be_a_list_of_input_partitions(spark: SparkSession) -> None:
+    def source(parts: Any) -> type[DataSource]:
+        class S(DataSource):
+            @classmethod
+            def name(cls) -> str:
+                return "p"
+
+            def schema(self) -> str:
+                return "a INT"
+
+            def reader(self, schema: Any) -> DataSourceReader:
+                class R(DataSourceReader):
+                    def partitions(self) -> Any:
+                        return parts
+
+                    def read(self, partition: InputPartition) -> Any:
+                        yield (1,)
+
+                return R()
+
+        return S
+
+    for bad in ((InputPartition(1),), [1]):
+        spark.dataSource.register(source(bad))
+        with pytest.raises(Exception) as e:  # noqa: PT011
+            spark.read.format("p").load().collect()
+        assert "DATA_SOURCE_TYPE_MISMATCH" in str(e.value)
+
+
+def test_pushfilters_without_the_conf_is_refused(spark: SparkSession) -> None:
+    class Plain(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class NoPush(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (1,)
+
+            class Push(NoPush):
+                def pushFilters(self, filters: list[Any]) -> Any:
+                    return filters
+
+            return Push() if self.options.get("push") == "1" else NoPush()
+
+    spark.dataSource.register(Plain)
+    assert spark.read.format("Plain").load().count() == 1  # pushFilters not overridden: reads normally
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        spark.read.format("Plain").option("push", "1").load().collect()
+    assert "DATA_SOURCE_PUSHDOWN_DISABLED" in str(e.value)
+    spark.conf.set("spark.sql.python.filterPushdown.enabled", "true")
+    assert spark.read.format("Plain").option("push", "1").load().filter("a = 1").count() == 1
+
+
+def test_filter_classes_are_dataclasses() -> None:
+    assert EqualTo(("a", "b"), 3) == EqualTo(("a", "b"), 3)
+
+
+def test_stream_reader_is_p4() -> None:
+    with pytest.raises(PySparkNotImplementedError):
+        Fixed({}).streamReader(None)  # type: ignore[arg-type]
+
+
+# ---- writing ---------------------------------------------------------------------------------------
+
+
+class Log:
+    events: ClassVar[list[tuple[str, Any]]] = []
+
+
+class Msg(WriterCommitMessage):
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+class Sink(DataSource):
+    @classmethod
+    def name(cls) -> str:
+        return "sink"
+
+    def schema(self) -> str:
+        return "a INT"
+
+    def writer(self, schema: Any, overwrite: bool) -> DataSourceWriter:
+        Log.events.append(("writer", overwrite))
+        fail = self.options.get("fail") == "1"
+
+        class W(DataSourceWriter):
+            def write(self, iterator: Any) -> WriterCommitMessage:
+                got = [r.a for r in iterator]
+                Log.events.append(("write", sorted(got)))
+                if fail:
+                    raise RuntimeError("write failed")
+                return Msg(len(got))
+
+            def commit(self, messages: list[Any]) -> None:
+                Log.events.append(("commit", [m.n for m in messages]))
+
+            def abort(self, messages: list[Any]) -> None:
+                Log.events.append(("abort", messages))
+
+        return W()
+
+
+def test_write_append_and_overwrite(spark: SparkSession) -> None:
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.range(3).selectExpr("cast(id as int) as a")
+    df.write.format("sink").mode("append").save()
+    df.write.format("sink").mode("overwrite").save()
+    assert Log.events == [
+        ("writer", False),
+        ("write", [0, 1, 2]),
+        ("commit", [3]),
+        ("writer", True),
+        ("write", [0, 1, 2]),
+        ("commit", [3]),
+    ]
+
+
+def test_write_failure_calls_abort_and_raises(spark: SparkSession) -> None:
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.range(2).selectExpr("cast(id as int) as a")
+    with pytest.raises(PySparkRuntimeError) as e:
+        df.write.format("sink").option("fail", "1").mode("append").save()
+    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert "write failed" in str(e.value)
+    assert ("abort", [None]) in Log.events
+    assert not any(k == "commit" for k, _ in Log.events)
+
+
+@pytest.mark.parametrize("mode", ["error", "errorifexists", "ignore"])
+def test_write_modes_error_and_ignore_are_refused(spark: SparkSession, mode: str) -> None:
+    spark.dataSource.register(Sink)
+    df = spark.range(1).selectExpr("cast(id as int) as a")
+    with pytest.raises(PySparkRuntimeError) as e:
+        df.write.format("sink").mode(mode).save()
+    assert "UNSUPPORTED_DATA_SOURCE_SAVE_MODE" in str(e.value)
+
+
+def test_arrow_writer_gets_record_batches(spark: SparkSession) -> None:
+    got: list[Any] = []
+
+    class ArrowSink(DataSource):
+        def writer(self, schema: Any, overwrite: bool) -> DataSourceWriter:
+            class W(DataSourceArrowWriter):
+                def write(self, iterator: Any) -> WriterCommitMessage:
+                    got.extend(iterator)
+                    return Msg(0)
+
+            return W()
+
+    spark.dataSource.register(ArrowSink)
+    spark.range(4).selectExpr("cast(id as int) as a").write.format("ArrowSink").mode("append").save()
+    assert sum(b.num_rows for b in got) == 4
+    assert all(isinstance(b, pa.RecordBatch) for b in got)
+
+
+def test_round_trip_through_a_python_source_matches_parquet(spark: SparkSession, tmp_path: Any) -> None:
+    """The same rows read through a Python source and as Parquet answer one query alike."""
+    path = str(tmp_path / "t.parquet")
+    data = [(i, f"s{i % 4}", i * 1.5) for i in range(50)]
+    spark.createDataFrame(data, "a INT, b STRING, c DOUBLE").write.parquet(path)
+
+    class Same(DataSource):
+        def schema(self) -> str:
+            return "a INT, b STRING, c DOUBLE"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def partitions(self) -> list[InputPartition]:
+                    return [InputPartition(range(0, 25)), InputPartition(range(25, 50))]
+
+                def read(self, partition: InputPartition) -> Any:
+                    for i in partition.value:
+                        yield data[i]
+
+            return R()
+
+    spark.dataSource.register(Same)
+    query = "SELECT b, count(*) AS n, sum(c) AS s FROM {t} WHERE a > 3 GROUP BY b ORDER BY b"
+    spark.read.parquet(path).createOrReplaceTempView("pq")
+    spark.read.format("Same").load().createOrReplaceTempView("py")
+    assert spark.sql(query.format(t="py")).collect() == spark.sql(query.format(t="pq")).collect()

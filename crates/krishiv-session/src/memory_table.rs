@@ -4,11 +4,17 @@
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
+use std::sync::Arc;
+
 use krishiv_common::error::KrishivError;
+use krishiv_exec::MemoryScan;
+use krishiv_exec::ScanPushdown;
+use krishiv_exec::planner::TableProvider;
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
+use crate::catalog::TempTable;
 use crate::session::{Session, internal};
 
 impl Session {
@@ -47,5 +53,88 @@ impl Session {
             columns,
             krishiv_exec::planner::MemoryTable::from_lease(schema, rows, lease),
         ))
+    }
+}
+
+/// What a [`SourceTable`] calls each time a plan reads it: the table's rows as batches of its schema.
+pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + Send + Sync>;
+
+/// A table whose rows come from a callback, asked afresh for every physical plan of a query (not
+/// once per registration): the Python Data Source API's reader lists its partitions and reads
+/// them when the plan is made, as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
+struct SourceTable {
+    schema: SchemaRef,
+    source: BatchSource,
+}
+
+impl std::fmt::Debug for SourceTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceTable")
+            .field("schema", &self.schema)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TableProvider for SourceTable {
+    fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        let batches = (self.source)()?;
+        let batches = batches
+            .into_iter()
+            .map(|b| {
+                if b.schema() != self.schema {
+                    return Err(internal(format!(
+                        "a batch of schema {} for a table of schema {}",
+                        b.schema(),
+                        self.schema
+                    )));
+                }
+                crate::carrier::recarried(&b, &self.schema).map(Batch::new)
+            })
+            .collect::<Result<Vec<Batch>, KrishivError>>()?;
+        Ok(Arc::new(MemoryScan::try_new(
+            Arc::clone(&self.schema),
+            batches,
+        )?))
+    }
+}
+
+impl Session {
+    /// Registers the temporary table `name` of `schema` whose rows `source` returns each time a
+    /// query over it is planned. The schema is fixed here (the analysis); the rows are not (a
+    /// source that lists files sees new ones on the next action).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no equivalent of;
+    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` for a reserved name.
+    pub fn register_batch_source(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+        source: BatchSource,
+    ) -> Result<(), KrishivError> {
+        if crate::catalog::is_reserved_view_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|f| {
+                Ok(TableColumn::new(
+                    f.name().clone(),
+                    DataType::from_arrow_field(f)?,
+                    f.is_nullable(),
+                ))
+            })
+            .collect::<Result<Vec<_>, KrishivError>>()?;
+        let schema = crate::carrier::canonical_schema(schema);
+        self.state.catalog.put(
+            name,
+            TempTable::Provider {
+                columns,
+                table: Arc::new(SourceTable { schema, source }),
+            },
+        );
+        self.state.cache.forget_table(name);
+        Ok(())
     }
 }

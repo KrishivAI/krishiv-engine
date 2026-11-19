@@ -217,6 +217,54 @@ impl PySession {
         })
     }
 
+    /// A DataFrame over a Python data source (design P3-T040): `schema` is any Arrow
+    /// object carrying the source's schema (read now, from an empty table), `read` a
+    /// callable returning an Arrow object of that schema. The engine calls it once for
+    /// every physical plan of a query over the DataFrame, so a source that lists its
+    /// partitions in `read` sees new ones on the next action. The failure of `read`
+    /// is `PYTHON_DATA_SOURCE_ERROR` (action `read`, type `partitions`).
+    fn register_python_source(
+        &self,
+        py: Python<'_>,
+        schema: &Bound<'_, PyAny>,
+        read: Py<PyAny>,
+    ) -> PyResult<PyDataFrame> {
+        let (schema, _) = ArrowStream::from_arrow(schema)?.read_all()?;
+        let name = format!(
+            "{ARROW_TABLE_PREFIX}{}",
+            ARROW_TABLES.fetch_add(1, Ordering::Relaxed)
+        );
+        let source: krishiv_session::BatchSource = std::sync::Arc::new(move || {
+            Python::attach(|py| {
+                let fail = |err: &PyErr| {
+                    let traceback = err
+                        .traceback(py)
+                        .and_then(|t| t.format().ok())
+                        .unwrap_or_default();
+                    krishiv_common::error::KrishivError::from(
+                        krishiv_common::error::PythonDataSourceError {
+                            action: "read".to_owned(),
+                            r#type: "partitions".to_owned(),
+                            msg: format!("{traceback}{err}"),
+                        },
+                    )
+                };
+                let table = read.call0(py).map_err(|e| fail(&e))?;
+                let (_, batches) = ArrowStream::from_arrow(table.bind(py))
+                    .and_then(|s| s.read_all())
+                    .map_err(|e| fail(&e))?;
+                Ok(batches)
+            })
+        });
+        self.inner
+            .register_batch_source(&name, schema, source)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(PyDataFrame {
+            inner: self.inner.table(&name),
+            owned: vec![OwnedTable::new(self.inner.clone(), name)],
+        })
+    }
+
     /// Names of the session's temporary tables and views (with the tables
     /// that hold `create_dataframe` data).
     fn temp_table_names(&self) -> Vec<String> {
