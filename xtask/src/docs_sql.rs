@@ -222,7 +222,7 @@ fn float_rounding_only(ours: &str, spark: &str) -> bool {
             x == y
                 || match (x.parse::<f64>(), y.parse::<f64>()) {
                     (Ok(x), Ok(y)) if x.is_finite() && y.is_finite() => {
-                        (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
+                        x != y && (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
                     }
                     _ => false,
                 }
@@ -613,6 +613,7 @@ pub fn run(root: &Path, check: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn the_float_note_needs_every_difference_to_be_last_digits() {
@@ -622,6 +623,9 @@ mod tests {
             "a 0.2727272727272727"
         ));
         assert!(!float_rounding_only("1", "2"));
+        assert!(!float_rounding_only("1", "1.0"));
+        assert!(!float_rounding_only("0.0", "-0.0"));
+        assert!(!float_rounding_only("1.0E10", "10000000000.0"));
         assert!(!float_rounding_only("0.27", "0.2727272727272727"));
         assert!(!float_rounding_only("x", "y"));
         assert!(!float_rounding_only("1 2", "1"));
@@ -638,7 +642,6 @@ mod tests {
         );
         assert_eq!(difference_from_spark(Some(&ok("1")), "2"), Some(false));
     }
-    use serde_json::json;
 
     #[test]
     fn slug_keeps_plain_names_and_spells_operators() {
