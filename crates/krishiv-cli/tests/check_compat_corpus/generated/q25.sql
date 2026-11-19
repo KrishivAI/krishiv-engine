@@ -1,5 +1,6 @@
 -- query 25: nope(1)
-SELECT tuple_intersection_double(a, b) AS c1 FROM t25 WHERE x IN (1, 2) AND y = 'x(tuple_intersection_double)';
-SELECT bitmap_bit_position(a, b) AS c2 FROM t25 WHERE x IN (1, 2) AND y = 'x(bitmap_bit_position)';
-SELECT tuple_difference_double(a, b) AS c3 FROM t25 WHERE x IN (1, 2) AND y = 'x(tuple_difference_double)';
-SELECT approx_top_k_accumulate(a, b) AS c4 FROM t25 WHERE x IN (1, 2) AND y = 'x(approx_top_k_accumulate)';
+SELECT legacy_fn_37(a, b) AS c1 FROM t25 WHERE x IN (1, 2) AND y = 'x(legacy_fn_37)';
+SELECT xpath_number(a, b) AS c2 FROM t25 WHERE x IN (1, 2) AND y = 'x(xpath_number)';
+SELECT session_window(a, b) AS c3 FROM t25 WHERE x IN (1, 2) AND y = 'x(session_window)';
+SELECT bitmap_count(a, b) AS c4 FROM t25 WHERE x IN (1, 2) AND y = 'x(bitmap_count)';
+SELECT string(a, b) AS c5 FROM t25 WHERE x IN (1, 2) AND y = 'x(string)';

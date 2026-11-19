@@ -1,6 +1,4 @@
 -- query 28: nope(1)
-SELECT legacy_fn_34(a, b) AS c1 FROM t28 WHERE x IN (1, 2) AND y = 'x(legacy_fn_34)';
-SELECT cbrt(a, b) AS c2 FROM t28 WHERE x IN (1, 2) AND y = 'x(cbrt)';
-SELECT count_if(a, b) AS c3 FROM t28 WHERE x IN (1, 2) AND y = 'x(count_if)';
-SELECT power(a, b) AS c4 FROM t28 WHERE x IN (1, 2) AND y = 'x(power)';
-SELECT map_concat(a, b) AS c5 FROM t28 WHERE x IN (1, 2) AND y = 'x(map_concat)';
+SELECT power(a, b) AS c1 FROM t28 WHERE x IN (1, 2) AND y = 'x(power)';
+SELECT tuple_difference_theta_double(a, b) AS c2 FROM t28 WHERE x IN (1, 2) AND y = 'x(tuple_difference_theta_double)';
+SELECT xpath_long(a, b) AS c3 FROM t28 WHERE x IN (1, 2) AND y = 'x(xpath_long)';

@@ -1,4 +1,4 @@
 -- query 0: nope(1)
-SELECT variance(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(variance)';
+SELECT var_pop(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(var_pop)';
 SELECT count_min_sketch(a, b) AS c2 FROM t0 WHERE x IN (1, 2) AND y = 'x(count_min_sketch)';
-SELECT sentences(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(sentences)';
+SELECT theta_difference(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(theta_difference)';
