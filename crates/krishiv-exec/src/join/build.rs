@@ -671,6 +671,7 @@ impl Partials {
         for &i in &lost {
             self.mark_lost(i);
         }
+        self.reserve_fixed();
         if self.settle_all(false).0 || !lost.is_empty() {
             self.release_excess();
         }
@@ -763,13 +764,12 @@ impl Partials {
         // Those with a fixed Bloom move there; a filter created now costs
         // what it took from the pool (the rest came out of these
         // reservations), so the build goes on to write tables when the net
-        // is short of the request.
-        let (_, reserved) = self.settle_all(true);
+        // is short of the request; one that filled gave its bytes back.
+        let (_, moved) = self.settle_all(true);
         self.drop_hashes();
         let held: usize = self.memory.iter().map(Reservation::size).sum();
-        let net = self
-            .release(held.saturating_sub(self.heap_bytes()))
-            .saturating_sub(reserved);
+        let net = (self.release(held.saturating_sub(self.heap_bytes())) + moved.freed)
+            .saturating_sub(moved.taken);
         (net, self.hash_bytes() < had)
     }
 

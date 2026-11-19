@@ -693,12 +693,14 @@ fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
     big.add_keys(&shared, &[spread(0, 1000)], None);
     small.add_keys(&shared, &[spread(50_000, 100)], None);
     assert!(small.hash_bytes() > 0 && !spilled[0].active());
-    // The filter (64 KiB) costs more than the hashes freed: net 0, but
-    // the hashes left (the spillable-bytes signal must change).
+    // The big partial's batch reserved the filter's memory: the drain
+    // takes nothing more from the pool, so the net is the hashes freed.
+    assert_eq!(spilled[0].outcome().0, events::RESERVED);
+    let freed = small.hash_bytes();
     assert_eq!(
         small.shed_hashes(),
-        (0, true),
-        "reported the gross shed or no move"
+        (freed, true),
+        "reported the filter again or no move"
     );
     assert!(
         spilled[0].active(),
@@ -746,7 +748,7 @@ fn a_full_fixed_filter_is_freed_and_the_bloom_lost() {
     let k = published_filter(&f);
     assert!(k.bloom_bytes().is_none() && k.has_range());
     let (bits, keys) = spilled[0].outcome();
-    assert_eq!(bits, events::ACTIVE | events::FULL);
+    assert_eq!(bits, events::RESERVED | events::ACTIVE | events::FULL);
     assert_eq!(keys, 21_101);
 }
 
@@ -772,7 +774,10 @@ fn a_lost_bloom_frees_the_fixed_filter() {
     let held = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
     assert!(held.is_empty());
     assert!(published_filter(&f).bloom_bytes().is_none());
-    assert_eq!(spilled[0].outcome().0, events::ACTIVE | events::LOST);
+    assert_eq!(
+        spilled[0].outcome().0,
+        events::RESERVED | events::ACTIVE | events::LOST
+    );
     // A partial dropped (a key of another type) disables the filter and
     // frees its fixed Bloom.
     let f = fixed_filter();
@@ -817,35 +822,125 @@ fn a_refused_fixed_filter_loses_the_bloom_as_before() {
 }
 
 /// A partial of `f` holding `n` keys as hashes, its pool then full: the
-/// rest of the limit taken by another reservation of its consumer.
+/// rest of the limit taken by another reservation of its consumer. With
+/// `early`, the filter's memory was reserved while the pool had room;
+/// without, the partial is given a fresh fixed filter that saw the same
+/// keys, as if that reservation had been refused.
 fn full_pool_partial(
     f: &JoinRuntimeFilter,
     lost: &Arc<[std::sync::atomic::AtomicBool]>,
-    spilled: &Arc<[super::SpilledBloom]>,
     n: i64,
-) -> (Partials, Reservation) {
+    early: bool,
+) -> (Partials, Reservation, Arc<[super::SpilledBloom]>) {
     let limit = 1 << 20;
-    let mut p = owned_partial(f, lost, spilled, limit);
+    let mut p = owned_partial(f, lost, &fixed(), limit);
     p.add_keys(std::slice::from_ref(f), &[spread(0, n)], None);
-    assert!(!spilled[0].active(), "made below the cap, unforced");
+    assert!(!p.spilled[0].active(), "made below the cap, unforced");
+    assert_eq!(p.spilled[0].outcome().0, events::RESERVED, "not reserved");
+    if !early {
+        let fresh = fixed();
+        fresh[0].saw(u64::try_from(n).unwrap_or(0));
+        p.spilled = fresh;
+    }
+    // The early reservation holds the filter's bytes of the same pool.
+    let filter = if early {
+        f.options.bloom_spill_bytes.map_or(0, |b| b as usize)
+    } else {
+        0
+    };
     let mut hog = p.memory[0].split(0);
-    assert!(hog.try_grow(limit - p.memory[0].size()).is_ok());
+    assert!(hog.try_grow(limit - p.memory[0].size() - filter).is_ok());
     assert!(p.memory[0].split(0).try_grow(1).is_err(), "pool not full");
-    (p, hog)
+    let spilled = Arc::clone(&p.spilled);
+    (p, hog, spilled)
 }
 
-/// A spill request when the pool is full (TPC-H q09 SF100 at 2g: the
-/// filter was `planned; refused`): the hashes being drained already hold
-/// more than the filter, so it is paid from their reservation, the pool
-/// is not asked, and the net freed is the hashes less the filter.
+/// Review F1 of f574c368f: a spill request when the pool is full and the
+/// partial's hashes (2,000 keys, 16 KB) are far below the filter (64 KiB),
+/// as at q09 SF1000 (160 MB of hashes against 320 MiB) and SF100: the
+/// filter's memory, reserved early, makes it, and the pool is not asked.
+#[test]
+fn a_full_pool_makes_the_reserved_fixed_filter() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 2_000, true);
+    let hashes = p.hash_bytes();
+    assert!(hashes < 64 << 10, "the hashes cover the filter");
+    assert_eq!(p.shed_hashes(), (hashes, true), "net freed");
+    assert_eq!(
+        spilled[0].outcome().0,
+        events::RESERVED | events::ACTIVE,
+        "refused"
+    );
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert_eq!(fixed.len(), 1);
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k
+        .evaluate(spread(0, 2_000).as_ref())
+        .unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 2_000);
+}
+
+/// A reserved filter no partial drained into is freed at publish, and the
+/// build's own Bloom goes out (a guessed build that stayed small).
+#[test]
+fn an_unused_reservation_is_freed_at_publish() {
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let mut p = owned_partial(&f, &lost, &spilled, 1 << 24);
+    p.add_keys(std::slice::from_ref(&f), &[spread(0, 2_000)], None);
+    assert_eq!(spilled[0].outcome().0, events::RESERVED);
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty(), "the unused reservation was handed over");
+    let k = published_filter(&f);
+    assert!(
+        k.bloom_bytes().is_some_and(|b| b < 64 << 10),
+        "not its own Bloom"
+    );
+}
+
+/// Review F2 of f574c368f: a filter made from the hashes' reservation and
+/// filled by the same drain (capacity below the partial's keys, full
+/// pool) gives its bytes back, so the net is every hash byte freed.
+#[test]
+fn a_filter_made_and_filled_at_once_reports_the_whole_net() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    f.options.bloom_spill_bytes = Some(1 << 10);
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 20_000, false);
+    let held = p.memory[0].size();
+    let (net, moved) = p.shed_hashes();
+    assert!(moved);
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE | events::FULL);
+    assert!(lost[0].load(Ordering::Relaxed));
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    assert_eq!(net, held - p.heap_bytes(), "the filled filter's bytes lost");
+}
+
+/// A spill request when the pool is full and the early reservation was
+/// refused: the hashes being drained hold more than the filter, so it is
+/// paid from their reservation, the pool is not asked, and the net freed
+/// is the hashes less the filter.
 #[test]
 fn a_full_pool_funds_the_fixed_filter_from_the_hashes() {
     use std::sync::atomic::Ordering;
 
     let mut f = fixed_filter();
     f.options.bloom_max_items = 100_000;
-    let (lost, spilled) = (flag(), fixed());
-    let (mut p, _hog) = full_pool_partial(&f, &lost, &spilled, 10_000);
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 10_000, false);
     let held = p.memory[0].size();
     let hashes = p.hash_bytes();
     assert!(hashes >= 64 << 10, "the hashes do not cover the filter");
@@ -878,8 +973,8 @@ fn a_refused_batch_funds_the_fixed_filter_from_the_hashes() {
 
     let mut f = fixed_filter();
     f.options.bloom_max_items = 100_000;
-    let (lost, spilled) = (flag(), fixed());
-    let (mut p, _hog) = full_pool_partial(&f, &lost, &spilled, 10_000);
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 10_000, false);
     p.add_keys(&[f], &[spread(20_000, 100)], None);
     assert_eq!(spilled[0].outcome().0, events::ACTIVE, "refused");
     assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
@@ -963,16 +1058,17 @@ async fn a_spilling_build_publishes_its_fixed_bloom() {
         hashes > 64 << 10,
         "too few hashes to pass the filter's size"
     );
+    // The batch reserved the 64 KiB filter (the build is big enough), so
+    // the hashes free their whole size; a request past them writes tables.
     let freed = sink
-        .spill(&mut l, hashes, &ctx)
+        .spill(&mut l, hashes + 1, &ctx)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    // Net of the 64 KiB filter the hashes do not cover the request, so
-    // tables were written too.
     let written = l
         .downcast_ref::<super::BuildLocal>()
         .map_or(0, |l| l.file_bytes);
     assert!(written > 0, "no table written (freed {freed} of {hashes})");
+    assert!(freed > hashes, "the hashes' bytes not all counted");
     assert!(sink.combine(l, &g).is_ok());
     sink.finalize(&g, &ctx)
         .await
@@ -996,7 +1092,7 @@ async fn a_spilling_build_publishes_its_fixed_bloom() {
     assert_eq!(
         get("fixed_bloom"),
         Some(crate::metrics::Metric::Text(
-            "planned; active; bloom".into()
+            "planned; reserved; active; bloom".into()
         ))
     );
     assert_eq!(
@@ -1010,10 +1106,10 @@ async fn a_spilling_build_publishes_its_fixed_bloom() {
 }
 
 /// A build without a spill scope, below its key cap, asked to spill after
-/// `combine`: `spill_global` moves the merged hashes into a new fixed
-/// filter, which costs more than they free, so it returns 0; the filter is
-/// active and the spillable-bytes signal no longer offers the hashes
-/// (`shed_hashes`' `moved`, fd8d1dada review finding 2).
+/// `combine`: `spill_global` moves the merged hashes into the fixed filter
+/// the batch reserved, so it returns their bytes; the filter is active and
+/// the spillable-bytes signal no longer offers the hashes (`shed_hashes`'
+/// `moved`, fd8d1dada review finding 2).
 #[tokio::test]
 #[expect(
     clippy::disallowed_methods,
@@ -1062,8 +1158,8 @@ async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
         crate::OperatorId(1),
         "b",
     );
-    // 2,000 keys as hashes pass a sixteenth of the 64 KiB filter, and
-    // free less than it costs.
+    // 2,000 keys as hashes pass a sixteenth of the 64 KiB filter, which
+    // their batch reserves.
     let keys = spread(0, 2000);
     let batch = krishiv_types::batch::Batch::new(
         arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])
@@ -1085,7 +1181,10 @@ async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
         .spill_global(&g, 1, &ctx)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(freed, 0, "a net of 0 reported as freed");
+    assert_eq!(
+        freed, hashes,
+        "the reserved filter counted against the shed"
+    );
     assert_eq!(
         lock(&super::state(&g).unwrap_or_else(|e| panic!("{e}")).runtime).hash_bytes(),
         0
@@ -1106,7 +1205,7 @@ async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
     assert_eq!(
         state,
         Some(crate::metrics::Metric::Text(
-            "planned; active; bloom".into()
+            "planned; reserved; active; bloom".into()
         )),
         "the fixed filter was not active"
     );
