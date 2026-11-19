@@ -66,6 +66,12 @@ fn having_results_do_not_depend_on_the_output_filter() {
             "SELECT k64, sum(v) FROM t GROUP BY k64 HAVING sum(v) > 60000 OR k64 > 1900",
             false,
         ),
+        // A predicate that may raise (ANSI division; count(*) is never 0
+        // here): refused, the Filter alone evaluates it (review NIT-A).
+        (
+            "SELECT k64 FROM t GROUP BY k64 HAVING sum(v) / count(*) > 2500",
+            false,
+        ),
         // An expression between the aggregate and the filter.
         (
             "SELECT k64, s2 FROM (SELECT k64, sum(v) * 2 AS s2 FROM t GROUP BY k64) WHERE s2 > 120000",
