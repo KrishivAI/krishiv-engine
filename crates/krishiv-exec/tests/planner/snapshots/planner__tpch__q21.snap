@@ -5,7 +5,7 @@ expression: tpch.plan(q).to_string()
 TopN 100, [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST]
 +- Exchange SinglePartition
    +- LocalTopN 100, [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST]
-      +- Project [s_name#1, count(1)#4611686018427387953 AS numwait#68]
+      +- Project [s_name#1, count(1)#4611686018427387955 AS numwait#68]
          +- HashAggregate keys=[s_name#1], functions=[count(1)]
             +- Exchange hashpartitioning(s_name#1)
                +- PartialHashAggregate keys=[s_name#1], functions=[count(1)]
@@ -36,4 +36,4 @@ TopN 100, [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST]
                         +- BroadcastExchange
                            +- Project [l_orderkey#36, l_suppkey#38]
                               +- Filter isnotnull(l_orderkey#7) (ids +29)
-                                 +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_commitdate#18, l_receiptdate#19], PushedFilters: [isnotnull(l_orderkey#7)]
+                                 +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9], PushedFilters: [isnotnull(l_orderkey#7)]
