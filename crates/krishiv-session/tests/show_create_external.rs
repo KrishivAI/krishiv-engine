@@ -168,6 +168,26 @@ fn comment_on_column_sets_and_clears_the_column_comment() {
     block_on(s.sql("COMMENT ON COLUMN cc.b IS NULL")).unwrap();
     assert!(!show_create(&s, "cc").contains("COMMENT"));
     assert!(block_on(s.sql("COMMENT ON COLUMN cc.nope IS 'x'")).is_err());
-    // A column name alone is not a table and a column.
-    assert!(block_on(s.sql("COMMENT ON COLUMN b IS 'x'")).is_err());
+    // A column name alone is not a table and a column; Spark names the command in the view errors.
+    let class = |q: &str| {
+        block_on(async { s.sql(q).await?.collect().await })
+            .unwrap_err()
+            .error_class()
+            .name()
+            .to_owned()
+    };
+    assert_eq!(
+        class("COMMENT ON COLUMN b IS 'x'"),
+        "INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER"
+    );
+    block_on(s.sql("CREATE VIEW cv AS SELECT a FROM cc")).unwrap();
+    block_on(s.sql("CREATE TEMP VIEW ctv AS SELECT 1 AS a")).unwrap();
+    assert_eq!(
+        class("COMMENT ON COLUMN cv.a IS 'x'"),
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+    );
+    assert_eq!(
+        class("COMMENT ON COLUMN ctv.a IS 'x'"),
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+    );
 }

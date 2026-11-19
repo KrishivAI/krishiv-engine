@@ -1220,8 +1220,10 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
-                    AlterColumnAction::UnsetComment => ColumnChange::UnsetComment,
+                    AlterColumnAction::Comment(c) | AlterColumnAction::CommentOn(Some(c)) => {
+                        ColumnChange::Comment(c.clone())
+                    }
+                    AlterColumnAction::CommentOn(None) => ColumnChange::UnsetComment,
                     AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
                         ColumnChange::Nullability
                     }
@@ -1380,6 +1382,13 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
+            if comment_on_column(&a.action) {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: "COMMENT ON COLUMN".to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
@@ -1388,6 +1397,8 @@ impl Session {
         }
         let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
             "COMMENT ON TABLE"
+        } else if comment_on_column(&a.action) {
+            "COMMENT ON COLUMN"
         } else {
             "ALTER TABLE"
         };
@@ -1955,3 +1966,14 @@ pub(crate) use delta::{delta_write_refused, is_delta_table};
 
 mod pipeline;
 mod row_level;
+
+/// Whether `action` is `COMMENT ON COLUMN`, whose errors name that command (Spark's `UnresolvedTable`).
+fn comment_on_column(action: &AlterTableAction) -> bool {
+    matches!(
+        action,
+        AlterTableAction::AlterColumn {
+            action: AlterColumnAction::CommentOn(_),
+            ..
+        }
+    )
+}

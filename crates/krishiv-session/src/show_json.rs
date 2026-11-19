@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::analyze::command_schema as cols;
 use crate::dataframe::DataFrame;
 use crate::session::Session;
+use crate::store::CatalogStore;
 
 impl Session {
     /// The `AS JSON` form of `show` (`show.as_json`).
@@ -22,26 +23,56 @@ impl Session {
         show: &Show,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
+        // `SHOW TABLE EXTENDED ... AS JSON` lists names like `SHOW TABLES` and builds no information text, so the
+        // listing is what runs (and no refusal of the text form applies).
+        let listed = match &show.kind {
+            ShowKind::TableExtended {
+                namespace,
+                pattern,
+                span,
+                ..
+            } => ShowKind::Tables {
+                namespace: namespace.clone(),
+                pattern: Some(pattern.clone()),
+                span: *span,
+            },
+            kind => kind.clone(),
+        };
         let plain = Show {
-            kind: show.kind.clone(),
+            kind: listed,
             as_json: false,
             span: show.span,
         };
         let rows = string_rows(Box::pin(self.exec_show(&plain, original)).await?).await?;
         let (key, items): (&str, Vec<String>) = match &show.kind {
             ShowKind::Tables { .. } => ("tables", rows.iter().map(|r| table(r, None)).collect()),
-            ShowKind::TableExtended { .. } => {
-                let catalog = self.state.catalog.current_catalog();
-                (
-                    "tables",
-                    rows.iter().map(|r| table(r, Some(&catalog))).collect(),
-                )
-            }
+            ShowKind::TableExtended { .. } => (
+                "tables",
+                rows.iter()
+                    .map(|r| table(r, Some(self.table_type(r))))
+                    .collect(),
+            ),
             _ => ("partitions", rows.iter().map(|r| partition(r)).collect()),
         };
         let doc = format!("{{\"{key}\":[{}]}}", items.join(","));
         self.string_frame(cols::SHOW_JSON, vec![vec![Some(doc)]])
             .await
+    }
+
+    /// Spark's `tableType` of a listed row: `VIEW` for a temporary or permanent view, else `MANAGED` or `EXTERNAL`.
+    fn table_type(&self, row: &[String]) -> &'static str {
+        let (ns, name) = (
+            row.first().map_or("", String::as_str),
+            row.get(1).map_or("", String::as_str),
+        );
+        if row.get(2).is_some_and(|t| t == "true") {
+            return "VIEW";
+        }
+        match self.state.catalog.store.table(ns, name) {
+            Some(t) if t.view.is_some() => "VIEW",
+            Some(t) if !t.managed => "EXTERNAL",
+            _ => "MANAGED",
+        }
     }
 }
 
@@ -70,9 +101,10 @@ fn js(s: &str) -> String {
     Value::String(s.to_owned()).to_string()
 }
 
-/// One `SHOW TABLES` row (`namespace`, `tableName`, `isTemporary`, and for `EXTENDED` the information text), as
-/// an object whose keys are in Spark's order (serde_json's map would sort them).
-fn table(row: &[String], catalog: Option<&str>) -> String {
+/// One `SHOW TABLES` row (`namespace`, `tableName`, `isTemporary`) as an object whose keys are in Spark's order
+/// (serde_json's map would sort them). `extended` is the table type of `SHOW TABLE EXTENDED`, which also writes
+/// the `catalog` (the session catalog's, temporary views included).
+fn table(row: &[String], extended: Option<&str>) -> String {
     let temporary = row.get(2).is_some_and(|t| t == "true");
     let namespace = row
         .first()
@@ -82,48 +114,29 @@ fn table(row: &[String], catalog: Option<&str>) -> String {
         "\"name\":{}",
         js(row.get(1).map_or("", String::as_str))
     )];
-    if let Some(catalog) = catalog.filter(|_| !temporary) {
-        fields.push(format!("\"catalog\":{}", js(catalog)));
+    if extended.is_some() {
+        fields.push(format!("\"catalog\":{}", js(crate::catalog::CATALOG)));
     }
     fields.push(format!("\"namespace\":[{namespace}]"));
-    if let Some(ty) = row
-        .get(3)
-        .and_then(|info| info.lines().find_map(|l| l.strip_prefix("Type: ")))
-    {
+    if let Some(ty) = extended {
         fields.push(format!("\"type\":{}", js(ty)));
     }
     fields.push(format!("\"isTemporary\":{temporary}"));
     format!("{{{}}}", fields.join(","))
 }
 
-/// One `SHOW PARTITIONS` row, `p=7/q=a` (values percent-escaped), as an object in column order.
+/// One `SHOW PARTITIONS` row, `p=7/q=a`, as an object in column order. Spark splits the escaped name on `/` and
+/// the first `=` and keeps the `%XX` escapes (`ShowPartitionsJsonCommand`); a segment without `=` is a key with
+/// an empty value.
 fn partition(row: &[String]) -> String {
     let fields: Vec<String> = row
         .first()
         .map_or("", String::as_str)
         .split('/')
-        .filter_map(|part| part.split_once('='))
-        .map(|(k, v)| format!("{}:{}", js(&unescape(k)), js(&unescape(v))))
+        .map(|part| {
+            let (k, v) = part.split_once('=').unwrap_or((part, ""));
+            format!("{}:{}", js(k), js(v))
+        })
         .collect();
     format!("{{{}}}", fields.join(","))
-}
-
-/// `%XX` escapes of a partition path part, undone.
-fn unescape(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%'
-            && let Some(h) = s.get(i + 1..i + 3)
-            && let Ok(v) = u8::from_str_radix(h, 16)
-        {
-            out.push(v);
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

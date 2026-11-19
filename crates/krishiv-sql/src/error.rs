@@ -19,12 +19,14 @@
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
+    InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
     InvalidStatementOrClause, InvalidTempObjQualifier, InvalidTimeTravelTimestampFormat,
     KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0035, LegacyErrorTemp0045,
     LegacyErrorTemp0053, MultipleTimeTravelSpec, ParseEmptyStatement, ParseSyntaxError,
-    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment, UnsupportedFeatureTimeTravel,
+    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    UnsupportedFeatureShowTableExtendedJsonWithPartition, UnsupportedFeatureTimeTravel,
 };
 
 use crate::ast::Span;
@@ -292,6 +294,19 @@ pub(crate) fn time_travel_unsupported(parts: &[String], span: Span) -> ParseErro
         UnsupportedFeatureTimeTravel {
             relation_id: full.iter().map(|p| quote(p)).collect::<Vec<_>>().join("."),
         },
+        span,
+    )
+}
+
+/// `INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER`: `COMMENT ON COLUMN` with one name part.
+pub(crate) fn comment_on_column_incorrect_identifier(span: Span) -> ParseError {
+    at(InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier {}, span)
+}
+
+/// `UNSUPPORTED_FEATURE.SHOW_TABLE_EXTENDED_JSON_WITH_PARTITION`.
+pub(crate) fn show_table_extended_json_with_partition(span: Span) -> ParseError {
+    at(
+        UnsupportedFeatureShowTableExtendedJsonWithPartition {},
         span,
     )
 }

@@ -204,17 +204,16 @@ impl<'s> Parser<'s> {
                 let at = p.start();
                 let mut name = p.table_name()?;
                 let Some(last) = name.parts.pop().filter(|_| !name.parts.is_empty()) else {
-                    return p.fail();
+                    return Self::fatal(error::comment_on_column_incorrect_identifier(
+                        p.span_from(start),
+                    ));
                 };
                 name.span = p.span_from(at);
                 p.expect_kw("IS")?;
                 let comment = p.comment_value()?;
                 let span = p.span_from(start);
                 p.command_end()?;
-                let action = match comment {
-                    Some(c) => AlterColumnAction::Comment(c),
-                    None => AlterColumnAction::UnsetComment,
-                };
+                let action = AlterColumnAction::CommentOn(comment);
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
                     table: DdlName::Parts(name),
                     action: AlterTableAction::AlterColumn {
@@ -875,6 +874,17 @@ impl<'s> Parser<'s> {
                 && p.kw_at(1, "JSON");
             if as_json {
                 p.pos += 2;
+                if matches!(
+                    &kind,
+                    ShowKind::TableExtended {
+                        partition: Some(_),
+                        ..
+                    }
+                ) {
+                    return Self::fatal(error::show_table_extended_json_with_partition(
+                        p.span_from(start),
+                    ));
+                }
             }
             let span = p.span_from(start);
             p.command_end()?;

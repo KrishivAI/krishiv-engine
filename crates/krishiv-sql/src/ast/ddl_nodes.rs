@@ -874,8 +874,9 @@ pub enum ChangeColumnAction {
 pub enum AlterColumnAction {
     /// `COMMENT '...'`.
     Comment(String),
-    /// `COMMENT ON COLUMN ... IS NULL` (Spark 4.3): drops the comment.
-    UnsetComment,
+    /// `COMMENT ON COLUMN table.column IS 'comment' | NULL` (Spark 4.3): sets the comment, or drops it for `NULL`.
+    /// A separate variant from `Comment` because Spark names the command in its errors.
+    CommentOn(Option<String>),
     /// `SET NOT NULL`.
     SetNotNull,
     /// `DROP NOT NULL`.
