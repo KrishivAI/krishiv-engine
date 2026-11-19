@@ -77,11 +77,11 @@ fn first_paragraphs(json_text: &str) -> Result<HashMap<String, Option<String>>, 
         let Some(first) = docs.lines().next() else {
             continue;
         };
-        let paragraph: Vec<&str> = docs.lines().take_while(|l| !l.trim().is_empty()).collect();
-        if paragraph.len() < 2 {
-            continue;
-        }
-        let paragraph = paragraph.join("\n");
+        let paragraph = docs
+            .lines()
+            .take_while(|l| !l.trim().is_empty() && !l.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n");
         match map.get_mut(first) {
             Some(known) if known.as_deref() != Some(paragraph.as_str()) => *known = None,
             Some(_) => {}
@@ -90,6 +90,9 @@ fn first_paragraphs(json_text: &str) -> Result<HashMap<String, Option<String>>, 
             }
         }
     }
+    // A one-line paragraph has nothing to expand; it was recorded only so that a longer paragraph
+    // with the same first line is seen as ambiguous.
+    map.retain(|_, paragraph| paragraph.as_deref().is_none_or(|p| p.contains('\n')));
     Ok(map)
 }
 
@@ -419,12 +422,14 @@ mod tests {
     #[test]
     fn a_method_description_is_expanded_to_its_first_paragraph() {
         let json = r#"{"index":{"1":{"docs":"Swaps the tree for the one `json`\ndescribes (other keys).\n\n# Errors\n\nNone."},
-            "2":{"docs":"One line only."},"3":{"docs":"Same start\nfirst."},"4":{"docs":"Same start\nsecond."}}}"#;
+            "2":{"docs":"One line only."},"3":{"docs":"Same start\nfirst."},"4":{"docs":"Same start\nsecond."},
+            "5":{"docs":"Same line"},"6":{"docs":"Same line\nlonger."},
+            "7":{"docs":"Fenced first\n```\ncode\n```"}}}"#;
         let map = first_paragraphs(json).unwrap();
-        let md = "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n";
+        let md = "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn c() {}\n  ```\n  Same line\n\n- ```rust\n  pub fn d() {}\n  ```\n  Fenced first\n";
         assert_eq!(
             expand_first_lines(md, &map),
-            "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n  describes (other keys).\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n"
+            "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n  describes (other keys).\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn c() {}\n  ```\n  Same line\n\n- ```rust\n  pub fn d() {}\n  ```\n  Fenced first\n"
         );
     }
 
