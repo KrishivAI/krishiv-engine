@@ -1405,8 +1405,8 @@ impl Parser<'_> {
             // `@v1`: one word (our lexer does not split it).
             Some(w)
                 if w.len() > 1
-                    && w[..1].eq_ignore_ascii_case("v")
-                    && w[1..].bytes().all(|b| b.is_ascii_digit()) =>
+                    && w.as_bytes()[0].eq_ignore_ascii_case(&b'v')
+                    && w.as_bytes()[1..].iter().all(u8::is_ascii_digit) =>
             {
                 let text = w[1..].to_owned();
                 let value_span = self.tok(0).map_or(Span::new(at, at), |t| t.span);

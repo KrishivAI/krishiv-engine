@@ -191,3 +191,30 @@ fn time_travel_names_the_resolved_relation() {
         travel("`spark_catalog`.`default`.`tbl`")
     );
 }
+
+/// A session with an access policy other than `AllowAll` gives one error for an existing and a missing relation:
+/// the catalog is not read before the policy is asked, so a denied principal learns nothing about names.
+#[test]
+fn time_travel_under_a_policy_is_no_existence_oracle() {
+    use krishiv_session::{AllowAll, ReadOnlyPolicy};
+    use std::sync::Arc;
+    let s = Session::builder()
+        .access_policy(Arc::new(ReadOnlyPolicy::new(Arc::new(AllowAll))))
+        .build()
+        .unwrap();
+    assert_eq!(
+        error(&s, "select * from nope@v1"),
+        error(&s, "select * from nope2 version as of 1")
+    );
+    assert_eq!(
+        error(&s, "select * from nope@v1").0,
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn a_non_ascii_word_after_the_at_sign_is_a_syntax_error() {
+    let s = Session::new().unwrap();
+    assert_eq!(class(&s, "select * from tbl@é"), "PARSE_SYNTAX_ERROR");
+    assert_eq!(class(&s, "select * from tbl@vé"), "PARSE_SYNTAX_ERROR");
+}

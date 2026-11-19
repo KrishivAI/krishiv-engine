@@ -475,14 +475,12 @@ impl Lowerer {
         let mut plan = planned?;
         if let Some(with) = &q.with {
             let mut ctes = Vec::new();
+            // A definition sees the ones before it (and itself, when recursive): `self.ctes` grows
+            // by one name per definition.
             for (i, c) in with.ctes.iter().enumerate() {
-                // A definition sees the ones before it (and itself, when recursive).
-                self.ctes.truncate(base);
-                self.ctes.extend(
-                    names[..i + usize::from(with.recursive)]
-                        .iter()
-                        .map(|n| (*n).to_owned()),
-                );
+                if with.recursive {
+                    self.ctes.push(names[i].to_owned());
+                }
                 let max_level = match &c.max_recursion_level {
                     None => None,
                     Some(n) if with.recursive => Some(
@@ -492,7 +490,9 @@ impl Lowerer {
                     Some(_) => return Err(unsupported("MAX RECURSION LEVEL", c.span)),
                 };
                 let body = self.query(&c.query);
-                self.ctes.truncate(base);
+                if !with.recursive {
+                    self.ctes.push(names[i].to_owned());
+                }
                 let mut body = body?;
                 let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
                 if with.recursive && reads_table(&body, &c.name.value, self.case_sensitive) {
@@ -513,6 +513,7 @@ impl Lowerer {
                     plan: arc(body),
                 });
             }
+            self.ctes.truncate(base);
             plan = self.node(
                 PlanNode::WithCte {
                     input: arc(plan),

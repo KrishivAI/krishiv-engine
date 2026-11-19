@@ -33,6 +33,12 @@ impl Session {
         if !is_time_travel {
             return None;
         }
+        // The catalog is read only for a session that lets everyone read everything: before the
+        // analysis asks the policy, an answer that depends on the relation existing would tell a
+        // denied principal which names exist. Any other session gets the lowerer's refusal.
+        if !self.state.policy_open {
+            return None;
+        }
         let parts = e.relation.as_deref()?;
         let name = TableName::resolve(parts, &self.namespace_for(parts, env).ok()?, env).ok()?;
         if self.temp_entry_of(&name, env) {

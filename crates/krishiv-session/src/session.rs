@@ -155,6 +155,9 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
+    /// Whether `policy` is the default [`AllowAll`]: nothing is denied, so a lookup that runs before the
+    /// analysis asks the policy tells no one anything.
+    pub(crate) policy_open: bool,
     /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
     /// (P3-T062); `None`: those statements are refused.
     pub(crate) grants: Option<Arc<crate::grants::GrantsPolicy>>,
@@ -430,6 +433,7 @@ impl SessionBuilder {
         let parts = SessionParts {
             profile: self.profile,
             principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+            policy_open: self.policy.is_none(),
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
             grants: self.grants,
             functions: self.functions,
@@ -445,6 +449,7 @@ struct SessionParts {
     profile: SparkProfile,
     principal: Arc<Principal>,
     policy: Arc<dyn AccessPolicy>,
+    policy_open: bool,
     grants: Option<Arc<crate::grants::GrantsPolicy>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     admission: Option<Arc<dyn AdmissionController>>,
