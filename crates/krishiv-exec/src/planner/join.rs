@@ -345,6 +345,14 @@ impl Planner<'_> {
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
+            if self.rf.equated_sites {
+                sites.extend(super::runtime_filter::equated_sites(
+                    &probe,
+                    &probe_exprs,
+                    &build,
+                    &build_exprs,
+                ));
+            }
         }
         if join_type.builds_preserved() {
             // The rows the join returns are build rows (a right outer

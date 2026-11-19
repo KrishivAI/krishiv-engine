@@ -25,7 +25,7 @@ use proptest::prelude::*;
 use super::tpch::{Tpch, answers, expected_rows, parquet_files, parquet_tables, rows, sql};
 
 /// Configurations compared: off, the defaults, and forced forms.
-const MODES: [(&str, &[(&str, &str)]); 6] = [
+const MODES: [(&str, &[(&str, &str)]); 7] = [
     ("off", &[("krishiv.runtimeFilter.enabled", "false")]),
     ("default", &[]),
     (
@@ -52,6 +52,10 @@ const MODES: [(&str, &[(&str, &str)]); 6] = [
             ("spark.sql.optimizer.runtime.bloomFilter.enabled", "false"),
             ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
         ],
+    ),
+    (
+        "no-equated",
+        &[("krishiv.runtimeFilter.equatedSites", "false")],
     ),
     (
         "adaptive-off",
@@ -686,6 +690,74 @@ fn a_selective_build_estimated_large_still_filters_by_its_keys() {
     let plan = t.plan_sql(q).unwrap();
     assert!(plan.to_string().contains("RuntimeFilter #"), "{plan}");
     assert!(!plan.to_string().contains("(bloom)"), "{plan}");
+}
+
+/// TPC-H q18's shape: a fact table joined to a dimension, and the
+/// dimension's key cut by a `HAVING` subquery. The subquery's filter on the
+/// dimension key also reaches the fact table's scan through the inner
+/// join's `b.k64 = m.k64` (`krishiv.runtimeFilter.equatedSites`), so the
+/// fact rows of keys the subquery drops never reach the join; results do
+/// not change, and with the key off the fact scan gets only the
+/// dimension build's own filter. `v` is the row number: the subquery
+/// keeps about the keys of `small`'s first 400 rows, a few dozen of them
+/// in `big`'s and `mid`'s domain.
+#[test]
+fn a_filter_reaches_scans_through_join_key_equalities() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 29;
+    write(
+        dir.path(),
+        "big.parquet",
+        &table(&mut rng, 60_000, 4_000, 0),
+    );
+    write(dir.path(), "mid.parquet", &table(&mut rng, 3_000, 4_000, 0));
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 20_000, 40_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("mid", vec!["mid.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v, m.v FROM big b JOIN mid m ON b.k64 = m.k64 WHERE m.k64 IN \
+             (SELECT k64 FROM small GROUP BY k64 HAVING sum(v) < 400)";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    // As in `a_selective_build_estimated_large_still_filters_by_its_keys`:
+    // no IN list or exact set, and a Bloom filter of at most 1,000 keys, so
+    // `mid`'s build (3,000 rows, estimated from its table) publishes a
+    // range only and the subquery's build (a `HAVING` guess, ~400 keys)
+    // its Bloom filter.
+    let base: &[(&str, &str)] = &[
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.bloom.maxItems", "1000"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+    ];
+    let mut counts = Vec::new();
+    for on in ["true", "false"] {
+        let mut mode = base.to_vec();
+        mode.push(("krishiv.runtimeFilter.equatedSites", on));
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(q).unwrap();
+        let (got, c) = run(&plan);
+        assert_eq!(sorted(&got), want, "equatedSites={on}\n{plan}");
+        let text = plan.to_string();
+        let to_big = text.matches(".default.big.k64").count();
+        counts.push((to_big, c.rows_dropped));
+    }
+    let ((on_big, on_dropped), (off_big, off_dropped)) = (counts[0], counts[1]);
+    // The subquery's filter is one more filter on the fact scan.
+    assert_eq!(on_big, off_big + 1, "{counts:?}");
+    assert!(on_dropped > off_dropped, "{counts:?}");
 }
 
 /// TPC-H q20's shape: a build cut by a `LIKE` the estimator does not model

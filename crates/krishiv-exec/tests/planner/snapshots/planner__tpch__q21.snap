@@ -10,7 +10,7 @@ TopN 100, [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST]
             +- Exchange hashpartitioning(s_name#1)
                +- PartialHashAggregate keys=[s_name#1], functions=[count(1)]
                   +- Project [s_name#1]
-                     +- HashJoin LeftSemi, [l_orderkey#7] = [l_orderkey#36], residual: (NOT (l_suppkey#38 == l_suppkey#9)), RuntimeFilter #4: l_orderkey#7 -> spark_catalog.default.lineitem.l_orderkey
+                     +- HashJoin LeftSemi, [l_orderkey#7] = [l_orderkey#36], residual: (NOT (l_suppkey#38 == l_suppkey#9)), RuntimeFilter #4: l_orderkey#7 -> spark_catalog.default.lineitem.l_orderkey, RuntimeFilter #5: l_orderkey#7 -> spark_catalog.default.orders.o_orderkey
                         :- HashJoin LeftAnti, [l_orderkey#7] = [l_orderkey#52], residual: (NOT (l_suppkey#54 == l_suppkey#9))
                         :  :- Project [l_orderkey#7, l_suppkey#9, s_name#1]
                         :  :  +- HashJoin Inner, [l_suppkey#9] = [s_suppkey#0], RuntimeFilter #3: l_suppkey#9 -> spark_catalog.default.lineitem.l_suppkey

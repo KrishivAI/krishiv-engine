@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The config entries of the at-scale runtime Bloom tiers (gap ledger §4
-//! item 13, study 36 §4.4): `atScale` and the memory tier.
+//! item 13, study 36 §4.4): `atScale` and the memory tier; and of runtime
+//! filter targets through join key equalities (`equatedSites`).
 
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
@@ -30,6 +31,20 @@ pub static RUNTIME_FILTER_BLOOM_MEMORY_TIER: ConfigEntry = ConfigEntry {
           of 1/64 of the query memory limit (`krishiv.memory.limit`, or `krishiv.session.memoryLimit` \
           when lower) and a key cap of the keys that size holds at the filter's false-positive rate. It applies \
           only while `krishiv.runtimeFilter.bloom.atScale` is on. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.equatedSites`: runtime filters also reach scans through inner-join key equalities.
+pub static RUNTIME_FILTER_EQUATED_SITES: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.equatedSites",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A runtime filter on a join key also targets the scans of the columns an inner equi-join below \
+          equates with it (a key pair of two plain columns of one type), as on the key's own scan: for \
+          `a.k = b.k` below, a filter on `b.k` also filters `a.k` at `a`'s scan. Results do not change.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.3.0",
