@@ -49,6 +49,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),

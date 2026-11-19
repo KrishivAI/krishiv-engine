@@ -15,3 +15,16 @@ fn ui_allowed_hosts_is_a_startup_string_with_no_default() {
     );
     assert_eq!(UI_ALLOWED_HOSTS.scope, Scope::Cluster);
 }
+
+#[test]
+fn ui_allowed_origins_is_a_startup_string_with_no_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&UI_ALLOWED_ORIGINS), None);
+    c.set("krishiv.ui.allowedOrigins", "https://console.example.com")
+        .unwrap();
+    assert_eq!(
+        c.get(&UI_ALLOWED_ORIGINS).and_then(ConfigValue::as_str),
+        Some("https://console.example.com")
+    );
+    assert_eq!(UI_ALLOWED_ORIGINS.scope, Scope::Cluster);
+}

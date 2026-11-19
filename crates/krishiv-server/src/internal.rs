@@ -181,14 +181,32 @@ pub fn random_token() -> Result<String, UiError> {
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
-async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
+/// The policy for a page that `origins` may frame: [`CSP`] with its `frame-ancestors 'none'` replaced by them.
+fn framable_csp(origins: &[String]) -> String {
+    CSP.replace(
+        "frame-ancestors 'none'",
+        &format!("frame-ancestors {}", origins.join(" ")),
+    )
+}
+
+async fn security_headers(
+    State(s): State<UiState>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    // Only the pages (not `/api`) can be framed, and only by the configured origins (P3-T071).
+    let framable = !req.uri().path().starts_with("/api") && !s.policy.frame_origins().is_empty();
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if framable && let Ok(v) = HeaderValue::from_str(&framable_csp(s.policy.frame_origins())) {
+        h.insert(header::CONTENT_SECURITY_POLICY, v);
+    } else {
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        );
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -259,10 +277,13 @@ pub fn router_with_ui_policy(
         .route("/api/internal/openapi.json", get(pages::openapi_json))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
-        .layer(middleware::from_fn_with_state(state, pages::host_guard));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            pages::host_guard,
+        ));
     crate::router()
         .merge(internal)
-        .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(state, security_headers))
 }
 
 pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {

@@ -38,6 +38,8 @@ const MAX_SQL_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone)]
 pub struct UiPolicy {
     hosts: Vec<String>,
+    /// Origins that may frame the UI's pages (`frame-ancestors`); empty means none.
+    frame_origins: Vec<String>,
     /// Whether the `Host` header is checked at all (see [`UiPolicy::for_listener`]).
     enforce: bool,
     secure_cookie: bool,
@@ -54,6 +56,7 @@ impl UiPolicy {
     #[must_use]
     pub fn loopback() -> Self {
         Self {
+            frame_origins: Vec::new(),
             hosts: ["localhost", "127.0.0.1", "[::1]"]
                 .into_iter()
                 .map(str::to_owned)
@@ -88,6 +91,23 @@ impl UiPolicy {
             self.hosts.push(h);
         }
         self
+    }
+
+    /// Lets `origin` (`scheme://host[:port]`, nothing else) frame the UI's pages. Anything that is not exactly
+    /// an origin (a path, a wildcard, a quote or space that would end the CSP source) is ignored.
+    #[must_use]
+    pub fn allow_frame_origin(mut self, origin: &str) -> Self {
+        let o = origin.trim().to_ascii_lowercase();
+        if is_origin(&o) && !self.frame_origins.contains(&o) {
+            self.frame_origins.push(o);
+        }
+        self
+    }
+
+    /// The origins that may frame the UI's pages.
+    #[must_use]
+    pub fn frame_origins(&self) -> &[String] {
+        &self.frame_origins
     }
 
     /// Marks the session cookie `Secure` (the listener is TLS). It also fixes the scheme a browser's `Origin` must
@@ -527,6 +547,29 @@ pub struct SqlRun {
 }
 
 /// A configured host name that can be matched: not blank and not the wildcard `*` (which is never allowed).
+/// `http(s)://host[:port]` with a plain host: no path, query, userinfo, wildcard or CSP-significant character.
+fn is_origin(o: &str) -> bool {
+    let Some(rest) = o
+        .strip_prefix("https://")
+        .or_else(|| o.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let host = strip_port(rest);
+    let port_ok = rest.len() == host.len()
+        || rest[host.len()..]
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    // A colon is only the inside of a bracketed IPv6 literal; `strip_port` leaves an empty port in place.
+    let colons_ok = host.starts_with('[') || !host.contains(':');
+    !host.is_empty()
+        && port_ok
+        && colons_ok
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'[' | b']' | b':'))
+}
+
 fn is_usable_host(host: &str) -> bool {
     let h = host.trim();
     !h.is_empty() && h != "*"
@@ -546,6 +589,25 @@ mod tests {
         assert!(!p.allows("evil.example.com"));
         assert!(!p.allows("localhost.evil.com"));
         assert!(!p.allows(""));
+    }
+
+    #[test]
+    fn only_exact_origins_may_frame_the_ui() {
+        let p = UiPolicy::loopback()
+            .allow_frame_origin("https://Console.example.com")
+            .allow_frame_origin("http://localhost:3000")
+            .allow_frame_origin("https://console.example.com")
+            .allow_frame_origin("*")
+            .allow_frame_origin("https://*.example.com")
+            .allow_frame_origin("https://a.example.com/path")
+            .allow_frame_origin("https://a.example.com; script-src *")
+            .allow_frame_origin("https://u@a.example.com")
+            .allow_frame_origin("https://a.example.com:")
+            .allow_frame_origin("ftp://a.example.com");
+        assert_eq!(
+            p.frame_origins(),
+            ["https://console.example.com", "http://localhost:3000"]
+        );
     }
 
     #[test]

@@ -106,6 +106,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &UI_ALLOWED_HOSTS,
+    &UI_ALLOWED_ORIGINS,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -743,6 +744,22 @@ pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
           `[::1]`. A server bound to another address checks the `Host` header only when this is \
           set (it already requires authentication, and TLS for bearer methods). The \
           environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The origins that may frame the web UI (P3-T071).
+pub static UI_ALLOWED_ORIGINS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedOrigins",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated origins (`https://console.example.com`, a scheme, a host and an optional \
+          port; no path, no wildcard) that may embed the web UI's pages in a frame. They become \
+          the `frame-ancestors` source list of the UI pages' Content-Security-Policy. Unset, the \
+          default, no page may be framed (`frame-ancestors 'none'`). The `/api` routes are never \
+          framable.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

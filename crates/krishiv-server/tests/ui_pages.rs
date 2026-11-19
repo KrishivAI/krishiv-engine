@@ -725,3 +725,41 @@ async fn the_editor_result_is_exact_at_the_row_cap_boundary() {
         assert_eq!(done["truncated"], json!(truncated), "{rows} rows");
     }
 }
+
+#[tokio::test]
+async fn only_the_configured_origins_may_frame_the_pages_and_never_the_api() {
+    let a = auth();
+    let framed = start_with(
+        UiPolicy::for_listener(true, []).allow_frame_origin("https://console.example.com"),
+    )
+    .await;
+    // A deep link is the SPA shell, framable by the allowed origin only.
+    let (status, head, _) = raw(framed, "GET", "/queries/q-1", &["Host: localhost"], "").await;
+    assert_eq!(status, 200);
+    assert!(
+        head.contains("frame-ancestors https://console.example.com;")
+            && !head.contains("frame-ancestors 'none'")
+            && !head.contains("x-frame-options"),
+        "{head}"
+    );
+    // The API keeps `none` and DENY.
+    let (_, head, _) = raw(
+        framed,
+        "GET",
+        "/api/internal/health",
+        &["Host: localhost", &a],
+        "",
+    )
+    .await;
+    assert!(
+        head.contains("frame-ancestors 'none'") && head.contains("x-frame-options: deny"),
+        "{head}"
+    );
+    // The default allows nobody.
+    let closed = start_with(UiPolicy::for_listener(true, [])).await;
+    let (_, head, _) = raw(closed, "GET", "/queries/q-1", &["Host: localhost"], "").await;
+    assert!(
+        head.contains("frame-ancestors 'none'") && head.contains("x-frame-options: deny"),
+        "{head}"
+    );
+}
