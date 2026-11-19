@@ -54,8 +54,14 @@ class RunnerBuildMismatch(RuntimeError):
     """The runner is not built at the shipped CPU level, so its timings are not the product's (bench/README.md)."""
 
 
-# The CPU level the shipped binaries and wheels are built for, per machine (`.github/workflows/binaries.yml`).
-SHIPPED_TARGET_CPU = {"x86_64": "x86-64-v3", "amd64": "x86-64-v3", "aarch64": "neoverse-n1", "arm64": "neoverse-n1"}
+# The CPU level the shipped binaries and wheels are built for, per (system, machine) as `platform` reports them
+# (`.github/workflows/binaries.yml`, `wheels.yml`): Linux x86_64 and aarch64 through RUSTFLAGS, macOS arm64 by a plain
+# build. A host with no shipped binary (Windows, FreeBSD, macOS x86_64, ...) is not judged.
+SHIPPED_TARGET_CPU = {
+    ("linux", "x86_64"): "x86-64-v3",
+    ("linux", "aarch64"): "neoverse-n1",
+    ("darwin", "arm64"): "default",
+}
 # Set to 1 to run a runner of another CPU level anyway (a build-level experiment, never a Krishiv timing).
 ANY_BUILD_ENV = "KRISHIV_BENCH_ANY_BUILD"
 SHIPPED_BUILD_COMMAND = (
@@ -64,29 +70,37 @@ SHIPPED_BUILD_COMMAND = (
 )
 
 
-def shipped_rustflags(machine: str | None = None) -> str:
-    """The ``RUSTFLAGS`` of a runner at the shipped level of ``machine`` (bench/README.md); empty where none is."""
-    want = SHIPPED_TARGET_CPU.get((machine or platform.machine()).lower())
-    if want is None:
+def shipped_target_cpu(host: tuple[str, str] | None = None) -> str | None:
+    """The shipped ``target-cpu`` of ``host`` (``(system, machine)``, this one by default), or None when none ships."""
+    system, machine = host or (platform.system(), platform.machine())
+    return SHIPPED_TARGET_CPU.get((system.lower(), machine.lower()))
+
+
+def shipped_rustflags(host: tuple[str, str] | None = None) -> str:
+    """The ``RUSTFLAGS`` of a runner at the shipped level of ``host`` (bench/README.md); empty where it is the
+    default level or none ships."""
+    want = shipped_target_cpu(host)
+    if want in (None, "default"):
         return ""
     align = " -C llvm-args=-x86-branches-within-32B-boundaries" if want.startswith("x86-64") else ""
     return f"-C target-cpu={want}{align}"
 
 
-def build_level_problem(binary: Path, build: dict[str, str], machine: str | None = None) -> str | None:
-    """Why ``build`` (a runner's ``--build-info`` fields) is not the shipped CPU level of ``machine``, or None.
+def build_level_problem(binary: Path, build: dict[str, str], host: tuple[str, str] | None = None) -> str | None:
+    """Why ``build`` (a runner's ``--build-info`` fields) is not the shipped CPU level of ``host``, or None.
 
-    A runner that cannot report its level (``unknown``: too old, or a test double) and a machine with no shipped
-    level are not judged. Study 28 measured a ``target-cpu=default`` runner 1.14x slower over TPC-H (q04 1.59x), so a
+    A runner that cannot report its level (``unknown``: too old, or a test double) and a host with no shipped
+    binary are not judged. Study 28 measured a ``target-cpu=default`` runner 1.14x slower over TPC-H (q04 1.59x), so a
     timing of one says little about what users run.
     """
-    want = SHIPPED_TARGET_CPU.get((machine or platform.machine()).lower())
+    want = shipped_target_cpu(host)
     cpu = build.get("target_cpu", "unknown")
     if want is None or cpu in ("unknown", want):
         return None
+    flags = shipped_rustflags(host)
+    build_cmd = (f"RUSTFLAGS='{flags}' " if flags else "") + "cargo build --profile dist -p krishiv-bench-runner"
     return (
-        f"{binary} is built for target-cpu={cpu}, not the shipped {want}: rebuild it "
-        f"(RUSTFLAGS='{shipped_rustflags(machine)}' cargo build --profile dist -p krishiv-bench-runner), "
+        f"{binary} is built for target-cpu={cpu}, not the shipped {want}: rebuild it ({build_cmd}), "
         f"or set {ANY_BUILD_ENV}=1 for a run that compares build levels"
     )
 

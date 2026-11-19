@@ -233,6 +233,8 @@ def correctness_probe(
         eng = KrishivEngine(threads=threads, memory_limit=memory, binary=binary)
         eng.timeout_s = timeout_s or None
         try:
+            # RunnerBuildMismatch is not caught on purpose: every probe is built at the shipped level, so a mismatch
+            # is a harness bug that must stop the bisect, not a commit to mark skipped or bad.
             try:
                 eng.setup(ds)
             except (RunnerError, RunnerCrashed) as e:  # e.g. a runner protocol older than this harness

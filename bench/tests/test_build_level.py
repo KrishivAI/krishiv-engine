@@ -37,7 +37,8 @@ def repo(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _x86(monkeypatch):
-    """Judged as on the laptop (x86_64), whatever machine runs the tests."""
+    """Judged as on the laptop (Linux x86_64), whatever host runs the tests."""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.delenv(ANY_BUILD_ENV, raising=False)
 
@@ -51,31 +52,48 @@ def test_problem_names_the_level_and_the_fix(tmp_path):
 
 
 def test_problem_on_arm_names_the_arm_build(tmp_path):
-    p = build_level_problem(tmp_path / "r", {"target_cpu": "default"}, "aarch64")
+    p = build_level_problem(tmp_path / "r", {"target_cpu": "default"}, ("Linux", "aarch64"))
     assert p is not None
     assert "RUSTFLAGS='-C target-cpu=neoverse-n1' cargo build" in p
 
 
 @pytest.mark.parametrize(
-    ("cpu", "machine", "judged"),
+    ("cpu", "host", "judged"),
     [
-        ("x86-64-v3", "x86_64", False),
-        ("unknown", "x86_64", False),  # an old runner or a test double cannot say
-        ("default", "x86_64", True),
-        ("x86-64-v4", "x86_64", True),
-        ("default", "aarch64", True),
-        ("neoverse-n1", "aarch64", False),
-        ("default", "riscv64", False),  # no shipped level there
+        ("x86-64-v3", ("Linux", "x86_64"), False),
+        ("unknown", ("Linux", "x86_64"), False),  # an old runner or a test double cannot say
+        ("default", ("Linux", "x86_64"), True),
+        ("x86-64-v4", ("Linux", "x86_64"), True),
+        ("default", ("Linux", "aarch64"), True),
+        ("neoverse-n1", ("Linux", "aarch64"), False),
+        ("default", ("Darwin", "arm64"), False),  # macOS arm64 ships at the default level
+        ("neoverse-n1", ("Darwin", "arm64"), True),
+        ("default", ("Linux", "riscv64"), False),  # no shipped binary there
+        ("default", ("Windows", "AMD64"), False),
+        ("default", ("FreeBSD", "amd64"), False),
+        ("default", ("Darwin", "x86_64"), False),
     ],
 )
-def test_only_a_known_other_level_is_a_problem(tmp_path, cpu, machine, judged):
-    assert (build_level_problem(tmp_path / "r", {"target_cpu": cpu}, machine) is not None) == judged
+def test_only_a_known_other_level_is_a_problem(tmp_path, cpu, host, judged):
+    assert (build_level_problem(tmp_path / "r", {"target_cpu": cpu}, host) is not None) == judged
 
 
 def test_shipped_rustflags_per_machine():
-    assert shipped_rustflags("x86_64") == "-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries"
-    assert shipped_rustflags("aarch64") == "-C target-cpu=neoverse-n1"
-    assert shipped_rustflags("riscv64") == ""
+    assert (
+        shipped_rustflags(("Linux", "x86_64"))
+        == "-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries"
+    )
+    assert shipped_rustflags(("Linux", "aarch64")) == "-C target-cpu=neoverse-n1"
+    assert shipped_rustflags(("Darwin", "arm64")) == ""  # a plain build is the shipped one
+    assert shipped_rustflags(("Linux", "riscv64")) == ""
+    assert shipped_rustflags() == shipped_rustflags(("Linux", "x86_64"))  # this host, as patched by _x86
+
+
+def test_problem_on_a_mac_names_a_plain_build(tmp_path):
+    p = build_level_problem(tmp_path / "r", {"target_cpu": "neoverse-n1"}, ("Darwin", "arm64"))
+    assert p is not None
+    assert "not the shipped default: rebuild it (cargo build --profile dist" in p
+    assert "RUSTFLAGS" not in p
 
 
 def test_read_build_info_of_a_runner_and_of_one_that_cannot_say(tmp_path):
