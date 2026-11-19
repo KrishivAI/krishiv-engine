@@ -110,6 +110,13 @@ _OVERWRITE = textwrap.dedent(
     """
 )
 
+# The consumer's own "cancelled" error is an `Exception` (`except Exception` swallows it); the re-armed Ctrl-C
+# is then raised at the next check, here in the handler's following statements.
+_LATER_BATCH_CAPSULE = _LATER_BATCH.replace(
+    "slow.toArrow()",
+    "import pyarrow as pa\n    try:\n        pa.table(slow)\n    except Exception:\n        time.sleep(0.5)",
+)
+
 
 def test_an_interrupt_after_the_first_batch_stops_the_query() -> None:
     done = subprocess.run(
@@ -127,3 +134,14 @@ def test_an_interrupt_during_an_overwrite_leaves_the_old_or_the_new_table() -> N
     )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "rows " in done.stdout
+
+
+def test_an_interrupt_during_a_foreign_consumer_read_raises_keyboard_interrupt() -> None:
+    # `pa.table(df)` reads the PyCapsule stream and never calls `check_error`: the Ctrl-C is re-armed, so the
+    # consumer's own "cancelled" error does not swallow it (an `except Exception` must not catch it).
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", _LATER_BATCH_CAPSULE], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "interrupted after" in done.stdout
+    assert "session ok" in done.stdout

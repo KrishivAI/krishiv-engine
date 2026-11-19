@@ -110,8 +110,9 @@ pub(crate) fn register_session(session: &std::sync::Arc<krishiv_session::Session
     live.push(std::sync::Arc::downgrade(session));
 }
 
-/// Interrupts every action of every live session through the session (`Session::interrupt_all`, as
-/// `interruptAll` does). Whether there was a live session to ask.
+/// Interrupts every action of every live session in the process, other threads' sessions included, through
+/// the session (`Session::interrupt_all`, as `interruptAll` does); PySpark classic's SIGINT handler does the
+/// same (`cancelAllJobs` on the shared context). Whether there was a live session to ask.
 fn interrupt_live_sessions() -> bool {
     let sessions: Vec<_> = LIVE_SESSIONS
         .lock()
@@ -132,7 +133,8 @@ fn interrupt_live_sessions() -> bool {
 /// overwrite could be left with the old table gone and the new one not written. The sessions
 /// cancel their actions instead (`interrupt_all`: an action before its commit point ends at once, one
 /// past it finishes), `work` is polled to its end, and the signal's error is returned in place of
-/// its output. With no live session to ask, `work` simply runs to its end. Off the main thread
+/// its output. A second Ctrl-C while a past-commit action finishes waits too: Python raises it after the
+/// first. With no live session to ask, `work` simply runs to its end. Off the main thread
 /// `check_signals` never raises, so such a call waits as `stream::wait_for` does.
 fn wait_for_signals<F: std::future::Future + Send>(py: Python<'_>, work: F) -> PyResult<F::Output>
 where

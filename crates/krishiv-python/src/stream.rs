@@ -163,6 +163,14 @@ pub struct ArrowStream {
 /// The Python error a reader's signal check raised, for [`ArrowStream::check_error`] to raise.
 pub(crate) type InterruptSlot = Arc<Mutex<Option<PyErr>>>;
 
+/// Sets the interpreter's pending SIGINT again (`PyErr_SetInterruptEx`), so its next signal check raises
+/// `KeyboardInterrupt`.
+pub(crate) fn rearm_interrupt() {
+    // SAFETY: `PyErr_SetInterruptEx` only sets the interpreter's pending-signal flag; it may be called
+    // from any thread, with or without the GIL.
+    unsafe { pyo3::ffi::PyErr_SetInterruptEx(2) };
+}
+
 impl std::fmt::Debug for ArrowStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowStream")
@@ -346,6 +354,8 @@ impl ArrowStream {
             .as_ref()
             .and_then(|slot| slot.lock().ok()?.take());
         if let Some(err) = raised {
+            // Consume the signal `rearm_interrupt` set for consumers that do not come here.
+            let _ = py.check_signals();
             return Err(err);
         }
         let taken = self

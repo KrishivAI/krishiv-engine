@@ -415,6 +415,11 @@ impl PyDataFrame {
                         if let Ok(mut slot) = raised.lock() {
                             *slot = Some(e);
                         }
+                        // `check_signals` consumed the signal. A consumer that never calls `check_error`
+                        // (`pa.table(df)`, Polars, DuckDB over `__arrow_c_stream__`) would turn the cancelled
+                        // stream into its own `Exception` and swallow the Ctrl-C, so the signal is re-armed:
+                        // Python raises `KeyboardInterrupt` at its next check. `check_error` consumes it again.
+                        crate::stream::rearm_interrupt();
                         true
                     }
                 })
