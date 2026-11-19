@@ -852,7 +852,8 @@ fn one_field_under_two_spellings_fails_startup() {
 }
 
 /// A delegated declaration's `Debug` (logged at startup) names its mode, audience, actor client
-/// and token endpoint host, never the endpoint's userinfo or the client secret's value.
+/// and token endpoint host, never the endpoint's userinfo; the client secret shows only as its
+/// reference (`env:`/`file:`), since a declaration holds no secret value to print.
 #[test]
 fn delegated_debug_hides_userinfo_and_secret() {
     let pairs = delegated_with(&[
