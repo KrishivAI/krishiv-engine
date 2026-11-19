@@ -43,6 +43,22 @@ fn max_records_per_file_reads_the_write_option() {
         max_records_per_file(&options(&[("MAXRECORDSPERFILE", " 7 ")]), "parquet").unwrap(),
         7
     );
+    for v in ["0", "-1", "-9223372036854775808"] {
+        assert_eq!(
+            max_records_per_file(&options(&[("maxRecordsPerFile", v)]), "parquet").unwrap(),
+            0,
+            "{v} is no limit"
+        );
+    }
+    let e = max_records_per_file(
+        &options(&[("maxRecordsPerFile", "9223372036854775808")]),
+        "parquet",
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
+    );
     let e = max_records_per_file(&options(&[("maxRecordsPerFile", "ten")]), "parquet").unwrap_err();
     assert_eq!(
         e.error_class().name(),
