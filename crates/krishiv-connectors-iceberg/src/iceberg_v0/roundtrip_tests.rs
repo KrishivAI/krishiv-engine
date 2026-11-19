@@ -233,13 +233,16 @@ fn krishiv_reads_spark_on_top() {
             spark_created.len() + steps.len(),
             "{name}: one snapshot per Krishiv step on top of Spark's"
         );
-        // Krishiv's delete replaced the file holding Spark's deletes of that partition: fewer position deletes.
+        // Krishiv's delete replaced a Spark file that had deletes: on v3 its DV goes with it
+        // (`removeDanglingDeletesFor`); on v2 the partition's position delete file stays live, as Java keeps it.
         if name != "evolved" {
             let deletes = |v: &Value| v["delete_files"].as_array().unwrap().len();
-            assert!(
-                deletes(&s["before"]) < deletes(&created[name]["spark"]),
-                "{name}: the rewritten file's deletes are gone"
-            );
+            let (now, was) = (deletes(&s["before"]), deletes(&created[name]["spark"]));
+            if name == "mor3" {
+                assert_eq!(now, was - 1, "{name}: the rewritten file's DV is gone");
+            } else {
+                assert_eq!(now, was, "{name}: position delete files stay");
+            }
             assert!(
                 deletes(&s["after"]) > deletes(&s["before"]),
                 "{name}: Spark's merge-on-read DML wrote deletes on top"
