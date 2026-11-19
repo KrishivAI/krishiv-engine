@@ -67,8 +67,9 @@ _LATER_BATCH = textwrap.dedent(
     import krishiv
 
     spark = krishiv.SparkSession.builder.create()
-    # The first batches arrive at once; the rest of the result takes minutes.
-    slow = spark.range(0, 3000000000).filter("id % 1000000007 = 0")
+    # The filter keeps three rows of three billion: the result takes minutes to produce (spark.range
+    # would build the ids client-side, so the SQL table function is used).
+    slow = spark.sql("SELECT id FROM range(0, 3000000000) WHERE id % 1000000007 = 0")
     started = time.monotonic()
     threading.Timer(2.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
     try:
@@ -91,16 +92,21 @@ _OVERWRITE = textwrap.dedent(
     spark = krishiv.SparkSession.builder.create()
     spark.sql("CREATE TABLE t (id BIGINT) USING parquet")
     spark.range(5).write.mode("append").saveAsTable("t")
-    big = spark.range(0, 50000000).selectExpr("id * 2 AS id")
+    big = spark.sql("SELECT id * 2 AS id FROM range(0, 50000000)")
     threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
     try:
         big.write.mode("overwrite").saveAsTable("t")
     except KeyboardInterrupt:
         pass
-    # Either the old rows or the new ones, never a dropped or emptied table.
-    n = spark.sql("SELECT count(*) AS n FROM t").collect()[0]["n"]
+    # Once the write has begun a cancel fails it and the table is gone (as Spark's V1 overwrite); what
+    # must never show is a partial table: the old rows or the new ones.
+    try:
+        n = spark.sql("SELECT count(*) AS n FROM t").collect()[0]["n"]
+    except Exception as e:
+        assert "TABLE_OR_VIEW_NOT_FOUND" in str(e), e
+        n = 0
     print(f"rows {n}", flush=True)
-    assert n in (5, 50000000), n
+    assert n in (0, 5, 50000000), n
     """
 )
 

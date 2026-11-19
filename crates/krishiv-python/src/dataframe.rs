@@ -409,9 +409,6 @@ impl PyDataFrame {
         let hook = {
             let raised = std::sync::Arc::clone(&raised);
             let hook: crate::stream::Interrupt = std::sync::Arc::new(move || {
-                if !crate::stream::consumer_attached() {
-                    return false;
-                }
                 Python::attach(|py| match py.check_signals() {
                     Ok(()) => false,
                     Err(e) => {

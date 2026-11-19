@@ -127,18 +127,6 @@ fn detached<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     py.detach(f)
 }
 
-thread_local! {
-    /// Whether this thread was attached to Python when its [`Detaching`] read began: only then may
-    /// the read look at Python's signals ([`consumer_attached`]), as a thread without a Python
-    /// thread state is never attached.
-    static CONSUMER_ATTACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Whether the read running on this thread began attached to Python (see [`Detaching`]).
-pub(crate) fn consumer_attached() -> bool {
-    CONSUMER_ATTACHED.with(std::cell::Cell::get)
-}
-
 impl<R: Iterator + Send> Iterator for Detaching<R>
 where
     R::Item: Send,
@@ -147,10 +135,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let inner = &mut self.0;
-        CONSUMER_ATTACHED.with(|c| c.set(attached()));
-        let out = detached(|| inner.next());
-        CONSUMER_ATTACHED.with(|c| c.set(false));
-        out
+        detached(|| inner.next())
     }
 }
 
