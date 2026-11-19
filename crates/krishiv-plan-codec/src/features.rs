@@ -301,6 +301,7 @@ fn collated(t: &DataType) -> bool {
         DataType::Array(a) => collated(a.element_type()),
         DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
+        DataType::Udt(u) => collated(u.sql_type()),
         _ => false,
     }
 }
@@ -372,6 +373,8 @@ fn visit_type<'a>(t: &'a DataType, f: &mut impl FnMut(Construct<'a>)) {
             visit_type(m.value_type(), f);
         }
         DataType::Struct(s) => s.fields().iter().for_each(|x| visit_type(x.data_type(), f)),
+        // A user-defined type is stored as its SQL type: what that holds is a construct too.
+        DataType::Udt(u) => visit_type(u.sql_type(), f),
         _ => {}
     }
 }

@@ -350,6 +350,7 @@ impl DataType {
                     stack.push((&m.value_type, depth + 1));
                 }
                 Self::Struct(s) => stack.extend(s.fields.iter().map(|f| (&f.data_type, depth + 1))),
+                Self::Udt(u) => stack.push((u.sql_type(), depth + 1)),
                 _ => {}
             }
         }
@@ -365,6 +366,7 @@ impl DataType {
                 Self::Array(a) => a.element_type().any_type(pred),
                 Self::Map(m) => m.key_type().any_type(pred) || m.value_type().any_type(pred),
                 Self::Struct(s) => s.fields().iter().any(|f| f.data_type().any_type(pred)),
+                Self::Udt(u) => u.sql_type().any_type(pred),
                 _ => false,
             }
     }

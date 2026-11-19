@@ -1185,6 +1185,11 @@ fn a_user_defined_type_needs_its_feature() {
         "{:?}",
         plan.features
     );
+    assert!(
+        plan.features.contains(&"nested_types".to_owned()),
+        "{:?}",
+        plan.features
+    );
     let udt = DataType::Udt(std::sync::Arc::new(UdtType::new(
         DataType::Integer,
         Some("pkg.PointUDT".to_owned()),

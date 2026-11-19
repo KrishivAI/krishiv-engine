@@ -1742,8 +1742,12 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
-        DataType::Udt(_) => {
-            // Spark's JSON form: the class names and the storage type.
+        DataType::Udt(u) => {
+            // Spark's JSON form: the class names and the storage type. A storage type that is an
+            // array, map or struct is a nested type the reader needs `nested_types` for.
+            if u.sql_type().any_type(&DataType::is_nested) {
+                nested.set(true);
+            }
             return Ok(pb::DataType {
                 kind: Kind::Udt as i32,
                 json: t.json(),

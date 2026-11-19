@@ -208,7 +208,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## DataType.kind
 
-30 arms: 24 done, 0 partial, 6 missing, 0 out of scope.
+30 arms: 23 done, 1 partial, 6 missing, 0 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -234,7 +234,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 20 | array | done |  | DataType | P2-T091a | 1 |
 | 21 | struct | done |  | DataType | P2-T091a | 1 |
 | 22 | map | done |  | DataType | P2-T091a | 1 |
-| 23 | udt | done |  | DataType::Udt | P3-T079 | 1 |
+| 23 | udt | partial | a UDT with no sql_type (Spark builds it from the JVM class alone; Krishiv cannot load JVM classes, so `sql_type` is required and the answer is SQL_TYPE_NOT_SET) | DataType::Udt | P3-T079 | 1 |
 | 24 | unparsed | missing |  | a type string parsed by the SQL type parser | P3-T012 | 1 |
 | 25 | variant | done |  | DataType | P2-T091a | 1 |
 | 26 | geometry | done |  | DataType | P2-T091a | 1 |
