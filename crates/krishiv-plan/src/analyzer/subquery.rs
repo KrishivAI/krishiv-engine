@@ -720,7 +720,7 @@ impl Rewriter {
             SubqueryKind::Exists => (JoinKind::LeftSemi, Vec::new(), false),
             SubqueryKind::In(values) if negated => (JoinKind::LeftAnti, values.clone(), true),
             SubqueryKind::In(values) => (JoinKind::LeftSemi, values.clone(), false),
-            SubqueryKind::Scalar => return None,
+            SubqueryKind::Scalar | SubqueryKind::Table(_) => return None,
         };
         Some(Pred {
             kind,
@@ -1235,7 +1235,7 @@ impl Rewriter {
                         check_in(values, sub.origin)?;
                         true
                     }
-                    SubqueryKind::Scalar => false,
+                    SubqueryKind::Scalar | SubqueryKind::Table(_) => false,
                 };
                 if wanted && seen.insert((addr(&*sub), null_aware)) {
                     out.push((Arc::clone(&sub), null_aware));

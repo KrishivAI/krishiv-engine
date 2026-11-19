@@ -43,6 +43,7 @@ mod properties;
 pub(crate) mod pushdown;
 mod python_relation;
 mod python_udf;
+mod python_udtf;
 mod row_level;
 mod runtime_filter;
 pub(crate) mod subquery;

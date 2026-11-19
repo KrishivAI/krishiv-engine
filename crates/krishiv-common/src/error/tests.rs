@@ -288,6 +288,26 @@ fn catalog_limit_exceeded_names_the_limit() {
     );
 }
 
+/// P3-T067 §3.3: a delegated catalog without a usable user token is 42501 and names the catalog.
+#[test]
+fn catalog_delegation_unavailable_is_42501_and_names_the_catalog() {
+    let e: KrishivError = KrishivCatalogDelegationUnavailable {
+        catalog: "`lake`".to_owned(),
+        reason: "this session authenticated with `token`".to_owned(),
+    }
+    .into();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable
+    );
+    assert_eq!(e.error_class().sql_state(), Some("42501"));
+    let text = e.to_string();
+    assert!(
+        text.contains("`lake`") && text.contains("authenticated with `token`"),
+        "{text}"
+    );
+}
+
 /// One release's leaf classes: name -> (SQLSTATE, template), as Spark joins a
 /// main message and its sub-class message.
 fn release_leaves(

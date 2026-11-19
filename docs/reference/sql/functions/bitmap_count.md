@@ -8,7 +8,7 @@ description: "Returns the number of set bits in the child bitmap."
 
 Returns the number of set bits in the child bitmap.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -20,7 +20,7 @@ bitmap_count(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 3.5.0 |
@@ -33,24 +33,25 @@ bitmap_count(child)
 ```sql
 -- bitmap_count, example 1
 > SELECT bitmap_count(X '1010');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2
 ```
 
 ```sql
 -- bitmap_count, example 2
 > SELECT bitmap_count(X 'FFFF');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+16
 ```
 
 ```sql
 -- bitmap_count, example 3
 > SELECT bitmap_count(X '0');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+0
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
