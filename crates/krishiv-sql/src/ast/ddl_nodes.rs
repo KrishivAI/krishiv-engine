@@ -1050,6 +1050,8 @@ pub struct Delete {
     pub table: DdlName,
     /// Its alias, if written.
     pub alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the table and its alias (Spark 4.3).
+    pub options: Vec<TableOption>,
     /// `WHERE ...`.
     pub where_clause: Option<Expr>,
     /// Source text, from `DELETE` to the end of the statement.
@@ -1067,13 +1069,15 @@ pub struct UpdateAssignment {
     pub span: Span,
 }
 
-/// `UPDATE name [AS alias] SET ... [WHERE ...]`.
+/// `UPDATE name [AS alias] [WITH (options)] SET ... [WHERE ...]`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Update {
     /// The table to update.
     pub table: DdlName,
     /// Its alias, if written.
     pub alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the table and its alias (Spark 4.3).
+    pub options: Vec<TableOption>,
     /// The `SET` assignments.
     pub assignments: Vec<UpdateAssignment>,
     /// `WHERE ...`.
@@ -1089,6 +1093,8 @@ pub struct Merge {
     pub target: DdlName,
     /// Its alias, if written.
     pub target_alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the target and its alias (Spark 4.3).
+    pub target_options: Vec<TableOption>,
     /// The source.
     pub source: MergeSource,
     /// `ON ...`.

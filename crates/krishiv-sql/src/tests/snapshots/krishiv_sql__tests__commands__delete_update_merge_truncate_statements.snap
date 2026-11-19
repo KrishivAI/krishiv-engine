@@ -18,6 +18,7 @@ Delete(
             },
         ),
         alias: None,
+        options: [],
         where_clause: Some(
             Expr {
                 kind: Binary(
@@ -63,6 +64,7 @@ Delete(
             },
         ),
         alias: None,
+        options: [],
         where_clause: None,
         span: 0..13,
     },
@@ -98,6 +100,7 @@ Delete(
             },
         ),
         alias: None,
+        options: [],
         where_clause: Some(
             Expr {
                 kind: Binary(
@@ -143,6 +146,7 @@ Update(
             },
         ),
         alias: None,
+        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -187,6 +191,7 @@ Update(
             },
         ),
         alias: None,
+        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -305,6 +310,7 @@ Update(
                 span: 12..13,
             },
         ),
+        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -360,6 +366,7 @@ Update(
                 span: 9..10,
             },
         ),
+        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -424,6 +431,7 @@ Update(
             },
         ),
         alias: None,
+        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -474,6 +482,7 @@ Merge(
                 span: 16..17,
             },
         ),
+        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -588,6 +597,7 @@ Merge(
             },
         ),
         target_alias: None,
+        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -671,6 +681,7 @@ Merge(
             },
         ),
         target_alias: None,
+        target_options: [],
         source: Query {
             query: Query {
                 with: None,
@@ -846,6 +857,7 @@ Merge(
             },
         ),
         target_alias: None,
+        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -1008,6 +1020,7 @@ Merge(
             },
         ),
         target_alias: None,
+        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -1137,6 +1150,7 @@ Merge(
                 span: 38..39,
             },
         ),
+        target_options: [],
         source: Table {
             name: Dynamic(
                 DynamicName {

@@ -138,7 +138,9 @@ impl<'s> Parser<'s> {
         // Spark's `tableAlias` takes any identifier but the clause keyword
         // that follows (`UPDATE t c1 = 2` names `t` `c1`, then wants
         // `SET`).
-        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) {
+        // `WITH (` opens the table options of Spark 4.3 (`UPDATE t WITH (k = v) SET ...`), not an alias.
+        let options = self.kw_at(0, "WITH") && self.sym_at(1, Sym::LParen);
+        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) && !options {
             return self.any_ident().map(Some);
         }
         Ok(None)
