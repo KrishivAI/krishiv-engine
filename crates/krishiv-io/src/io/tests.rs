@@ -150,7 +150,7 @@ fn coalescing_waste_depends_on_the_store() {
         "S3A://b",
         "gs://b",
         "az://c",
-        "abfss://c@a",
+        "abfss://c@a.dfs.core.windows.net",
         "https://h",
     ] {
         assert!(StoreId::new(remote).is_remote(), "{remote}");
@@ -170,6 +170,39 @@ fn coalescing_waste_depends_on_the_store() {
     };
     assert_eq!(c.waste(&StoreId::new("file")), w);
     assert_eq!(c.waste(&StoreId::new("s3://bucket")), w);
+}
+
+#[test]
+fn a_printed_object_path_re_parses_to_its_store_and_key() {
+    for input in [
+        "s3a://bucket/dir/k.parquet",
+        "gs://bucket/k",
+        "abfss://c@acct.dfs.core.windows.net/dir/k",
+        "abfs://c@Acct.blob.core.windows.net/dir/k",
+        "abfss://ws@onelake.blob.fabric.microsoft.com/lh/k",
+        "abfss://ws@wsid.z28.dfs.fabric.microsoft.com/lh/k",
+        "abfss://ws@wsid.z28.blob.fabric.microsoft.com/lh/k",
+        "az://c/k",
+    ] {
+        let url = parse_object_url(input).unwrap();
+        let file = FileRef {
+            store: url.store_id.clone(),
+            path: url.key.clone(),
+            size: 1,
+            version: VersionToken::Modified(0),
+            modified_micros: None,
+        };
+        let printed = file.display_path();
+        let again = parse_object_url(&printed).unwrap();
+        assert_eq!(again.store_id, url.store_id, "{input} -> {printed}");
+        assert_eq!(again.key, url.key, "{input} -> {printed}");
+    }
+    // An Azure Storage id names the account's `dfs` host, whichever name the path used.
+    let blob = parse_object_url("abfs://c@acct.blob.core.windows.net/k").unwrap();
+    assert_eq!(
+        blob.store_id.to_string(),
+        "abfss://c@acct.dfs.core.windows.net"
+    );
 }
 
 #[test]
@@ -1023,5 +1056,76 @@ fn read_latency_counts_every_read_attempt_to_a_remote_store_only() {
         let total: u64 = s.sched.totals().read_latency.counts().iter().sum();
         let own: u64 = s.io.counters().read_latency.counts().iter().sum();
         assert_eq!((total, own), (3, 3));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn list_from_is_recursive_sorted_and_strictly_after_the_offset() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t/_delta_log");
+        std::fs::create_dir_all(root.join("_sidecars/deep")).unwrap();
+        // Written out of order so the store's walk order is not the answer.
+        for name in [
+            "00000000000000000002.json",
+            "_sidecars/deep/a.parquet",
+            "00000000000000000000.json",
+            "00000000000000000001.json",
+            "00000000000000000001.checkpoint.parquet",
+            "_last_checkpoint",
+        ] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let sched = IoScheduler::new(IoConfig::default());
+        let id = StoreId::new("file");
+        sched.register_whole_listing_store(
+            id.clone(),
+            Arc::new(local_listing::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        let io = sched.context();
+        let dir = Path::from_absolute_path(&root).unwrap();
+        let names = |listed: Vec<ObjectMeta>| -> Vec<String> {
+            listed
+                .iter()
+                .map(|m| {
+                    m.location
+                        .as_ref()
+                        .strip_prefix(&format!("{dir}/"))
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect()
+        };
+        let offset = Path::from(format!("{dir}/00000000000000000000.json"));
+        let got = names(io.list_from(&id, &dir, &offset).await.unwrap());
+        assert_eq!(
+            got,
+            [
+                "00000000000000000001.checkpoint.parquet",
+                "00000000000000000001.json",
+                "00000000000000000002.json",
+                "_last_checkpoint",
+                "_sidecars/deep/a.parquet",
+            ]
+        );
+        // An offset past everything lists nothing; an offset before everything lists all.
+        let last = Path::from(format!("{dir}/_sidecars/deep/a.parquet"));
+        assert!(io.list_from(&id, &dir, &last).await.unwrap().is_empty());
+        let all = names(io.list_from(&id, &dir, &dir).await.unwrap());
+        assert_eq!(all.len(), 6);
+        assert!(all.windows(2).all(|w| w[0] < w[1]));
+        // A missing directory is an empty listing.
+        let missing = Path::from(format!("{dir}/nope"));
+        assert!(
+            io.list_from(&id, &missing, &missing)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     });
 }

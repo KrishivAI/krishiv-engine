@@ -15,7 +15,10 @@ use krishiv_kernels::KernelError;
 use krishiv_kernels::Operand;
 use krishiv_kernels::string;
 
-use super::args::{Bin, Prim, Str};
+use krishiv_common::error::KrishivError;
+
+use super::args::{Bin, Inputs, Prim, Str, to_utf8};
+use super::array_edit::{list_of, span, too_long};
 use super::string::{shape, utf8};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
@@ -41,6 +44,7 @@ pub(super) const NAMES: &[&str] = &[
     "__locate_lcase",
     "__find_in_set_lcase",
     "__trim_collated",
+    "__icu_case",
     "__replace_lcase",
     "__translate_lcase",
     "__split_part_lcase",
@@ -58,6 +62,13 @@ pub(super) const NAMES: &[&str] = &[
 /// Binds the character function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
+    if listed == "reverse"
+        && let Some(binding) = args
+            .first()
+            .and_then(|a| super::array_shape::reverse_binding(&a.data_type()))
+    {
+        return Some((listed, Ok(binding)));
+    }
     let shape = shape(args);
     let ansi = opts.ansi;
     let ctx = opts.kernel;
@@ -180,6 +191,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 chars.operand(),
             )?))
         }),
+        ("__icu_case", "IIS") => Binding::new(DataType::Utf8, |x| {
+            let (upper, id, s) = (x.int(0)?, x.int(1)?, x.str(2)?);
+            Ok(utf8(string::icu_case(
+                upper.operand(),
+                id.operand(),
+                s.operand(),
+            )?))
+        }),
         ("__replace_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
             let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);
             Ok(utf8(string::replace_lcase(
@@ -283,7 +302,76 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(utf8(string::concat_ws(sep.operand(), &operands)?))
             })
         }
+        ("concat_ws", s) if s.starts_with('S') && s.chars().all(|c| c == 'S' || c == 'A') => {
+            let count = shape.len();
+            Binding::new(DataType::Utf8, move |x| concat_ws_arrays(x, count))
+        }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
     Some((listed, Ok(binding)))
+}
+
+/// `concat_ws(sep, str | array<str>, ...)` with at least one array argument:
+/// the non-NULL strings and the non-NULL elements of the non-NULL arrays,
+/// joined by `sep`; NULL only when `sep` is.
+fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
+    enum Part {
+        Text(StringArray),
+        List(ArrayRef, StringArray),
+    }
+    let seps = x.strings(0)?;
+    let mut parts = Vec::with_capacity(count);
+    for i in 1..count {
+        let c = x.column(i)?;
+        parts.push(if matches!(c.data_type(), DataType::List(_)) {
+            let values = to_utf8(list_of(&c, "concat_ws")?.values().as_ref())?;
+            Part::List(c, values)
+        } else {
+            Part::Text(to_utf8(c.as_ref())?)
+        });
+    }
+    let mut out: Vec<Option<String>> = Vec::with_capacity(x.rows());
+    let mut total = 0usize;
+    for row in 0..x.rows() {
+        if seps.is_null(row) {
+            out.push(None);
+            continue;
+        }
+        let sep = seps.value(row);
+        let mut text = String::new();
+        let mut first = true;
+        let mut push = |piece: &str| {
+            if !first {
+                text.push_str(sep);
+            }
+            first = false;
+            text.push_str(piece);
+        };
+        for part in &parts {
+            match part {
+                Part::Text(a) => {
+                    if a.is_valid(row) {
+                        push(a.value(row));
+                    }
+                }
+                Part::List(c, values) => {
+                    let list = list_of(c, "concat_ws")?;
+                    if list.is_valid(row) {
+                        let (start, len) = span(list, row);
+                        for at in start..start + len {
+                            if values.is_valid(at) {
+                                push(values.value(at));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        total = total.saturating_add(text.len());
+        if i32::try_from(total).is_err() {
+            return Err(too_long("concat_ws", total));
+        }
+        out.push(Some(text));
+    }
+    Ok(Arc::new(StringArray::from(out)))
 }

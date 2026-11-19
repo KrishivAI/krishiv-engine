@@ -1,0 +1,53 @@
+name: Spark compatibility gap
+description: Report a Spark behaviour, function, or error that Krishiv does not match.
+title: "compat: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Krishiv matches Spark exactly unless a divergence is documented and opt-in. Please include a Spark run
+        if you have one; the exact output and error class help us reproduce it.
+  - type: input
+    id: krishiv-version
+    attributes:
+      label: Krishiv version or commit
+      description: The Krishiv release, or the commit if you built from source.
+    validations:
+      required: true
+  - type: input
+    id: spark-version
+    attributes:
+      label: Spark version
+      description: The Spark version you ran (3.5, 4.0, 4.1 or 4.2), with the exact patch if you know it.
+    validations:
+      required: true
+  - type: textarea
+    id: statement
+    attributes:
+      label: SQL or DataFrame code
+      description: The smallest statement or call that shows the difference.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: spark-output
+    attributes:
+      label: Spark output or error
+      description: The result or error class and message Spark produced.
+    validations:
+      required: true
+  - type: textarea
+    id: krishiv-output
+    attributes:
+      label: Krishiv output or error
+      description: What Krishiv produced instead.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and the [known-differences list](https://github.com/KrishivAI/krishiv-engine/blob/main/docs/concepts/known-differences.md) for this behaviour.
+        - label: I ran the statement on a real Spark, not from memory of its docs.

@@ -30,7 +30,7 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 - `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
   registry. Test-only code (not in the library): `the_checked_in_wrappers_match_the_registry` fails when they are stale and
   `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them. `python_wrappers/table.rs` is the PySpark
-  signature table (data). Every registered function must have a row, or be listed as not exported / hand-written there, or
+  signature table (data) and `table_catalog.rs` its second half: functions added later, including the ones only Spark's catalog lists (sketches, bitmaps, `xpath`, ...), whose wrapper raises the unsupported-feature error when called (listed in `_ENGINE_UNSUPPORTED`). Generators and the lambda functions are hand-written in `python/krishiv/sql/functions.py` (`HANDWRITTEN`). Every registered function must have a row, or be listed as not exported / hand-written there, or
   generation fails (and with it the crate's tests). Never edit the generated files by hand.
 
 ## Key files
@@ -85,6 +85,8 @@ Paths are relative to this crate.
   to this family.
 
 - `spark.sql.binaryOutputStyle` (`BindOptions::binary_style`, `krishiv_kernels::binary_style::BinaryStyle`; plan data through the `binary_output_style` codec feature, only when it differs from the unset default `HEX_DISCRETE`) sets how `to_csv` and `to_xml` print `BINARY` fields; `from_xml` reads a binary field back with Spark 4.1+'s `getBinaryParser` (`BinaryStyle::parse`, lenient as Java's decoders are: optional brackets, `Byte.parseByte`, odd-length hex, unpadded base64; SOURCE-DERIVED, no Spark run yet). A text the style's decoder refuses is a miss like any other leaf (NULL under PERMISSIVE, `MALFORMED_RECORD_IN_PARSING` under FAILFAST), there is no UTF-8 fallback; an empty element is NULL; Spark 4.0.x has no BINARY read-back, so every non-empty text misses there. `from_csv` reads the field text's UTF-8 bytes; `cast(binary as string)` ignores the setting (Spark 4.2.0 run). Goldens: `krishiv-session/tests/binary_output_style.rs`.
+
+- `sketch` (P3-T086): the DataSketches layer over the `datasketches` crate (pinned `=0.6.0`). `sketch/hll.rs` has the lgConfigK check, per-type update encodings, serialize/deserialize with Spark's error classes and the union rules; `registry/hll.rs` + `scalar/hll.rs` are `hll_sketch_estimate` and `hll_union`; `hll_sketch_agg` and `hll_union_agg` are registry aggregates run by `krishiv-exec`. Bytes are the compact form, Spark writes the updatable one (`length`/`hex` differ; both read both). The catalog TSV lists `hll_sketch_estimate`/`hll_union` as aggregates (a generator artifact), which `every_definition_is_in_sparks_catalog` exempts.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.

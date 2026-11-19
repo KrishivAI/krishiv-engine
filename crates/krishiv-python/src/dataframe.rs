@@ -26,6 +26,43 @@ pub struct PyDataFrame {
     pub(crate) owned: Vec<Arc<OwnedTable>>,
 }
 
+/// `krishiv._native.Observation`: the handle of `DataFrame.observe` (P3-T084).
+#[pyclass(name = "Observation", module = "krishiv._native", frozen)]
+#[derive(Debug)]
+pub struct PyObservation {
+    inner: krishiv_session::Observation,
+}
+
+#[pymethods]
+impl PyObservation {
+    /// An observation named `name`, or by a fresh unique name.
+    #[new]
+    #[pyo3(signature = (name=None))]
+    fn new(py: Python<'_>, name: Option<&str>) -> PyResult<Self> {
+        let inner = match name {
+            Some(n) => krishiv_session::Observation::named(n).map_err(|e| to_py(py, &e))?,
+            None => krishiv_session::Observation::new(),
+        };
+        Ok(Self { inner })
+    }
+
+    /// The name keying the metrics.
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name().to_owned()
+    }
+
+    /// The one-row metrics, as a stream: blocks (the GIL released) until
+    /// the first action on the observed frame has finished.
+    fn get(&self, py: Python<'_>) -> PyResult<ArrowStream> {
+        let obs = self.inner.clone();
+        let batch = py.detach(|| obs.get()).map_err(|e| to_py(py, &e))?;
+        let schema = batch.schema();
+        let reader = arrow_array::RecordBatchIterator::new([Ok(batch)], schema);
+        Ok(ArrowStream::new(Box::new(reader)))
+    }
+}
+
 /// A temporary table dropped from its session when the last holder goes.
 #[derive(Debug)]
 pub(crate) struct OwnedTable {
@@ -171,6 +208,20 @@ impl PyDataFrame {
         self.derive(self.inner.order_by(columns(cols)))
     }
 
+    /// Observes `metrics` under `observation` (PySpark's `observe`).
+    fn observe(
+        &self,
+        py: Python<'_>,
+        observation: &PyObservation,
+        metrics: Vec<PyColumn>,
+    ) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .observe(&observation.inner, columns(metrics))
+            .map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
+    }
+
     fn limit(&self, n: i32) -> Self {
         self.derive(self.inner.limit(n))
     }
@@ -272,10 +323,59 @@ impl PyDataFrame {
         Ok(self.derive(inner))
     }
 
+    /// A reliable checkpoint (PySpark's `checkpoint`): the rows are fixed now (`eager`) or at the
+    /// result's first action, and the result does not see later changes to the sources.
+    #[pyo3(signature = (eager=true))]
+    fn checkpoint(&self, py: Python<'_>, eager: bool) -> PyResult<Self> {
+        let df = self.inner.clone();
+        let inner = block_on(py, async move { df.checkpoint(eager).await })?;
+        Ok(self.derive(inner))
+    }
+
+    /// A local checkpoint (PySpark's `localCheckpoint`): as `checkpoint`, held by the session, no
+    /// directory needed. The storage level is `(use_disk, use_memory, use_offheap, deserialized,
+    /// replication)`, accepted as PySpark takes it.
+    #[pyo3(signature = (eager=true, level=None))]
+    fn local_checkpoint(
+        &self,
+        py: Python<'_>,
+        eager: bool,
+        level: Option<(bool, bool, bool, bool, i32)>,
+    ) -> PyResult<Self> {
+        let level = level.map(
+            |(use_disk, use_memory, use_off_heap, deserialized, replication)| {
+                krishiv_session::StorageLevel {
+                    use_disk,
+                    use_memory,
+                    use_off_heap,
+                    deserialized,
+                    replication,
+                }
+            },
+        );
+        let df = self.inner.clone();
+        let inner = block_on(py, async move { df.local_checkpoint(eager, level).await })?;
+        Ok(self.derive(inner))
+    }
+
     /// Whether this frame's plan is cached now.
     fn is_cached(&self, py: Python<'_>) -> PyResult<bool> {
         let df = self.inner.clone();
         block_on(py, async move { df.is_cached().await })
+    }
+
+    /// The effective storage level of this frame's plan: `(use_disk, use_memory, use_off_heap,
+    /// deserialized, replication)`, all false and 1 when it is not cached.
+    fn storage_level(&self, py: Python<'_>) -> PyResult<(bool, bool, bool, bool, i32)> {
+        let df = self.inner.clone();
+        let level = block_on(py, async move { df.storage_level().await })?;
+        Ok((
+            level.use_disk,
+            level.use_memory,
+            level.use_off_heap,
+            level.deserialized,
+            level.replication,
+        ))
     }
 
     fn alias(&self, alias: &str) -> Self {

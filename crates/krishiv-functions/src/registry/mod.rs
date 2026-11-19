@@ -17,6 +17,8 @@ mod array_edit;
 mod array_scan;
 mod array_set;
 mod array_shape;
+mod avro;
+mod bitmap;
 mod bitwise;
 mod catalog;
 mod collection;
@@ -28,6 +30,7 @@ mod element;
 mod generator;
 mod geo;
 mod hashing;
+mod hll;
 mod hof;
 mod json;
 mod map;
@@ -38,6 +41,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod time;
+mod time_window;
 mod url;
 mod variant;
 mod vector;
@@ -197,6 +201,21 @@ pub enum Aggregate {
     PercentileDisc,
     /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++.
     ApproxCountDistinct,
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram`.
+    HistogramNumeric,
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap with the bit of
+    /// each non-NULL position set; never NULL.
+    BitmapConstructAgg,
+    /// `bitmap_or_agg(bitmap)`: the bitwise OR of the non-NULL bitmaps; never
+    /// NULL (4,096 zero bytes for no input).
+    BitmapOrAgg,
+    /// `bitmap_and_agg(bitmap)` (Spark 4.1): the bitwise AND of the non-NULL
+    /// bitmaps; never NULL (4,096 `0xFF` bytes for no input).
+    BitmapAndAgg,
+    /// `hll_sketch_agg(x[, lgConfigK])`: an HLL sketch of the non-NULL values; never NULL.
+    HllSketchAgg,
+    /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of HLL sketches; never NULL.
+    HllUnionAgg,
 }
 
 /// A built-in function.
@@ -289,6 +308,11 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "timestampdiff" => "timestampdiff",
         // `base[index]`: the lowering of a subscript (Spark's `ExtractValue`).
         "__subscript" => "__subscript",
+        // The candidate windows of a row (`window(ts, ...)`): the analyzer builds the call and explodes it.
+        "__time_windows" => "__time_windows",
+        // `window_time(w)`: the catalog row is an aggregate (Spark's `Unevaluable` expression), so the analyzer
+        // renames the calls to this scalar.
+        "__window_time" => "__window_time",
         // The comparison key of a collated value (ADR 0043); the analyzer and the optimizer build it.
         "__collation_key" => "__collation_key",
         "__collation_map_keys" => "__collation_map_keys",
@@ -306,6 +330,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__endswith_lcase" => "__endswith_lcase",
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
+        "__icu_case" => "__icu_case",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
@@ -314,7 +339,11 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
-    let arity = if name == "__indeterminate_collation" {
+    let arity = if name == "__time_windows" {
+        Arity::new([false, false, false, false, true, false, false], "4")
+    } else if name == "__window_time" {
+        Arity::new([false, true, false, false, false, false, false], "1")
+    } else if name == "__indeterminate_collation" {
         Arity::new([false, false, false, true, false, false, false], "3")
     } else if name == "__collation_array_set" {
         Arity::new([false, false, false, false, false, true, false], "5")
@@ -367,7 +396,11 @@ impl Registry {
                     // `aes_encrypt` stays as the catalog lists it (a real
                     // Spark run accepts it inside `count(DISTINCT ...)`);
                     // the engine still draws an IV per row.
-                    deterministic: row.deterministic.unwrap_or(false),
+                    // `from_avro` and `to_avro` are deterministic in Spark (their catalog row says `unknown` only because
+                    // the probe image had no `spark-avro` module): `count(from_avro(..))` must analyze.
+                    deterministic: row
+                        .deterministic
+                        .unwrap_or(matches!(spec.name, "from_avro" | "to_avro")),
                     since: row.since,
                     arity: row.arity.clone(),
                     inputs: spec.inputs,

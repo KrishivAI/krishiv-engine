@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ratio#278, store_qty#279, store_wholesale_cost#280, store_sales_price#281, other_chan_qty#282, other_chan_wholesale_cost#283, other_chan_sales_price#284]

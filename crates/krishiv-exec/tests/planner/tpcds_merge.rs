@@ -39,7 +39,7 @@ const ROWS: &[(&str, u64)] = &[
 ];
 
 /// The TPC-DS tables, empty, with SF10's row counts as their statistics.
-fn tables() -> (MemoryCatalog, Arc<MemoryTables>) {
+pub(crate) fn tables() -> (MemoryCatalog, Arc<MemoryTables>) {
     let path =
         super::tpch::root().join("tests/fixtures/spark-4.2.0/golden-tables/tpcds-schemas.json");
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

@@ -154,6 +154,20 @@ impl UdfLibrary {
             .epoch
     }
 
+    /// The names (lower-case, sorted) of every registered UDF, scalar and aggregate.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let mut names: Vec<String> = inner
+            .udfs
+            .keys()
+            .chain(inner.udafs.keys())
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Whether no UDF (scalar or aggregate) is registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {

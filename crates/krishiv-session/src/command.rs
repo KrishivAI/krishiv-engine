@@ -44,12 +44,12 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::analyze::command_schema as cols;
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
-use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
 use crate::store::{CatalogStore, StoredFunction};
@@ -78,20 +78,9 @@ impl Session {
         match &s.kind {
             SetKind::All => {
                 // Every explicitly set key (the frame sorts by key).
-                let config = self.state.conf.snapshot();
-                let mut rows: Vec<(String, String)> = config
-                    .explicit_registered()
-                    .into_iter()
-                    .map(|(key, value)| (key.to_owned(), value))
-                    .collect();
-                rows.extend(
-                    config
-                        .explicit_unregistered()
-                        .into_iter()
-                        .map(|(key, value)| (key.to_owned(), value.to_owned())),
-                );
+                let rows = self.state.conf.explicit_entries();
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     rows.into_iter()
                         .map(|(key, value)| vec![Some(key), Some(value)])
                         .collect(),
@@ -118,8 +107,7 @@ impl Session {
                         ]
                     })
                     .collect();
-                self.string_frame(&["key", "value", "meaning", "Since version"], rows)
-                    .await
+                self.string_frame(cols::SET_VERBOSE, rows).await
             }
             SetKind::Show { key, .. } => {
                 let value = self
@@ -127,11 +115,8 @@ impl Session {
                     .conf
                     .value(key)
                     .unwrap_or_else(|| UNDEFINED.to_owned());
-                self.string_frame(
-                    &["key", "value"],
-                    vec![vec![Some(key.clone()), Some(value)]],
-                )
-                .await
+                self.string_frame(cols::SET, vec![vec![Some(key.clone()), Some(value)]])
+                    .await
             }
             SetKind::Assign {
                 key,
@@ -156,12 +141,13 @@ impl Session {
                     }
                     .into());
                 }
+                self.authorize_set_key(key).await?;
                 // The assignment sets through the session configuration,
                 // so validation and error classes are its own; the row
                 // shows the value as written, as in Spark.
                 self.conf().set(key, value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(key.clone()), Some(value.clone())]],
                 )
                 .await
@@ -180,7 +166,7 @@ impl Session {
                 };
                 self.conf().set(TIME_ZONE_KEY, &value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(TIME_ZONE_KEY.to_owned()), Some(value)]],
                 )
                 .await
@@ -220,8 +206,8 @@ impl Session {
     /// Spark.
     pub(crate) async fn exec_reset(&self, r: &Reset) -> Result<DataFrame, KrishivError> {
         match &r.key {
-            None => self.state.conf.reset(),
-            Some(key) => self.conf().unset(key)?,
+            None => self.state.conf.reset(), // every key it set passed `SET`'s check
+            Some(key) => self.unset_key(key).await?,
         }
         self.empty_frame().await
     }
@@ -373,16 +359,15 @@ impl Session {
         };
         self.state.catalog.put(
             &key,
-            TempTable::View {
+            TempTable::sql_view(
                 plan,
                 columns,
-                pins: Vec::new(),
-                text: original
+                original
                     .and_then(|o| o.get(v.query.span.start..v.query.span.end))
                     .map(str::to_owned),
-            },
+            ),
         );
-        self.state.cache.invalidate_table(&v.name.value);
+        self.state.cache.forget_table(&v.name.value);
         self.empty_frame().await
     }
 
@@ -400,7 +385,7 @@ impl Session {
                 .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
-            self.state.cache.invalidate_table(&v.name.value);
+            self.state.cache.forget_table(&v.name.value);
         } else {
             self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
@@ -409,7 +394,11 @@ impl Session {
 
     /// The name the cache knows the table `parts` by: a temporary view or table by its name, a
     /// permanent table as `namespace.name`. `None` when there is no such relation.
-    fn cache_key(&self, parts: &[String]) -> Option<String> {
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a permanent table's name while a declared catalog is
+    /// current ([`Session::refuse_declared_current`]).
+    fn cache_key(&self, parts: &[String]) -> Result<Option<String>, KrishivError> {
         let env = self.query_env();
         let case_sensitive = env.analysis.conf.case_sensitive;
         let fold = |s: &str| {
@@ -423,12 +412,15 @@ impl Session {
         match parts {
             [only] => {
                 if self.state.catalog.exists(only, case_sensitive) {
-                    return Some(only.clone());
+                    return Ok(Some(only.clone()));
                 }
-                let namespace = self.stored_namespace().ok()?;
-                store
+                self.refuse_declared_current()?;
+                let Ok(namespace) = self.stored_namespace() else {
+                    return Ok(None);
+                };
+                Ok(store
                     .table(&namespace, &fold(only))
-                    .map(|_| format!("{namespace}.{}", fold(only)))
+                    .map(|_| format!("{namespace}.{}", fold(only))))
             }
             [namespace, name]
                 if namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
@@ -438,18 +430,26 @@ impl Session {
                         .exists(&crate::catalog::global_key(name), case_sensitive) =>
             {
                 // The cache records a view by the last part of the name it was read by.
-                Some(name.clone())
+                Ok(Some(name.clone()))
             }
-            [namespace, name] if self.stored_namespace().is_ok() => store
-                .table(&fold(namespace), &fold(name))
-                .map(|_| format!("{}.{}", fold(namespace), fold(name))),
-            _ => None,
+            [namespace, name] => {
+                if !namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+                    self.refuse_declared_current()?;
+                }
+                if self.stored_namespace().is_err() {
+                    return Ok(None);
+                }
+                Ok(store
+                    .table(&fold(namespace), &fold(name))
+                    .map(|_| format!("{}.{}", fold(namespace), fold(name))))
+            }
+            _ => Ok(None),
         }
     }
 
     /// Runs `CACHE [LAZY] TABLE name [AS query]`, `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`,
-    /// all returning an empty frame as in Spark. `CACHE TABLE` reads the relation once into the
-    /// cache (`LAZY` and `OPTIONS` change nothing observable here); with `AS query` it first creates
+    /// all returning an empty frame as in Spark. `CACHE TABLE` registers the relation and reads it once into the
+    /// cache (`LAZY` only registers; `OPTIONS` change nothing observable here); with `AS query` it first creates
     /// the temporary view `name`.
     ///
     /// # Errors
@@ -474,13 +474,14 @@ impl Session {
                     }
                     .into());
                 };
-                if let Some(key) = self.cache_key(&parts) {
+                if let Some(key) = self.cache_key(&parts)? {
                     self.uncache_table(&key);
                 } else if !if_exists {
                     return Err(table_not_found(&parts));
                 }
             }
             CacheKind::Cache {
+                lazy,
                 name,
                 query,
                 options,
@@ -509,8 +510,8 @@ impl Session {
                     let create = format!("{prefix}{body}");
                     Box::pin(self.sql_here_spanned(&create, spans)).await?;
                 }
-                // The relation is cached by reading it once: `LAZY` is the same here, since a
-                // snapshot is taken the first time anything reads it either way.
+                // Registered at once (`is_cached` answers from the call on); `LAZY` stops there,
+                // else one `count()` reads every batch into the cache without keeping the rows.
                 let frame = self
                     .table(
                         &parts
@@ -520,8 +521,19 @@ impl Session {
                             .join("."),
                     )
                     .cache();
-                // Counting reads every batch into the cache without keeping the rows.
-                frame.count().await?;
+                let filled = if *lazy {
+                    frame.is_cached().await.map(drop)
+                } else {
+                    frame.count().await.map(drop)
+                };
+                if let Err(error) = filled {
+                    // A failed `CACHE TABLE` leaves nothing cached, nor the view `AS query` made.
+                    let _ = frame.unpersist().await;
+                    if let (Some(_), [view]) = (query, parts.as_slice()) {
+                        let _ = self.drop_temp_view(view);
+                    }
+                    return Err(error);
+                }
             }
             _ => {
                 return Err(crate::session::internal("unknown CACHE form".to_owned()));
@@ -548,7 +560,7 @@ impl Session {
                     }
                     .into());
                 };
-                let Some(key) = self.cache_key(&parts) else {
+                let Some(key) = self.cache_key(&parts)? else {
                     return Err(table_not_found(&parts));
                 };
                 self.refresh_table(&key);
@@ -556,6 +568,8 @@ impl Session {
             RefreshKind::Function { .. } => {}
             RefreshKind::Path { .. } => {
                 self.refresh_files();
+                // As REFRESH TABLE: the key counts' answers are counted again.
+                self.state.io.key_facts().clear();
             }
             _ => {
                 return Err(crate::session::internal("unknown REFRESH form".to_owned()));
@@ -1539,84 +1553,22 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
-                // `system` has no namespace: after `USE system` the row says so rather than
-                // naming the default database of another catalog.
-                let row = if crate::system::is_system(&self.state.catalog.current_catalog()) {
-                    vec![Some(crate::system::SYSTEM.to_owned()), Some(String::new())]
-                } else {
-                    vec![
-                        Some(CATALOG.to_owned()),
-                        Some(self.state.catalog.current_namespace()),
-                    ]
-                };
-                self.string_frame(&["catalog", "namespace"], vec![row])
+                // `system` (and a declared catalog) has no namespace here: after `USE system` the
+                // row says so rather than naming the default database of another catalog.
+                let row = self.current_namespace_row();
+                self.string_frame(cols::SHOW_CURRENT_NAMESPACE, vec![row])
                     .await
             }
             krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
-                let rows = [CATALOG, crate::system::SYSTEM]
-                    .into_iter()
+                // The declared catalogs this principal sees join them (design P3-T067 §2.4).
+                let rows = (self.catalog_names().into_iter())
                     .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
-                    .map(|n| vec![Some(n.to_owned())])
+                    .map(|n| vec![Some(n)])
                     .collect();
-                self.ordered_frame(&["catalog"], &[], rows).await
+                self.ordered_frame(cols::SHOW_CATALOGS, &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }
-    }
-
-    /// A frame of the string columns `columns` with `rows` (`None` is
-    /// NULL), as Spark's `SET` commands return. Rows come out ordered by
-    /// `key`, as in Spark.
-    pub(crate) async fn string_frame(
-        &self,
-        columns: &[&str],
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
-        let one = || {
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-            )
-        };
-        let row = |values: &[Option<String>]| {
-            one().select(
-                columns
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(&name, value)| match value {
-                        Some(value) => lit(value.as_str()).alias(name),
-                        None => lit_null().cast(DataType::String).alias(name),
-                    }),
-            )
-        };
-        let df = if rows.is_empty() {
-            // No rows: one placeholder row with the schema, limited to
-            // nothing, so the columns read as non-nullable strings.
-            row(&vec![Some(String::new()); columns.len()]).limit(0)
-        } else if rows.len() == 1 {
-            row(&rows[0])
-        } else {
-            let inputs: Vec<Arc<LogicalPlan>> =
-                rows.iter().map(|r| Arc::clone(&row(r).plan)).collect();
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::Union {
-                    inputs,
-                    by_name: false,
-                    allow_missing_columns: false,
-                })),
-            )
-        };
-        // Rows come out ordered by key: unions read in any order, so the
-        // frame sorts.
-        let df = if columns.contains(&"key") {
-            df.order_by([col("key")])
-        } else {
-            df // callers without a `key` column pass at most one row
-        };
-        let env = self.query_env();
-        df.analyzed_in(env).await?;
-        Ok(df)
     }
 }
 
@@ -1951,15 +1903,7 @@ fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> O
     Some(text)
 }
 
-pub(crate) fn is_bare_default(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::Nested(inner) => is_bare_default(inner),
-        ExprKind::Column(parts) => {
-            matches!(&parts[..], [p] if !p.quoted && p.value.eq_ignore_ascii_case("default"))
-        }
-        _ => false,
-    }
-}
+pub(crate) use krishiv_sql::is_bare_default;
 
 /// Whether any node of the top-level expression tree `e` (windows
 /// included) matches `pred`. Subquery plans are not crossed: a `Query` is
@@ -1993,6 +1937,8 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
         )
     })
 }
+
+mod frames;
 
 #[cfg(test)]
 mod tests;

@@ -26,7 +26,7 @@ use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::output_spill::{OutputSpill, SpillUnread};
 use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// The build sink.
 #[derive(Debug)]
@@ -49,8 +49,16 @@ pub(crate) struct BuildGlobal {
     /// Between `finalize` and the first read: the finalized build, its
     /// tables spillable (see [`IdleBuild`]).
     idle: Mutex<Option<Arc<IdleBuild>>>,
+    /// Probe drivers that may still read the level-0 tables
+    /// ([`Self::probe_joined`], [`Self::probe_left`]).
+    probes: AtomicUsize,
+    /// A probe driver reached the probe's flush, so every probe driver
+    /// exists: the flush starts behind a barrier all of them arrive at.
+    probe_flushing: AtomicBool,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
+    /// Shared with every partial of this build ([`Partials::bloom_lost`]).
+    bloom_lost: Arc<[AtomicBool]>,
     /// The runtime filters and where they are published, abandoned if the
     /// build never publishes them.
     filters: Vec<FilterId>,
@@ -62,6 +70,13 @@ pub(crate) struct BuildGlobal {
 struct Partials {
     builders: Vec<Option<KeyFilterBuilder>>,
     memory: Vec<Reservation>,
+    /// Per filter, shared by every partial of one task's build: set once
+    /// any of them dropped that filter's Bloom hashes (a refused
+    /// reservation, a spill, or past `bloom_max_items`). The merged filter
+    /// can then no longer be a Bloom (`KeyFilterBuilder::merge` of a partial
+    /// without hashes has none), so the other drivers stop collecting them
+    /// (review N4). Only a hint: each task's build has its own flags.
+    bloom_lost: Arc<[AtomicBool]>,
 }
 
 impl Drop for BuildGlobal {
@@ -92,9 +107,9 @@ struct Collect {
 /// The finalized build.
 #[derive(Debug)]
 pub(crate) struct Built {
-    /// Per level-0 partition: its table, or `None` if it spilled or is
-    /// empty.
-    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// The level-0 tables, `None` once every probe driver is done with
+    /// them ([`BuildGlobal::probe_left`]).
+    level0: Mutex<Option<Arc<Level0>>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
     /// The spilled partitions' work, shared by the probe drivers' flush
@@ -103,7 +118,62 @@ pub(crate) struct Built {
     /// Notified whenever a driver's claim on `grace` ends, or a write of an
     /// idle build's partition does.
     pub(crate) grace_changed: Arc<Event>,
+    /// The runtime filters' memory: a scan of another pipeline may still
+    /// read a filter after the probe ends, so it stays until the build's
+    /// state is dropped.
     _memory: Vec<Reservation>,
+}
+
+impl Built {
+    /// The level-0 tables, for a probe driver to hold while it probes;
+    /// `None` once they were released.
+    pub(crate) fn level0(&self) -> Option<Arc<Level0>> {
+        lock(&self.level0).clone()
+    }
+}
+
+/// A finalized build's level-0 tables and the memory they hold (their rows
+/// and indexes). Each probe driver holds a reference while it probes, and
+/// the build holds one until every probe driver is done, so the memory goes
+/// back when the probe ends rather than when its pipeline does: a
+/// downstream sink's final phase (an aggregate's merge) gets it.
+#[derive(Debug)]
+pub(crate) struct Level0 {
+    /// Per level-0 partition: its table, or `None` if it spilled or is
+    /// empty.
+    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// Held only to go back with the tables.
+    _memory: Vec<Reservation>,
+}
+
+impl BuildGlobal {
+    /// A probe driver that may read the level-0 tables: its state was made.
+    /// Only for a build its probe owns (a prebuilt build may serve more
+    /// than one probe, so it is never released).
+    pub(crate) fn probe_joined(&self) {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A probe driver started the probe's flush.
+    pub(crate) fn probe_flushing(&self) {
+        self.probe_flushing.store(true, Ordering::Release);
+    }
+
+    /// A probe driver that [joined](Self::probe_joined) is done with the
+    /// tables: its flush ended, or its state was dropped. It dropped its
+    /// own reference first. When the last one leaves after some driver
+    /// started the flush, every probe driver has left, and the build's
+    /// reference is taken out: the caller drops it, and with it the tables
+    /// and their memory. A count that reaches zero before any flush (drivers
+    /// whose output was not wanted) releases nothing: later drivers may
+    /// still join, and the tables go when the build's state is dropped.
+    pub(crate) fn probe_left(&self) -> Option<Arc<Level0>> {
+        let last = self.probes.fetch_sub(1, Ordering::AcqRel) == 1;
+        if !last || !self.probe_flushing.load(Ordering::Acquire) {
+            return None;
+        }
+        lock(&self.built.get()?.level0).take()
+    }
 }
 
 impl BuildGlobal {
@@ -179,10 +249,23 @@ impl IdleBuild {
     /// Ends the idle window: the build as the probe reads it.
     fn seal(&self) -> Option<Built> {
         let mut st = lock(&self.state);
-        let mut built = st.built.take()?;
-        for m in &mut st.memory {
-            built._memory.append(m);
+        let built = st.built.take()?;
+        // The tables' memory goes back with the tables (`Level0`), not with
+        // the build: a probe that ends releases it for the sink above.
+        // No clone of the tables exists before the seal, so `get_mut` holds.
+        let mut level0 = lock(&built.level0);
+        let present = level0.is_some();
+        let unique = level0.as_mut().and_then(Arc::get_mut);
+        debug_assert!(
+            unique.is_some() || !present,
+            "hash join level-0 tables shared before the build sealed"
+        );
+        if let Some(l0) = unique {
+            for m in &mut st.memory {
+                l0._memory.append(m);
+            }
         }
+        drop(level0);
         drop(st);
         self.hook.set_idle(false);
         self.hook.set_spillable_bytes(0);
@@ -237,8 +320,14 @@ impl SpillUnread for IdleBuild {
                 let Some(built) = built.as_mut() else {
                     return Ok(0);
                 };
-                let mut order: Vec<usize> = (0..built.tables.len())
-                    .filter(|&p| built.tables[p].is_some() && memory.get(p).is_some())
+                // Idle: no probe driver holds the tables yet, so the
+                // reference is unique.
+                let mut l0 = lock(&built.level0);
+                let Some(l0) = l0.as_mut().and_then(Arc::get_mut) else {
+                    return Ok(0);
+                };
+                let mut order: Vec<usize> = (0..l0.tables.len())
+                    .filter(|&p| l0.tables[p].is_some() && memory.get(p).is_some())
                     .collect();
                 order.sort_by_key(|&p| std::cmp::Reverse(held(&memory[p])));
                 // One partition covers the request: the smallest that does,
@@ -265,7 +354,7 @@ impl SpillUnread for IdleBuild {
                 topup.shrink_to_credit(topup.size());
                 let mut jobs = Vec::with_capacity(chosen.len());
                 for p in chosen {
-                    let Some(table) = built.tables[p].take() else {
+                    let Some(table) = l0.tables[p].take() else {
                         continue;
                     };
                     built.spilled |= 1 << p;
@@ -304,7 +393,9 @@ impl SpillUnread for IdleBuild {
                 for (p, table, scratch) in jobs {
                     let rows = table.arena().len() as u64;
                     let mut w = scope.writer(Arc::clone(&schema), scratch)?;
-                    write_sliced(&mut w, table.arena().batch())?;
+                    for block in table.arena().blocks() {
+                        write_sliced(&mut w, block)?;
+                    }
                     drop(table);
                     files.push((p, w.finish()?, rows));
                 }
@@ -390,6 +481,15 @@ fn publish(
     drop(partials.memory);
 }
 
+/// One "Bloom lost" flag per runtime filter ([`Partials::bloom_lost`]).
+fn lost_flags(shared: &Shared) -> Arc<[AtomicBool]> {
+    shared
+        .runtime
+        .iter()
+        .map(|_| AtomicBool::new(false))
+        .collect()
+}
+
 /// Empty partials of `shared`'s runtime filters.
 fn partials(shared: &Shared) -> Vec<Option<KeyFilterBuilder>> {
     shared
@@ -406,6 +506,44 @@ impl Partials {
             .flatten()
             .map(KeyFilterBuilder::heap_bytes)
             .sum()
+    }
+
+    /// Bytes of the Bloom hashes alone: what [`Self::shed_hashes`] frees, so
+    /// part of what a build offers the arbitrator (review N3).
+    fn hash_bytes(&self) -> usize {
+        self.builders
+            .iter()
+            .flatten()
+            .map(KeyFilterBuilder::hash_bytes)
+            .sum()
+    }
+
+    /// Drops every filter's Bloom hashes and tells the build's other
+    /// partials.
+    fn drop_hashes(&mut self) {
+        for (i, b) in self.builders.iter_mut().enumerate() {
+            if let Some(b) = b.as_mut().filter(|b| b.has_hashes()) {
+                b.drop_hashes();
+                if let Some(lost) = self.bloom_lost.get(i) {
+                    lost.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Drops the hashes of the filters another partial of this build lost
+    /// the Bloom of; returns whether any went.
+    fn follow_lost(&mut self) -> bool {
+        let mut dropped = false;
+        for (b, lost) in self.builders.iter_mut().zip(self.bloom_lost.iter()) {
+            if let Some(b) = b.as_mut().filter(|b| b.has_hashes())
+                && lost.load(Ordering::Relaxed)
+            {
+                b.drop_hashes();
+                dropped = true;
+            }
+        }
+        dropped
     }
 
     /// Adds one batch's keys; reserves what the partials grew by, dropping
@@ -426,7 +564,14 @@ impl Partials {
         keys: &[ArrayRef],
         valid: Option<&arrow_buffer::NullBuffer>,
     ) {
-        for (b, f) in self.builders.iter_mut().zip(filters) {
+        // Another partial dropped a filter's hashes: its merged filter
+        // cannot be a Bloom, so these would only hold memory until finalize.
+        if self.follow_lost() {
+            self.release_excess();
+        }
+        let mut lost = false;
+        for (i, (b, f)) in self.builders.iter_mut().zip(filters).enumerate() {
+            let had = b.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             let ok = match (b.as_mut(), keys.get(f.key)) {
                 (Some(builder), Some(k)) => builder.add(k.as_ref(), valid).is_ok(),
                 _ => false,
@@ -434,8 +579,26 @@ impl Partials {
             if !ok {
                 *b = None;
             }
+            // Past `bloom_max_items` the builder dropped its own hashes.
+            if had && !b.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+        if lost {
+            self.release_excess();
         }
         self.fit();
+    }
+
+    /// Releases what the reservations hold beyond the partials' bytes, after
+    /// hashes were dropped (a merge or `bloom_max_items`); only then, so a
+    /// few bytes' shrink of a range does not release and re-grow per batch.
+    fn release_excess(&mut self) {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        self.release(held.saturating_sub(self.heap_bytes()));
     }
 
     /// Reserves what the partials hold beyond their reservations; when that
@@ -450,41 +613,55 @@ impl Partials {
         if want > held && memory.try_grow(want - held).is_err() {
             // The Bloom hashes go first; the exact keys only if the
             // reservation still fails without them.
-            for b in self.builders.iter_mut().flatten() {
-                b.drop_hashes();
-            }
+            self.drop_hashes();
             let want = self.heap_bytes();
             let Some(memory) = self.memory.first_mut() else {
                 return;
             };
             if want <= held || memory.try_grow(want - held).is_ok() {
-                if want < held {
-                    // Only the first reservation shrinks (the others are
-                    // merged drivers', released when the partials drop).
-                    let extra = (held - want).min(memory.size());
-                    memory.shrink(extra);
-                }
+                self.release(held.saturating_sub(want));
                 return;
             }
             for b in self.builders.iter_mut().flatten() {
                 b.drop_bloom();
             }
             let want = self.heap_bytes();
-            let Some(memory) = self.memory.first_mut() else {
-                return;
-            };
             if want < held {
-                let extra = (held - want).min(memory.size());
-                memory.shrink(extra);
-            } else {
+                self.release(held - want);
+            } else if let Some(memory) = self.memory.first_mut() {
                 // The few value-set bytes left are not worth failing over.
                 let _ = memory.try_grow(want - held);
             }
         }
     }
 
+    /// Shrinks the reservations, in order, by up to `extra` bytes in all;
+    /// returns the bytes released. Merged drivers' reservations shrink too:
+    /// they hold the merged hashes as much as the first does.
+    fn release(&mut self, mut extra: usize) -> usize {
+        let want = extra;
+        for m in &mut self.memory {
+            let s = extra.min(m.size());
+            m.shrink(s);
+            extra -= s;
+        }
+        want - extra
+    }
+
+    /// Drops the Bloom filters' hashes and shrinks the reservations to what
+    /// is left; returns the bytes freed. A build asked to spill sheds this
+    /// optional memory before it writes a table (review of the raised Bloom
+    /// caps, M1): at 20 M keys the hashes are up to 160 MB a driver.
+    fn shed_hashes(&mut self) -> usize {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        self.drop_hashes();
+        self.release(held.saturating_sub(self.heap_bytes()))
+    }
+
     fn merge(&mut self, other: Self) {
-        for (dst, src) in self.builders.iter_mut().zip(other.builders) {
+        let mut lost = false;
+        for (i, (dst, src)) in self.builders.iter_mut().zip(other.builders).enumerate() {
+            let had = dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             *dst = match (dst.take(), src) {
                 (Some(mut a), Some(b)) => {
                     a.merge(b);
@@ -492,8 +669,21 @@ impl Partials {
                 }
                 _ => None,
             };
+            // Past `bloom_max_items` the merge dropped the hashes: drivers
+            // still sinking stop collecting them (review nit of e324818fe).
+            if had && !dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
         }
         self.memory.extend(other.memory);
+        if lost {
+            // Both partials' reservations still hold the hashes the merge
+            // dropped.
+            self.release_excess();
+        }
         // `merge` grew this driver's hashes by the other's (review minor 2).
         self.fit();
     }
@@ -565,6 +755,19 @@ pub(crate) fn arena_chunk(
 }
 
 impl BuildSink {
+    /// What a build can free when asked to spill: the Bloom hashes of its
+    /// filter partials, which it sheds first, and its tables in memory when
+    /// it has a spill scope (review N3: a build with spilled or small
+    /// tables but large hashes is asked too).
+    fn spillable(&self, parts: &[Part], runtime: &Partials) -> usize {
+        let tables = if self.0.spill.is_some() {
+            mem_bytes(parts)
+        } else {
+            0
+        };
+        runtime.hash_bytes() + tables
+    }
+
     /// Builds and publishes the runtime filters from the merged partials;
     /// returns the reservation that holds them for the query (a filter that
     /// does not fit keeps only its min/max range).
@@ -638,16 +841,19 @@ impl BuildSink {
         }
         ctx.consumer()
             .signal()
-            .set_spillable_bytes(mem_bytes(&c.parts));
+            .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
         Ok(freed)
     }
 }
 
-/// What indexing a partition's in-memory rows reserves: `(index, copy)`,
-/// its [`JoinTable`] index (and match bitmap when `marks`) and its
-/// transient concatenation copy (none for a single chunk); `None` if no
-/// rows are in memory.
-fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
+/// What indexing a partition's in-memory rows reserves, as `(lasting,
+/// transient, kept)`: lasting is its [`JoinTable`] index (and match bitmap when
+/// `marks`) plus the copied chunk tails that stay beside chunks the arena
+/// also slices (held through the probe); transient is the rest of the
+/// tails' copy, which replaces chunks dropped once the arena is built
+/// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
+/// `None` if no rows are in memory.
+fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
@@ -657,12 +863,25 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
-    let copy = if part.chunks.len() > 1 {
-        part.bytes()
-    } else {
-        0
-    };
-    Some((index, copy))
+    let (copy, kept) = RowArena::reblock_bytes(&part.chunks, 0);
+    Some((index.saturating_add(kept), copy.saturating_sub(kept), kept))
+}
+
+/// Returns what a built partition's chunks reserved beyond its arena: the
+/// chunks were reserved at their allocated size (builder slack, and tails
+/// charged at the chunk they were sliced from), the arena copied the tails
+/// into exact blocks and the chunks are gone, so the reservation keeps
+/// `bytes`, the arena's allocated bytes ([`RowArena::held_bytes`]), less
+/// the `kept` tail bytes the index reservation still holds (so the two
+/// together cover the arena; `kept` may be all of it, leaving the chunks'
+/// reservation nothing). Never below zero, and only ever shrinks.
+fn trim_to_arena(part: &mut Part, kept: usize, bytes: usize) {
+    let mut excess = part.bytes().saturating_sub(bytes.saturating_sub(kept));
+    for m in part.memory.iter_mut() {
+        let cut = excess.min(m.size());
+        m.shrink(cut);
+        excess -= cut;
+    }
 }
 
 /// A duration in whole nanoseconds, saturating.
@@ -676,8 +895,13 @@ struct Job {
     /// Bytes of its rows in memory.
     bytes: usize,
     chunks: Vec<Batch>,
-    /// What indexing it reserves (see [`build_need`]).
+    /// What indexing it reserves: lasting (index and kept tails) and the
+    /// transient copy (see [`build_need`]).
     need: (usize, usize),
+    /// Of the lasting part, the arena's copied tails that stay beside chunks
+    /// it also slices: reserved through the probe
+    /// ([`RowArena::reblock_bytes`]).
+    kept: usize,
     /// Its estimated distinct keys (row layout, when sketched).
     keys: Option<usize>,
 }
@@ -726,12 +950,18 @@ impl BuildGlobal {
             collect: Mutex::new(Collect::default()),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials::default()),
+            bloom_lost: Arc::default(),
             filters: Vec::new(),
             publisher: None,
         };
         let _ = g.built.set(Built {
-            tables: Vec::new(),
+            level0: Mutex::new(Some(Arc::new(Level0 {
+                tables: Vec::new(),
+                _memory: Vec::new(),
+            }))),
             spilled: 0,
             grace: Arc::new(Mutex::new(grace)),
             grace_changed: Arc::new(Event::default()),
@@ -742,6 +972,11 @@ impl BuildGlobal {
 }
 
 impl Sink for BuildSink {
+    // A build's tables do not depend on its input's batches (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinBuild"
     }
@@ -758,10 +993,16 @@ impl Sink for BuildSink {
             .collect()
     }
 
+    /// Partitions absorb in `combine`, which runs in lane order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();
         let rows = hashing.rows();
+        let bloom_lost = lost_flags(&self.0);
         Ok(Arc::new(BuildGlobal {
             hashing,
             spilled: Arc::new(AtomicU64::new(0)),
@@ -774,10 +1015,14 @@ impl Sink for BuildSink {
             }),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials {
                 builders: partials(&self.0),
                 memory: Vec::new(),
+                bloom_lost: Arc::clone(&bloom_lost),
             }),
+            bloom_lost,
             filters: self.0.runtime.iter().map(|f| f.filter.id()).collect(),
             publisher: self.0.publisher.clone(),
         }))
@@ -797,6 +1042,7 @@ impl Sink for BuildSink {
             runtime: Partials {
                 builders: partials(&self.0),
                 memory: vec![memory.reservation()],
+                bloom_lost: Arc::clone(&state(global)?.bloom_lost),
             },
             sketches: sketches(&state(global)?.hashing, memory),
         }))
@@ -894,7 +1140,7 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].block(s.arena_schema(&g.hashing))?;
             s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
@@ -907,9 +1153,8 @@ impl Sink for BuildSink {
         }
         g.rows.fetch_add(n as u64, Ordering::Relaxed);
         l.stored += stored;
-        if s.spill.is_some() {
-            l.signal.set_spillable_bytes(mem_bytes(&l.parts));
-        }
+        l.signal
+            .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
         Ok(SinkStatus::NeedMoreInput)
     }
 
@@ -935,13 +1180,11 @@ impl Sink for BuildSink {
             (Some(_), None) => c.sketches = None,
             (None, _) => {}
         }
-        lock(&g.runtime).merge(l.runtime);
+        let mut runtime = lock(&g.runtime);
+        runtime.merge(l.runtime);
         // The finalizing driver's signal offers the combined state.
-        l.signal.set_spillable_bytes(if self.0.spill.is_some() {
-            mem_bytes(&c.parts)
-        } else {
-            0
-        });
+        l.signal
+            .set_spillable_bytes(self.spillable(&c.parts, &runtime));
         Ok(())
     }
 
@@ -955,10 +1198,20 @@ impl Sink for BuildSink {
             let g = state(global)?;
             let s = &self.0;
             let filter_memory = self.publish_filters(g, ctx);
+            // The partials' hashes went with the publish: offer only the
+            // tables from here (review L3 of the N2-N4 pass).
+            {
+                let c = lock(&g.collect);
+                ctx.consumer()
+                    .signal()
+                    .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
+            }
             // Write what is left of spilled partitions; reserve the index of
-            // the rest, spilling the largest while it does not fit. A
-            // partition's table is built only while its concatenation copy
-            // is reserved, so the copies never need the build's size again.
+            // the rest, spilling the largest while it does not fit. The arenas
+            // read the blocks in place; finalize copies only the chunk tails.
+            // A spilling build reserves every index and kept tail and the
+            // largest transient copy, so one partition can always run and the
+            // copies never need the build's size again.
             let mut index = ctx.consumer().reservation();
             let mut held_copy = 0;
             if s.spill.is_some() {
@@ -986,7 +1239,7 @@ impl Sink for BuildSink {
                         let rows = g.hashing.rows();
                         let marks = s.join_type.builds_preserved();
                         let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
-                        needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
+                        needs.fold((0usize, 0usize), |(i, m), (index, copy, _)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
                     };
@@ -1010,11 +1263,12 @@ impl Sink for BuildSink {
                         let marks = s.join_type.builds_preserved();
                         Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
                     })
-                    .map(|(i, need, p, keys)| Job {
+                    .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
                         bytes: p.bytes(),
+                        kept,
                         chunks: std::mem::take(&mut p.chunks),
-                        need,
+                        need: (lasting, copy),
                         keys,
                     })
                     .collect()
@@ -1025,11 +1279,11 @@ impl Sink for BuildSink {
             // Nothing in memory is spillable any more.
             ctx.consumer().signal().set_spillable_bytes(0);
             // One blocking task per partition (the executor's blocking pool
-            // bounds how many run at once), each started only once its
-            // concatenation copy is reserved. A spilling build's reservation
-            // already funds the largest copy (`spare`), so one partition can
-            // always run; without a spill scope a partition's index and copy
-            // are asked for through arbitration when nothing else runs.
+            // bounds how many run at once), each started only once its tails'
+            // copy is reserved. A spilling build's reservation already funds
+            // the largest transient copy (`spare`), so one partition can always run;
+            // without a spill scope a partition's index and copy are asked
+            // for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
             let mut spare = held_copy;
             // The concatenation copies reserved at once (for the counter).
@@ -1037,6 +1291,10 @@ impl Sink for BuildSink {
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
+            // Per built partition: the kept tails its index reservation
+            // holds and its arena's allocated bytes, to true up its chunks'
+            // reservation once they are gone.
+            let mut arena_held = Vec::with_capacity(jobs.len());
             loop {
                 if let Some(&Job {
                     need: (index_bytes, copy),
@@ -1052,7 +1310,7 @@ impl Sink for BuildSink {
                     let funded = if spill && copy <= spare {
                         spare -= copy;
                         true
-                    } else if index.try_grow(grow).is_ok() {
+                    } else if grow == 0 || index.try_grow(grow).is_ok() {
                         true
                     } else if running.is_empty() {
                         index.grow(grow).await.map_err(KrishivError::from)?;
@@ -1065,6 +1323,7 @@ impl Sink for BuildSink {
                         chunks,
                         need: (index_bytes, copy),
                         keys,
+                        kept,
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
@@ -1079,7 +1338,7 @@ impl Sink for BuildSink {
                                 .run_blocking(move || {
                                     let t0 = std::time::Instant::now();
                                     let schema = shared.arena_schema(&hashing);
-                                    let arena = RowArena::concat(schema, &chunks)?;
+                                    let arena = RowArena::over_chunks(schema, &chunks)?;
                                     drop(chunks);
                                     let t1 = std::time::Instant::now();
                                     let layout = shared.keys.layout().filter(|_| hashing.rows());
@@ -1103,7 +1362,7 @@ impl Sink for BuildSink {
                                     table
                                 })
                                 .await?;
-                            Ok::<_, KrishivError>((p, table, copy, index_bytes))
+                            Ok::<_, KrishivError>((p, table, index_bytes, copy, kept))
                         });
                         continue;
                     }
@@ -1111,15 +1370,28 @@ impl Sink for BuildSink {
                 let Some(done) = futures::StreamExt::next(&mut running).await else {
                     break;
                 };
-                let (p, table, copy, index_bytes) = done?;
-                copying = copying.saturating_sub(copy);
+                let (p, table, lasting, transient, kept) = done?;
+                copying = copying.saturating_sub(transient);
                 // The index was reserved for one key per row: keep what it
-                // holds.
+                // holds. The copied tails beside chunks the arena also slices
+                // (`kept`, part of `lasting`) stay reserved through the probe.
                 index.shrink(
-                    index_bytes
+                    lasting
+                        .saturating_sub(kept)
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
+                // The transient copy replaced chunks that are gone now.
+                if spill {
+                    // Keep the largest transient copy funded; return the rest.
+                    spare = spare.saturating_add(transient);
+                    if spare > held_copy {
+                        index.shrink((spare - held_copy).min(index.size()));
+                        spare = held_copy;
+                    }
+                } else {
+                    index.shrink(transient.min(index.size()));
+                }
                 let split = table.arena().memory_split();
                 let n = &self.0.counters;
                 n.add(
@@ -1133,19 +1405,13 @@ impl Sink for BuildSink {
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
                 self.0.counters.add(Counter::HashBuckets, buckets as u64);
+                // Of `kept`, what the index reservation still holds once the
+                // index is paid: an index past its estimate took the rest.
+                let covered = lasting.saturating_sub(table.index_memory()).min(kept);
+                arena_held.push((p, covered, table.arena().held_bytes()));
                 tables.push((p, table));
-                if spill {
-                    // Keep the largest copy funded; return the rest.
-                    spare = spare.saturating_add(copy);
-                    if spare > held_copy {
-                        index.shrink(spare - held_copy);
-                        spare = held_copy;
-                    }
-                } else {
-                    index.shrink(copy);
-                }
             }
-            index.shrink(spare);
+            index.shrink(spare.min(index.size()));
             let mut c = lock(&g.collect);
             // Spilled partitions that hold rows: the probe defers only these
             // (an empty partition matches nothing, spilled or not).
@@ -1173,9 +1439,14 @@ impl Sink for BuildSink {
                     }
                 }
             }
-            let mut memory = vec![index, filter_memory];
+            let mut memory = vec![index];
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
+            for (p, kept, bytes) in arena_held {
+                if let Some(part) = c.parts.get_mut(p) {
+                    trim_to_arena(part, kept, bytes);
+                }
+            }
             for (p, part) in c.parts.iter_mut().enumerate() {
                 if spilled & (1 << p) == 0 {
                     self.0
@@ -1197,11 +1468,14 @@ impl Sink for BuildSink {
             n.add(Counter::BuildSpillBytes, c.file_bytes);
             n.add(Counter::FinalizeNs, nanos(started.elapsed()));
             let built = Built {
-                tables: all,
+                level0: Mutex::new(Some(Arc::new(Level0 {
+                    tables: all,
+                    _memory: memory,
+                }))),
                 spilled,
                 grace: Arc::new(Mutex::new(grace)),
                 grace_changed: Arc::new(Event::default()),
-                _memory: memory,
+                _memory: vec![filter_memory],
             };
             drop(c);
             if g.built.get().is_some() || lock(&g.idle).is_some() {
@@ -1250,10 +1524,14 @@ impl Sink for BuildSink {
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            if self.0.spill.is_none() {
-                return Ok(0);
+            // The optional Bloom hashes go before any table is written.
+            let shed = l.runtime.shed_hashes();
+            if shed >= target || self.0.spill.is_none() {
+                l.signal
+                    .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
+                return Ok(shed);
             }
-            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target);
+            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target - shed);
             for &p in &chosen {
                 l.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
@@ -1261,8 +1539,9 @@ impl Sink for BuildSink {
                 .spill_parts(&l.hashing, &mut l.parts, &chosen, ctx, false)
                 .await?;
             l.file_bytes += written;
-            l.signal.set_spillable_bytes(mem_bytes(&l.parts));
-            Ok(freed)
+            l.signal
+                .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
+            Ok(freed + shed)
         })
     }
 
@@ -1277,195 +1556,23 @@ impl Sink for BuildSink {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
-            self.spill_collected(state(global)?, target, ctx, false)
-                .await
+            let g = state(global)?;
+            // The merged partials' Bloom hashes go before any table is
+            // written, as in `spill` (review N2).
+            let shed = lock(&g.runtime).shed_hashes();
+            if shed >= target || self.0.spill.is_none() || g.built.get().is_some() {
+                if shed > 0 {
+                    let c = lock(&g.collect);
+                    ctx.consumer()
+                        .signal()
+                        .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
+                }
+                return Ok(shed);
+            }
+            Ok(shed + self.spill_collected(g, target - shed, ctx, false).await?)
         })
     }
 }
 
 #[cfg(all(test, not(loom)))]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{ArrayRef, Int64Array};
-    use arrow_schema::DataType;
-    use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions, RuntimeFilter};
-    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
-
-    use super::{Partials, Writing, publish};
-    use crate::join::grace::Grace;
-    use crate::join::{FilterPublisher, JoinRuntimeFilter};
-    use crate::sync::{Event, Mutex, lock};
-    use crate::values::{LocalValues, Producer};
-
-    /// A write of an idle build's partitions that ends any other way than
-    /// with its files (cancelled with its query) leaves the grace phase
-    /// failed, never short of rows; one that lands hands over its files.
-    #[test]
-    fn an_unfinished_write_of_an_idle_build_loses_its_partitions() {
-        let grace = Arc::new(Mutex::new(Grace::new(2)));
-        let changed = Arc::new(Event::default());
-        let writing = |parts| Writing {
-            grace: Arc::clone(&grace),
-            changed: Arc::clone(&changed),
-            parts,
-            landed: false,
-        };
-        lock(&grace).writing = 2;
-        writing(1).landed(Vec::new());
-        assert_eq!(lock(&grace).writing, 1);
-        assert!(lock(&grace).lost.is_none());
-        drop(writing(1));
-        let g = lock(&grace);
-        assert_eq!(g.writing, 0);
-        assert!(g.lost.is_some(), "the rows were lost");
-    }
-
-    fn reservation(limit: usize) -> Reservation {
-        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
-            limit: Some(limit),
-            quantum: 1,
-            // The whole limit for the partials: the spill-scratch floor
-            // would hide part of it from these exact-size cases.
-            spill_scratch_reserve: 0,
-            ..MemoryConfig::default()
-        });
-        let id = pool.register("partials", None);
-        Reservation::new(pool, id)
-    }
-
-    /// Publishes into `f`'s cell, as its only producer.
-    fn publisher(f: &JoinRuntimeFilter) -> FilterPublisher {
-        let values = LocalValues::new();
-        assert!(values.adopt_filter(Arc::clone(&f.filter)).is_ok());
-        FilterPublisher {
-            values: Arc::new(values),
-            producer: Producer::default(),
-        }
-    }
-
-    fn filter() -> JoinRuntimeFilter {
-        JoinRuntimeFilter {
-            key: 0,
-            filter: Arc::new(RuntimeFilter::new(
-                FilterId(1),
-                ColumnPath::new("k"),
-                DataType::Int64,
-            )),
-            options: KeyFilterOptions {
-                max_values: 0,
-                ..KeyFilterOptions::default()
-            },
-        }
-    }
-
-    /// Memory for the distinct keys but not for their Bloom hashes too: the
-    /// hashes go and the exact set stays (`drop_hashes`, review M1), with
-    /// the reservation equal to what the partial holds. Were the hashes and
-    /// the keys dropped together (`drop_bloom`), only the range would be
-    /// published.
-    #[test]
-    fn without_room_for_the_hashes_the_exact_set_stays() {
-        let mut f = filter();
-        f.options.max_values = 100;
-        let shared = vec![f.clone()];
-        // Sparse (not a dense range, which would publish as the range
-        // whatever is kept), and more than the `IN` list holds (100), so
-        // `drop_bloom` would drop them where `drop_hashes` keeps them.
-        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
-            (0..2000).map(|i: i64| i * 1_000_003),
-        ));
-        let sizes = |hashes: bool| {
-            let mut b = krishiv_io::KeyFilterBuilder::new(DataType::Int64, f.options).unwrap();
-            b.add(keys.as_ref(), None).unwrap();
-            if !hashes {
-                b.drop_hashes();
-            }
-            b.heap_bytes()
-        };
-        let (keys_only, with_hashes) = (sizes(false), sizes(true));
-        assert!(with_hashes > keys_only, "no hashes to drop");
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            // Room for the keys and half the hashes: never both.
-            memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
-        };
-        p.add_keys(&shared, &[Arc::clone(&keys)], None);
-        assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
-        assert_eq!(p.heap_bytes(), keys_only, "the keys were dropped too");
-        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert_eq!(
-            k.form(),
-            krishiv_io::FilterForm::HashSet(2000),
-            "no exact set published"
-        );
-    }
-
-    /// Without memory for the hashes the Bloom is dropped; without memory
-    /// for the published filter only the range is kept; a dropped partial
-    /// disables its filter.
-    #[test]
-    fn memory_pressure_drops_forms_never_fails() {
-        let f = filter();
-        let shared = vec![f.clone()];
-        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: vec![reservation(1024)],
-        };
-        let spec_keys = [Arc::clone(&keys)];
-        p.add_keys(&shared, &spec_keys, None);
-        assert!(p.memory[0].size() <= 1024);
-        let mut held = reservation(1 << 20);
-        publish(&publisher(&f), &shared, p, &mut held);
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert!(k.bloom_bytes().is_none() && k.has_range());
-
-        // The hashes fit, the published Bloom does not.
-        let f = filter();
-        let shared = vec![f.clone()];
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: vec![reservation(1 << 20)],
-        };
-        p.add_keys(&shared, &spec_keys, None);
-        let mut tiny = reservation(16);
-        publish(&publisher(&f), &shared, p, &mut tiny);
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert!(k.bloom_bytes().is_none() && k.has_range());
-
-        // A key of another type drops the partial; the filter is disabled.
-        let f = filter();
-        let shared = vec![f.clone()];
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: Vec::new(),
-        };
-        let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
-        p.add_keys(&shared, &[wrong], None);
-        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
-        assert!(matches!(
-            f.filter.published().snapshot,
-            FilterSnapshot::Disabled(_)
-        ));
-    }
-}
+mod tests;

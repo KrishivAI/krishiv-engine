@@ -55,6 +55,11 @@ _TEMPLATES = {
     "NOT_NUMERIC_COLUMNS": (
         "Numeric aggregation function can only be applied on numeric columns, got <invalid_columns>."
     ),
+    "NOT_LIST_OF_COLUMN": "Argument `<arg_name>` should be a list[Column], got <arg_type>.",
+    "REUSE_OBSERVATION": "An Observation can be used with a DataFrame only once.",
+    "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
+    "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
     "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
@@ -425,6 +430,9 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("PARSE_", ParseException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
+    # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.
+    ("_LEGACY_ERROR_TEMP_0", ParseException),
+    ("_LEGACY_ERROR_TEMP_1", AnalysisException),
 )
 # By SQLSTATE: the analyzer's class 42 (42601, syntax, is the parser's), arithmetic
 # (22012 division by zero, 22003 overflow), datetime (22007, 22008), 0A000 unsupported.
@@ -481,14 +489,43 @@ def not_implemented(feature: str) -> PySparkNotImplementedError:
     return PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 
 
+class UnsupportedFeatureAttributeError(UnsupportedOperationException, AttributeError):
+    """``KRISHIV_UNSUPPORTED_FEATURE`` raised where Spark has an attribute Krishiv lacks. It is also an
+    ``AttributeError``, so ``getattr(obj, name, default)``, ``hasattr`` and ``inspect.getmembers`` treat the
+    name as absent, as they do for a plain missing attribute."""
+
+
+class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError):
+    """``KRISHIV_UNSUPPORTED_FEATURE`` raised by importing a module Krishiv lacks. It is also an
+    ``ImportError``, so ``try: import x except ImportError`` and ``pkgutil.walk_packages`` treat the
+    module as absent."""
+
+
+def _unsupported_args(feature: str) -> dict[str, Any]:
+    return {
+        "errorClass": "KRISHIV_UNSUPPORTED_FEATURE",
+        "messageParameters": {"feature": feature},
+        "sqlState": "0A000",
+    }
+
+
+def _unsupported_text(feature: str) -> str:
+    return f"[KRISHIV_UNSUPPORTED_FEATURE] The feature {feature} is not supported by Krishiv yet. SQLSTATE: 0A000"
+
+
+def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError:
+    """:func:`unsupported_feature` for an attribute or property (also an ``AttributeError``)."""
+    return UnsupportedFeatureAttributeError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
+def unsupported_module(feature: str) -> UnsupportedFeatureImportError:
+    """:func:`unsupported_feature` for a module (also an ``ImportError``)."""
+    return UnsupportedFeatureImportError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
 def unsupported_feature(feature: str) -> UnsupportedOperationException:
     """The engine's unsupported-feature error, as the engine itself raises it
     (``KRISHIV_UNSUPPORTED_FEATURE``, SQLSTATE ``0A000``): for a PySpark method
     whose plan the engine cannot build or run yet, where emulating it is out
     of scope. Raised eagerly, as there is no plan to attach it to."""
-    return UnsupportedOperationException(
-        f"[KRISHIV_UNSUPPORTED_FEATURE] The feature {feature} is not supported by Krishiv yet. SQLSTATE: 0A000",
-        errorClass="KRISHIV_UNSUPPORTED_FEATURE",
-        messageParameters={"feature": feature},
-        sqlState="0A000",
-    )
+    return UnsupportedOperationException(_unsupported_text(feature), **_unsupported_args(feature))

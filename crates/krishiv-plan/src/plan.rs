@@ -10,7 +10,7 @@ use krishiv_common::secret::OptionValue;
 
 use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
-use crate::{AttrId, BoundColumn, Expr, Origin, SortOrder};
+use crate::{AttrId, BoundColumn, Expr, Origin, PythonUdfRef, SortOrder};
 
 /// The IR version a [`Plan`] is written in. It changes when a node changes
 /// meaning; adding a node or field does not change it before 1.0.
@@ -74,6 +74,25 @@ pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 /// global temporary view's `global_temp.v`): a control character no identifier
 /// holds, so a quoted alias with a dot in it stays one part.
 pub const ALIAS_PART_SEP: char = '\u{1e}';
+
+/// The kept range `[lower, upper)` of a [`PlanNode::Sample`]'s draws,
+/// compared bit for bit (so a plan stays `Eq`).
+#[derive(Debug, Clone, Copy)]
+pub struct SampleBounds {
+    /// Inclusive lower bound (Spark's `lowerBound`).
+    pub lower: f64,
+    /// Exclusive upper bound (Spark's `upperBound`).
+    pub upper: f64,
+}
+
+impl PartialEq for SampleBounds {
+    fn eq(&self, other: &Self) -> bool {
+        self.lower.to_bits() == other.lower.to_bits()
+            && self.upper.to_bits() == other.upper.to_bits()
+    }
+}
+
+impl Eq for SampleBounds {}
 
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +257,32 @@ pub enum PlanNode {
         input: Arc<LogicalPlan>,
         /// The partitioning expressions.
         exprs: Vec<Arc<Expr>>,
+    },
+    /// `TABLESAMPLE (x PERCENT)` or `(BUCKET x OUT OF y)`: Spark's `Sample`
+    /// without replacement (Bernoulli). Each row of input partition `i`
+    /// takes one draw of `XORShiftRandom(seed + i)` and is kept when
+    /// `lower <= x < upper`; no draw when `upper - lower <= 0`. The output
+    /// is the input's attributes. Rewrites never move a filter or a
+    /// projection across it, and never drop it.
+    Sample {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The kept range of the draw.
+        bounds: SampleBounds,
+        /// The `REPEATABLE` seed; `None` draws one per physical plan.
+        seed: Option<i64>,
+    },
+    /// `Dataset.observe(name, metrics)` (Spark's `CollectMetrics`): rows
+    /// pass through unchanged while the metrics (aggregate expressions, as
+    /// a global aggregate with no grouping) are folded over the rows that
+    /// flow through; the result is reported under `name`, not as rows.
+    CollectMetrics {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The observation name.
+        name: String,
+        /// The metric expressions (aliased once resolved).
+        metrics: Vec<Arc<Expr>>,
     },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
@@ -481,6 +526,104 @@ pub enum PlanNode {
         /// The columns (empty until resolved).
         output: Vec<BoundColumn>,
     },
+    /// `mapInPandas` / `mapInArrow` (Spark's `MapInPandas`, `MapInArrow`;
+    /// design P3-T085 §3.1): each partition of `input`, every column, goes to
+    /// the Python UDF as an iterator of batches; its rows are whatever the
+    /// function yields, typed as `output` declares. A front end may build it
+    /// over an unresolved input; the analyzer resolves it (its `output` ids
+    /// are kept once per analysis, then made fresh).
+    MapPartitions {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The UDF (a map kind: 205, 207).
+        udf: PythonUdfRef,
+        /// The declared result columns, with analyzer-assigned ids.
+        output: Vec<BoundColumn>,
+        /// Barrier execution mode (`isBarrier`): representable, refused by
+        /// the physical planner.
+        barrier: bool,
+    },
+    /// `groupBy(keys).applyInPandas` / `applyInArrow` (Spark's
+    /// `FlatMapGroupsInPandas`, `FlatMapGroupsInArrow`): the rows of `input`
+    /// clustered by `keys` (one group without keys) and sorted by them; the
+    /// UDF sees each group's rows, every column, and yields any rows, typed as
+    /// `output` declares. A front end may build it over an unresolved input
+    /// with unresolved keys; the analyzer binds them over `input`.
+    GroupMap {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The grouping expressions over `input`.
+        keys: Vec<Arc<Expr>>,
+        /// The UDF (a grouped-map kind: 201, 209, 215, 216).
+        udf: PythonUdfRef,
+        /// The declared result columns.
+        output: Vec<BoundColumn>,
+    },
+    /// `groupBy(..).cogroup(groupBy(..)).applyInPandas` / `applyInArrow`
+    /// (Spark's `FlatMapCoGroupsInPandas`, `FlatMapCoGroupsInArrow`): the
+    /// UDF sees, per key, the left rows then the right rows of that key (an
+    /// empty side for a key on one side only). A front end may build it over
+    /// unresolved inputs and keys, as [`PlanNode::GroupMap`].
+    CoGroupMap {
+        /// The left relation.
+        left: Arc<LogicalPlan>,
+        /// The right relation.
+        right: Arc<LogicalPlan>,
+        /// The grouping expressions over `left`.
+        left_keys: Vec<Arc<Expr>>,
+        /// The grouping expressions over `right`, as many as `left_keys`.
+        right_keys: Vec<Arc<Expr>>,
+        /// The UDF (a cogrouped-map kind: 206, 210).
+        udf: PythonUdfRef,
+        /// The declared result columns.
+        output: Vec<BoundColumn>,
+    },
+    /// A Python table function in `FROM` (Spark's resolved `PythonUDTF`
+    /// call): `args` over no input, and at most one `TABLE` argument with
+    /// its partitioning. Resolved plans only.
+    PythonTableFunction {
+        /// The scalar arguments.
+        args: Vec<Arc<Expr>>,
+        /// The `TABLE(...)` argument, if any.
+        table_arg: Option<TableArg>,
+        /// The UDF (a table kind: 300, 301, 302).
+        udf: PythonUdfRef,
+        /// The declared (or analyzed) result columns.
+        output: Vec<BoundColumn>,
+        /// A `LATERAL` call's left side (Spark's `Generate(PythonUDTF)`
+        /// over it): `args` read its columns, and the node's rows are each
+        /// input row's columns then the rows the call gave for it (the last
+        /// input row's for `terminate`'s rows). `None` in `FROM`.
+        lateral: Option<Arc<LogicalPlan>>,
+        /// `analyze`'s pickled `AnalyzeResult`, for a UDTF analyzed per call
+        /// (passed to its `__init__`); kept in the plan so that a cached
+        /// plan never runs `analyze` again.
+        analyzed: Option<Arc<[u8]>>,
+    },
+}
+
+/// The `TABLE(t)` argument of a [`PlanNode::PythonTableFunction`] (Spark's
+/// `FunctionTableSubqueryArgumentExpression`): the relation and how its rows
+/// reach the function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableArg {
+    /// The relation.
+    pub input: Arc<LogicalPlan>,
+    /// `PARTITION BY` expressions over `input` (a hash exchange on them).
+    pub partition_by: Vec<Arc<Expr>>,
+    /// `ORDER BY` within a partition (a local sort after the partitioning).
+    pub order_by: Vec<SortOrder>,
+    /// `WITH SINGLE PARTITION`: every row in one partition.
+    pub single_partition: bool,
+    /// What the function receives of each row (`analyze`'s `select`, each
+    /// expression over `input` named as the function sees it); empty for
+    /// every column of `input`.
+    pub select: Vec<Arc<Expr>>,
+    /// Its position among the call's arguments (the node's `args` hold
+    /// the others, in order).
+    pub position: usize,
+    /// Its name, when it is a named argument (`row => TABLE(t)`).
+    pub name: Option<String>,
 }
 
 /// The attribute a resolved generator reads: its argument is always a
@@ -510,6 +653,11 @@ pub enum GeneratorKind {
     /// a variant array (`pos`, `key`, `value`); any other value, a variant
     /// null and SQL `NULL` give no rows.
     VariantExplode,
+    /// A Python UDTF under `LATERAL` (Spark's `Generate(PythonUDTF)`): the
+    /// node's `arg` is the call, a [`crate::FunctionId::PythonUdf`] of a
+    /// table kind with the UDTF's arguments, not a column; the generated
+    /// columns are its declared result.
+    PythonUdtf,
 }
 
 impl GeneratorKind {
@@ -522,6 +670,7 @@ impl GeneratorKind {
             Self::PosExplode => "posexplode",
             Self::Inline => "inline",
             Self::VariantExplode => "variant_explode",
+            Self::PythonUdtf => "python_udtf",
         }
     }
 
@@ -655,6 +804,7 @@ pub enum ReadSource {
         options: BTreeMap<String, OptionValue>,
     },
     /// Files of a format (`spark.read.parquet(path)`).
+    #[non_exhaustive]
     Files {
         /// Format name, e.g. `parquet`, as written (compared
         /// case-insensitively; a resolved [`Scan`] holds it in lower case).
@@ -666,7 +816,52 @@ pub enum ReadSource {
         paths: Vec<OptionValue>,
         /// Data source options.
         options: BTreeMap<String, OptionValue>,
+        /// The schema the user declared (`spark.read.schema(..)`); `None`
+        /// infers it from the files. Build with [`ReadSource::files`] and
+        /// [`ReadSource::with_schema`].
+        schema: Option<krishiv_types::StructType>,
     },
+    /// Arrow data held in the session's relation store (Spark's
+    /// `LocalRelation`). Built only from a lease; the analyzer resolves it
+    /// to a [`Scan`] with the Arrow schema's columns.
+    Local(crate::LocalRelation),
+}
+
+impl ReadSource {
+    /// A read of files of `format` at `paths` whose schema is inferred.
+    #[must_use]
+    pub fn files(
+        format: impl Into<String>,
+        paths: Vec<OptionValue>,
+        options: BTreeMap<String, OptionValue>,
+    ) -> Self {
+        Self::Files {
+            format: format.into(),
+            paths,
+            options,
+            schema: None,
+        }
+    }
+
+    /// This read with the user-declared `schema`; a table read is returned
+    /// unchanged (Spark's `NamedTable` has no schema).
+    #[must_use]
+    pub fn with_schema(self, schema: krishiv_types::StructType) -> Self {
+        match self {
+            Self::Files {
+                format,
+                paths,
+                options,
+                ..
+            } => Self::Files {
+                format,
+                paths,
+                options,
+                schema: Some(schema),
+            },
+            other @ (Self::Table { .. } | Self::Local(_)) => other,
+        }
+    }
 }
 
 /// A resolved read.
@@ -981,6 +1176,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -988,10 +1184,25 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
-            | PlanNode::ReplicateRows { input, .. } => f(input),
-            PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
+            | PlanNode::Sample { input, .. }
+            | PlanNode::ReplicateRows { input, .. }
+            | PlanNode::MapPartitions { input, .. }
+            | PlanNode::GroupMap { input, .. } => f(input),
+            PlanNode::Join { left, right, .. }
+            | PlanNode::SetOp { left, right, .. }
+            | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
+            }
+            PlanNode::PythonTableFunction {
+                table_arg, lateral, ..
+            } => {
+                if let Some(l) = lateral {
+                    f(l);
+                }
+                if let Some(t) = table_arg {
+                    f(&t.input);
+                }
             }
             PlanNode::Union { inputs, .. } => inputs.iter().for_each(f),
             PlanNode::WithCte { input, ctes } => {
@@ -1031,6 +1242,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1038,10 +1250,25 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
-            | PlanNode::ReplicateRows { input, .. } => f(input),
-            PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
+            | PlanNode::Sample { input, .. }
+            | PlanNode::ReplicateRows { input, .. }
+            | PlanNode::MapPartitions { input, .. }
+            | PlanNode::GroupMap { input, .. } => f(input),
+            PlanNode::Join { left, right, .. }
+            | PlanNode::SetOp { left, right, .. }
+            | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
+            }
+            PlanNode::PythonTableFunction {
+                table_arg, lateral, ..
+            } => {
+                if let Some(l) = lateral {
+                    f(l);
+                }
+                if let Some(t) = table_arg {
+                    f(&mut t.input);
+                }
             }
             PlanNode::Union { inputs, .. } => inputs.iter_mut().for_each(f),
             PlanNode::WithCte { input, ctes } => {
@@ -1069,8 +1296,14 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
+            | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1125,6 +1358,22 @@ impl LogicalPlan {
                 .for_each(f),
             PlanNode::InlineTable { rows, .. } => rows.iter().flatten().for_each(f),
             PlanNode::TableFunction { args, .. } => args.iter().for_each(f),
+            PlanNode::GroupMap { keys, .. } => keys.iter().for_each(f),
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                ..
+            } => left_keys.iter().chain(right_keys).for_each(f),
+            PlanNode::PythonTableFunction {
+                args, table_arg, ..
+            } => {
+                args.iter().for_each(&mut *f);
+                if let Some(t) = table_arg {
+                    t.partition_by.iter().for_each(&mut *f);
+                    t.order_by.iter().for_each(|o| f(&o.expr));
+                    t.select.iter().for_each(&mut *f);
+                }
+            }
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -1153,8 +1402,14 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
+            | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter_mut().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1221,6 +1476,22 @@ impl LogicalPlan {
             PlanNode::TableFunction { args, .. } => {
                 args.iter_mut().for_each(f);
             }
+            PlanNode::GroupMap { keys, .. } => keys.iter_mut().for_each(f),
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                ..
+            } => left_keys.iter_mut().chain(right_keys).for_each(f),
+            PlanNode::PythonTableFunction {
+                args, table_arg, ..
+            } => {
+                args.iter_mut().for_each(&mut *f);
+                if let Some(t) = table_arg {
+                    t.partition_by.iter_mut().for_each(&mut *f);
+                    t.order_by.iter_mut().for_each(|o| f(&mut o.expr));
+                    t.select.iter_mut().for_each(&mut *f);
+                }
+            }
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -1253,6 +1524,8 @@ impl LogicalPlan {
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
+                | PlanNode::Sample { input, .. }
+                | PlanNode::CollectMetrics { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;
@@ -1299,8 +1572,26 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
-                PlanNode::UnionLoop { output, .. } | PlanNode::UnionLoopRef { output, .. } => {
+                PlanNode::UnionLoop { output, .. }
+                | PlanNode::UnionLoopRef { output, .. }
+                | PlanNode::MapPartitions { output, .. }
+                | PlanNode::GroupMap { output, .. }
+                | PlanNode::CoGroupMap { output, .. }
+                | PlanNode::PythonTableFunction {
+                    output,
+                    lateral: None,
+                    ..
+                } => {
                     return Some(output.clone());
+                }
+                PlanNode::PythonTableFunction {
+                    output,
+                    lateral: Some(input),
+                    ..
+                } => {
+                    let mut out = input.resolved_output()?;
+                    out.extend(output.iter().cloned());
+                    return Some(out);
                 }
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
@@ -1496,9 +1787,26 @@ impl LogicalPlan {
 impl PartialEq for LogicalPlan {
     fn eq(&self, other: &Self) -> bool {
         dag::eq(Node::Plan(self), Node::Plan(other), || {
-            self.origin == other.origin && self.node == other.node
+            self.origin == other.origin
+                && std::mem::discriminant(&self.node) == std::mem::discriminant(&other.node)
+                && children_eq(self, other)
+                && self.node == other.node
         })
     }
+}
+
+/// Whether the children of two nodes of one kind are equal, pair by pair.
+/// Compared before the nodes' fields, so the derived `PlanNode` comparison
+/// (a large frame in an unoptimised build) finds each child pair already
+/// equal in the walk's memo instead of recursing: a chain of
+/// [`MAX_DEPTH`](crate::MAX_DEPTH) nodes needs only this small frame per
+/// level.
+fn children_eq(a: &LogicalPlan, b: &LogicalPlan) -> bool {
+    let mut left = Vec::new();
+    a.for_each_child(&mut |c| left.push(c));
+    let mut right = Vec::new();
+    b.for_each_child(&mut |c| right.push(c));
+    left.len() == right.len() && left.iter().zip(&right).all(|(l, r)| l == r)
 }
 
 impl Eq for LogicalPlan {}

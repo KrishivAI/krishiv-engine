@@ -31,7 +31,7 @@ import json
 from decimal import Decimal
 from typing import Any, Callable, Dict, Iterable, List, Optional, Union, TYPE_CHECKING
 
-from krishiv.errors import PySparkTypeError, UnsupportedOperationException, PySparkValueError
+from krishiv._udf._host import PySparkTypeError, UnsupportedOperationException, PySparkValueError
 from krishiv._udf.loose_version import LooseVersion
 from krishiv._udf.types import (
     cast,

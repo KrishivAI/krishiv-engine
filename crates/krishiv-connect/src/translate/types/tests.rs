@@ -6,7 +6,7 @@ use krishiv_types::{DataType, DecimalType};
 
 use super::super::testing::proto_type;
 use super::*;
-use crate::proto::v4_2::data_type as dt;
+use crate::proto::v4_3::data_type as dt;
 
 #[test]
 fn every_supported_kind_maps() {
@@ -151,9 +151,12 @@ fn unsupported_and_unset_kinds() {
         Kind::VarChar(dt::VarChar::default()),
     ] {
         let e = data_type(&proto_type(kind)).expect_err("unsupported");
-        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
         assert!(
-            e.message().contains("spark.connect.DataType."),
+            e.message().contains("spark.connect.DataType"),
             "{}",
             e.message()
         );
@@ -221,7 +224,7 @@ fn interval_types_keep_their_fields() {
     }
 }
 
-use crate::proto::v4_2::DataType as DataTypeProto;
+use crate::proto::v4_3::DataType as DataTypeProto;
 
 /// `array<struct<a:int not null comment 'c', b:map<string,array<double>>>>`
 /// exactly as pyspark-client 4.2 sends it

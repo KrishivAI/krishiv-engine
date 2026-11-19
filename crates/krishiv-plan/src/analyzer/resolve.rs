@@ -159,7 +159,7 @@ pub(super) struct Level {
 
 /// A scope environment: the CTEs visible and the enclosing queries.
 pub(super) struct Env {
-    id: usize,
+    pub(super) id: usize,
     pub(super) ctes: Vec<(String, Rel)>,
     /// Identifies `ctes`: environments with one CTE scope resolve a
     /// relation without outer references alike.
@@ -181,15 +181,29 @@ pub(super) struct Resolver<'a> {
     /// The recursive CTEs being resolved, innermost last: each loop's id
     /// and the attributes its recursive term reads (see `recursive`).
     pub(super) loops: Vec<(u32, Vec<Attr>)>,
-    memo: HashMap<(usize, usize), Rel>,
+    pub(super) memo: HashMap<(usize, usize), Rel>,
     /// Relations without outer references, by (relation, CTE scope): they
     /// resolve alike in every environment with that CTE scope, so a plan
     /// reached both as a child and inside a subquery is resolved once.
-    closed: HashMap<(usize, usize), Rel>,
+    pub(super) closed: HashMap<(usize, usize), Rel>,
     /// Each relation's representative among the relations equal to it
     /// (`encode::identity_keys`): resolution does not depend on how the
     /// input shares subtrees, so equal input keys give equal plans.
-    canon: HashMap<usize, Arc<LogicalPlan>>,
+    pub(super) canon: HashMap<usize, Arc<LogicalPlan>>,
+    /// The relation (canonical address) that first used each observation name (`observe`).
+    pub(super) observed: HashMap<String, usize>,
+    /// The identity key of every relation of the input, kept from the first `canonicalize` (the root's).
+    pub(super) keys: HashMap<usize, u128>,
+    /// The input holds a node the prefix cache does not serve (a resolved scan, SQL text, a read by path).
+    pub(super) uncacheable: bool,
+    /// This resolution started from a prefix entry.
+    pub(super) warm_started: bool,
+    /// The names of the tables the input reads, as written.
+    pub(super) read_tables: Vec<Vec<String>>,
+    /// One shared expression per column id, used wherever a projection passes that column through
+    /// unchanged. A chain of `withColumn` steps then holds one expression per column instead of one per
+    /// column per step, and passes that skip an expression already seen skip it.
+    pub(super) pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
     pub(super) columns: Vec<BTreeSet<String>>,
     /// The lambda scopes pushed by the higher-order calls whose bodies
     /// bind now, innermost last (see `hof`).
@@ -207,7 +221,7 @@ pub(super) struct Resolver<'a> {
     pub(super) secret: std::collections::HashSet<usize>,
     pub(super) secret_scope: bool,
     op_outer: Option<usize>,
-    root_env: Option<Arc<Env>>,
+    pub(super) root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
     pub(super) folds: std::cell::RefCell<super::fold::Memo>,
     /// The SQL function whose body is being resolved: what its parameters
@@ -220,6 +234,11 @@ pub(super) struct Resolver<'a> {
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
+    /// Binding the metrics of an `observe` (Spark checks them in `CheckAnalysis`, not as an aggregate).
+    pub(super) observing: bool,
+    /// The ids front ends chose that this analysis kept so far (`Range` leaves, the Python relations'
+    /// declared columns): a later one with the same id gets a fresh one (`built_id`).
+    pub(super) built_ids: std::collections::HashSet<AttrId>,
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
     /// declared with (see `char_varchar`).
     pub(super) declared: HashMap<AttrId, Arc<str>>,
@@ -234,12 +253,17 @@ type Resolved = (
     Vec<String>,
     Vec<Option<String>>,
     Vec<Option<String>>,
+    Option<super::prefix::PrefixEntry>,
+    bool,
+    (std::collections::HashSet<u64>, bool),
 );
 
 pub(super) fn resolve(
     plan: &Plan,
     ctx: &AnalysisContext,
     b: &Bindings,
+    warm: Option<&super::prefix::PrefixEntry>,
+    caching: bool,
 ) -> Result<Resolved, AnalysisError> {
     let mut other = ctx.clone();
     other.conf.ansi = !ctx.conf.ansi;
@@ -253,6 +277,13 @@ pub(super) fn resolve(
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
+        observed: HashMap::new(),
+        observing: false,
+        keys: HashMap::new(),
+        uncacheable: false,
+        warm_started: false,
+        read_tables: Vec::new(),
+        pass_exprs: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
@@ -266,18 +297,32 @@ pub(super) fn resolve(
         fn_path: Vec::new(),
         sql_calls: 0,
         pending_nondeterministic: None,
+        built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
     r.next_id = first_free_id(plan.root())?;
+    let start_id = r.next_id;
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
+    r.canonicalize(plan.root());
+    if let Some(entry) = warm {
+        r.seed_prefix(entry, plan.root(), &env);
+    }
     let rel = r.rel(plan.root(), &env)?;
     if let Some(error) = r.pending_nondeterministic.take() {
         return Err(error);
     }
+    // Only a caching analyzer keeps the entry; the plain one skips the copies.
+    let entry = if caching {
+        r.export_prefix(plan.root(), start_id)
+    } else {
+        None
+    };
+    // What the hints read, before they are dropped (P3-T062 review r-m1).
+    let hinted = super::reads::hint_reads(&rel.plan);
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -313,12 +358,22 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings, declared, comments))
+    Ok((
+        root,
+        output,
+        uses,
+        warnings,
+        declared,
+        comments,
+        entry,
+        r.warm_started,
+        hinted,
+    ))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
 /// offset).
-fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
+pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     use crate::walk::{Node, visit_distinct};
     use crate::{ExprNode, ResolvedExpr};
     let mut top = 0_u64;
@@ -328,6 +383,11 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
         match node {
             Node::Plan(p) => match &p.node {
                 PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
+                PlanNode::Range { output, .. } => bump(output),
+                PlanNode::MapPartitions { output, .. }
+                | PlanNode::GroupMap { output, .. }
+                | PlanNode::CoGroupMap { output, .. }
+                | PlanNode::PythonTableFunction { output, .. } => output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -411,11 +471,12 @@ impl Resolver<'_> {
     }
 
     /// Records the representative of every relation under `root`.
-    fn canonicalize(&mut self, root: &Arc<LogicalPlan>) {
+    pub(super) fn canonicalize(&mut self, root: &Arc<LogicalPlan>) {
         if self.canon.contains_key(&addr(&**root)) {
             return;
         }
         let keys = crate::encode::identity_keys(root);
+        let first_call = self.keys.is_empty();
         let mut first: HashMap<u128, Arc<LogicalPlan>> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
         let mut exprs: Vec<Arc<crate::Expr>> = Vec::new();
@@ -430,6 +491,19 @@ impl Resolver<'_> {
                 None => Arc::clone(&p),
             };
             self.canon.insert(addr(&*p), rep);
+            if first_call {
+                match &p.node {
+                    PlanNode::Scan(_)
+                    | PlanNode::Sql { .. }
+                    | PlanNode::Read(ReadSource::Files { .. }) => self.uncacheable = true,
+                    // `Read(Local)` is cacheable on purpose (content-addressed,
+                    // so a kept analysis of it stays valid): it falls to the wildcard.
+                    PlanNode::Read(ReadSource::Table { name, .. }) => {
+                        self.read_tables.push(name.clone());
+                    }
+                    _ => {}
+                }
+            }
             p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
             p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
             while let Some(e) = exprs.pop() {
@@ -442,9 +516,25 @@ impl Resolver<'_> {
                 e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
             }
         }
+        if first_call {
+            self.keys = keys.into_iter().map(|(p, k)| (p as usize, k)).collect();
+        }
     }
 
-    fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    /// The shared expression that passes `col` through a projection (see `pass_exprs`).
+    pub(super) fn pass_expr(&mut self, col: &BoundColumn) -> Arc<Expr> {
+        let shared = self
+            .pass_exprs
+            .entry(col.id)
+            .or_insert_with(|| col_expr(col, Origin::UNKNOWN));
+        // The same id names the same column; a different shape builds its own expression.
+        match &shared.node {
+            ExprNode::Resolved(crate::ResolvedExpr::Column(c)) if c == col => Arc::clone(shared),
+            _ => col_expr(col, Origin::UNKNOWN),
+        }
+    }
+
+    pub(super) fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         self.canon
             .get(&addr(&**p))
             .cloned()
@@ -596,6 +686,8 @@ impl Resolver<'_> {
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
                 | PlanNode::Repartition { .. }
+                | PlanNode::Sample { .. }
+                | PlanNode::CollectMetrics { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);
@@ -871,19 +963,46 @@ impl Resolver<'_> {
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
+            PlanNode::CollectMetrics {
+                input,
+                name,
+                metrics,
+            } => self.collect_metrics(p, input, name, metrics, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
-            PlanNode::Read(ReadSource::Files { .. })
+            PlanNode::Read(ReadSource::Files { .. } | ReadSource::Local(_))
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
             | PlanNode::PartialAggregate { .. }
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
+            | PlanNode::PythonTableFunction { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => self.map_partitions(o, input, udf, output, *barrier, env),
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => self.group_map(o, input, keys, udf, output, env),
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => self.cogroup_map(o, left, right, left_keys, right_keys, udf, output, env),
         }
     }
 
@@ -897,6 +1016,7 @@ impl Resolver<'_> {
                     None => Err(unsupported("reading files by path", o)),
                 }
             }
+            PlanNode::Read(ReadSource::Local(l)) => self.local(p, l),
             PlanNode::Sql { .. } => {
                 let root = self.b.sql.get(&addr(&**p)).cloned();
                 let env0 = self.root_env.clone();
@@ -908,7 +1028,7 @@ impl Resolver<'_> {
             PlanNode::Scan(s) => {
                 let name = match &s.source {
                     ReadSource::Table { name, .. } => name.clone(),
-                    ReadSource::Files { .. } => Vec::new(),
+                    ReadSource::Files { .. } | ReadSource::Local(_) => Vec::new(),
                 };
                 let source = self.b.scans.get(&name).copied();
                 // Bind checked every scan of a table; one it did not bind
@@ -993,6 +1113,22 @@ impl Resolver<'_> {
                 projections,
                 output,
             } => self.expand_node(o, input, projections, output, env),
+            // Spark's `Sample`: the input's output, columns pass through.
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::Sample {
+                    input: Arc::clone(&c.plan),
+                    bounds: *bounds,
+                    seed: *seed,
+                };
+                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+                r.widen = Some(Arc::new(Widen::Through { child: c }));
+                Ok(r)
+            }
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {
@@ -1012,9 +1148,13 @@ impl Resolver<'_> {
             } => {
                 // A built `Range` (the DataFrame API, Spark Connect) carries
                 // an id of its builder's choosing, which two ranges of one
-                // plan share; the leaf gets this analysis's own fresh id.
+                // plan share: the first keeps its id (so a plan analysed
+                // before and stored, as a temporary view's, still names it
+                // above the leaf, SQL-25), a later one with the same id gets
+                // this analysis's own fresh id (past every id the plan holds).
+                let id = self.built_id(output.id);
                 let col = BoundColumn {
-                    id: self.fresh(),
+                    id,
                     ..output.clone()
                 };
                 let node = PlanNode::Range {
@@ -1051,6 +1191,7 @@ impl Resolver<'_> {
             | PlanNode::Hint { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
+            | PlanNode::CollectMetrics { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }
@@ -1061,7 +1202,16 @@ impl Resolver<'_> {
             | PlanNode::Generate { .. }
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
-            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
+            | PlanNode::Window { .. }
+            // `python_relations`.
+            | PlanNode::MapPartitions { .. }
+            | PlanNode::GroupMap { .. }
+            | PlanNode::CoGroupMap { .. } => Err(unsupported("a plan shape", o)),
+            // Built by no front end yet (UDTFs, P3-T014).
+            PlanNode::PythonTableFunction { .. } => Err(unsupported(
+                "a Python UDF relation in an unresolved plan",
+                o,
+            )),
         }
     }
 
@@ -1096,7 +1246,7 @@ impl Resolver<'_> {
                         name: news[i].0.clone(),
                     })));
                 }
-                None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
+                None => exprs.push(self.pass_expr(&a.col)),
             }
         }
         for (i, (name, b)) in news.iter().enumerate() {

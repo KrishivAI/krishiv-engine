@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Grouping, JoinCondition,
-    JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, SortDirection, SubqueryKind,
+    AttrId, Builtin, CastMode, Expr, ExprNode, FrameBound, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource,
+    ResolvedExpr, ResolvedFunction, SortDirection, SubqueryKind, WindowSpecRef,
 };
 use krishiv_types::DataType;
 
@@ -313,27 +313,7 @@ impl Interp<'_> {
                         (k.collect(), r)
                     })
                     .collect();
-                keyed.sort_by(|(a, _), (b, _)| {
-                    for ((x, y), o) in a.iter().zip(b).zip(order) {
-                        let c = match (x, y) {
-                            (V::Null, V::Null) => std::cmp::Ordering::Equal,
-                            (V::Null, _) => match o.nulls {
-                                NullOrdering::NullsFirst => std::cmp::Ordering::Less,
-                                NullOrdering::NullsLast => std::cmp::Ordering::Greater,
-                            },
-                            (_, V::Null) => match o.nulls {
-                                NullOrdering::NullsFirst => std::cmp::Ordering::Greater,
-                                NullOrdering::NullsLast => std::cmp::Ordering::Less,
-                            },
-                            _ if o.direction == SortDirection::Descending => y.cmp(x),
-                            _ => x.cmp(y),
-                        };
-                        if c.is_ne() {
-                            return c;
-                        }
-                    }
-                    std::cmp::Ordering::Equal
-                });
+                keyed.sort_by(|(a, _), (b, _)| compare(a, b, order));
                 Rel {
                     cols: rel.cols,
                     rows: keyed.into_iter().map(|(_, r)| r).collect(),
@@ -398,6 +378,96 @@ impl Interp<'_> {
                     first.rows.extend(r.rows);
                 }
                 first
+            }
+            // `row_number()` (each partition's rows in order, numbered from 1), or
+            // aggregate functions over a whole partition with no ordering (the
+            // `SubqueryAsWindow` shape: every row gets its partition's value).
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                let rel = self.plan(input, outer);
+                let ix = index(&rel.cols);
+                let mut calls: Vec<Option<Arc<Expr>>> = Vec::with_capacity(exprs.len());
+                for e in exprs {
+                    let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &e.node else {
+                        panic!("window output {e:?}")
+                    };
+                    let ExprNode::Window(w) = &expr.node else {
+                        panic!("window expression {expr:?}")
+                    };
+                    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &w.function.node else {
+                        panic!("window function")
+                    };
+                    if f.id.name() == "row_number" {
+                        calls.push(None);
+                        continue;
+                    }
+                    assert_eq!(
+                        f.kind,
+                        FunctionKind::Aggregate,
+                        "unsupported window function"
+                    );
+                    assert!(order_by.is_empty(), "an ordered aggregate window");
+                    let WindowSpecRef::Spec(spec) = &w.window else {
+                        panic!("window spec")
+                    };
+                    assert!(
+                        spec.frame.as_ref().is_none_or(|f| {
+                            f.lower == FrameBound::UnboundedPreceding
+                                && f.upper == FrameBound::UnboundedFollowing
+                        }),
+                        "an aggregate window over part of its partition"
+                    );
+                    calls.push(Some(Arc::clone(&w.function)));
+                }
+                let mut keyed: Vec<(Vec<V>, Vec<V>, Vec<V>)> = rel
+                    .rows
+                    .into_iter()
+                    .map(|r| {
+                        let part: Vec<V> = partition_by
+                            .iter()
+                            .map(|e| self.eval(e, &ix, &r, outer))
+                            .collect();
+                        let key: Vec<V> = order_by
+                            .iter()
+                            .map(|o| self.eval(&o.expr, &ix, &r, outer))
+                            .collect();
+                        (part, key, r)
+                    })
+                    .collect();
+                keyed.sort_by(|(pa, a, _), (pb, b, _)| {
+                    pa.cmp(pb).then_with(|| compare(a, b, order_by))
+                });
+                let mut rows = Vec::with_capacity(keyed.len());
+                let mut at = 0;
+                while at < keyed.len() {
+                    let end = at
+                        + keyed[at..]
+                            .iter()
+                            .take_while(|(p, _, _)| *p == keyed[at].0)
+                            .count();
+                    let group: Vec<Vec<V>> =
+                        keyed[at..end].iter().map(|(_, _, r)| r.clone()).collect();
+                    let values: Vec<Option<V>> = calls
+                        .iter()
+                        .map(|c| c.as_ref().map(|f| self.aggregate(f, &ix, &group, outer)))
+                        .collect();
+                    for (n, mut r) in (1..).zip(group) {
+                        r.extend(
+                            values
+                                .iter()
+                                .map(|v| v.clone().unwrap_or_else(|| V::int(n))),
+                        );
+                        rows.push(r);
+                    }
+                    at = end;
+                }
+                let mut cols = rel.cols;
+                cols.extend(exprs.iter().map(|e| output(e)));
+                Rel { cols, rows }
             }
             PlanNode::Shift { input, offset } => {
                 let mut rel = self.plan(input, outer);
@@ -792,6 +862,29 @@ impl Interp<'_> {
             other => panic!("unsupported expression {other:?}"),
         }
     }
+}
+
+/// Sort keys `a` against `b` under `order`.
+fn compare(a: &[V], b: &[V], order: &[krishiv_plan::SortOrder]) -> std::cmp::Ordering {
+    for ((x, y), o) in a.iter().zip(b).zip(order) {
+        let c = match (x, y) {
+            (V::Null, V::Null) => std::cmp::Ordering::Equal,
+            (V::Null, _) => match o.nulls {
+                NullOrdering::NullsFirst => std::cmp::Ordering::Less,
+                NullOrdering::NullsLast => std::cmp::Ordering::Greater,
+            },
+            (_, V::Null) => match o.nulls {
+                NullOrdering::NullsFirst => std::cmp::Ordering::Greater,
+                NullOrdering::NullsLast => std::cmp::Ordering::Less,
+            },
+            _ if o.direction == SortDirection::Descending => y.cmp(x),
+            _ => x.cmp(y),
+        };
+        if c.is_ne() {
+            return c;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 fn output(e: &Expr) -> AttrId {

@@ -53,6 +53,7 @@ impl Planner<'_> {
         right: &Arc<LogicalPlan>,
         kind: JoinKind,
         condition: &JoinCondition,
+        demand: Option<HashSet<AttrId>>,
     ) -> Result<Planned> {
         // Taken first: every path below either uses it or drops it.
         let request = self.take_request(left, right);
@@ -67,7 +68,17 @@ impl Planner<'_> {
             return self.join_with_python_udfs(left, right, kind, on);
         }
         let hints = (self.side_hint(left), self.side_hint(right));
-        let planned = (self.plan(left)?, self.plan(right)?);
+        // Each side is asked for what the parent reads plus what the condition reads (study 38
+        // lever A). The other side's ids in it can only keep a column here (a superset of what is
+        // read), never drop one.
+        let demand = match on {
+            Some(on) => super::build::with_columns_of(demand, on),
+            None => demand,
+        };
+        self.demand.clone_from(&demand);
+        let planned_left = self.plan(left)?;
+        self.demand = demand;
+        let planned = (planned_left, self.plan(right)?);
         self.join_planned((left, right), planned, hints, kind, on, request)
     }
 
@@ -306,7 +317,15 @@ impl Planner<'_> {
         // runtime filters to the probe side's scans.
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
-        if join_type.drops_unmatched_probe() && !merge {
+        // `GroupKeyCode`'s encoding join (design P2b D2 section 2.3): a
+        // dimension joined by `<=>` on its keys with their numbered
+        // dictionary, which holds every key tuple the dimension has, so a
+        // filter would drop nothing and cost a probe per row.
+        let encodes = !keys.is_empty()
+            && keys.iter().all(|k| k.2)
+            && (krishiv_optimizer::is_group_code_dictionary(&logical.0)
+                || krishiv_optimizer::is_group_code_dictionary(&logical.1));
+        if join_type.drops_unmatched_probe() && !merge && !encodes {
             let key_types: Vec<_> = probe_keys
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())

@@ -20,9 +20,11 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::physical::{
     ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
-    SharedId, SharedPlan,
+    SharedId, SharedPlan, TableWriteRequest,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{
+    ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest,
+};
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
@@ -532,6 +534,34 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Sample(s) => {
+                // The planner writes finite bounds with `0 <= lower <= upper`,
+                // or `lower = 0` over a negative `upper`: a fraction within
+                // Spark's rounding epsilon below zero, an empty range of draws.
+                if !(s.lower.is_finite()
+                    && s.upper.is_finite()
+                    && 0.0 <= s.lower
+                    && (s.lower <= s.upper || s.lower == 0.0))
+                {
+                    return Err(CodecError::Corrupt(format!(
+                        "a sample's bounds [{}, {}) are not a range of draws",
+                        s.lower, s.upper
+                    )));
+                }
+                PhysNode::Sample {
+                    input: self.boxed(s.input)?,
+                    lower: s.lower,
+                    upper: s.upper,
+                    seed: s.seed,
+                }
+            }
+            Kind::CollectMetrics(m) => PhysNode::CollectMetrics {
+                input: self.boxed(m.input)?,
+                name: m.name.clone(),
+                measure: self.boxed(m.measure)?,
+                instance: m.instance,
+                limit: m.limit,
+            },
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
                 layout: layout(&r.layout),
@@ -552,6 +582,72 @@ impl Decoder {
                     })
                     .collect::<Result<_>>()?,
             },
+            Kind::PythonMap(p) => PhysNode::PythonMap {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonUdtf(p) => PhysNode::PythonUdtf {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+                call: krishiv_exec::physical::PythonUdtfPlan {
+                    arg_names: p.arg_names.iter().map(|n| n.name.clone()).collect(),
+                    table: p
+                        .table
+                        .as_ref()
+                        .map(|t| {
+                            let table = krishiv_exec::physical::PythonUdtfTable {
+                                position: usize_of(t.position)?,
+                                columns: usizes(&t.columns)?,
+                                names: t.names.clone(),
+                                partition_child_indexes: usizes(&t.partition_child_indexes)?,
+                            };
+                            // One struct of named input columns, at an argument's place.
+                            if table.names.len() != table.columns.len()
+                                || table.position >= p.arg_names.len()
+                                || table
+                                    .partition_child_indexes
+                                    .iter()
+                                    .any(|&i| i >= table.columns.len())
+                            {
+                                return Err(corrupt(
+                                    "a Python UDTF TABLE argument of uneven shape",
+                                ));
+                            }
+                            Ok(table)
+                        })
+                        .transpose()?,
+                    carried: usizes(&p.carried)?,
+                    analyzed: p.analyzed.clone(),
+                },
+            },
+            Kind::PythonGroupMap(p) => PhysNode::PythonGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonCoGroupMap(p) => PhysNode::PythonCoGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                side: usize_of(p.side)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonAggregate(p) => PhysNode::PythonAggregate {
+                input: self.boxed(p.input)?,
+                layout: layout(&p.layout),
+                keys: usizes(&p.keys)?,
+                key_values: usizes(&p.key_values)?,
+                window: p.window.as_ref().map(|w| w.bounded.clone()),
+                calls: p
+                    .calls
+                    .iter()
+                    .map(|c| {
+                        Ok(PythonCallPlan {
+                            call: self.expr_ref(c.call)?,
+                            output: AttrId(c.output),
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            },
             Kind::Generate(g) => PhysNode::Generate {
                 input: self.boxed(g.input)?,
                 layout: layout(&g.layout),
@@ -560,6 +656,7 @@ impl Decoder {
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
                     VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
+                    PythonUdtf => krishiv_plan::GeneratorKind::PythonUdtf,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -628,6 +725,69 @@ impl Decoder {
                 write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
+            Kind::TableWrite(t) => self.table_write(t)?,
+        })
+    }
+
+    fn table_write(&mut self, t: &pb::TableWriteNode) -> Result<PhysNode> {
+        use pb::table_write_node::Request;
+        let table = required(&t.table, "a written table")?;
+        let options = |entries: &[pb::MapLiteralEntry]| {
+            entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let request = match required(&t.request, "a write request")? {
+            Request::Write(w) => {
+                let filter = w.filter.map(|i| self.expr_ref(i)).transpose()?;
+                let mode = enum_map!(pb::TableWriteMode, w.mode, "write mode", {
+                    Append => WriteMode::Append,
+                    Truncate => WriteMode::Truncate,
+                    OverwriteByFilter => WriteMode::OverwriteByFilter(
+                        filter.clone().ok_or_else(|| corrupt("an overwrite by filter without its filter"))?,
+                    ),
+                    OverwriteDynamic => WriteMode::OverwriteDynamic,
+                })?;
+                if filter.is_some() && !matches!(mode, WriteMode::OverwriteByFilter(_)) {
+                    return Err(corrupt("a write filter on a mode that takes none"));
+                }
+                let mut request =
+                    WriteRequest::new(mode, w.table_name.clone(), schema_from(&w.input_schema)?);
+                request.options = options(&w.options);
+                request.write_id.clone_from(&w.write_id);
+                TableWriteRequest::Write(request)
+            }
+            Request::RowLevel(r) => {
+                let op = enum_map!(pb::RowLevelOperation, r.op, "row-level operation", {
+                    Delete => RowLevelOperation::Delete,
+                    Update => RowLevelOperation::Update,
+                    Merge => RowLevelOperation::Merge,
+                })?;
+                let mut request = RowLevelWrite::new(
+                    op,
+                    r.table_name.clone(),
+                    schema_from(&r.input_schema)?,
+                    r.touched.clone(),
+                    r.read_filter.map(|i| self.expr_ref(i)).transpose()?,
+                );
+                request.options = options(&r.options);
+                request.write_id.clone_from(&r.write_id);
+                TableWriteRequest::RowLevel(request)
+            }
+        };
+        Ok(PhysNode::TableWrite {
+            input: self.boxed(t.input)?,
+            table: Scan {
+                source: read_source(required(&table.source, "a written table's source")?)?,
+                output: table
+                    .output
+                    .iter()
+                    .map(bound_column)
+                    .collect::<Result<_>>()?,
+                version: table.version.map(TableVersion),
+            },
+            request,
         })
     }
 
@@ -1169,6 +1329,13 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         AnyValue => AggregateFunction::AnyValue { ignore_nulls: ignore },
         MaxBy => AggregateFunction::MaxBy,
         MinBy => AggregateFunction::MinBy,
+        MaxByKeyFirst => AggregateFunction::MaxByKeyFirst,
+        MinByKeyFirst => AggregateFunction::MinByKeyFirst,
+        BitmapConstructAgg => AggregateFunction::BitmapConstructAgg,
+        BitmapOrAgg => AggregateFunction::BitmapOrAgg,
+        BitmapAndAgg => AggregateFunction::BitmapAndAgg,
+        HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
+        HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1186,6 +1353,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         PercentileApprox => percentile_approx_function(a)?,
         PercentileDisc => percentile_disc_function(a)?,
         ApproxCountDistinct => hll_function(a)?,
+        HistogramNumeric => histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
@@ -1358,6 +1526,23 @@ fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
     Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
 }
 
+/// A `histogram_numeric` function from its wire form.
+fn histogram_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+        || a.hll_precision != 0
+        || a.histogram_bins < 2
+    {
+        return Err(corrupt("a `histogram_numeric` of bad parameters"));
+    }
+    Ok(AggregateFunction::HistogramNumeric {
+        nb: a.histogram_bins,
+    })
+}
+
 fn join_type(t: i32) -> Result<JoinType> {
     enum_map!(pb::JoinType, t, "join type", {
         Inner => JoinType::Inner,
@@ -1447,11 +1632,34 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
             name: t.name.clone(),
             options: options(&t.options)?,
         },
-        Kind::Files(f) => ReadSource::Files {
-            format: f.format.clone(),
-            paths: f.paths.iter().map(option).collect::<Result<_>>()?,
-            options: options(&f.options)?,
-        },
+        Kind::Files(f) => {
+            let files = ReadSource::files(
+                f.format.clone(),
+                f.paths.iter().map(option).collect::<Result<_>>()?,
+                options(&f.options)?,
+            );
+            match f.schema.as_ref().map(spark_type).transpose()? {
+                None => files,
+                Some(DataType::Struct(schema)) => files.with_schema(schema),
+                Some(_) => return Err(corrupt("a declared file schema that is not a struct")),
+            }
+        }
+        Kind::Local(l) => {
+            let hash: [u8; 32] = l
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| corrupt("a local relation hash that is not 32 bytes"))?;
+            let batches = usize::try_from(l.batches)
+                .map_err(|_| corrupt("a local relation batch count that does not fit"))?;
+            ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+                schema_from(&l.schema)?,
+                hash,
+                batches,
+                l.rows,
+                l.bytes,
+            ))
+        }
     })
 }
 
@@ -1562,8 +1770,12 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
 }
 
 /// A collated string type from its collation's canonical name: only the
-/// form the encoder writes, so the plan encodes to the same bytes.
+/// form the encoder writes, so the plan encodes to the same bytes. The
+/// INDETERMINATE collation is `null`.
 fn collated_string(t: &pb::DataType) -> Result<DataType> {
+    if t.collation == Collation::INDETERMINATE.name() {
+        return Ok(DataType::CollatedString(Collation::INDETERMINATE));
+    }
     match Collation::parse(&t.collation) {
         Ok(c) if !c.is_utf8_binary() && !c.is_indeterminate() && c.name() == t.collation => {
             Ok(DataType::CollatedString(c))
@@ -1585,8 +1797,9 @@ fn interval_day_time(t: &pb::DataType) -> Result<DataType> {
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
 fn nested(t: &pb::DataType) -> Result<DataType> {
     // Only the canonical form the encoder writes: bytes decode to a plan
-    // that encodes to the same bytes.
-    match DataType::from_json(&t.json) {
+    // that encodes to the same bytes. The canonical reading also takes the
+    // INDETERMINATE collation (`string collate null`), which `from_json` refuses.
+    match DataType::from_canonical_json(&t.json) {
         Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
         _ => Err(corrupt("an invalid nested type")),
     }
@@ -1601,7 +1814,24 @@ fn narrow<T: TryFrom<i32>>(v: i32) -> Result<T> {
 }
 
 fn literal(l: &pb::Literal) -> Result<Literal> {
+    literal_at(l, 0)
+}
+
+/// `l`, `depth` literals inside a nested literal: the type bounds the depth of
+/// a valid one, and the bound keeps a hostile chain from recursing further.
+fn literal_at(l: &pb::Literal, depth: usize) -> Result<Literal> {
     use pb::literal::Kind;
+    if depth > DataType::MAX_NESTING_DEPTH {
+        return Err(corrupt("a nested literal deeper than a type may be"));
+    }
+    let member = |m: &pb::Literal| {
+        // The options map is its own feature and never a member (the encoder
+        // refuses it).
+        if matches!(m.kind, Some(Kind::Map(_))) {
+            return Err(corrupt("an options map inside a nested literal"));
+        }
+        literal_at(m, depth + 1)
+    };
     Ok(match required(&l.kind, "a literal kind")? {
         Kind::Null(n) => Literal::Null(n.data_type.as_ref().map(spark_type).transpose()?),
         Kind::Boolean(v) => Literal::Boolean(*v),
@@ -1665,6 +1895,43 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
                 .map(|e| (e.key.clone(), e.value.clone()))
                 .collect(),
         ),
+        Kind::Array(v) => {
+            let DataType::Array(t) = spark_type(required(&v.data_type, "an array literal type")?)?
+            else {
+                return Err(corrupt("an array literal whose type is not an array"));
+            };
+            Literal::array(
+                (*t).clone(),
+                v.elements.iter().map(member).collect::<Result<_>>()?,
+            )
+            .map_err(|_| corrupt("an array literal that does not fit its type"))?
+        }
+        Kind::KeyValueMap(v) => {
+            let DataType::Map(t) = spark_type(required(&v.data_type, "a map literal type")?)?
+            else {
+                return Err(corrupt("a map literal whose type is not a map"));
+            };
+            let entries = v
+                .entries
+                .iter()
+                .map(|e| {
+                    Ok((
+                        member(required(&e.key, "a map literal key")?)?,
+                        member(required(&e.value, "a map literal value")?)?,
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            Literal::key_value_map((*t).clone(), entries)
+                .map_err(|_| corrupt("a map literal that does not fit its type"))?
+        }
+        Kind::Struct(v) => {
+            let DataType::Struct(t) = spark_type(required(&v.data_type, "a struct literal type")?)?
+            else {
+                return Err(corrupt("a struct literal whose type is not a struct"));
+            };
+            Literal::struct_value(t, v.fields.iter().map(member).collect::<Result<_>>()?)
+                .map_err(|_| corrupt("a struct literal that does not fit its type"))?
+        }
     })
 }
 
@@ -1682,4 +1949,44 @@ fn day_time_field(v: i32) -> Result<DayTimeField> {
         Minute => DayTimeField::Minute,
         Second => DayTimeField::Second,
     })
+}
+
+/// A Python relation node's UDF, frame sides and declared result.
+fn python_relation(p: &pb::PythonRelation) -> Result<krishiv_exec::physical::PythonRelationPlan> {
+    let u = required(&p.udf, "a Python relation UDF identity")?;
+    let udf = krishiv_plan::PythonUdfRef {
+        name: u.name.clone(),
+        version: u32::try_from(u.version)
+            .map_err(|_| corrupt("a Python UDF version out of range"))?,
+        eval_type: PythonEvalType::from_code(u.eval_type)
+            .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
+        thread_safe: u.thread_safe,
+        deterministic: p.deterministic,
+    };
+    let sides = p
+        .sides
+        .iter()
+        .map(|s| {
+            if s.names.len() != s.columns.len() || s.types.len() != s.columns.len() {
+                return Err(corrupt("a Python frame side of uneven lengths"));
+            }
+            Ok(krishiv_exec::physical::PythonFrameSide {
+                columns: usizes(&s.columns)?,
+                names: s.names.clone(),
+                types: s.types.iter().map(spark_type).collect::<Result<_>>()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let output = p
+        .output
+        .iter()
+        .map(|c| {
+            Ok(krishiv_exec::physical::PythonOutputColumn {
+                name: c.name.clone(),
+                data_type: spark_type(required(&c.data_type, "a Python result type")?)?,
+                nullable: c.nullable,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(krishiv_exec::physical::PythonRelationPlan { udf, sides, output })
 }

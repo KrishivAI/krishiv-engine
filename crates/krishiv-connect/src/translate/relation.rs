@@ -4,17 +4,18 @@
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
 //! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
-//! `WithColumns` and `Range`. The `plan_id` of a relation's `RelationCommon` becomes the
-//! `Origin` of the node it translates to, as Spark tags the plan it builds
-//! for the relation; `df["a"]` references name that id.
+//! `WithColumns`, `Range` and the Python UDF relations (`relation_udf`).
+//! The `plan_id` of a relation's `RelationCommon` becomes the `Origin` of
+//! the node it translates to, as Spark tags the plan it builds for the
+//! relation; `df["a"]` references name that id.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId,
-    PlanNode, ReadSource, SqlArgs,
+    ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
+    Origin, PlanId, PlanNode, ReadSource, SetOperation, SqlArgs,
 };
 
 use super::errors::{
@@ -23,8 +24,8 @@ use super::errors::{
 };
 use super::names::parse_multipart_identifier;
 use super::{Result, Translator};
-use crate::proto::v4_2::{self as pb, Expression};
-use crate::proto::v4_2::{
+use crate::proto::v4_3::{self as pb, Expression};
+use crate::proto::v4_3::{
     Relation, aggregate::GroupType, join::JoinType, read::ReadType, relation::RelType,
 };
 
@@ -42,20 +43,14 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => {
-                let Some(input) = &p.input else {
-                    // Spark reads a missing input as `OneRowRelation`.
-                    return Err(unsupported_field(
-                        "Project",
-                        "input",
-                        "projections without an input relation",
-                    ));
-                };
-                PlanNode::Project {
-                    input: self.relation(input)?,
-                    exprs: self.expressions(&p.expressions)?,
-                }
-            }
+            RelType::Project(p) => PlanNode::Project {
+                // Spark reads a missing input as `OneRowRelation`.
+                input: match &p.input {
+                    Some(input) => self.relation(input)?,
+                    None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                },
+                exprs: self.expressions(&p.expressions)?,
+            },
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,
@@ -84,36 +79,130 @@ impl Translator<'_> {
                 offset: Arc::new(Expr::literal(Literal::Integer(o.offset))),
             },
             RelType::Aggregate(a) => self.aggregate(a)?,
-            RelType::SubqueryAlias(a) => {
-                if !a.qualifier.is_empty() {
-                    return Err(unsupported_field(
-                        "SubqueryAlias",
-                        "qualifier",
-                        "relation aliases with a qualifier",
-                    ));
-                }
-                PlanNode::SubqueryAlias {
-                    input: self.input("SubqueryAlias", a.input.as_deref())?,
-                    alias: a.alias.clone(),
-                    columns: Vec::new(),
-                }
-            }
+            RelType::SubqueryAlias(a) => PlanNode::SubqueryAlias {
+                input: self.input("SubqueryAlias", a.input.as_deref())?,
+                alias: alias_name(&a.qualifier, &a.alias)?,
+                columns: Vec::new(),
+            },
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
+            RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            RelType::MapPartitions(m) => self.map_partitions(m)?,
+            RelType::GroupMap(g) => self.group_map(g)?,
+            RelType::CoGroupMap(g) => self.cogroup_map(g)?,
+            RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
+                self.local_relation(|| super::local::inline_request(l))?,
+            )),
+            RelType::CachedLocalRelation(c) => {
+                PlanNode::Read(ReadSource::Local(self.local_relation(|| {
+                    Ok(super::LocalRequest::Cached {
+                        hash: c.hash.clone(),
+                    })
+                })?))
+            }
+            RelType::CachedRemoteRelation(c) => {
+                self.conf.cached_remote.record(&c.relation_id);
+                PlanNode::Read(ReadSource::Table {
+                    name: super::cached_remote_table(&c.relation_id),
+                    options: std::collections::BTreeMap::new(),
+                })
+            }
+            RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
+                input: self.input("CollectMetrics", c.input.as_deref())?,
+                name: c.name.clone(),
+                metrics: self.expressions(&c.metrics)?,
+            },
             other => {
                 return Err(unsupported_variant(
-                    "relation",
                     "spark.connect.Relation",
                     other.variant(),
                 ));
             }
         };
-        let origin = rel
-            .common
-            .as_ref()
-            .and_then(|c| c.plan_id)
-            .map_or(Origin::UNKNOWN, |id| Origin::plan(PlanId(id)));
-        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin)))
+        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+    }
+
+    /// `SetOperation`, as Spark's `transformSetOperation` (v4.2.0): `is_all` defaults to false,
+    /// `by_name` is for `UNION` only, `allow_missing_columns` needs `by_name`, and a `UNION` that
+    /// is not `ALL` is a `Distinct` over the `Union`.
+    fn set_op(&mut self, s: &pb::SetOperation, origin: Origin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&s.left_input, &s.right_input) else {
+            return Err(
+                krishiv_common::error::ConnectInvalidPlanSetOperationMustHaveTwoInputs {}.into(),
+            );
+        };
+        let left = self.relation(left)?;
+        let right = self.relation(right)?;
+        let all = s.is_all.unwrap_or(false);
+        let by_name = s.by_name.unwrap_or(false);
+        let allow_missing_columns = s.allow_missing_columns.unwrap_or(false);
+        Ok(
+            match pb::set_operation::SetOpType::try_from(s.set_op_type) {
+                Ok(pb::set_operation::SetOpType::Except) => {
+                    if by_name {
+                        return Err(krishiv_common::error::ConnectInvalidPlanExceptDoesNotSupportUnionByName {}.into());
+                    }
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op: SetOperation::Except,
+                        all,
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Intersect) => {
+                    if by_name {
+                        return Err(krishiv_common::error::ConnectInvalidPlanIntersectDoesNotSupportUnionByName {}.into());
+                    }
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op: SetOperation::Intersect,
+                        all,
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Union) => {
+                    if !by_name && allow_missing_columns {
+                        return Err(krishiv_common::error::ConnectInvalidPlanUnionByNameAllowMissingColRequiresByName {}.into());
+                    }
+                    let union = PlanNode::Union {
+                        inputs: vec![left, right],
+                        by_name,
+                        allow_missing_columns,
+                    };
+                    if all {
+                        union
+                    } else {
+                        PlanNode::Distinct {
+                            input: Arc::new(LogicalPlan::new(union).with_origin(origin)),
+                        }
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Unspecified) => {
+                    return Err(invalid_enum(
+                        "spark.connect.SetOperation.SetOpType",
+                        "SET_OP_TYPE_UNSPECIFIED",
+                        s.set_op_type,
+                    ));
+                }
+                Err(_) => {
+                    return Err(invalid_enum(
+                        "spark.connect.SetOperation.SetOpType",
+                        "UNRECOGNIZED",
+                        s.set_op_type,
+                    ));
+                }
+            },
+        )
+    }
+
+    /// The next local relation of the plan, from the host (see [`super::LocalRelations`]).
+    fn local_relation(
+        &mut self,
+        request: impl FnOnce() -> Result<super::LocalRequest>,
+    ) -> Result<krishiv_plan::LocalRelation> {
+        let ordinal = self.locals;
+        self.locals += 1;
+        self.conf.local_relations.get(ordinal, request)
     }
 
     /// The input relation of `message`, which must be set.
@@ -150,13 +239,11 @@ impl Translator<'_> {
                 options: typed(&t.options),
             },
             ReadType::DataSource(d) => {
-                if d.schema.as_deref().is_some_and(|s| !s.is_empty()) {
-                    return Err(unsupported_field(
-                        "Read.DataSource",
-                        "schema",
-                        "reads with a user-specified schema",
-                    ));
-                }
+                // Spark: a set and non-empty schema is the reader's schema.
+                let schema = match d.schema.as_deref() {
+                    Some(s) if !s.is_empty() => Some(super::schema::parse_table_schema(s)?),
+                    _ => None,
+                };
                 if !d.predicates.is_empty() {
                     return Err(unsupported_field(
                         "Read.DataSource",
@@ -164,17 +251,19 @@ impl Translator<'_> {
                         "reads with predicates",
                     ));
                 }
-                ReadSource::Files {
-                    format: d
-                        .format
+                let source = ReadSource::files(
+                    d.format
                         .clone()
                         .unwrap_or_else(|| self.conf.default_data_source.clone()),
-                    paths: d
-                        .paths
+                    d.paths
                         .iter()
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
-                    options: typed(&d.options),
+                    typed(&d.options),
+                );
+                match schema {
+                    Some(schema) => source.with_schema(schema),
+                    None => source,
                 }
             }
         }))
@@ -290,16 +379,29 @@ impl Translator<'_> {
         let input = self.relation(input)?;
         let keys = self.expressions(&a.grouping_expressions)?;
         let aggregates = self.expressions(&a.aggregate_expressions)?;
+        // The output keeps `expr AS name`; the grouping expressions are the
+        // bare `expr`: an alias is not an input column (PY-009).
+        let bare = |k: &Arc<Expr>| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(k),
+        };
+        let group_keys: Vec<Arc<Expr>> = keys.iter().map(bare).collect();
         let grouping = match GroupType::try_from(a.group_type) {
-            Ok(GroupType::Groupby) => Grouping::GroupBy(keys.clone()),
-            Ok(GroupType::Rollup) => Grouping::Rollup(keys.clone()),
-            Ok(GroupType::Cube) => Grouping::Cube(keys.clone()),
+            Ok(GroupType::Groupby) => Grouping::GroupBy(group_keys),
+            Ok(GroupType::Rollup) => Grouping::Rollup(group_keys),
+            Ok(GroupType::Cube) => Grouping::Cube(group_keys),
             Ok(GroupType::GroupingSets) => Grouping::GroupingSets {
-                exprs: keys.clone(),
+                exprs: group_keys,
                 sets: a
                     .grouping_sets
                     .iter()
-                    .map(|s| self.expressions(&s.grouping_set))
+                    .map(|s| {
+                        Ok(self
+                            .expressions(&s.grouping_set)?
+                            .iter()
+                            .map(bare)
+                            .collect())
+                    })
                     .collect::<Result<_>>()?,
             },
             Ok(GroupType::Pivot) => {
@@ -403,3 +505,29 @@ impl Translator<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
+/// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the
+/// separator could not be told from two parts, so it is refused as `KRISHIV_UNSUPPORTED_FEATURE`
+/// (a deviation from note section 4: 56K00 is for `oneof` arms).
+fn alias_name(qualifier: &[String], alias: &str) -> Result<String> {
+    let parts = || qualifier.iter().map(String::as_str).chain([alias]);
+    if parts().any(|p| p.contains(ALIAS_PART_SEP)) {
+        return Err(unsupported_field(
+            "SubqueryAlias",
+            "qualifier",
+            "relation alias parts holding the control character U+001E",
+        ));
+    }
+    Ok(parts()
+        .collect::<Vec<_>>()
+        .join(&ALIAS_PART_SEP.to_string()))
+}
+
+/// The origin of a relation: its `plan_id`, when the client sent one.
+fn origin_of(rel: &Relation) -> Origin {
+    rel.common
+        .as_ref()
+        .and_then(|c| c.plan_id)
+        .map_or(Origin::UNKNOWN, |id| Origin::plan(PlanId(id)))
+}

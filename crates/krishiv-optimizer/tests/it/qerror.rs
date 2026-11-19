@@ -17,16 +17,24 @@
 //!   as `dsdgen` writes TPC-DS) for a bigger run;
 //! - `KRISHIV_QERROR_SCALE`: TPC-H orders (default 150); the TPC-DS
 //!   synthetic fact tables get twice as many rows;
-//! - `KRISHIV_QERROR_SUITES`: `tpch`, `tpcds` or both, comma separated.
+//! - `KRISHIV_QERROR_SUITES`: `tpch`, `tpcds` or both, comma separated;
+//! - `KRISHIV_QERROR_NDV`: `exact` (default) or `theta`. With `theta` the run
+//!   also prints the q-error with every column's distinct count replaced by a
+//!   Theta sketch estimate (lg_k 12, the library default Iceberg's writer
+//!   uses), next to the exact-count line, so the cost of the sketch error is
+//!   visible (P3-T024, PR-54c). The values are fed as a tag byte and their
+//!   fixed-point or UTF-8 bytes: the sketch's error does not depend on the
+//!   byte layout, and the optimizer (L3) cannot depend on the Iceberg
+//!   connector (L5) that owns the real serialisation.
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::Arc;
 
-use krishiv_optimizer::{
-    ColumnStats, Options, PlanStats, Statistics, TableStats, optimize_with_options,
-};
+use datasketches::hash::value::raw_bytes;
+use datasketches::theta::ThetaSketchBuilder;
+use krishiv_optimizer::{ColumnStats, PlanStats, Statistics, TableStats, optimize_with_options};
 use krishiv_plan::{Literal, LogicalPlan, PlanNode, ReadSource, Scan};
 use krishiv_types::DataType;
 use serde_json::Value;
@@ -79,7 +87,7 @@ impl Errors {
 
 /// Table statistics by table name, read off the data.
 #[derive(Debug)]
-struct DataStats(HashMap<String, TableStats>);
+pub(crate) struct DataStats(HashMap<String, TableStats>);
 
 impl Statistics for DataStats {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -99,8 +107,55 @@ fn bound(v: &V) -> Option<Literal> {
     }
 }
 
+/// Where the per-column distinct counts come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ndv {
+    /// Counted exactly.
+    Exact,
+    /// A Theta sketch estimate at lg_k 12.
+    Theta,
+}
+
+/// The Theta estimate (lg_k 12) of the distinct values of `values` (no nulls), rounded.
+pub(crate) fn theta_distinct(values: &[&V]) -> u64 {
+    let mut sketch = ThetaSketchBuilder::default().lg_k(12).build().unwrap();
+    let mut buf = Vec::new();
+    for v in values {
+        buf.clear();
+        match v {
+            V::Null => buf.push(0),
+            V::Bool(b) => buf.extend([1, u8::from(*b)]),
+            V::Num(n) => {
+                buf.push(2);
+                buf.extend(n.to_le_bytes());
+            }
+            V::Str(s) => {
+                buf.push(3);
+                buf.extend(s.as_bytes());
+            }
+            V::Date(d) => {
+                buf.push(4);
+                buf.extend(d.to_le_bytes());
+            }
+        }
+        sketch.update(raw_bytes::from_slice(&buf));
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a non-negative estimate of a count"
+    )]
+    let n = sketch.estimate().round() as u64;
+    n
+}
+
 /// The statistics a table of `db` would report after `ANALYZE`.
-fn stats_of(db: &Db) -> DataStats {
+pub(crate) fn stats_of(db: &Db) -> DataStats {
+    stats_with(db, Ndv::Exact)
+}
+
+/// The statistics of `db` with the distinct counts from `ndv`.
+pub(crate) fn stats_with(db: &Db, ndv: Ndv) -> DataStats {
     let tables = db.tables.iter().map(|(name, (cols, rows))| {
         let columns = cols.iter().enumerate().map(|(i, c)| {
             let present: Vec<&V> = rows
@@ -108,9 +163,12 @@ fn stats_of(db: &Db) -> DataStats {
                 .map(|r| &r[i])
                 .filter(|v| **v != V::Null)
                 .collect();
-            let distinct: HashSet<&V> = present.iter().copied().collect();
+            let distinct = match ndv {
+                Ndv::Exact => present.iter().copied().collect::<HashSet<&V>>().len() as u64,
+                Ndv::Theta => theta_distinct(&present),
+            };
             let stats = ColumnStats {
-                distinct: Some(distinct.len() as u64),
+                distinct: Some(distinct),
                 nulls: Some((rows.len() - present.len()) as u64),
                 min: present.iter().min().copied().and_then(bound),
                 max: present.iter().max().copied().and_then(bound),
@@ -128,7 +186,7 @@ fn stats_of(db: &Db) -> DataStats {
 }
 
 /// A suite's tables: names and typed columns.
-type Schemas = Vec<(String, Vec<(String, DataType)>)>;
+pub(crate) type Schemas = Vec<(String, Vec<(String, DataType)>)>;
 
 fn parse_type(ty: &str) -> DataType {
     let upper = ty.to_ascii_uppercase();
@@ -140,7 +198,7 @@ fn parse_type(ty: &str) -> DataType {
     krishiv_types::parse_data_type(ty).unwrap()
 }
 
-fn tpch_schemas() -> Schemas {
+pub(crate) fn tpch_schemas() -> Schemas {
     let path = support::root().join("tests/fixtures/spark-4.2.0/analyzer-goldens.json");
     let g: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut out: Schemas = g["tables"]
@@ -166,7 +224,7 @@ fn tpch_schemas() -> Schemas {
     out
 }
 
-fn tpcds_schemas() -> Schemas {
+pub(crate) fn tpcds_schemas() -> Schemas {
     let path = support::root().join("tests/fixtures/spark-4.2.0/golden-tables/tpcds-schemas.json");
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     doc["tables"]
@@ -230,7 +288,7 @@ fn decimal(text: &str) -> V {
 
 /// The tables of `schemas` read from `dir/<table>.<ext>`: one row per line,
 /// fields separated by `|` (with the trailing `|` the generators write).
-fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
+pub(crate) fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
     let mut db = Db::default();
     for (name, cols) in schemas {
         let path = dir.join(format!("{name}.{ext}"));
@@ -256,7 +314,7 @@ fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
 /// row number; every other `_sk` column a draw from the dimensions' keys;
 /// facts (the `sales`, `returns` and `inventory` tables) have `rows` rows,
 /// dimensions a tenth of that; other columns draw from small domains.
-fn synthetic_tpcds(schemas: &Schemas, seed: u64, rows: i64) -> Db {
+pub(crate) fn synthetic_tpcds(schemas: &Schemas, seed: u64, rows: i64) -> Db {
     let mut r = Rng(seed | 1);
     let mut db = Db::default();
     let dims = (rows / 10).max(8);
@@ -320,12 +378,10 @@ fn run_suite(
     ctx: &krishiv_plan::analyzer::AnalysisContext,
     db: &Db,
     on: bool,
+    ndv: Ndv,
 ) -> Errors {
-    let stats = stats_of(db);
-    let options = Options {
-        stats_propagation: on,
-        ..Options::default()
-    };
+    let stats = stats_with(db, ndv);
+    let options = support::options(|o| o.stats_propagation = on);
     let mut errors = Errors::default();
     // The interpreter panics on constructs it does not run: those relations
     // are skipped (and counted), quietly.
@@ -389,7 +445,43 @@ fn report(suite: &str, on: &Errors, off: &Errors) {
     }
 }
 
-fn suites() -> HashSet<String> {
+/// Whether `KRISHIV_QERROR_NDV=theta` asks for the sketch comparison.
+fn theta_requested() -> bool {
+    std::env::var("KRISHIV_QERROR_NDV").is_ok_and(|v| v.eq_ignore_ascii_case("theta"))
+}
+
+/// With `--ndv theta`: runs `theta` (propagation on, sketch distinct counts)
+/// and prints its median and p95 beside the exact-count `on` line.
+#[expect(clippy::print_stdout, reason = "the report is the output")]
+fn report_theta(suite: &str, exact: &Errors, theta: impl FnOnce() -> Errors) {
+    if !theta_requested() {
+        return;
+    }
+    let sketched = theta();
+    for (label, e) in [
+        ("ndv exact        ", exact),
+        ("ndv theta lg_k 12", &sketched),
+    ] {
+        let (median, p95, max) = e.summary();
+        println!(
+            "q-error {suite:<6} {label}: median {median:>8.2}  p95 {p95:>10.2}  max {max:>12.2}  ({} joins and aggregates)",
+            e.q.len()
+        );
+    }
+    let (m_e, p_e, _) = exact.summary();
+    let (m_t, p_t, _) = sketched.summary();
+    if exact.q.is_empty() {
+        println!("q-error {suite:<6} sketch cost: no joins or aggregates measured");
+    } else {
+        println!(
+            "q-error {suite:<6} sketch cost: median x{:.3}  p95 x{:.3}",
+            m_t / m_e,
+            p_t / p_e
+        );
+    }
+}
+
+pub(crate) fn suites() -> HashSet<String> {
     std::env::var("KRISHIV_QERROR_SUITES")
         .unwrap_or_else(|_| "tpch,tpcds".to_owned())
         .split(',')
@@ -397,7 +489,7 @@ fn suites() -> HashSet<String> {
         .collect()
 }
 
-fn scale() -> i64 {
+pub(crate) fn scale() -> i64 {
     std::env::var("KRISHIV_QERROR_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -415,10 +507,13 @@ fn tpch_report() -> (Errors, Errors) {
         .collect();
     let ctx = support::ctx();
     let (on, off) = (
-        run_suite(&sqls, &ctx, &db, true),
-        run_suite(&sqls, &ctx, &db, false),
+        run_suite(&sqls, &ctx, &db, true, Ndv::Exact),
+        run_suite(&sqls, &ctx, &db, false, Ndv::Exact),
     );
     report("tpch", &on, &off);
+    report_theta("tpch", &on, || {
+        run_suite(&sqls, &ctx, &db, true, Ndv::Theta)
+    });
     (on, off)
 }
 
@@ -433,10 +528,13 @@ fn tpcds_report() -> (Errors, Errors) {
         .collect();
     let ctx = support::ctx_over(tpcds::catalog());
     let (on, off) = (
-        run_suite(&sqls, &ctx, &db, true),
-        run_suite(&sqls, &ctx, &db, false),
+        run_suite(&sqls, &ctx, &db, true, Ndv::Exact),
+        run_suite(&sqls, &ctx, &db, false, Ndv::Exact),
     );
     report("tpcds", &on, &off);
+    report_theta("tpcds", &on, || {
+        run_suite(&sqls, &ctx, &db, true, Ndv::Theta)
+    });
     (on, off)
 }
 
@@ -526,4 +624,75 @@ fn data_directories_load_in_the_generators_format() {
     assert_eq!(stats.rows, 2);
     assert_eq!(stats.columns["s"].nulls, Some(1));
     assert_eq!(stats.columns["k"].distinct, Some(2));
+}
+
+/// Theta distinct counts stay within a factor of the exact ones: exact below
+/// the sketch's capacity (4,096 at lg_k 12), within 10% (about six standard
+/// errors) above it; and a whole TPC-H run with them estimates no worse than
+/// 1.5 times the exact-count median.
+#[test]
+fn theta_distinct_counts_stay_near_exact() {
+    for distinct in [10_i64, 1_000, 4_000, 20_000, 200_000] {
+        let values: Vec<V> = (0..distinct * 3).map(|i| V::int(i % distinct)).collect();
+        let refs: Vec<&V> = values.iter().collect();
+        let est = theta_distinct(&refs) as f64;
+        let exact = distinct as f64;
+        let factor = if distinct <= 4_000 { 1.001 } else { 1.1 };
+        assert!(
+            est / exact <= factor && exact / est <= factor,
+            "{distinct} distinct values estimated as {est}"
+        );
+    }
+    let db = data::tpch(7, scale());
+    let (exact, theta) = (stats_with(&db, Ndv::Exact), stats_with(&db, Ndv::Theta));
+    for (table, t) in &exact.0 {
+        for (col, c) in &t.columns {
+            let (e, s) = (
+                c.distinct.unwrap_or(0) as f64,
+                theta.0[table].columns[col].distinct.unwrap_or(0) as f64,
+            );
+            // Below the sketch's capacity it is exact, so this is an equality
+            // there (not a bound that cannot fail).
+            let factor = if e <= 4_000.0 { 1.0 } else { 1.1 };
+            assert!(
+                s.max(1.0) / e.max(1.0) <= factor && e.max(1.0) / s.max(1.0) <= factor,
+                "{table}.{col}: {e} exact, {s} sketched"
+            );
+        }
+    }
+    let ctx = support::ctx();
+    let sqls: Vec<(String, String)> = (1..=22)
+        .map(|q| (format!("q{q:02}"), support::tpch_sql(q)))
+        .collect();
+    let m_exact = run_suite(&sqls, &ctx, &db, true, Ndv::Exact).summary().0;
+    let m_theta = run_suite(&sqls, &ctx, &db, true, Ndv::Theta).summary().0;
+    assert!(
+        m_theta <= m_exact * 1.5,
+        "median {m_theta} sketched, {m_exact} exact"
+    );
+}
+
+/// `Ndv::Theta` really reads the sketch: above the sketch's capacity a column's distinct count differs from
+/// the exact count (a fallback to exact counts would make them equal) yet stays within 10% of it, and below
+/// capacity the two are equal.
+#[test]
+fn theta_statistics_come_from_the_sketch_not_the_exact_count() {
+    let rows: Vec<Vec<V>> = (0..60_000_i64)
+        .map(|i| vec![V::int(i % 20_000), V::int(i % 100)])
+        .collect();
+    let mut db = Db::default();
+    db.tables.insert(
+        "t".to_owned(),
+        (vec!["big".to_owned(), "small".to_owned()], rows),
+    );
+    let (exact, theta) = (stats_with(&db, Ndv::Exact), stats_with(&db, Ndv::Theta));
+    let column = |s: &DataStats, c: &str| s.0["t"].columns[c].distinct.unwrap();
+    assert_eq!(column(&exact, "big"), 20_000);
+    let sketched = column(&theta, "big");
+    assert_ne!(
+        sketched, 20_000,
+        "the same as the exact count: not a sketch"
+    );
+    assert!(sketched.abs_diff(20_000) <= 2_000, "{sketched}");
+    assert_eq!(column(&theta, "small"), 100);
 }

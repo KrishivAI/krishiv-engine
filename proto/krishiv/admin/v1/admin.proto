@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// krishiv.admin.v1: the control API of `krishiv server` (design P3-T066, ADR 0036, ADR 0046).
+// One service, two transports: gRPC and REST under /api/admin/v1 (the proto3 JSON mapping of
+// these messages). Additive only (design §6.1): fields are never removed, renumbered, renamed or
+// retyped; enums start with *_UNSPECIFIED = 0 and only gain values; one request and one response
+// message per RPC; new intent is a new RPC. The REST verb and path of each RPC, and the privilege it
+// checks, are in `crates/krishiv-server/admin-v1/routes.json` (the router and the OpenAPI document
+// read it). Until the first release that ships it the surface is
+// `preview` (design D8). `cargo xtask admin-api` checks the descriptor against the base branch.
+syntax = "proto3";
+
+package krishiv.admin.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service AdminService {
+  // The engine version and the revision of this surface. Any authenticated caller.
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // The `system.capabilities` rows. Any authenticated caller.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // The caller's own sessions, or every session with `Monitor` (the rows of `system.sessions`).
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // Ends a session and cancels its queries: one's own, or any with `Operate`.
+  rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
+
+  // The caller's own queries, or every query with `Monitor` (the rows of `system.queries`).
+  rpc ListQueries(ListQueriesRequest) returns (ListQueriesResponse);
+
+  // Cancels one query: one's own, or any with `Operate`.
+  rpc CancelQuery(CancelQueryRequest) returns (CancelQueryResponse);
+
+  // Cancels the queries carrying a tag selector (`k` or `k=v`). Without `Operate` it matches only
+  // the caller's own queries; what comes back never depends on other principals' queries.
+  rpc CancelQueriesByTag(CancelQueriesByTagRequest) returns (CancelQueriesByTagResponse);
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  // The engine's version, as `/api/v1/version` reports it.
+  string version = 1;
+  // An integer that grows whenever this surface's descriptor changes (design §6.3): a client that
+  // needs a field checks it first.
+  int64 admin_v1_revision = 2;
+  // True until the first release that ships admin.v1 (design D8): the surface may still change.
+  bool preview = 3;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  repeated Capability capabilities = 1;
+}
+
+// One row of `system.capabilities`.
+message Capability {
+  string kind = 1;
+  string name = 2;
+  string value = 3;
+  string detail = 4;
+}
+
+// A session as `system.sessions` shows it.
+message Session {
+  string session_id = 1;
+  string principal = 2;
+  // The service principal acting for `principal` (trusted impersonation), if any.
+  string delegated_by = 3;
+  // Client-asserted.
+  string client_type = 4;
+  // `connect`, `flight_sql` or `embedded`.
+  string transport = 5;
+  // `open`, `closed`, `expired` or `killed`.
+  string state = 6;
+  google.protobuf.Timestamp created = 7;
+  google.protobuf.Timestamp last_active = 8;
+  // Set when the session ended.
+  google.protobuf.Timestamp closed = 9;
+  // `release_session`, `idle_timeout`, `admin_kill` or `drain`, when it ended.
+  string close_reason = 10;
+  map<string, string> tags = 11;
+  int64 queries_running = 12;
+  int64 queries_started = 13;
+}
+
+message ListSessionsRequest {
+  // At most this many rows (default 100, clamped to 1,000).
+  int32 page_size = 1;
+  // From `next_page_token` of the previous page; bound to this request's filters.
+  string page_token = 2;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  // Empty at the end.
+  string next_page_token = 2;
+}
+
+message KillSessionRequest {
+  string session_id = 1;
+  // Makes a retry safe: the same id with the same request returns the first response.
+  string request_id = 2;
+}
+
+message KillSessionResponse {
+  // The queries the kill cancelled.
+  int64 queries_cancelled = 1;
+}
+
+// A query as `system.queries` shows it.
+message Query {
+  string query_id = 1;
+  string session_id = 2;
+  string principal = 3;
+  // `queued`, `running`, `finished`, `failed`, `cancelled` or `denied`.
+  string state = 4;
+  // `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN`, when classified.
+  string statement_class = 5;
+  // Cut and masked by the session's text policy.
+  string text = 6;
+  google.protobuf.Timestamp submitted = 7;
+  google.protobuf.Timestamp started = 8;
+  google.protobuf.Timestamp ended = 9;
+  string error_class = 10;
+  string resource_group = 11;
+  map<string, string> tags = 12;
+}
+
+message ListQueriesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  // Keeps these states; empty means `running` and `queued`.
+  repeated string states = 3;
+  // Keeps the queries of this session.
+  string session_id = 4;
+  // Keeps the queries of this principal.
+  string principal = 5;
+  // Keeps the queries carrying this tag selector (`k` or `k=v`).
+  string tag = 6;
+}
+
+message ListQueriesResponse {
+  repeated Query queries = 1;
+  string next_page_token = 2;
+}
+
+message CancelQueryRequest {
+  string query_id = 1;
+  string request_id = 2;
+}
+
+message CancelQueryResponse {}
+
+message CancelQueriesByTagRequest {
+  // `k` or `k=v`.
+  string selector = 1;
+  string request_id = 2;
+}
+
+message CancelQueriesByTagResponse {
+  // The queries cancelled.
+  repeated string query_ids = 1;
+}

@@ -49,7 +49,72 @@ pub async fn authorize(
     securable: &Securable,
     privilege: Privilege,
 ) -> Result<(), KrishivError> {
+    authorize_reported(policy, principal, securable, privilege, privilege).await
+}
+
+/// [`authorize`] asking `asked` but refusing (and telling [`AccessPolicy::denied`]) as
+/// `reported`: Bind asks a column-level policy `Browse` for a read, and a refusal names the
+/// `Select` the statement needs (P3-T062 review m6).
+///
+/// # Errors
+/// As [`authorize`], naming `reported`.
+pub async fn authorize_reported(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    asked: Privilege,
+    reported: Privilege,
+) -> Result<(), KrishivError> {
+    let result = decide(policy, principal, securable, asked).await;
+    match result {
+        Err(e)
+            if e.error_class()
+                == krishiv_common::error::ErrorClass::KrishivInsufficientPermissions =>
+        {
+            policy.denied(principal, securable, reported);
+            Err(if asked == reported {
+                e
+            } else {
+                insufficient_permissions(principal, securable, reported)
+            })
+        }
+        other => other,
+    }
+}
+
+/// [`authorize`] as a trial: the same questions, in the same order, and the same answer
+/// (the `Browse`-to-`Select` fallback and the filtered-reader rule included), but a refusal
+/// is not told to [`AccessPolicy::denied`], so the policy writes no audit record and counts
+/// nothing. For checks whose refusal is an answer to the engine, not a refusal of the caller:
+/// the analyze API's trial of a run's target checks (P3-T063 review R2-1).
+///
+/// # Errors
+/// As [`authorize`].
+pub async fn authorize_quietly(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
+    decide(policy, principal, securable, privilege).await
+}
+
+async fn decide(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
     let denied = || insufficient_permissions(principal, securable, privilege);
+    // What is asked, before any answer: the analyze API's securables are checked against these
+    // events (P3-T063 m3). The securable prints as the denial text does (redacted, ADR 0038).
+    tracing::trace!(
+        target: "krishiv::authorize",
+        principal = %principal.name,
+        privilege = %privilege,
+        securable = %securable,
+        "authorize"
+    );
     if privilege.changes() {
         match policy.check(principal, securable, Privilege::Select).await {
             // A write-only principal (reads denied) may still write.
@@ -57,7 +122,26 @@ pub async fn authorize(
             Ok(AccessDecision::AllowWith(_)) | Err(_) => return Err(denied()),
         }
     }
-    match policy.check(principal, securable, privilege).await {
+    let decision = match policy.check(principal, securable, privilege).await {
+        Ok(AccessDecision::Allow) => Ok(AccessDecision::Allow),
+        // Metadata is not rows: a row filter or column mask does not hide that the object
+        // exists or its schema.
+        Ok(AccessDecision::AllowWith(_)) if privilege == Privilege::Browse => {
+            Ok(AccessDecision::Allow)
+        }
+        // `Select` implies `Browse` (ADR 0046 §4): a provider that knows only `Select` keeps
+        // answering metadata commands as it did before `Browse` existed.
+        Ok(_) | Err(_) if privilege == Privilege::Browse => {
+            match policy.check(principal, securable, Privilege::Select).await {
+                Ok(AccessDecision::Allow | AccessDecision::AllowWith(_)) => {
+                    Ok(AccessDecision::Allow)
+                }
+                _ => return Err(denied()),
+            }
+        }
+        other => other,
+    };
+    match decision {
         Ok(AccessDecision::Allow) => Ok(()),
         Ok(AccessDecision::AllowWith(_)) if privilege == Privilege::Select => {
             Err(KrishivUnsupportedFeature {
@@ -67,6 +151,57 @@ pub async fn authorize(
         }
         Ok(AccessDecision::AllowWith(_) | AccessDecision::Deny { .. }) | Err(_) => Err(denied()),
     }
+}
+
+/// The column pass of a policy that [decides columns](AccessPolicy::column_level): `Select` on
+/// each column of every table and view the final plan reads (`reads`, one per use, see
+/// `reads::column_reads`), and on the table itself when some appearance reads whole rows
+/// (`count(*)`, a view, or a plan the walk cannot prove). Bind asked only `Browse` on them, so
+/// this is the read check; a policy that does not decide columns was asked `Select` on the table
+/// at Bind and is not asked again.
+///
+/// # Errors
+/// As [`authorize`], at `origin`, for the first column (or table) denied.
+pub(super) async fn authorize_columns(
+    ctx: &super::AnalysisContext,
+    uses: &[super::SecurableUse],
+    reads: &[super::reads::Reads],
+    origin: crate::Origin,
+) -> Result<(), super::AnalysisError> {
+    if !ctx.policy.column_level() {
+        return Ok(());
+    }
+    for (i, used) in uses.iter().enumerate() {
+        let (Securable::Table(table) | Securable::View(table)) = &used.securable else {
+            continue;
+        };
+        if used.privilege != Privilege::Select {
+            continue;
+        }
+        let at = |e| super::AnalysisError::new(e, origin);
+        // A use without a derived read is asked as whole rows (fail closed).
+        let read = reads.get(i);
+        if read.is_none_or(|r| r.whole) {
+            authorize(
+                &*ctx.policy,
+                &ctx.principal,
+                &used.securable,
+                Privilege::Select,
+            )
+            .await
+            .map_err(at)?;
+        }
+        for column in read.map(|r| &r.columns).into_iter().flatten() {
+            let securable = Securable::Column {
+                table: table.clone(),
+                column: column.clone(),
+            };
+            authorize(&*ctx.policy, &ctx.principal, &securable, Privilege::Select)
+                .await
+                .map_err(at)?;
+        }
+    }
+    Ok(())
 }
 
 /// The scopes of the `secret('scope', 'key')` references among `values`, each once, in order.
@@ -199,14 +334,183 @@ mod tests {
         Fixed(answers.iter().cloned().collect())
     }
 
-    const ALL: [Privilege; 6] = [
+    const ALL: [Privilege; 10] = [
         Privilege::Select,
         Privilege::Modify,
         Privilege::Create,
         Privilege::Drop,
         Privilege::Monitor,
         Privilege::Usage,
+        Privilege::Browse,
+        Privilege::Operate,
+        Privilege::Manage,
+        Privilege::Impersonate,
     ];
+
+    #[test]
+    fn select_implies_browse() {
+        // A provider that knows only `Select` answers metadata as before `Browse` existed.
+        let select_only = fixed(&[
+            (Privilege::Select, Some(AccessDecision::Allow)),
+            (Privilege::Browse, deny()),
+        ]);
+        check(&select_only, Privilege::Browse).unwrap();
+        // A provider that fails on `Browse` but allows `Select` too.
+        let browse_errors = fixed(&[
+            (Privilege::Select, Some(AccessDecision::Allow)),
+            (Privilege::Browse, None),
+        ]);
+        check(&browse_errors, Privilege::Browse).unwrap();
+        // `Browse` alone does not give `Select`.
+        let browse_only = fixed(&[
+            (Privilege::Browse, Some(AccessDecision::Allow)),
+            (Privilege::Select, deny()),
+        ]);
+        check(&browse_only, Privilege::Browse).unwrap();
+        let e = check(&browse_only, Privilege::Select).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivInsufficientPermissions);
+        // Neither: denied, as `BROWSE`, without the reason.
+        let neither = fixed(&[(Privilege::Select, deny()), (Privilege::Browse, deny())]);
+        let e = check(&neither, Privilege::Browse).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivInsufficientPermissions);
+        assert!(
+            e.to_string().contains("BROWSE") && !e.to_string().contains("secret"),
+            "{e}"
+        );
+    }
+
+    /// Counts the refusals it is told of.
+    struct Counting(Fixed, std::sync::atomic::AtomicUsize);
+
+    impl AccessPolicy for Counting {
+        fn version(&self) -> PolicyVersion {
+            self.0.version()
+        }
+
+        fn check<'a>(
+            &'a self,
+            p: &'a Principal,
+            s: &'a Securable,
+            privilege: Privilege,
+        ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+            self.0.check(p, s, privilege)
+        }
+
+        fn denied(&self, _: &Principal, _: &Securable, _: Privilege) {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn the_policy_is_told_of_each_refusal_once() {
+        let counted = |answers: &[(Privilege, Option<AccessDecision>)], p| {
+            let policy = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+            let r = check(&policy, p);
+            (
+                r.is_ok(),
+                policy.1.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        // `Browse` refused, `Select` allowed: an answer, not a refusal.
+        let browse_fallback = [
+            (Privilege::Browse, deny()),
+            (Privilege::Select, Some(AccessDecision::Allow)),
+        ];
+        assert_eq!(counted(&browse_fallback, Privilege::Browse), (true, 0));
+        // Both refused: one refusal, however many questions it took.
+        let neither = [(Privilege::Browse, deny()), (Privilege::Select, deny())];
+        assert_eq!(counted(&neither, Privilege::Browse), (false, 1));
+        // A write-only principal's read probe is not a refusal.
+        let write_only = [
+            (Privilege::Select, deny()),
+            (Privilege::Modify, Some(AccessDecision::Allow)),
+        ];
+        assert_eq!(counted(&write_only, Privilege::Modify), (true, 0));
+        // A failing policy is a refusal too; an unapplied filter is not a permission refusal.
+        assert_eq!(
+            counted(&[(Privilege::Select, None)], Privilege::Select),
+            (false, 1)
+        );
+        assert_eq!(
+            counted(&[(Privilege::Select, filtered())], Privilege::Select),
+            (false, 0)
+        );
+        // Policies decide tables by default; columns only when they say so.
+        assert!(!AllowAll.column_level() && !DenyAll.column_level());
+        let column = Securable::Column {
+            table: TableIdent {
+                catalog: "c".to_owned(),
+                namespace: vec!["s".to_owned()],
+                name: "t".to_owned(),
+            },
+            column: "a".to_owned(),
+        };
+        assert_eq!(column.to_string(), "column `a` of table `c`.`s`.`t`");
+    }
+
+    /// T063 review R2-1: a quiet trial decides exactly as [`authorize`] does and tells the policy of
+    /// no refusal.
+    #[test]
+    fn a_quiet_check_decides_as_authorize_and_tells_the_policy_nothing() {
+        let principal = Principal::new("ana", PrincipalKind::User);
+        let table = Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        });
+        let cases: [&[(Privilege, Option<AccessDecision>)]; 6] = [
+            &[
+                (Privilege::Browse, deny()),
+                (Privilege::Select, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Browse, deny()), (Privilege::Select, deny())],
+            &[
+                (Privilege::Select, deny()),
+                (Privilege::Modify, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Select, None)],
+            &[(Privilege::Select, filtered())],
+            &[
+                (Privilege::Select, filtered()),
+                (Privilege::Drop, Some(AccessDecision::Allow)),
+            ],
+        ];
+        for answers in cases {
+            for p in ALL {
+                let loud = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let quiet = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let a = block_on(authorize(&loud, &principal, &table, p));
+                let q = block_on(authorize_quietly(&quiet, &principal, &table, p));
+                assert_eq!(
+                    a.as_ref().map_err(KrishivError::to_string),
+                    q.as_ref().map_err(KrishivError::to_string),
+                    "{p} {answers:?}"
+                );
+                assert_eq!(quiet.1.load(std::sync::atomic::Ordering::Relaxed), 0);
+                // `authorize` itself tells the policy once of each permission refusal.
+                let refused = a
+                    .as_ref()
+                    .is_err_and(|e| e.error_class() == ErrorClass::KrishivInsufficientPermissions);
+                assert_eq!(
+                    loud.1.load(std::sync::atomic::Ordering::Relaxed),
+                    usize::from(refused),
+                    "{p} {answers:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_filtered_reader_may_browse() {
+        // Metadata is not rows: a row filter answered for `Browse` or for its `Select`
+        // fallback still shows that the object exists and its schema.
+        for policy in [
+            fixed(&[(Privilege::Browse, filtered()), (Privilege::Select, deny())]),
+            fixed(&[(Privilege::Browse, deny()), (Privilege::Select, filtered())]),
+        ] {
+            check(&policy, Privilege::Browse).unwrap();
+        }
+    }
 
     #[test]
     fn allow_all_and_deny_all() {
@@ -307,11 +611,24 @@ mod tests {
         let names: Vec<String> = ALL.iter().map(ToString::to_string).collect();
         assert_eq!(
             names,
-            ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR", "USAGE"]
+            [
+                "SELECT",
+                "MODIFY",
+                "CREATE",
+                "DROP",
+                "MONITOR",
+                "USAGE",
+                "BROWSE",
+                "OPERATE",
+                "MANAGE",
+                "IMPERSONATE"
+            ]
         );
         assert_eq!(
             ALL.map(Privilege::changes),
-            [false, true, true, true, false, false]
+            [
+                false, true, true, true, false, false, false, false, false, false
+            ]
         );
     }
 }

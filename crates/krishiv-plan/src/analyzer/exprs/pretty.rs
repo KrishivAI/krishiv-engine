@@ -171,6 +171,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             let outer = outer_names(plan);
             match kind {
                 SubqueryKind::Scalar => format!("scalarsubquery({outer})"),
+                SubqueryKind::Table(_) => format!("table-argument({outer})"),
                 SubqueryKind::Exists => format!("exists({outer})"),
                 SubqueryKind::In(_) if k.len() == 1 => {
                     format!("({} IN (listquery({outer})))", k[0])
@@ -207,6 +208,12 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             name, qualifier, ..
         }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
             format!("{}[{}]", k[0], k[1])
+        }
+        // `current_time()` is `CurrentTime` with its default precision, which Spark shows: `current_time(6)` (SQL-26).
+        ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if name == "current_time" && qualifier.is_empty() && k.is_empty() => {
+            "current_time(6)".to_owned()
         }
         // `TimeAddInterval` and `SubtractTimes` show `left + right` / `left - right`, without the parentheses of
         // Spark's arithmetic operators (`intervals.rs` `time_arithmetic` names them so).
@@ -295,6 +302,12 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             } else {
                 text
             }
+        }
+        // The resolved call of the same (SQL-26).
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id.name() == "current_time" && k.is_empty() && f.filter.is_none() =>
+        {
+            "current_time(6)".to_owned()
         }
         // Spark's `ExtractValue` shows `child[ordinal]`.
         ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -822,7 +835,15 @@ pub(super) fn pretty_literal(v: &Literal, zone: Option<SessionZone>) -> String {
             crate::spark_fmt::timestamp(SessionZone::local_micros(zone, *us), false)
         }
         Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
-        _ => v.to_string(),
+        // Nested values name as the display form (`ARRAY(1, 2)`); Spark's own
+        // name is golden-pending (design P3-T012a, 5).
+        Literal::Array { .. }
+        | Literal::KeyValueMap { .. }
+        | Literal::Struct { .. }
+        | Literal::Map(_)
+        | Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. }
+        | Literal::CalendarInterval { .. } => v.to_string(),
     }
 }
 

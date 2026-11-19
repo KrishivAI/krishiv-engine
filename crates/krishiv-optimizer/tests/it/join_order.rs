@@ -202,10 +202,7 @@ fn results_match_with_statistics_propagation_on_and_off() {
     let ctx = support::ctx();
     let stats = fixture();
     let db = data::tpch(7, 150);
-    let off = Options {
-        stats_propagation: false,
-        ..Options::default()
-    };
+    let off = support::options(|o| o.stats_propagation = false);
     let mut ordered_differently = 0;
     for q in 1..=22 {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
@@ -256,10 +253,7 @@ fn eager_aggregation_fires_where_the_design_says() {
 #[test]
 fn eager_aggregation_can_be_switched_off() {
     let plan = support::resolve(&support::tpch_sql(13), &support::ctx());
-    let off = Options {
-        eager_aggregation: false,
-        ..Options::default()
-    };
+    let off = support::options(|o| o.eager_aggregation = false);
     let optimized = optimize_with_options(&plan, &fixture(), &off).unwrap();
     assert!(!optimized.root().to_string().contains("PartialAggregate"));
 

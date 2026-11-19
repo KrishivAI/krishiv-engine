@@ -95,6 +95,10 @@ fn invariants(
 
 fn plan_with(plan: &Plan, stats: &dyn Statistics, conf: &[(&str, &str)]) -> (Plan, Vec<RuleStep>) {
     let mut config = Config::new();
+    // The reference interpreter has no window operator: these tests compare rows, not W1 plans.
+    config
+        .set("krishiv.optimizer.subqueryAsWindow", "false")
+        .unwrap();
     for (k, v) in conf {
         config.set(k, v).unwrap();
     }

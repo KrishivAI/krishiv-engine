@@ -1,0 +1,9 @@
+[
+  {"rpc": "GetVersion", "method": "GET", "path": "/version", "privilege": "authenticated"},
+  {"rpc": "GetCapabilities", "method": "GET", "path": "/capabilities", "privilege": "authenticated"},
+  {"rpc": "ListSessions", "method": "GET", "path": "/sessions", "privilege": "authenticated"},
+  {"rpc": "KillSession", "method": "POST", "path": "/sessions/{session_id}:kill", "privilege": "authenticated"},
+  {"rpc": "ListQueries", "method": "GET", "path": "/queries", "privilege": "authenticated"},
+  {"rpc": "CancelQuery", "method": "POST", "path": "/queries/{query_id}:cancel", "privilege": "authenticated"},
+  {"rpc": "CancelQueriesByTag", "method": "POST", "path": "/queries:cancelByTag", "privilege": "authenticated"}
+]

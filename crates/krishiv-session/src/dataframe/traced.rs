@@ -9,7 +9,6 @@ use std::sync::{Arc, PoisonError};
 use arrow_array::RecordBatch;
 use futures::StreamExt;
 use krishiv_common::error::KrishivError;
-use krishiv_plan::cache::CacheKey;
 
 use super::DataFrame;
 use crate::session::RecordBatchStream;
@@ -23,33 +22,30 @@ impl DataFrame {
         use tracing::Instrument as _;
         let span = self.span();
         async {
-            // A closed session answers nothing, not even from the result cache.
-            self.session.check_open()?;
+            // A closed session answers nothing, not even from the result cache; the frame's own
+            // observations end with the refusal (no later run can complete them).
+            if let Err(e) = self.session.check_open() {
+                super::observe::fail_observations(&self.observers_through(Vec::new()), &e);
+                return Err(e);
+            }
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
+            // The registry first: a `cache()` call before this action counts.
+            self.session.register_pending_caches().await;
             let a = self
                 .action_analysis()
                 .instrument(tracing::info_span!("krishiv.analyze"))
                 .await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
-            // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
+            // A plan that holds a registered relation (`cache()`, `persist()`) runs the query: the
             // snapshot is filled from the run, whatever the shared store holds.
             let result = crate::result_cache::settings(&a.env)
-                .filter(|_| self.cache_request.is_none())
                 .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
-                // A cached relation substituted into the plan makes the rows depend on this
-                // session's state: neither served from nor stored into the shared cache.
-                .filter(|_| {
-                    !self.session.state.cache.would_substitute(&a.analyzed)
-                        && self
-                            .session
-                            .state
-                            .cache
-                            .lookup(&CacheKey::of(&a.analyzed))
-                            .is_none()
-                });
+                // A cached relation in the plan makes the rows depend on this session's state:
+                // neither served from nor stored into the shared cache.
+                .filter(|_| !self.session.state.cache.would_substitute(&a.analyzed));
             if let Some((settings, key)) = &result
                 && let Some((batches, _age)) =
                     self.session.state.runtime.results.lookup(key, settings.ttl)
@@ -62,6 +58,7 @@ impl DataFrame {
                     a.env.statement_class,
                     self.session.operation_id(),
                 );
+                self.session.stamp_row(&id);
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 let replayed = crate::result_cache::replay(batches);
                 return Ok(if edge {
@@ -107,7 +104,7 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let who = crate::telemetry::Who::of(&self.session.state);
+        let who = crate::telemetry::Who::of(&self.session);
         self.trace
             .as_ref()
             .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))

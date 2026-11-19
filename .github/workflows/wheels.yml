@@ -39,9 +39,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Read at build time by krishiv-python (`build_info()["commit"]`) and krishiv-session (`krishiv.build.info`).
+  KRISHIV_GIT_SHA: ${{ github.sha }}
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
-  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc
+  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud
   # The shipped CPU levels (see README.md, "Supported CPUs").
   X86_RUSTFLAGS: -C target-cpu=x86-64-v3
   ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
@@ -80,12 +82,27 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: $/.github/actions/setup-uv
         if: matrix.libc == 'manylinux'
+      # The cloud-store test reads and writes s3:// against MinIO: the bucket is a directory of its data dir.
+      - name: S3 emulator (MinIO)
+        if: matrix.libc == 'manylinux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/minio/krishiv-test"
+          docker run -d --rm --name krishiv-wheel-minio -p 127.0.0.1:9000:9000 --user "$(id -u):$(id -g)" \
+            -v "$RUNNER_TEMP/minio:/data" cgr.dev/chainguard/minio server /data
+          up=0
+          for _ in $(seq 1 60); do
+            if curl -s -o /dev/null --max-time 2 -f http://127.0.0.1:9000/minio/health/live; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != 1 ]; then docker logs krishiv-wheel-minio || true; echo "MinIO did not start" >&2; exit 1; fi
+          echo "KRISHIV_TEST_S3_ENDPOINT=http://127.0.0.1:9000" >> "$GITHUB_ENV"
       - name: Test (manylinux, on the runner)
         if: matrix.libc == 'manylinux'
         env:
@@ -113,7 +130,7 @@ jobs:
         run: |
           if [ "$FLAVOUR" = abi3 ]; then pys="cp311-cp311 cp314-cp314"; else pys="cp314-cp314t"; fi
           for p in $pys; do
-            docker run --rm -v "$PWD:/w" -w /w \
+            docker run --rm -e KRISHIV_GIT_SHA -e GITHUB_ACTIONS -v "$PWD:/w" -w /w \
               quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d \
               bash .github/scripts/wheel-test.sh "/opt/python/$p/bin/python" dist "$FLAVOUR"
           done
@@ -149,6 +166,7 @@ jobs:
           working-directory: python
           target: x86_64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ env.ABI3_ARGS }} --out ../dist
       - name: The compat wheel has no CPU level marker
         run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
@@ -193,6 +211,7 @@ jobs:
           working-directory: python
           target: aarch64
           manylinux: 2_28
+          docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
       - name: The wheel carries the CPU level marker
         run: |
@@ -253,6 +272,13 @@ jobs:
         run: |
           for v in $VERSIONS; do
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      # P3-T074: the docs examples and notebooks on macOS arm64 (the abi3 wheel, Python 3.11 and 3.14).
+      - name: Docs examples and notebooks
+        if: matrix.flavour == 'abi3'
+        run: |
+          for v in 3.11 3.14; do
+            .github/scripts/docs-examples-test.sh dist "$(uv python find "$v")"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

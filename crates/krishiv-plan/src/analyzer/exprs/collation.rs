@@ -110,6 +110,8 @@ const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
 /// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
 /// non-binary collation instead of matching bytes.
 const DEPENDS: &[&str] = &[
+    // Spark hashes the collation key (`HllSketchAgg.update`); Krishiv has no key hashing yet.
+    "hll_sketch_agg",
     "contains",
     "startswith",
     "endswith",
@@ -263,13 +265,15 @@ pub(super) fn string_of(c: Collation) -> DataType {
     }
 }
 
-/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`).
-fn has_key(t: &DataType) -> bool {
+/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`, and ICU with the
+/// `collations-icu` feature).
+pub(in crate::analyzer) fn has_key(t: &DataType) -> bool {
     !t.any_type(&|x| {
         matches!(x, DataType::CollatedString(c) if !matches!(
             c.family(),
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) || c.is_indeterminate())
+        ) && !(cfg!(feature = "collations-icu") && matches!(c.family(), CollationFamily::Icu { .. }))
+            || c.is_indeterminate())
     })
 }
 
@@ -329,6 +333,27 @@ pub(super) fn subquery_key_collation(
 /// collation of the result: `nvl2(selector, if_not_null, if_null)`.
 fn selector_args(name: &str) -> usize {
     usize::from(name.eq_ignore_ascii_case("nvl2"))
+}
+
+/// Whether `name` called with `count` arguments returns a binary-collated string whatever its
+/// arguments: the `BINARY_RESULT` calls, except the CASE-like `decode(expr, search, result, ...)`,
+/// which is typed by its result positions (the 2-argument form is the charset decoder).
+fn binary_result(name: &str, count: usize) -> bool {
+    BINARY_RESULT.contains(&name) && !(name == "decode" && count >= 3)
+}
+
+/// Whether argument `index` of `name` (of `count`) is one of its result positions: `if(cond, a, b)`
+/// and `decode(expr, search, result, ..., default)` take their collation from the results alone,
+/// never from the condition or the searched values (those are compared, not returned).
+fn is_result_arg(name: &str, index: usize, count: usize) -> bool {
+    if name.eq_ignore_ascii_case("if") && count == 3 {
+        index >= 1
+    } else if name.eq_ignore_ascii_case("decode") && count >= 3 {
+        // Results sit at 2, 4, ...; an even count ends in the default.
+        index >= 2 && (index.is_multiple_of(2) || index == count - 1)
+    } else {
+        true
+    }
 }
 
 /// How many leading arguments of `name` give the collation of the result: the others are numbers
@@ -428,8 +453,10 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
         )),
         ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr, memo),
         ExprNode::Function(f)
-            if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str())
-                || BINARY_RESULT.contains(&f.name.to_ascii_lowercase().as_str()) =>
+            if {
+                let lower = f.name.to_ascii_lowercase();
+                INSPECTS.contains(&lower.as_str()) || binary_result(&lower, f.args.len())
+            } =>
         {
             // `collation(x)` and `typeof(x)` return an ordinary string, and so do the
             // binary-result functions (`soundex`, `md5`, ...): the collation of the arguments
@@ -437,7 +464,11 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Resolved(ResolvedExpr::Function(f))
-            if INSPECTS.contains(&f.id.name()) || BINARY_RESULT.contains(&f.id.name()) =>
+            if INSPECTS.contains(&f.id.name()) || {
+                let mut count = 0;
+                e.for_each_child(&mut |_| count += 1);
+                binary_result(f.id.name(), count)
+            } =>
         {
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
@@ -455,7 +486,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             let mut kids = Vec::new();
             let mut index = 0;
             e.for_each_child(&mut |k| {
-                if index >= skip && index < end {
+                if index >= skip && index < end && is_result_arg(name, index, count) {
                     kids.extend(strength_of(k, memo));
                 }
                 index += 1;
@@ -874,6 +905,17 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
         {
+            if name == "decode" && n >= 3 {
+                // The CASE-like `decode(expr, search, result, ...)` is not the charset decoder
+                // of the binary-result list: Spark types it by its result positions
+                // (`string collate UTF8_LCASE` for `decode(1, 1, 'a', 'b' COLLATE utf8_lcase)`)
+                // and compares `expr` with each `search` by collation. Until it is lowered to a
+                // CASE here, a collated operand is refused rather than typed and matched as bytes.
+                return Err(unsupported(
+                    "decode over a collated string".to_owned(),
+                    e.origin,
+                ));
+            }
             if DEPENDS.contains(&name.as_str()) {
                 match collated_rewrite(&name, n, c) {
                     Some(rw) => rewrite = rw,
@@ -887,10 +929,28 @@ impl Resolver<'_> {
             } else if ICU_CASE.contains(&name.as_str())
                 && matches!(c.family(), CollationFamily::Icu { .. })
             {
-                return Err(unsupported(
-                    format!("{name} over a collated string"),
-                    e.origin,
-                ));
+                // `upper`/`lower` map in the collation's language (`__icu_case`); `initcap`
+                // needs word segmentation and stays refused.
+                let upper = match name.as_str() {
+                    "upper" | "ucase" => Some(1),
+                    "lower" | "lcase" => Some(0),
+                    _ => None,
+                };
+                match (upper, i32::try_from(c.id())) {
+                    // Without the feature the kernel has no case map: refuse here, as before.
+                    (Some(upper), Ok(id)) if n == 1 && cfg!(feature = "collations-icu") => {
+                        rewrite = Some(Rewrite {
+                            name: "__icu_case",
+                            args: vec![RwArg::Int(upper), RwArg::Int(id), RwArg::Kid(0)],
+                        });
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            format!("{name} over a collated string"),
+                            e.origin,
+                        ));
+                    }
+                }
             }
         }
         // The call runs on plain strings: the carrier is one.
@@ -910,12 +970,13 @@ impl Resolver<'_> {
                     strength_of(&k.shown(), &mut memo),
                     Some((_, Strength::Default))
                 );
-                // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
-                // written, the replacement is the one that casts.
+                // `btrim` and `nvl2` are Spark's runtime-replaceable calls: their own arguments
+                // are shown as written, the replacement is the one that casts (`nvl2`: Spark
+                // 4.2.0 run, follow-up S3).
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
-                    && name != "btrim"
+                    && !matches!(name.as_str(), "btrim" | "nvl2")
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -1177,7 +1238,11 @@ impl Resolver<'_> {
         {
             return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
-        let search = KEYED_SEARCH.contains(&name).then_some(c);
+        // Spark's column name shows the implicit cast of a default-strength operand to an ICU
+        // collation (`collate(a, unicode_ci) = 'A' collate UNICODE_CI`, `collations-basic` 46-56).
+        let search = (KEYED_SEARCH.contains(&name)
+            || matches!(c.family(), CollationFamily::Icu { .. }))
+        .then_some(c);
         self.compare_keys(e, kids, n, |_| string_of(c), search, in_agg, window_fn, cx)
             .map(Some)
     }
@@ -1733,7 +1798,9 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
-            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name) => {
+            Err(Conflict::Indeterminate)
+                if !FAILS_INDETERMINATE.contains(&name) && !KEYED.contains(&name) =>
+            {
                 indeterminate = true;
                 None
             }
@@ -1778,6 +1845,63 @@ mod tests {
                 nullable: true,
             },
         ))))
+    }
+
+    #[test]
+    fn if_and_decode_count_only_their_result_positions() {
+        // if(cond, a, b): a and b; decode(e, s1, r1, s2, r2, default): r1, r2, default.
+        let ifs: Vec<bool> = (0..3).map(|i| is_result_arg("IF", i, 3)).collect();
+        assert_eq!(ifs, [false, true, true]);
+        let odd: Vec<bool> = (0..5).map(|i| is_result_arg("decode", i, 5)).collect();
+        assert_eq!(odd, [false, false, true, false, true]);
+        let even: Vec<bool> = (0..6).map(|i| is_result_arg("decode", i, 6)).collect();
+        assert_eq!(even, [false, false, true, false, true, true]);
+        assert!(is_result_arg("concat", 0, 2));
+    }
+
+    #[test]
+    fn a_collated_if_condition_gives_the_result_no_collation() {
+        let lcase = Collation::parse("UTF8_LCASE").unwrap();
+        let lit = |v: &str| Arc::new(Expr::new(ExprNode::Literal(Literal::String(v.to_owned()))));
+        let call = Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+            name: "if".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![leaf(lcase), lit("a"), lit("b")],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        })));
+        let got = strength_of(&call, &mut Memo::new());
+        assert_eq!(got, Some((Collation::UTF8_BINARY, Strength::Default)));
+    }
+
+    #[test]
+    fn a_decode_takes_its_collation_from_its_results() {
+        let lcase = Collation::parse("UTF8_LCASE").unwrap();
+        let lit = |v: &str| Arc::new(Expr::new(ExprNode::Literal(Literal::String(v.to_owned()))));
+        let decode = |args: Vec<Arc<Expr>>| {
+            Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                name: "decode".to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            })))
+        };
+        // Spark 4.2.0: a collated expr is no result; a collated default is.
+        let plain = decode(vec![leaf(lcase), lit("a"), lit("x"), lit("y")]);
+        assert_eq!(
+            strength_of(&plain, &mut Memo::new()),
+            Some((Collation::UTF8_BINARY, Strength::Default))
+        );
+        let dflt = decode(vec![lit("a"), lit("a"), lit("x"), leaf(lcase)]);
+        assert_eq!(
+            strength_of(&dflt, &mut Memo::new()),
+            Some((lcase, Strength::Implicit))
+        );
     }
 
     /// `e = concat(e, e)` sixty times shares one child per level: a walk that expands the

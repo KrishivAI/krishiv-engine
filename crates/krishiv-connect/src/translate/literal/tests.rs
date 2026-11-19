@@ -8,9 +8,9 @@ use krishiv_types::{DataType, DecimalType};
 
 use super::super::testing::proto_type;
 use super::*;
-use crate::proto::v4_2::DataType as DataTypeProto;
-use crate::proto::v4_2::data_type as dt;
-use crate::proto::v4_2::expression::literal as pl;
+use crate::proto::v4_3::DataType as DataTypeProto;
+use crate::proto::v4_3::data_type as dt;
+use crate::proto::v4_3::expression::literal as pl;
 
 fn literal_of(value: LiteralType) -> expression::Literal {
     expression::Literal {
@@ -148,7 +148,10 @@ fn nulls_carry_their_type() {
         dt::Char::default(),
     )))))
     .expect_err("char");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
 }
 
 #[test]
@@ -506,30 +509,242 @@ fn a_calendar_interval_literal_keeps_its_parts() {
 }
 
 #[test]
-fn literals_the_ir_has_no_value_for_are_unsupported() {
-    for (value, name) in [
-        (LiteralType::Array(pl::Array::default()), "array"),
-        (LiteralType::Map(pl::Map::default()), "map"),
-        (LiteralType::Struct(pl::Struct::default()), "struct"),
-        (
-            LiteralType::SpecializedArray(pl::SpecializedArray::default()),
-            "specialized_array",
-        ),
-        (LiteralType::Time(pl::Time::default()), "time"),
-    ] {
-        let e = literal(&literal_of(value)).expect_err(name);
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{name}"
-        );
-        assert!(
-            e.message()
-                .contains(&format!("spark.connect.Expression.Literal.{name}")),
-            "{name}: {}",
-            e.message()
-        );
+fn a_time_literal_is_unsupported() {
+    let e = literal(&literal_of(LiteralType::Time(pl::Time::default()))).expect_err("time");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(
+        e.message().contains("spark.connect.Expression.Literal") && e.message().contains("TIME"),
+        "{}",
+        e.message()
+    );
+}
+
+fn int_lit(v: i32) -> expression::Literal {
+    literal_of(LiteralType::Integer(v))
+}
+
+fn null_lit() -> expression::Literal {
+    literal_of(LiteralType::Null(proto_type(Kind::Integer(
+        dt::Integer::default(),
+    ))))
+}
+
+fn array_type(element: Kind, contains_null: bool) -> DataTypeProto {
+    proto_type(Kind::Array(Box::new(dt::Array {
+        element_type: Some(Box::new(proto_type(element))),
+        contains_null,
+        ..dt::Array::default()
+    })))
+}
+
+#[test]
+fn an_array_literal_takes_its_type_from_the_root_data_type() {
+    // A Spark 4.1+ client: the root carries the type, the elements none.
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array {
+            elements: vec![int_lit(1), null_lit(), int_lit(3)],
+            ..pl::Array::default()
+        })),
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), true)),
+    };
+    let got = literal(&lit).unwrap();
+    let Literal::Array {
+        data_type,
+        elements,
+    } = &got
+    else {
+        panic!("not an array: {got:?}");
+    };
+    assert_eq!(data_type.element_type(), &DataType::Integer);
+    assert!(data_type.contains_null());
+    assert_eq!(
+        elements,
+        &[
+            Literal::Integer(1),
+            Literal::Null(Some(DataType::Integer)),
+            Literal::Integer(3)
+        ]
+    );
+    // A null where the type forbids one is refused.
+    let strict = expression::Literal {
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), false)),
+        ..lit
+    };
+    assert_eq!(
+        literal(&strict).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+#[expect(deprecated, reason = "the pre-4.1 element_type field")]
+fn an_array_literal_of_an_older_client_names_its_element_type() {
+    let lit = literal_of(LiteralType::Array(pl::Array {
+        element_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+        elements: vec![int_lit(7)],
+    }));
+    let got = literal(&lit).unwrap();
+    assert_eq!(got.data_type().unwrap().simple_string(), "array<int>");
+    // Neither a root type nor an element type: Spark would infer one; Krishiv refuses.
+    let none = literal_of(LiteralType::Array(pl::Array {
+        elements: vec![int_lit(7)],
+        ..pl::Array::default()
+    }));
+    assert_eq!(
+        literal(&none).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+fn an_empty_array_literal_is_an_array_of_no_elements() {
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array::default())),
+        data_type: Some(array_type(Kind::String(dt::String::default()), true)),
+    };
+    let got = literal(&lit).unwrap();
+    assert_eq!(got.data_type().unwrap().simple_string(), "array<string>");
+}
+
+#[test]
+fn a_map_literal_pairs_keys_with_values() {
+    let map_type = proto_type(Kind::Map(Box::new(dt::Map {
+        key_type: Some(Box::new(proto_type(Kind::String(dt::String::default())))),
+        value_type: Some(Box::new(proto_type(Kind::Integer(dt::Integer::default())))),
+        value_contains_null: true,
+        ..dt::Map::default()
+    })));
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Map(pl::Map {
+            keys: vec![literal_of(LiteralType::String("a".into()))],
+            values: vec![int_lit(1)],
+            ..pl::Map::default()
+        })),
+        data_type: Some(map_type.clone()),
+    };
+    let got = literal(&lit).unwrap();
+    assert_eq!(got.data_type().unwrap().simple_string(), "map<string,int>");
+    // A different number of keys and values is an invalid plan.
+    let bad = expression::Literal {
+        literal_type: Some(LiteralType::Map(pl::Map {
+            keys: vec![literal_of(LiteralType::String("a".into()))],
+            ..pl::Map::default()
+        })),
+        data_type: Some(map_type),
+    };
+    assert_eq!(
+        literal(&bad).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+fn a_struct_literal_has_one_element_per_field_and_nests() {
+    let field = |name: &str, kind: Kind| dt::StructField {
+        name: name.to_owned(),
+        data_type: Some(proto_type(kind)),
+        nullable: true,
+        metadata: None,
+    };
+    let inner = Kind::Array(Box::new(dt::Array {
+        element_type: Some(Box::new(proto_type(Kind::Integer(dt::Integer::default())))),
+        contains_null: false,
+        ..dt::Array::default()
+    }));
+    let struct_type = proto_type(Kind::Struct(dt::Struct {
+        fields: vec![
+            field("a", Kind::Integer(dt::Integer::default())),
+            field("b", inner),
+        ],
+        ..dt::Struct::default()
+    }));
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Struct(pl::Struct {
+            elements: vec![
+                int_lit(1),
+                literal_of(LiteralType::Array(pl::Array {
+                    elements: vec![int_lit(2)],
+                    ..pl::Array::default()
+                })),
+            ],
+            ..pl::Struct::default()
+        })),
+        data_type: Some(struct_type.clone()),
+    };
+    let got = literal(&lit).unwrap();
+    assert_eq!(
+        got.data_type().unwrap().simple_string(),
+        "struct<a:int,b:array<int>>"
+    );
+    // The wrong count of elements.
+    let short = expression::Literal {
+        literal_type: Some(LiteralType::Struct(pl::Struct::default())),
+        data_type: Some(struct_type),
+    };
+    assert_eq!(
+        literal(&short).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+fn a_specialized_array_is_an_array_literal() {
+    let lit = literal_of(LiteralType::SpecializedArray(pl::SpecializedArray {
+        value_type: Some(pl::specialized_array::ValueType::Longs(
+            crate::proto::v4_3::Longs { values: vec![1, 2] },
+        )),
+    }));
+    let got = literal(&lit).unwrap();
+    assert_eq!(got.data_type().unwrap().simple_string(), "array<bigint>");
+    // With the root type of the same array it is accepted too, and a different kind is refused.
+    let typed_root = expression::Literal {
+        data_type: Some(array_type(Kind::Long(dt::Long::default()), true)),
+        ..lit.clone()
+    };
+    let typed = literal(&typed_root).unwrap();
+    assert_eq!(typed.data_type().unwrap().simple_string(), "array<bigint>");
+    let wrong = expression::Literal {
+        data_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+        ..lit
+    };
+    assert_eq!(
+        literal(&wrong).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanIncompatibleLiteralDataType
+    );
+}
+
+#[test]
+fn a_nested_literal_deeper_than_the_type_limit_is_too_complex() {
+    // array<array<...<int>>> past MAX_NESTING_DEPTH levels, each level a literal.
+    let n = DataType::MAX_NESTING_DEPTH + 2;
+    let mut ty = proto_type(Kind::Integer(dt::Integer::default()));
+    let mut value = int_lit(1);
+    for _ in 0..n {
+        ty = proto_type(Kind::Array(Box::new(dt::Array {
+            element_type: Some(Box::new(ty)),
+            contains_null: false,
+            ..dt::Array::default()
+        })));
+        value = literal_of(LiteralType::Array(pl::Array {
+            elements: vec![value],
+            ..pl::Array::default()
+        }));
     }
+    value.data_type = Some(ty);
+    let e = std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(move || {
+            // The deep message drops here, on the big stack.
+            literal(&value)
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedToParseTooComplex);
 }
 
 #[test]
@@ -568,5 +783,58 @@ fn a_decimal_literal_of_any_length_is_read_in_place() {
     assert_eq!(
         e.error_class(),
         ErrorClass::DecimalPrecisionExceedsMaxPrecision
+    );
+}
+
+#[test]
+#[expect(deprecated, reason = "the pre-4.1 element_type field")]
+fn a_member_that_misses_the_declared_type_is_an_invalid_plan_not_internal() {
+    let assertion = ErrorClass::ConnectInvalidPlanAssertionFailure;
+    // A pre-4.1 client declares `int` elements and sends a long.
+    let wrong_member = literal_of(LiteralType::Array(pl::Array {
+        element_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+        elements: vec![literal_of(LiteralType::Long(1))],
+    }));
+    assert_eq!(literal(&wrong_member).unwrap_err().error_class(), assertion);
+    // A null member under `array<int not null>`.
+    let null_member = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array {
+            elements: vec![int_lit(1), null_lit()],
+            ..pl::Array::default()
+        })),
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), false)),
+    };
+    assert_eq!(literal(&null_member).unwrap_err().error_class(), assertion);
+    // A specialized `longs` under a root `array<int>`.
+    let specialized = expression::Literal {
+        literal_type: Some(LiteralType::SpecializedArray(pl::SpecializedArray {
+            value_type: Some(pl::specialized_array::ValueType::Longs(
+                crate::proto::v4_3::Longs { values: vec![1] },
+            )),
+        })),
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), true)),
+    };
+    assert_eq!(literal(&specialized).unwrap_err().error_class(), assertion);
+}
+
+#[test]
+fn a_collated_type_in_a_nested_literals_root_is_refused() {
+    // An empty array has no `String` member to meet the scalar refusal: its declared type must.
+    let collated = array_type(
+        Kind::String(dt::String {
+            collation: "UTF8_LCASE".into(),
+            ..dt::String::default()
+        }),
+        true,
+    );
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array::default())),
+        data_type: Some(collated),
+    };
+    let e = literal(&lit).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
     );
 }

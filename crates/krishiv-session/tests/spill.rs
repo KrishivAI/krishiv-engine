@@ -245,3 +245,216 @@ fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
     drop(stream);
     wait_until_clean(&root(&dir));
 }
+
+/// RS-29 / PY-058: a spill directory that cannot be made (a read-only root, no writable home)
+/// does not fail queries that never spill: `select 1` and a plain scan run.
+#[test]
+fn an_unusable_spill_directory_does_not_fail_a_query_that_never_spills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    // a directory below a regular file can never be created
+    let dir = file.join("spill");
+    let s = Session::builder()
+        .config("krishiv.spill.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS one, 'a' AS b")).unwrap();
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    let df = block_on(s.sql("SELECT count(*) AS n FROM range(1000)")).unwrap();
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got[0].column(0).as_primitive::<Int64Type>().value(0), 1000);
+}
+
+/// PY-078: a query that has to spill, with a spill directory that cannot be made, fails naming
+/// `krishiv.spill.dir` and the OS error (`KRISHIV_SPILL_IO_ERROR`), not a bare memory error.
+#[test]
+fn a_spilling_query_with_an_unusable_spill_directory_names_the_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let dir = file.join("spill");
+    let s = session(&dir, Some("4MB"));
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await }).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+    assert!(err.to_string().contains("a_file"), "{err}");
+}
+
+/// PY-078: a write names the directory too; a query that never spills is unaffected.
+#[test]
+fn a_spilling_write_with_an_unusable_spill_directory_names_the_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("4MB"));
+    let out = tmp.path().join("o");
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let err = block_on(df.write().format("parquet").save(out.to_str().unwrap())).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+    assert!(err.to_string().contains("a_file"), "{err}");
+    let df = block_on(s.sql("SELECT count(*) AS n FROM range(10)")).unwrap();
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got[0].column(0).as_primitive::<Int64Type>().value(0), 10);
+}
+
+/// PY-078 (review): the error keeps the memory error as its cause, shows the OS error once, and
+/// is what `system.queries` records for the failed query.
+#[test]
+fn the_spill_failure_is_the_recorded_error_and_keeps_the_memory_error_as_its_cause() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("4MB"));
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await }).unwrap_err();
+    assert_eq!(
+        err.cause()
+            .map(krishiv_common::error::KrishivError::error_class),
+        Some(krishiv_common::error::ErrorClass::UnableToAcquireMemory),
+        "{err}"
+    );
+    assert_eq!(err.to_string().matches("os error").count(), 1, "{err}");
+    let rows = block_on(async {
+        s.sql("SELECT error_class FROM system.queries WHERE error_class IS NOT NULL")
+            .await
+            .unwrap()
+            .collect()
+            .await
+    })
+    .unwrap();
+    let classes: Vec<String> = rows
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_string::<i32>();
+            (0..b.num_rows())
+                .map(|i| a.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        classes.iter().any(|c| c == "KRISHIV_SPILL_IO_ERROR"),
+        "{classes:?}"
+    );
+}
+
+/// PY-078 (review): a spill set-up failure that is not an I/O failure keeps its own class.
+#[test]
+fn an_invalid_spill_setting_keeps_its_own_error_class() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            tmp.path().join("spill").to_str().unwrap(),
+        )
+        .config("krishiv.spill.compression", "zstd")
+        .config("krishiv.spill.zstd.level", "9999")
+        .config("krishiv.memory.limit", "4MB")
+        .build();
+    let s = s.expect("a level the registry accepts");
+    let err = block_on(async {
+        s.sql("SELECT count(*), max(s) FROM (SELECT sha2(cast(id AS string), 256) s FROM range(2000000) ORDER BY s)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivInvalidConfigValue,
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains("krishiv.spill.zstd.level"),
+        "{err}"
+    );
+    assert_eq!(
+        err.cause()
+            .map(krishiv_common::error::KrishivError::error_class),
+        Some(krishiv_common::error::ErrorClass::UnableToAcquireMemory),
+        "{err}"
+    );
+}
+
+/// PY-078 (review): the same frame run again once the directory is usable spills and succeeds.
+#[test]
+fn a_frame_run_again_after_the_spill_directory_became_usable_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let s = session(&file.join("spill"), Some("6m"));
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let err = block_on(df.collect()).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    std::fs::remove_file(&file).unwrap();
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, usize::try_from(KEYS).unwrap());
+}
+
+/// PY-078 (review): the spill directory opened for an earlier query, then made unwritable: the
+/// next spilling query still names the directory (the per-query directory cannot be created).
+#[cfg(unix)]
+#[test]
+fn a_spill_directory_that_became_unwritable_after_it_opened_is_named() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = root(&tmp);
+    let s = session(&r, Some("6m"));
+    let rows = |s: &Session| -> usize {
+        let df = block_on(s.sql(QUERY)).unwrap();
+        block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum()
+    };
+    assert_eq!(rows(&s), usize::try_from(KEYS).unwrap());
+    wait_until_clean(&r);
+    let dirs: Vec<_> = std::fs::read_dir(&r)
+        .unwrap()
+        .flatten()
+        .map(|d| d.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert!(!dirs.is_empty());
+    // A regular file where the session directory was: no child directory can be made below it,
+    // for a privileged run as for an unprivileged one.
+    let moved: Vec<_> = dirs
+        .iter()
+        .map(|d| {
+            let to = d.with_extension("moved");
+            std::fs::rename(d, &to).unwrap();
+            std::fs::write(d, b"x").unwrap();
+            to
+        })
+        .collect();
+    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
+    for (d, to) in dirs.iter().zip(&moved) {
+        std::fs::remove_file(d).unwrap();
+        std::fs::rename(to, d).unwrap();
+    }
+    let err = err.unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivSpillIoError,
+        "{err}"
+    );
+    assert!(err.to_string().contains("krishiv.spill.dir"), "{err}");
+}

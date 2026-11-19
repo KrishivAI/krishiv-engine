@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 
-use krishiv_exec::planner::MemoryTable;
+use krishiv_exec::planner::{MemoryTable, TableProvider};
 use krishiv_plan::analyzer::TableColumn;
 
 use super::{SessionCatalog, TempTable, is_hidden_name};
@@ -38,6 +38,28 @@ impl SessionCatalog {
     }
 }
 
+impl SessionCatalog {
+    /// Adds the hidden table `table`, read through its provider, and returns its name, which no SQL
+    /// text spells: a row-level statement's target at the version the statement read. Like a
+    /// script result it goes once nothing but the catalog holds the returned entry.
+    pub(crate) fn put_hidden_provider(
+        &self,
+        columns: Vec<TableColumn>,
+        table: Arc<dyn TableProvider>,
+    ) -> (String, Arc<TempTable>) {
+        let name = format!(
+            "{SCRIPT_RESULT_PREFIX}{}",
+            self.hidden.fetch_add(1, Ordering::AcqRel)
+        );
+        let entry = Arc::new(TempTable::Provider { columns, table });
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        tables.insert(name.to_lowercase(), (name.clone(), Arc::clone(&entry)));
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        (name, entry)
+    }
+}
+
 /// Drops the hidden entries nothing needs: those no live view pins (`live`) and, of the script
 /// results, those nothing but the catalog holds: a result frame, and every frame derived from it
 /// (`DataFrame::keep`), owns its table.
@@ -50,4 +72,32 @@ pub(super) fn retain(
             || live.contains(key)
             || (key.starts_with(SCRIPT_RESULT_PREFIX) && Arc::strong_count(table) > 1)
     });
+}
+
+/// Drops the script results no view in `tables` pins (a copy of another catalog's map): the copy
+/// has no frame that reads them, and keeping them would hold each result alive in both catalogs.
+pub(super) fn leave_out(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
+    let mut live = BTreeSet::new();
+    for (_, table) in tables.values() {
+        if let TempTable::View { pins, .. } = &**table {
+            live.extend(pins.iter().cloned());
+        }
+    }
+    tables.retain(|key, _| !key.starts_with(SCRIPT_RESULT_PREFIX) || live.contains(key));
+    // A kept result gets a handle of the copy's own (the batches stay shared): `retain` counts
+    // handles, so a handle shared with the source would keep the entry in both catalogs after each
+    // drops the view that pins it.
+    for (key, (_, table)) in tables.iter_mut() {
+        if key.starts_with(SCRIPT_RESULT_PREFIX)
+            && let TempTable::Memory {
+                columns,
+                table: data,
+            } = &**table
+        {
+            *table = Arc::new(TempTable::Memory {
+                columns: columns.clone(),
+                table: Arc::clone(data),
+            });
+        }
+    }
 }

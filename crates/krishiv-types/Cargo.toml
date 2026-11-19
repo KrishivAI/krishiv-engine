@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-types"
 description = "Internal type representations"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -16,7 +19,7 @@ arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 serde_json = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

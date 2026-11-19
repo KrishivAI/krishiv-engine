@@ -151,6 +151,7 @@ pub fn krishiv_udf_sdk::UdfLibrary::get_aggregate(&self, &str) -> core::option::
 pub fn krishiv_udf_sdk::UdfLibrary::get_aggregate_versioned(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::AggregateUdf>>
 pub fn krishiv_udf_sdk::UdfLibrary::get_versioned(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>>
 pub fn krishiv_udf_sdk::UdfLibrary::is_empty(&self) -> bool
+pub fn krishiv_udf_sdk::UdfLibrary::names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn krishiv_udf_sdk::UdfLibrary::new() -> Self
 pub fn krishiv_udf_sdk::UdfLibrary::register(&self, alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
 pub fn krishiv_udf_sdk::UdfLibrary::register_aggregate(&self, alloc::sync::Arc<dyn krishiv_udf_sdk::AggregateUdf>) -> core::result::Result<(), krishiv_udf_sdk::UdfError>

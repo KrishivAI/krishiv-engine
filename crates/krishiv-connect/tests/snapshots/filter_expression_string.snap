@@ -1,4 +1,8 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[KRISHIV_UNSUPPORTED_FEATURE] The feature SQL expression strings (spark.connect.Expression.expression_string, sent by selectExpr, where("...") and expr()) is not supported by Krishiv yet. SQLSTATE: 0A000
+Filter ((a > 1) and (b < 2))
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Filter plan_id=1
+  Read plan_id=0

@@ -32,18 +32,24 @@ pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
+mod key_count;
 mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
+mod observe;
 mod orient;
 mod probe_select;
 mod properties;
 pub(crate) mod pushdown;
+mod python_relation;
 mod python_udf;
+mod python_udtf;
+mod row_level;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
 mod window;
+mod write;
 
 use std::fmt;
 use std::sync::Arc;
@@ -56,10 +62,17 @@ pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
+pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
-pub use table::{
-    MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
+pub use row_level::{
+    CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
+    RowLevelTable, RowLevelWrite,
 };
+pub use table::{
+    MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
+    TableProviderResolver,
+};
+pub use write::{TableCapabilities, WriteMode, WriteRequest};
 
 use crate::error::Result;
 pub use crate::physical::PhysicalPlan;
@@ -97,6 +110,15 @@ pub struct PlanningContext {
     /// caller fixes it (a query planned in several pieces reads one
     /// `current_timestamp()`); `None`: planning takes it.
     pub query_start_micros: Option<i64>,
+    /// The salt unseeded `TABLESAMPLE` seeds are drawn from: the same salt
+    /// draws the same seeds, so a caller keeping it for one DataFrame keeps
+    /// its sampled rows across actions (Spark's Dataset keeps its executed
+    /// plan). `None`: each plan draws fresh seeds.
+    pub sample_salt: Option<u64>,
+    /// The plan is only shown (`EXPLAIN`, estimates), never run: checks Spark makes when the plan
+    /// executes, such as `QUERY_ONLY_CORRUPT_RECORD_COLUMN` (raised by the file format's reader), are
+    /// skipped.
+    pub inspect: bool,
 }
 
 impl PlanningContext {
@@ -108,7 +130,23 @@ impl PlanningContext {
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
             udfs: None,
             query_start_micros: None,
+            sample_salt: None,
+            inspect: false,
         }
+    }
+
+    /// The same context for a plan that is only inspected when `inspect`.
+    #[must_use]
+    pub fn with_inspection(mut self, inspect: bool) -> Self {
+        self.inspect = inspect;
+        self
+    }
+
+    /// The same context drawing unseeded sample seeds from `salt`.
+    #[must_use]
+    pub fn with_sample_salt(mut self, salt: u64) -> Self {
+        self.sample_salt = Some(salt);
+        self
     }
 
     /// The same context for the session user `user`.

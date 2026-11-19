@@ -165,6 +165,15 @@ impl RuntimeFilters {
         self.lock().stages.get(&partition).cloned()
     }
 
+    /// The row stage of the driver in `partition` of a source outside this crate whose batches
+    /// have `schema` (see [`SourceRows`]); filters whose target is not a column of `schema` are
+    /// dropped.
+    #[must_use]
+    pub fn source_rows(&self, schema: &Schema, partition: u32) -> SourceRows {
+        let filters = self.scan_filters(schema);
+        SourceRows(self.scan_stage(&filters, schema, partition))
+    }
+
     /// The filters at the table level of `table` (filters whose target is
     /// not a column of it are dropped).
     #[must_use]
@@ -402,6 +411,30 @@ impl RowStage {
     }
 }
 
+/// One driver's row stage for a scan source outside this crate (a connector's): the runtime
+/// filters' rows dropped from its batches, or kept for the hash probe above when the planner
+/// handed the stage to it. A source that receives [`RuntimeFilters`] must build one per driver
+/// (`RuntimeFilters::source_rows`), call [`Self::start_partition`] per unit of work it claims
+/// and pass each output batch through [`Self::apply`].
+#[derive(Debug)]
+pub struct SourceRows(ScanRows);
+
+impl SourceRows {
+    /// Restarts the stage's adaptive measurement at a new unit of work (a morsel, a file).
+    pub fn start_partition(&mut self) {
+        self.0.start_partition();
+    }
+
+    /// `batch` without the rows the runtime filters drop (as it is when the consumer evaluates
+    /// them).
+    ///
+    /// # Errors
+    /// A filter's evaluation error.
+    pub fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.0.apply(batch)
+    }
+}
+
 /// A scan driver's row stage: its own, or one its consumer evaluates.
 #[derive(Debug)]
 pub(crate) enum ScanRows {
@@ -464,7 +497,7 @@ impl SharedStage {
 
 /// `prev` with its set rows replaced by `answers` (one per set row, in
 /// order).
-fn scatter(prev: &BooleanBuffer, answers: &BooleanBuffer) -> BooleanBuffer {
+pub(super) fn scatter(prev: &BooleanBuffer, answers: &BooleanBuffer) -> BooleanBuffer {
     let mut out = BooleanBufferBuilder::new(prev.len());
     out.append_n(prev.len(), false);
     for (k, i) in prev.set_indices().enumerate() {
@@ -651,6 +684,55 @@ mod tests {
         // A batch the range mostly keeps is tested by both in full.
         assert_eq!(rows(&mut stage, &[0, 1, 2, 7000]), 3);
         assert_eq!(tested(&set) - before, 3 + 4);
+    }
+
+    fn source_rows(rows: &mut super::SourceRows, a: &[i64]) -> usize {
+        rows.apply(batch(a))
+            .unwrap_or_else(|e| unreachable!("{e}"))
+            .num_rows()
+    }
+
+    /// A connector's driver stage (`RuntimeFilters::source_rows`): with no filters every row
+    /// stays; a published filter drops the rows no producer keeps, restarting per unit of work;
+    /// nothing is handed to a consumer.
+    #[test]
+    fn source_rows_drop_what_the_filters_drop() {
+        let mut none = RuntimeFilters::default().source_rows(&schema(), 0);
+        none.start_partition();
+        assert_eq!(source_rows(&mut none, &[1, 2, 3]), 3);
+        let f = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        publish(&f, &[1]);
+        let slot = RuntimeFilters::new(vec![f]);
+        let mut rows = slot.source_rows(&schema(), 0);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[1, 2, 3, 4]), 1);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[2, 3]), 0);
+        assert!(slot.consumer_stage(0).is_none());
+    }
+
+    /// Handed to the consumer above (`hand_to_consumer`), the source keeps every row and the
+    /// consumer finds the driver's stage by its partition: the Delta self-join regression,
+    /// where a connector's scan never registered the stage the probe looked up.
+    #[test]
+    fn source_rows_handed_to_the_consumer_keep_the_rows() {
+        let f = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        publish(&f, &[1]);
+        let slot = RuntimeFilters::new(vec![f]);
+        assert!(slot.hand_to_consumer(std::collections::HashMap::from([(FilterId(1), 0)])));
+        assert!(slot.consumer_stage(3).is_none(), "before the driver starts");
+        let mut rows = slot.source_rows(&schema(), 3);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[1, 2, 3, 4]), 4);
+        assert!(slot.consumer_stage(3).is_some());
     }
 
     /// Filters on nested or absent columns have no row stage; a batch

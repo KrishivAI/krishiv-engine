@@ -10,14 +10,13 @@
 //! Ground truth: Spark 4.2's `stringExpressions.scala`, `maskExpressions.scala`,
 //! `urlExpressions.scala`, the `string-functions.sql`, `try-string-functions.sql`
 //! and `mask-functions.sql` goldens and the `string`/`url` matrix families.
-//! A function that takes an array in Spark (`reverse`, `concat_ws`) takes
-//! strings only here; the analyzer has no array type yet.
+//! `reverse` takes strings only here; `concat_ws` also takes arrays of strings.
 
 use krishiv_common::error::{
     DatatypeMismatchInvalidArgValue, DatatypeMismatchNonFoldableInput, KrishivError,
     KrishivUnsupportedFeature,
 };
-use krishiv_types::DataType;
+use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{
     Spec, exact, first_type, int, is_binary, match_inputs, matches, scalar, string, typed,
@@ -39,6 +38,32 @@ fn locate_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         DataType::Integer,
         nullable_of(c, 0) || nullable_of(c, 1),
     ))
+}
+
+/// `concat_ws`'s inputs: strings, each position an array of strings where the
+/// argument is an array.
+fn concat_ws_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let strings = DataType::Array(ArrayType::new(DataType::String, true).into());
+    // Spark's `TypeCollection(AbstractArrayType(StringType), StringType)`: a refusal names both.
+    let array_or_string = || InputType::StrictOneOf(vec![strings.clone(), DataType::String]);
+    (0..c.args().len().max(1))
+        .map(|i| match c.data_type(i) {
+            // Atomic elements are cast to strings; arrays, maps and structs
+            // (as elements, or as the argument) are refused, as Spark refuses them.
+            Some(DataType::Array(a)) if i > 0 => {
+                if matches!(
+                    a.element_type(),
+                    DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
+                ) {
+                    array_or_string()
+                } else {
+                    exact(strings.clone())
+                }
+            }
+            Some(DataType::Map(_) | DataType::Struct(_)) if i > 0 => array_or_string(),
+            _ => exact(DataType::String),
+        })
+        .collect()
 }
 
 /// `concat_ws`: NULL only when the separator is.
@@ -226,9 +251,16 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
         string,
     ));
+    // `reverse` takes a string, a binary or an array (Spark's `TypeCollection(StringType, ArrayType)`): an array keeps its type.
     out.extend(scalar(
         &["reverse"],
-        &Inputs::Expects(vec![text_or_bytes.clone()]),
+        &Inputs::Built(InputBuilder(|c: &CallTypes<'_>| {
+            if matches!(c.data_type(0), Some(DataType::Array(_))) {
+                vec![InputType::Array]
+            } else {
+                vec![InputType::OneOf(vec![DataType::String, DataType::Binary])]
+            }
+        })),
         first_type,
     ));
     out.extend(scalar(&["quote"], &one_text, nullable_string));
@@ -253,6 +285,11 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(scalar(
         &["__trim_collated"],
         &Inputs::Expects(vec![int_arg.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
+        &["__icu_case"],
+        &Inputs::Expects(vec![int_arg.clone(), int_arg.clone(), text.clone()]),
         string,
     ));
     out.extend(scalar(
@@ -301,7 +338,11 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Built(InputBuilder(elt_inputs)),
         elt_result,
     ));
-    out.extend(scalar(&["concat_ws"], &one_text, concat_ws_result));
+    out.extend(scalar(
+        &["concat_ws"],
+        &Inputs::Built(InputBuilder(concat_ws_inputs)),
+        concat_ws_result,
+    ));
     out.extend(scalar(
         &["base64"],
         &Inputs::Expects(vec![exact(DataType::Binary)]),

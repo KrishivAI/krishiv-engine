@@ -24,8 +24,9 @@ use krishiv_types::batch::Batch;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
+use crate::input_coalesce::{InputCoalesce, held_max_bytes};
 use crate::metrics::{DriverStats, OperatorMetrics};
-use crate::morsel::{Barrier, Baton, Countdown};
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
 use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
 use crate::pipeline::Pipeline;
 
@@ -37,6 +38,9 @@ pub(crate) struct PipelineRun {
     pub(crate) pipeline: Pipeline,
     /// Per operator: the finalized breaker state it reads, if any.
     pub(crate) operator_deps: Vec<Option<GlobalState>>,
+    /// Per operator, then for the sink: the first partition id it numbers
+    /// its input's partitions from (see `Pipeline::origins`).
+    pub(crate) operator_bases: Vec<u32>,
     /// Per operator: its flush barrier (used if it needs a flush), shared
     /// with the other pipelines of a fan-in that run the operator.
     pub(crate) barriers: Vec<Arc<Barrier>>,
@@ -47,8 +51,28 @@ pub(crate) struct PipelineRun {
     /// The fan-in's baton and this pipeline's member index, when the
     /// members of a deterministic fan-in take turns (see [`Baton`]).
     pub(crate) turn: Option<(Arc<Baton>, usize)>,
+    /// `(first partition id, lane count)` when the drivers of this pipeline
+    /// are the logical partitions of `krishiv.deterministicOrder` (T094 G1):
+    /// the driver of partition `p` is lane `p - first` and reads only the
+    /// morsels dealt to its lane.
+    pub(crate) lanes: Option<(u32, usize)>,
+    /// The lanes' combine order (set with `lanes`).
+    pub(crate) combine_order: Option<Arc<CombineOrder>>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+}
+
+/// A lane's place in its pipeline's [`CombineOrder`]: dropped, it lets the next
+/// lane combine, whether this one combined, failed or was aborted.
+struct LanePass {
+    order: Arc<CombineOrder>,
+    lane: usize,
+}
+
+impl Drop for LanePass {
+    fn drop(&mut self) {
+        self.order.pass(self.lane);
+    }
 }
 
 /// A driver's place in its fan-in's [`Baton`]: it leaves when dropped, so
@@ -426,6 +450,9 @@ struct Slot {
     /// The state is out of the slot for a step in progress: spill requests
     /// for it wait until the step ends.
     busy: bool,
+    /// The small batches held for this operator or sink
+    /// (`krishiv.exec.coalesceInput`, see [`coalescers`]).
+    coalesce: Option<InputCoalesce>,
 }
 
 /// The driver's operator and sink state. It sits behind an async mutex only
@@ -473,6 +500,8 @@ struct Driver {
     /// The driver's baton and member index in a deterministic fan-in, if it
     /// takes turns (its [`Turn`] guard is held by the driver's task).
     turn: Option<(Arc<Baton>, usize)>,
+    /// The scheduler-assigned partition id (the lane is `partition - first`).
+    partition: u32,
 }
 
 impl Driver {
@@ -487,6 +516,10 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_lane(
+                run.lanes
+                    .map(|(first, n)| ((partition - first) as usize, n)),
+            )
             .with_partition_base(base)
         };
         let p = &run.pipeline;
@@ -498,9 +531,11 @@ impl Driver {
             ctx: source_ctx,
             local: None,
             busy: false,
+            coalesce: None,
         });
         for (k, (id, op)) in p.operators.iter().enumerate() {
-            let mut c = ctx(*id, op.name());
+            let mut c = ctx(*id, op.name())
+                .with_numbering_base(run.operator_bases.get(k).copied().unwrap_or(base));
             if let Some(Some(state)) = run.operator_deps.get(k) {
                 c = c.with_dependency(Arc::clone(state));
             }
@@ -510,17 +545,27 @@ impl Driver {
                 ctx: c,
                 local: Some(local),
                 busy: false,
+                coalesce: None,
             });
         }
         let (sink_id, sink) = &p.sink;
-        let c = Arc::new(ctx(*sink_id, sink.name()));
+        let c = Arc::new(
+            ctx(*sink_id, sink.name()).with_numbering_base(
+                run.operator_bases
+                    .get(p.operators.len())
+                    .copied()
+                    .unwrap_or(base),
+            ),
+        );
         let local = sink.local_state(&c, &run.sink_global)?;
         slots.push(Slot {
             ctx: c,
             local: Some(local),
             busy: false,
+            coalesce: None,
         });
         let metrics = vec![OperatorMetrics::default(); p.operators.len() + 2];
+        coalescers(&run, &mut slots);
         Ok(Self {
             source_local,
             slots: tokio::sync::Mutex::new(Slots { slots, metrics }),
@@ -531,6 +576,7 @@ impl Driver {
             yields: 0,
             position: None,
             turn: run.turn.clone(),
+            partition,
             owner,
             run,
         })
@@ -584,9 +630,29 @@ impl Driver {
         self.finish_operators(finish_from).await?;
         let sink = &run.pipeline.sink.1;
         let k = run.pipeline.operators.len() + 1;
+        // Logical partitions combine in lane order, so partial aggregates, builds and
+        // runs merge the same way on every run. The guard is made after this lane's turn
+        // came, and lets the next lane go when its combine ends or fails. A lane that fails
+        // earlier (source, operators) never passes: the higher lanes stay parked until the
+        // query's failure cancels the query and the drivers are aborted.
+        let _lane = match (&run.combine_order, run.lanes) {
+            (Some(order), Some((first, _))) if !sink.combine_unordered() => {
+                let lane = (self.partition - first) as usize;
+                // The sink state stays in its slot while this lane waits, and spill
+                // requests are still served, so a lane waiting here can free memory
+                // for the lane it waits on.
+                pause(&run, Some((&self.owner, &self.slots)), order.wait(lane)).await?;
+                Some(LanePass {
+                    order: Arc::clone(order),
+                    lane,
+                })
+            }
+            _ => None,
+        };
         let local = self.slots.get_mut().slot(k)?.local.take();
         let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
         sink.combine(local, &run.sink_global)?;
+        drop(_lane);
         if run.countdown.arrive() {
             self.boundary().await?;
             let start = run.executor.now();
@@ -684,6 +750,11 @@ impl Driver {
         let run = Arc::clone(&self.run);
         self.release_unwanted(from);
         for (i, (_, op)) in run.pipeline.operators.iter().enumerate() {
+            if i >= from
+                && let Some(next) = self.drain(i).await?
+            {
+                from = next;
+            }
             while i >= from {
                 self.boundary().await?;
                 let out = {
@@ -709,6 +780,10 @@ impl Driver {
             }
             self.release_unwanted(from);
         }
+        let n = run.pipeline.operators.len();
+        if from <= n {
+            self.drain(n).await?;
+        }
         Ok(())
     }
 
@@ -719,6 +794,9 @@ impl Driver {
     /// a driver waiting for that work would otherwise wait forever.
     fn release_unwanted(&mut self, from: usize) {
         let slots = self.slots.get_mut();
+        for slot in slots.slots.iter_mut().skip(1).take(from) {
+            slot.coalesce = None;
+        }
         let n = slots.slots.len().saturating_sub(2);
         for slot in slots.slots.iter_mut().skip(1).take(from.min(n)) {
             if slot.local.take().is_some()
@@ -808,12 +886,46 @@ impl Driver {
     /// still wanted: the one after the last that returned `Finished`, or the
     /// operator count when the sink finished.
     async fn push(&mut self, start: usize, batch: Batch) -> Result<Option<usize>> {
+        self.enqueue(start, batch)?;
+        self.run_stack().await
+    }
+
+    /// Pushes `batch`, already past operator `start`'s coalescer, through
+    /// operators `start..` into the sink.
+    async fn push_held(&mut self, start: usize, batch: Batch) -> Result<Option<usize>> {
+        self.stack.push((start, batch));
+        self.run_stack().await
+    }
+
+    /// Operator `k`'s coalescer (`n`: the sink's), if it has one.
+    fn coalescer(&mut self, k: usize) -> Option<&mut InputCoalesce> {
+        let slot = self.slots.get_mut().slots.get_mut(k + 1)?;
+        slot.coalesce.as_mut()
+    }
+
+    /// Queues `batch` as operator `k`'s input (`n`: the sink's), through its
+    /// coalescer if it has one: the batches that coalescer makes ready, in
+    /// order (the stack runs its top first).
+    fn enqueue(&mut self, k: usize, batch: Batch) -> Result<()> {
+        let Some(c) = self.coalescer(k) else {
+            self.stack.push((k, batch));
+            return Ok(());
+        };
+        c.push(batch);
+        let ready: Vec<Batch> = std::iter::from_fn(|| c.pop_ready()).collect();
+        self.stack.extend(ready.into_iter().rev().map(|b| (k, b)));
+        Ok(())
+    }
+
+    /// Runs the batches on the stack through the operators into the sink.
+    /// Returns the index of the operator (or `n`, the sink) that finished,
+    /// if one did.
+    async fn run_stack(&mut self) -> Result<Option<usize>> {
         let run = Arc::clone(&self.run);
         let ops = &run.pipeline.operators;
         let n = ops.len();
         let mut finished: Option<usize> = None;
         let mut outputs = 0u32;
-        self.stack.push((start, batch));
         while let Some(top) = self.stack.last() {
             let i = top.0;
             if i == n {
@@ -821,6 +933,10 @@ impl Driver {
                     && self.sink(b).await?
                 {
                     finished = Some(n);
+                    // A finished sink takes no held rows either.
+                    if let Some(slot) = self.slots.get_mut().slots.get_mut(n + 1) {
+                        slot.coalesce = None;
+                    }
                     self.stack.clear();
                 }
                 continue;
@@ -844,10 +960,10 @@ impl Driver {
                 OperatorOutput::NeedMoreInput(b) => {
                     self.stack.pop();
                     self.metrics(i + 1).input(rows);
-                    self.forward(i, b);
+                    self.forward(i, b)?;
                 }
                 OperatorOutput::HaveMoreOutput(b) => {
-                    self.forward(i, Some(b));
+                    self.forward(i, Some(b))?;
                     outputs += 1;
                     if outputs.is_multiple_of(YIELD_EVERY_OUTPUTS) {
                         self.boundary().await?;
@@ -858,7 +974,7 @@ impl Driver {
                     // Nothing upstream of `i` is needed any more.
                     self.stack.clear();
                     self.metrics(i + 1).input(rows);
-                    self.forward(i, b);
+                    self.forward(i, b)?;
                     finished = Some(finished.map_or(i + 1, |f| f.max(i + 1)));
                 }
                 OperatorOutput::NeedMemory { .. } => {}
@@ -868,11 +984,33 @@ impl Driver {
     }
 
     /// Queues operator `i`'s output for operator `i + 1`.
-    fn forward(&mut self, i: usize, batch: Option<Batch>) {
+    fn forward(&mut self, i: usize, batch: Option<Batch>) -> Result<()> {
         if let Some(b) = batch {
             self.metrics(i + 1).output(b.num_rows());
-            self.stack.push((i + 1, b));
+            self.enqueue(i + 1, b)?;
         }
+        Ok(())
+    }
+
+    /// Sends the rows held for operator `k` (`n`: the sink) on through it.
+    /// Returns the new `from` if an operator finished.
+    async fn drain(&mut self, k: usize) -> Result<Option<usize>> {
+        let mut finished = None;
+        let Some(c) = self.coalescer(k) else {
+            return Ok(None);
+        };
+        c.flush();
+        while let Some(b) = self.coalescer(k).and_then(InputCoalesce::pop_ready) {
+            if let Some(f) = self.push_held(k, b).await? {
+                finished = Some(f);
+                // Operator `k` (or the sink, `n`) wants no more rows: what
+                // it still holds goes with its state (`release_unwanted`).
+                if f > k {
+                    break;
+                }
+            }
+        }
+        Ok(finished)
     }
 
     /// Sinks one batch; `true` if the sink is finished.
@@ -989,6 +1127,31 @@ impl Driver {
         let granted = reserved?.0;
         run.query.check_cancelled()?;
         Ok(granted)
+    }
+}
+
+/// The driver's coalescers, by operator index (`n` = the sink): in a
+/// pipeline whose sink [allows it](crate::operator::Sink::coalesce_input),
+/// one for the sink and one for each operator that
+/// [asks](crate::operator::Operator::coalesce_input) (a sink that allows it
+/// ignores the source positions it is told, so rows held past a position report are harmless). None under
+/// `krishiv.exec.coalesceInput=false`.
+fn coalescers(run: &PipelineRun, slots: &mut [Slot]) {
+    let p = &run.pipeline;
+    let config = run.query.config();
+    if !config.coalesce_input || !p.sink.1.coalesce_input() {
+        return;
+    }
+    let wants = p
+        .operators
+        .iter()
+        .map(|(_, op)| op.coalesce_input())
+        .chain(std::iter::once(true));
+    let max_bytes = held_max_bytes(run.query.pool().effective_limit());
+    for (slot, wants) in slots.iter_mut().skip(1).zip(wants) {
+        if wants {
+            slot.coalesce = Some(InputCoalesce::new(config.batch_size, max_bytes));
+        }
     }
 }
 

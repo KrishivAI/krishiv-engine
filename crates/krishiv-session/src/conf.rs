@@ -3,19 +3,21 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use krishiv_common::config::{Config, SESSION_TIME_ZONE, Scope, ValueType, lookup};
+use krishiv_common::config::{
+    Config, ConfigEntry, ConfigValue, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope,
+    ValueType, lookup,
+};
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
 };
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
+use krishiv_plan::analyzer::SparkProfile;
 
-/// Prefixes of entries read once, when the session is built (memory pool,
-/// spill directory, I/O scheduler): setting them later would not apply,
-/// so it fails like a static config.
-pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
-
-/// Session keys fixed when the session is built (its memory pool).
+/// Session-scope keys fixed when the session is built (its memory pool): `SET` of one fails like
+/// a static config, a builder option sets it. Every other session-scope key is read per query, so
+/// `SET` takes it, whatever its prefix (SQL-23: the `krishiv.io.*` format-option fallbacks and
+/// `krishiv.io.prefetchBytes` are read from each query's configuration snapshot).
 const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
@@ -33,6 +35,20 @@ pub(crate) struct ConfStore {
     /// The default of `spark.sql.session.timeZone`, read once when the
     /// session is built (see [`local_zone`]).
     local_zone: Arc<str>,
+    /// Whether the catalog declaration keys are startup only (a server runtime, design P3-T067
+    /// §2.2, decisions 1 and 7): set when the session is built, never changed.
+    pub(crate) static_catalogs: bool,
+    /// The session's Spark profile: the default of an entry whose Spark default differs by release
+    /// ([`profile_default`]).
+    profile: SparkProfile,
+}
+
+/// The default of `entry` under `profile` where Spark's differs by release from the registry's (Spark 4.2's):
+/// `spark.sql.execution.pythonUDTF.arrow.enabled` is `false` before 4.2 (`SQLConf.scala` at v3.5.6, v4.0.0 and
+/// v4.1.0; `true` at v4.2.0).
+fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
+    let before_4_2 = profile < SparkProfile::V4_2;
+    (entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2).then_some(ConfigValue::Bool(false))
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -83,12 +99,44 @@ impl ConfStore {
         Self::with_local_zone(config, &local_zone())
     }
 
+    /// A store starting at this one's current configuration, with the same
+    /// local zone, whose `RESET` restores `baseline` (the runtime's
+    /// configuration) and this one's build-time session keys. Spark's
+    /// `cloneSession` gives the clone empty initial session options
+    /// (`SparkSession.scala:286-298` at v4.3.0, and likewise at v3.5.0,
+    /// v4.0.0, v4.1.0 and v4.2.0), so its `RESET` restores the shared
+    /// state's configuration only (`ResetCommand`, `SetCommand.scala:220-238`
+    /// at v4.3.0). The build-time keys (the memory limit) describe the pool
+    /// the clone is built with, so they stay.
+    pub(crate) fn copy_onto(&self, baseline: &Config) -> Self {
+        let (config, _) = self.versioned_snapshot();
+        let mut initial = baseline.clone();
+        for key in SESSION_BUILD_TIME {
+            initial.reset_key(key, &self.initial);
+        }
+        Self {
+            current: RwLock::new((config, 0)),
+            initial,
+            local_zone: Arc::clone(&self.local_zone),
+            static_catalogs: self.static_catalogs,
+            profile: self.profile,
+        }
+    }
+
     fn with_local_zone(config: Config, local_zone: &str) -> Self {
         Self {
             current: RwLock::new((Arc::new(config.clone()), 0)),
             initial: config,
             local_zone: Arc::from(local_zone),
+            static_catalogs: false,
+            profile: SparkProfile::default(),
         }
+    }
+
+    /// This store for a session of `profile` (the defaults that differ by Spark release).
+    pub(crate) fn with_profile(mut self, profile: SparkProfile) -> Self {
+        self.profile = profile;
+        self
     }
 
     /// The zone an unset `spark.sql.session.timeZone` means.
@@ -117,6 +165,42 @@ impl ConfStore {
         self.versioned_snapshot().0
     }
 
+    /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
+    /// endpoints, regions, accounts, key files) another value than the configuration the session
+    /// was built with, i.e. whether the session itself redirected a store (P3-T067b).
+    pub(crate) fn store_settings_changed(&self, config: &Config) -> bool {
+        let endpoints = |c: &Config| {
+            let mut v: Vec<(String, String)> = c
+                .explicit_unregistered()
+                .into_iter()
+                .filter(|(k, _)| krishiv_io::is_server_scoped_option(k))
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.to_owned()))
+                .collect();
+            v.sort();
+            v
+        };
+        endpoints(config) != endpoints(&self.initial)
+    }
+
+    /// Every explicitly set key with its value as text, sorted by key: what
+    /// `SET` lists and Spark Connect's `Config` `GetAll` returns.
+    pub(crate) fn explicit_entries(&self) -> Vec<(String, String)> {
+        let config = self.snapshot();
+        let mut rows: Vec<(String, String)> = config
+            .explicit_registered()
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .chain(
+                config
+                    .explicit_unregistered()
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+            )
+            .collect();
+        rows.sort_unstable();
+        rows
+    }
+
     /// The configuration and its version, read together.
     pub(crate) fn versioned_snapshot(&self) -> (Arc<Config>, u64) {
         let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
@@ -137,7 +221,14 @@ impl ConfStore {
     /// The value of `key` as `spark.conf.get` and `SET key` show it: an
     /// unset session time zone shows the local zone.
     pub(crate) fn value(&self, key: &str) -> Option<String> {
-        get(&self.snapshot(), key).or_else(|| {
+        let config = self.snapshot();
+        if let Some(entry) = lookup(krishiv_common::config::resolve_alternative(key))
+            && !config.is_set(entry)
+            && let Some(v) = profile_default(entry, self.profile)
+        {
+            return Some(v.to_string());
+        }
+        get(&config, key).or_else(|| {
             lookup(key)
                 .is_some_and(|entry| entry.key == SESSION_TIME_ZONE.key)
                 .then(|| self.local_zone.to_string())
@@ -258,7 +349,7 @@ fn leading_number(text: &str) -> Option<(u32, &str)> {
 /// `krishiv.*` key or Spark alias) with its default, else an unregistered
 /// key as set.
 pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
-    match lookup(key) {
+    match lookup(krishiv_common::config::resolve_alternative(key)) {
         Some(entry) => config.get(entry).map(ToString::to_string),
         None => config.get_unregistered(key).map(str::to_owned),
     }
@@ -267,11 +358,7 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 /// Whether `key` can change after the session is built.
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
-        Some(entry) => {
-            entry.scope == Scope::Session
-                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
-                && !SESSION_BUILD_TIME.contains(&entry.key)
-        }
+        Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
         None => true,
     }
 }
@@ -327,7 +414,7 @@ impl RuntimeConf {
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
     /// or `krishiv.sql.session.timeZone`) no zone database entry or offset names.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -377,7 +464,7 @@ impl RuntimeConf {
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -385,6 +472,21 @@ impl RuntimeConf {
         }
         self.store.reset_key(key);
         Ok(())
+    }
+
+    /// Every explicitly set key and its value as text, sorted by key, as
+    /// `SET` lists them (Spark's `RuntimeConfig.getAll`). Registered keys
+    /// appear under their canonical name; defaults are not listed.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.conf().set("my.app.flag", "on")?;
+    /// assert!(session.conf().entries().contains(&("my.app.flag".to_owned(), "on".to_owned())));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn entries(&self) -> Vec<(String, String)> {
+        self.store.explicit_entries()
     }
 
     /// Whether `key` can be set at runtime.
@@ -395,9 +497,15 @@ impl RuntimeConf {
     /// assert!(!session.conf().is_modifiable("krishiv.memory.limit"));
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
+    ///
+    /// In a session of a server runtime the catalog declaration keys
+    /// (`krishiv.catalog.<name>.*`, `spark.sql.catalog.*`) are startup only, for every role
+    /// (design P3-T067 §2.2: a session-declared catalog is a client-chosen URL the server
+    /// fetches); an embedded session is unchanged.
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
+            && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
     }
 }
 

@@ -467,6 +467,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths,
             options: std::collections::BTreeMap::new(),
+            schema: None,
         }))
     };
     let key = [("l_orderkey", DataType::Long)];
@@ -512,6 +513,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths: path(),
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,
@@ -585,6 +587,89 @@ fn catalog_failures_hide_the_provider_text() {
     assert!(!format!("{e} {e:?}").contains("Canary"));
 }
 
+/// A catalog that refuses for want of a delegated user token (P3-T067 §3.3).
+struct NoUserToken;
+
+impl crate::analyzer::Catalog for NoUserToken {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivCatalogDelegationUnavailable {
+            catalog: "`lake`".to_owned(),
+            reason: "this session authenticated with `token`".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+/// A catalog whose delegated exchanges reached their limit (P3-T067 §3.3).
+struct ExchangeLimit;
+
+impl crate::analyzer::Catalog for ExchangeLimit {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivCatalogLimitExceeded {
+            source: "Delegated access to the catalog `lake` for this user".to_owned(),
+            limit: "token exchanges in a minute".to_owned(),
+            value: "60".to_owned(),
+            config: "a higher `krishiv.catalog.delegation.maxExchangesPerMinute`".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+#[test]
+fn a_catalog_limit_is_not_hidden_as_a_catalog_failure() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(ExchangeLimit),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogLimitExceeded
+    );
+    assert!(e.to_string().contains("maxExchangesPerMinute"), "{e}");
+}
+
+#[test]
+fn a_delegation_refusal_is_not_hidden_as_a_catalog_failure() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(NoUserToken),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable
+    );
+}
+
 #[test]
 fn already_resolved_plans_are_checked_too() {
     let resolved = run(QUERIES[5](), &ctx()).unwrap().plan;
@@ -622,8 +707,13 @@ fn pins_securables_and_fingerprint() {
         used["table `spark_catalog`.`default`.`supplier`"],
         ["s_name", "s_nationkey", "s_suppkey"]
     );
-    // `EXISTS (SELECT * FROM lineitem ...)` references every column.
-    assert_eq!(used["table `spark_catalog`.`default`.`lineitem`"].len(), 16);
+    // The columns the final plan reads (P3-T062 review B1): `EXISTS (SELECT * FROM lineitem
+    // ...)` becomes a semi join that reads only its keys and predicate columns, and the three
+    // uses of lineitem (instances of one scan) count together.
+    assert_eq!(
+        used["table `spark_catalog`.`default`.`lineitem`"],
+        ["l_commitdate", "l_orderkey", "l_receiptdate", "l_suppkey"]
+    );
     let q6 = run(QUERIES[5](), &ctx()).unwrap();
     assert_eq!(
         q6.securables[0].columns.iter().collect::<Vec<_>>(),
@@ -814,6 +904,7 @@ fn unsupported_inputs_fail_explicitly() {
         format: "parquet".to_owned(),
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
+        schema: None,
     }));
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sentences", vec![c("b")])]);
     for plan in [files, sha] {
@@ -874,6 +965,7 @@ fn unsupported_inputs_fail_explicitly() {
             format: "parquet".to_owned(),
             paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,

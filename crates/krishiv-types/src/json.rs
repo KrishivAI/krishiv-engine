@@ -97,12 +97,29 @@ impl DataType {
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value =
             serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;
-        Self::from_json_value(&value, 0)
+        Self::from_json_value(&value, 0, false)
     }
 
-    fn from_json_value(v: &Value, depth: usize) -> Result<Self> {
+    /// The inverse of [`Self::json`] for every type it writes: [`Self::from_json`] that also
+    /// reads the INDETERMINATE collation of a mixed expression's type (`string collate null`,
+    /// or `spark.null` in a field's `__COLLATIONS`), which Spark's `fromJson` refuses. For
+    /// Krishiv's own formats (the plan codec), never for input from Spark or a user.
+    ///
+    /// # Errors
+    /// As [`Self::from_json`].
+    pub fn from_canonical_json(text: &str) -> Result<Self> {
+        let value: Value =
+            serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;
+        Self::from_json_value(&value, 0, true)
+    }
+
+    /// `indeterminate`: the INDETERMINATE collation reads back ([`Self::from_canonical_json`]).
+    fn from_json_value(v: &Value, depth: usize, indeterminate: bool) -> Result<Self> {
         let invalid = || error::invalid_json_type(&v.to_string());
         let obj = match v {
+            Value::String(name) if indeterminate && name == INDETERMINATE_NAME => {
+                return Ok(Self::collated_string(Collation::INDETERMINATE));
+            }
             Value::String(name) => return atomic_from_name(name).ok_or_else(invalid)?,
             Value::Object(obj) => obj,
             _ => return Err(invalid()),
@@ -113,7 +130,7 @@ impl DataType {
         let child = |key: &str| {
             obj.get(key)
                 .ok_or_else(invalid)
-                .and_then(|c| Self::from_json_value(c, depth + 1))
+                .and_then(|c| Self::from_json_value(c, depth + 1, indeterminate))
         };
         let flag = |key: &str| obj.get(key).and_then(Value::as_bool).ok_or_else(invalid);
         let keys = |expected: &[&str]| {
@@ -138,7 +155,7 @@ impl DataType {
                     .ok_or_else(invalid)?;
                 let fields = fields
                     .iter()
-                    .map(|f| struct_field(f, depth))
+                    .map(|f| struct_field(f, depth, indeterminate))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(StructType::new(fields).into())
             }
@@ -149,7 +166,7 @@ impl DataType {
 
 /// A struct field: `name`, `type` and `nullable`, and `metadata` (optional,
 /// as in Spark).
-fn struct_field(v: &Value, depth: usize) -> Result<StructField> {
+fn struct_field(v: &Value, depth: usize, indeterminate: bool) -> Result<StructField> {
     let invalid = || error::invalid_json_type(&v.to_string());
     let obj = v.as_object().ok_or_else(invalid)?;
     let has_metadata = obj.contains_key("metadata");
@@ -165,13 +182,19 @@ fn struct_field(v: &Value, depth: usize) -> Result<StructField> {
         .get("nullable")
         .and_then(Value::as_bool)
         .ok_or_else(invalid)?;
-    let data_type = DataType::from_json_value(obj.get("type").ok_or_else(invalid)?, depth + 1)?;
+    let data_type = DataType::from_json_value(
+        obj.get("type").ok_or_else(invalid)?,
+        depth + 1,
+        indeterminate,
+    )?;
     let (data_type, metadata) = match obj.get("metadata") {
         None => (data_type, Metadata::empty()),
         Some(Value::Object(m)) => {
             let mut m = m.clone();
             let data_type = match m.remove(COLLATIONS_KEY) {
-                Some(Value::Object(map)) => apply_collations(&data_type, name, &map)?,
+                Some(Value::Object(map)) => {
+                    apply_collations(&data_type, name, &map, indeterminate)?
+                }
                 Some(_) => return Err(invalid()),
                 None => data_type,
             };
@@ -185,6 +208,12 @@ fn struct_field(v: &Value, depth: usize) -> Result<StructField> {
 /// The field-metadata key under which Spark's JSON form records the
 /// collations of a field's string leaves, by path.
 const COLLATIONS_KEY: &str = "__COLLATIONS";
+
+/// How [`DataType::json`] writes a string of the INDETERMINATE collation (its name is `null`).
+const INDETERMINATE_NAME: &str = "string collate null";
+
+/// How a field's `__COLLATIONS` names the INDETERMINATE collation ([`provider_name`]).
+const INDETERMINATE_PROVIDER_NAME: &str = "spark.null";
 
 /// `spark.NAME` or `icu.NAME`: Spark's collation provider prefix.
 fn provider_name(c: Collation) -> String {
@@ -216,20 +245,33 @@ fn collect_collations(t: &DataType, path: &str, out: &mut Map<String, Value>) {
 }
 
 /// `t` with the collations of `map` applied to its string leaves.
-fn apply_collations(t: &DataType, path: &str, map: &Map<String, Value>) -> Result<DataType> {
+fn apply_collations(
+    t: &DataType,
+    path: &str,
+    map: &Map<String, Value>,
+    indeterminate: bool,
+) -> Result<DataType> {
     Ok(match t {
         DataType::String => match map.get(path) {
+            Some(Value::String(spec)) if indeterminate && spec == INDETERMINATE_PROVIDER_NAME => {
+                DataType::collated_string(Collation::INDETERMINATE)
+            }
             Some(Value::String(spec)) => DataType::collated_string(parse_provider_name(spec)?),
             _ => t.clone(),
         },
         DataType::Array(a) => ArrayType::new(
-            apply_collations(a.element_type(), &format!("{path}.element"), map)?,
+            apply_collations(
+                a.element_type(),
+                &format!("{path}.element"),
+                map,
+                indeterminate,
+            )?,
             a.contains_null(),
         )
         .into(),
         DataType::Map(m) => MapType::new(
-            apply_collations(m.key_type(), &format!("{path}.key"), map)?,
-            apply_collations(m.value_type(), &format!("{path}.value"), map)?,
+            apply_collations(m.key_type(), &format!("{path}.key"), map, indeterminate)?,
+            apply_collations(m.value_type(), &format!("{path}.value"), map, indeterminate)?,
             m.value_contains_null(),
         )
         .into(),

@@ -351,14 +351,16 @@ fn caches_counts_the_relation_cache_and_the_file_metadata_cache() {
         &s,
         "SELECT concat_ws('|', cache, CAST(entries AS STRING), CAST(hits >= 0 AS STRING)) FROM system.caches ORDER BY cache",
     );
-    assert_eq!(r.len(), 2, "{r:?}");
+    assert_eq!(r.len(), 3, "{r:?}");
     assert!(
-        r[0].starts_with("file_metadata|") && r[1].starts_with("relation|"),
+        r[0].starts_with("checkpoint|")
+            && r[1].starts_with("file_metadata|")
+            && r[2].starts_with("relation|"),
         "{r:?}"
     );
-    let n: u64 = r[0].split('|').nth(1).unwrap().parse().unwrap();
-    assert!(n >= 1, "file metadata entries: {r:?}");
     let n: u64 = r[1].split('|').nth(1).unwrap().parse().unwrap();
+    assert!(n >= 1, "file metadata entries: {r:?}");
+    let n: u64 = r[2].split('|').nth(1).unwrap().parse().unwrap();
     assert!(n >= 1, "relation entries: {r:?}");
 }
 
@@ -677,10 +679,14 @@ fn show_tables_in_system_lists_the_tables() {
         [
             "caches",
             "capabilities",
+            "catalogs",
             "memory",
             "metrics",
             "operators",
-            "queries"
+            "partition_advice",
+            "queries",
+            "resource_groups",
+            "sessions"
         ]
     );
     assert_eq!(
@@ -928,10 +934,14 @@ fn use_system_shows_no_default_database() {
         [
             "caches",
             "capabilities",
+            "catalogs",
             "memory",
             "metrics",
             "operators",
-            "queries"
+            "partition_advice",
+            "queries",
+            "resource_groups",
+            "sessions"
         ]
     );
 }
@@ -1680,4 +1690,11 @@ fn a_short_raw_value_is_masked_as_a_whole_token() {
             .any(|w| w == "xy"),
         "{m:?}"
     );
+}
+
+#[test]
+fn system_resource_groups_is_empty_without_a_group_file() {
+    // No group file: the table exists and has no rows.
+    let s = Session::new().unwrap();
+    assert!(column_of(&s, "SELECT group_id FROM system.resource_groups", 0).is_empty());
 }

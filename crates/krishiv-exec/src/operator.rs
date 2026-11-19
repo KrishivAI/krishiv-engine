@@ -63,12 +63,35 @@ pub trait Source: Send + Sync {
     /// count). The pipeline runs `min(worker slots, this)` drivers. No
     /// default, so a scan cannot run serially by omission.
     fn max_parallelism(&self, global: &GlobalState) -> usize;
+    /// How many logical partitions (T094 G1) this source can be split into
+    /// under `krishiv.deterministicOrder`: with `Some(n)` the pipeline may run
+    /// `n` drivers, each reading only the morsels dealt to its lane
+    /// ([`TaskContext::lane`], [`MorselCursor::claim_for`](crate::MorselCursor::claim_for)),
+    /// so which rows a driver reads never depends on thread timing. `None`
+    /// (the default): one driver, as today.
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        let _ = global;
+        None
+    }
     /// How many partition ids the source's splits take in a `UNION ALL`
     /// numbering (Spark's `UnionRDD` offsets the next child by this child's
     /// partition count). Defaults to [`Self::max_parallelism`]: the slice or
     /// morsel count, which can exceed the drivers that run them.
     fn partitions(&self, global: &GlobalState) -> usize {
         self.max_parallelism(global)
+    }
+    /// Whether the source's output is Spark's `SinglePartition`: a `range`
+    /// asking for one slice with at least one row, a global aggregate. A
+    /// `UNION ALL` whose inputs all are runs them as one partition
+    /// (`spark.sql.unionOutputPartitioning`, `numbering.rs`). Default `false`
+    /// (Spark's `UnknownPartitioning`: a file scan, `VALUES`). Not mirrored
+    /// yet: a sort's output, a breaker over an AQE-coalesced shuffle and a
+    /// grouped aggregate over a one-partition input (no exchange in Spark:
+    /// `(s1 EXCEPT ALL ..) UNION ALL (s2 EXCEPT ALL ..)` is spid 0), which
+    /// Spark makes one partition.
+    fn single_partition(&self, global: &GlobalState) -> bool {
+        let _ = global;
+        false
     }
     /// One driver's state.
     ///
@@ -123,8 +146,10 @@ pub enum OperatorOutput {
     NeedMoreInput(Option<Batch>),
     /// One output batch; call `execute` again with the same input.
     HaveMoreOutput(Batch),
-    /// `try_grow` failed and the state is unchanged: the driver reserves
-    /// `bytes` and calls `execute` again with the same input.
+    /// `try_grow` failed and the state is unchanged, or the operator
+    /// records that it has taken the input already (the window's refused
+    /// flush): the driver reserves `bytes` and calls `execute` again with
+    /// the same input. A batch is still never half-applied.
     NeedMemory {
         /// Bytes the operator could not reserve.
         bytes: usize,
@@ -211,6 +236,30 @@ pub trait Operator: Send + Sync {
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
     }
+    /// Whether the operator's output for a batch depends only on that batch and its own
+    /// driver's state, never on what other drivers did or when (no shared counter, no
+    /// arrival-order effect). Under `krishiv.deterministicOrder` a pipeline splits into lanes
+    /// only if every operator says so (T094 G1, review M2). Default `false`: one driver, so
+    /// no operator is wrong by omission.
+    fn lane_safe(&self) -> bool {
+        false
+    }
+    /// Whether the driver may join this operator's small input batches into
+    /// batches of about `krishiv.exec.batchSize` rows, in a pipeline whose
+    /// sink [allows it](Sink::coalesce_input) (Polars item 2, J1). Say yes
+    /// only if the operator's output rows depend on neither its input's
+    /// batch boundaries nor when its rows arrive; their order may follow the
+    /// batches only where Spark leaves it unspecified (a left outer hash
+    /// join's unmatched rows come after each batch's matches). An operator
+    /// that evaluates expressions which can fail (ANSI) then also evaluates
+    /// up to a joined batch of rows that a limit above it would have cut:
+    /// prefer `false` unless its per-batch cost is worth that. The joined
+    /// batches keep the row order and one scan split each; the
+    /// driver hands every row on before the operator's
+    /// [`finish`](Self::finish). Default `false`.
+    fn coalesce_input(&self) -> bool {
+        false
+    }
     /// Whether the operator has work left that needs **every** driver's
     /// input first (a hash join's spilled partitions). If so, after
     /// [`finish`](Self::finish) a driver calls [`end_input`](Self::end_input),
@@ -219,6 +268,16 @@ pub trait Operator: Send + Sync {
     /// Drivers flush in parallel, so the operator shares out the work
     /// itself. Default: `false`.
     fn needs_flush(&self) -> bool {
+        false
+    }
+    /// Whether the operator's output keeps its input's Spark partitioning
+    /// (`ProjectExec`, `FilterExec`, `SampleExec`, `GenerateExec` (also
+    /// `ReplicateRows`, planned as one), and a
+    /// `LIMIT` over one partition), so a `SinglePartition` input stays one
+    /// (see [`Source::single_partition`]). Default `false`. Not mirrored
+    /// yet: Spark's `GlobalLimitExec` is one partition over any input;
+    /// Krishiv's `LIMIT` keeps its input's partitions.
+    fn keeps_partitioning(&self) -> bool {
         false
     }
     /// This driver's input ended: publish what [`flush`](Self::flush) needs
@@ -294,7 +353,10 @@ pub trait Sink: Send + Sync {
     fn published_filters(&self) -> Vec<FilterId> {
         Vec::new()
     }
-    /// Shared state, made once per pipeline run.
+    /// Shared state, made once per pipeline run. When the pipeline's source
+    /// reads a breaker, `ctx.dependency()` holds that breaker's finalized
+    /// state, as for the source: a sink that continues it adopts it
+    /// (`aggregate/distinct.rs` `KeyFeed`); other sinks ignore it.
     ///
     /// # Errors
     /// Any error fails the query.
@@ -314,8 +376,39 @@ pub trait Sink: Send + Sync {
         local: &mut LocalState,
         global: &GlobalState,
     ) -> Result<SinkStatus>;
+    /// Whether the driver may join this sink's small input batches, and
+    /// those of the operators of its pipeline that
+    /// [ask for it](Operator::coalesce_input), into batches of about
+    /// `krishiv.exec.batchSize` rows (`krishiv.exec.coalesceInput`; Polars
+    /// item 2, J1). Say yes only if the sink's result depends on neither
+    /// its batches' boundaries nor the source positions it is told
+    /// ([`position`](Self::position)), and on its rows' order only where
+    /// Spark leaves that unspecified: buffered rows reach it after positions
+    /// reported later, and an operator that allows joining may order its
+    /// output by the batches. Rows keep their order within a driver,
+    /// only unweighted rows of one scan split are joined, and a sink that
+    /// says yes gets every row before its `combine`. Default `false`.
+    fn coalesce_input(&self) -> bool {
+        false
+    }
+    /// Whether this sink may be fed by several logical-partition drivers
+    /// under `krishiv.deterministicOrder` (T094 G1): its `sink` touches only
+    /// the driver's own local state (or the result sink's ordered slots), and
+    /// its `combine` and `finalize` give the same result when the drivers
+    /// combine in partition order. Default `false`: one driver, as today.
+    fn lane_safe(&self) -> bool {
+        false
+    }
+    /// Whether `combine` may run in any lane order. The result sink's `combine` only marks
+    /// the lane ended, which releases batches other lanes hold back; making it wait for
+    /// lower lanes could deadlock (an exhausted lane parked behind a lane that is blocked on
+    /// the holdback limit). Default `false`: lanes combine in order.
+    fn combine_unordered(&self) -> bool {
+        false
+    }
     /// Merges one driver's state into the global state, once per driver
-    /// after its source is exhausted.
+    /// after its source is exhausted. Under `krishiv.deterministicOrder`
+    /// with logical partitions the drivers call it in partition order.
     ///
     /// # Errors
     /// Any error fails the query.

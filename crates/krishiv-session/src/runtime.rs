@@ -70,6 +70,8 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
+    pub(crate) profile_history: Option<Arc<crate::profile_history::ProfileHistory>>,
     /// The result cache: the process-wide one for a private runtime (sessions
     /// built alone share it, as before), a store of its own for a supplied
     /// runtime (ADR 0037 §6 holds per runtime).
@@ -85,15 +87,33 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
+    /// The admission controller built from `krishiv.workload.resourceGroups.file`, shared by every
+    /// session of the runtime so the group limits hold across them (`None` when the key is unset:
+    /// every query is admitted at once).
+    pub(crate) admission: Option<Arc<dyn crate::admission::AdmissionController>>,
+    /// The same controller as `admission`, kept by its own type for `system.resource_groups`.
+    pub(crate) resource_groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
+    /// The sessions, live and recently ended (`system.sessions`).
+    pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
+    /// The session actions running now, cancellable before their query exists.
+    pub(crate) actions: Arc<crate::action::Actions>,
     /// The I/O scheduler: pacing, the file-metadata and block caches and
     /// the local store, one for every session (design P2-E1 R3). Stores built
     /// from a session's `fs.*` settings carry a fingerprint of them in their
     /// id, so sessions with different settings never share a store or a cache
     /// entry (`krishiv_store::StoreRegistry`).
     pub(crate) io: Arc<IoScheduler>,
+    /// The egress policy fixed at startup (design P3-T067 §5): the store clients apply it, and
+    /// catalog clients (HMS, REST) take their own scopes of it.
+    egress: Arc<krishiv_io::egress::EgressPolicy>,
+    /// The declared catalogs (design P3-T067 §2.3), shared by every session.
+    pub(crate) catalogs: Arc<crate::catalog_registry::CatalogRegistry>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
+    /// The Delta snapshot cache of every session of the runtime (ADR 0037; keyed by the
+    /// principal too, so a session never reads a snapshot read under another's credentials).
+    pub(crate) delta: Arc<crate::delta::DeltaCache>,
 }
 
 /// The running queries by worker-local index, and the sessions closed
@@ -111,6 +131,8 @@ struct Live {
     session_id: Arc<str>,
     /// Its id in `system.queries`.
     id: Arc<str>,
+    /// Who runs it and its tags, for cancel by tag.
+    tagging: crate::action::Tagging,
     /// `None` until the query's context exists ([`EngineRuntime::attach`]).
     query: Option<Weak<QueryContext>>,
     /// A cancellation that came before the context: adopted at `attach`.
@@ -142,6 +164,7 @@ impl fmt::Debug for EngineRuntime {
 pub struct EngineRuntimeBuilder {
     pairs: Vec<(String, String)>,
     executor: Option<Arc<dyn Executor>>,
+    catalogs: Option<crate::catalog_registry::CatalogSetup>,
 }
 
 impl fmt::Debug for EngineRuntimeBuilder {
@@ -177,23 +200,87 @@ impl EngineRuntimeBuilder {
         self
     }
 
+    /// Declares the runtime's catalogs (design P3-T067 §2): parsed, checked and validated when
+    /// the runtime is built, then shared by every session. Without it a runtime has none (an
+    /// embedded runtime; `krishiv server` always passes one, in server mode).
+    pub fn catalogs(mut self, setup: crate::catalog_registry::CatalogSetup) -> Self {
+        self.catalogs = Some(setup);
+        self
+    }
+
     /// The runtime.
     ///
     /// # Errors
     /// Configuration errors; `INTERNAL_ERROR` if the executor's runtimes
-    /// cannot start.
+    /// cannot start; every startup refusal of a catalog declaration
+    /// ([`Self::catalogs`]).
     pub fn build(self) -> Result<Arc<EngineRuntime>, KrishivError> {
-        EngineRuntime::new(self.pairs, self.executor, false)
+        EngineRuntime::new(self.pairs, self.executor, false, self.catalogs)
     }
 }
 
 impl EngineRuntime {
+    /// The runtime's I/O scheduler; with an enforcing egress policy its stores connect only
+    /// through policy clients scoped to the admin-set store endpoints (design P3-T067 §5.2).
+    fn io_scheduler(
+        config: &Config,
+        executor: &Arc<dyn Executor>,
+        egress: &Arc<krishiv_io::egress::EgressPolicy>,
+    ) -> Result<Arc<IoScheduler>, KrishivError> {
+        // Checked in every build: a refused admin endpoint fails startup.
+        let store_scope = crate::egress::store_scope(egress, config)?;
+        let io_config = IoConfig::from_config(config);
+        let handle = executor.io_handle().clone();
+        if !egress.enforced() {
+            return Ok(IoScheduler::with_runtime(io_config, handle));
+        }
+        #[cfg(feature = "cloud")]
+        {
+            let proxy = crate::egress::egress_proxy(config);
+            if proxy.is_some() {
+                tracing::info!(
+                    "egress policy: policy clients send through krishiv.io.egress.proxy; the \
+                     proxy decides where requests may go"
+                );
+            }
+            let clients =
+                krishiv_io::SharedHttpClients::with_egress(krishiv_io::PolicyConnector::new(
+                    store_scope,
+                    krishiv_io::Redirects::Checked,
+                    proxy,
+                ));
+            Ok(IoScheduler::with_runtime_and_http_clients(
+                io_config, handle, clients,
+            ))
+        }
+        // Without `cloud` no remote store is built, so no store request leaves the process.
+        #[cfg(not(feature = "cloud"))]
+        {
+            let _ = store_scope;
+            Ok(IoScheduler::with_runtime(io_config, handle))
+        }
+    }
+
+    /// The egress policy fixed at startup (design P3-T067 §5): catalog clients scope it to
+    /// their own declared hosts.
+    #[must_use]
+    pub fn egress_policy(&self) -> &Arc<krishiv_io::egress::EgressPolicy> {
+        &self.egress
+    }
+
     /// A builder with the defaults.
     pub fn builder() -> EngineRuntimeBuilder {
         EngineRuntimeBuilder {
             pairs: Vec::new(),
             executor: None,
+            catalogs: None,
         }
+    }
+
+    /// The declared catalogs (design P3-T067 §2.3): readiness checks read them (T066).
+    #[must_use]
+    pub fn catalogs(&self) -> &Arc<crate::catalog_registry::CatalogRegistry> {
+        &self.catalogs
     }
 
     /// The private runtime of a session built without one.
@@ -201,17 +288,32 @@ impl EngineRuntime {
         pairs: Vec<(String, String)>,
         executor: Option<Arc<dyn Executor>>,
     ) -> Result<Arc<Self>, KrishivError> {
-        Self::new(pairs, executor, true)
+        Self::new(pairs, executor, true, None)
     }
 
     fn new(
         pairs: Vec<(String, String)>,
         executor: Option<Arc<dyn Executor>>,
         private: bool,
+        catalogs: Option<crate::catalog_registry::CatalogSetup>,
     ) -> Result<Arc<Self>, KrishivError> {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
         krishiv_exec::maybe_init_tokio_console();
+        // A server runtime's catalogs come from its `CatalogSetup` only: a declaration among its
+        // configuration would be listed by `SET` and declare nothing (review 58a2 M3).
+        if catalogs
+            .as_ref()
+            .is_some_and(|c| c.mode() == crate::catalog_decl::DeclMode::Server)
+            && let Some((key, _)) = pairs
+                .iter()
+                .find(|(k, _)| crate::catalog_decl::is_declaration_key(k))
+        {
+            return Err(CannotModifyStaticConfig {
+                key: format!("\"{key}\""),
+            }
+            .into());
+        }
         crate::conf::check_pairs(&pairs)?;
         let (config, _) = Config::from_pairs(pairs.iter().cloned())?;
         let executor: Arc<dyn Executor> = match executor {
@@ -219,14 +321,36 @@ impl EngineRuntime {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
-        let io =
-            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
+        // The egress policy (design P3-T067 §5): fixed at startup; in force when
+        // `krishiv.io.egress.privateAddresses = deny` (the server's default).
+        let egress = crate::egress::egress_policy(&config, |k| std::env::var(k).ok())?;
+        let io = Self::io_scheduler(&config, &executor, &egress)?;
+        // Startup validation of the declared catalogs (R14): a refusal stops the build.
+        let catalogs = Arc::new(match catalogs {
+            Some(setup) => {
+                crate::catalog_registry::CatalogRegistry::build(setup, &config, &egress)?
+            }
+            None => crate::catalog_registry::CatalogRegistry::empty(
+                crate::catalog_decl::DeclMode::Embedded,
+            ),
+        });
         io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
+        // With `krishiv.io.local.allowedRoots` set (server mode), listings never follow a link
+        // out of the roots (ADR 0046 §3a): the policy checks the paths as written, the store
+        // what a glob or directory read finds below them.
         #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(crate::session::LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
+        {
+            let roots = crate::access::allowed_roots(&config)?;
+            let local = if roots.is_empty() {
+                krishiv_io::SettledLocalFileSystem::new()
+            } else {
+                krishiv_io::SettledLocalFileSystem::confined(roots)
+            };
+            io.register_whole_listing_store(
+                StoreId::new(crate::session::LOCAL_STORE),
+                Arc::new(local) as Arc<dyn ObjectStore>,
+            );
+        }
         #[cfg(not(unix))]
         io.register_store(
             StoreId::new(crate::session::LOCAL_STORE),
@@ -238,12 +362,51 @@ impl EngineRuntime {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(crate::history::DEFAULT_CAPACITY);
+        let profile_history = match config
+            .get(&krishiv_common::config::HISTORY_PATH)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|p| !p.is_empty())
+        {
+            Some(dir) => {
+                let max = config
+                    .get(&krishiv_common::config::HISTORY_MAX_BYTES)
+                    .and_then(krishiv_common::config::ConfigValue::as_size)
+                    .unwrap_or(256 << 20);
+                Some(Arc::new(crate::profile_history::ProfileHistory::open(
+                    std::path::Path::new(&dir),
+                    max,
+                    config
+                        .get(&krishiv_common::config::HISTORY_LITERALS)
+                        .and_then(|v| v.as_str().map(|m| m != "keep"))
+                        .unwrap_or(true),
+                )?))
+            }
+            None => None,
+        };
         let results = if private {
             Arc::clone(crate::result_cache::global())
         } else {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
+        let delta = Arc::new(crate::delta::DeltaCache::from_config(&config));
+        let resource_groups = match config
+            .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+        {
+            Some(path) => {
+                let total = MemoryConfig::from_config(&config)
+                    .limit
+                    .unwrap_or(usize::MAX);
+                Some(Arc::new(crate::resource_groups::ResourceGroups::from_file(
+                    path, total,
+                )?))
+            }
+            None => None,
+        };
+        let admission = resource_groups
+            .clone()
+            .map(|g| g as Arc<dyn crate::admission::AdmissionController>);
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -256,14 +419,22 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
             invalidation,
             warehouse: Arc::new(Warehouse::default()),
             results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
+            sessions: Arc::default(),
+            admission,
+            resource_groups,
+            actions: Arc::default(),
             io,
+            egress,
+            catalogs,
             private,
+            delta,
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))
@@ -306,7 +477,11 @@ impl EngineRuntime {
         &self,
         session_pairs: Vec<(String, String)>,
     ) -> Result<Config, KrishivError> {
-        if let Some((key, _)) = session_pairs.iter().find(|(k, _)| runtime_owned(k)) {
+        // In server mode a session never declares a catalog (decision 7).
+        let server = self.catalogs.mode() == crate::catalog_decl::DeclMode::Server;
+        if let Some((key, _)) = session_pairs.iter().find(|(k, _)| {
+            runtime_owned(k) || (server && crate::catalog_decl::is_declaration_key(k))
+        }) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -332,7 +507,19 @@ impl EngineRuntime {
     /// Reserves the worker-local index of a new query of session `session`
     /// (`session_id`), `system.queries` row `id`, before its context
     /// exists: from here a cancellation of `id` is never lost.
+    #[cfg(test)]
     pub(crate) fn reserve(&self, session: u64, session_id: &str, id: &str) -> u64 {
+        self.reserve_tagged(session, session_id, id, crate::action::Tagging::none())
+    }
+
+    /// [`Self::reserve`] for a query that carries `tagging` (cancel by tag finds it from here on).
+    pub(crate) fn reserve_tagged(
+        &self,
+        session: u64,
+        session_id: &str,
+        id: &str,
+        tagging: crate::action::Tagging,
+    ) -> u64 {
         let index = self.query_index.fetch_add(1, Ordering::Relaxed);
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         // Entries of ended queries go as new ones arrive.
@@ -347,8 +534,11 @@ impl EngineRuntime {
                 session,
                 session_id: Arc::from(session_id),
                 id: Arc::from(id),
+                tagging,
                 query: None,
-                pending: None,
+                // The action running it hands over: a cancellation it already took is kept.
+                // Lock order: `live` (held here) -> the action's state (`action.rs`).
+                pending: crate::action::hand_over(session, id),
             },
         );
         index
@@ -398,12 +588,117 @@ impl EngineRuntime {
     }
 
     /// Cancels, with `reason`, every running query `pick` selects (by
-    /// session number and row id); the ids of those it cancelled. A query
+    /// session number and row id), and every statement still being analyzed
+    /// or planned (`action.rs`, by operation id); the ids of those it cancelled
+    /// (a statement the caller gave no id is ended but not listed). A query
     /// whose context does not exist yet keeps the reason for `attach`.
     pub(crate) fn cancel_where(
         &self,
         reason: CancelReason,
         pick: impl Fn(u64, &str) -> bool,
+    ) -> Vec<QueryId> {
+        self.cancel_counted(reason, &pick).0
+    }
+
+    /// [`Self::cancel_where`], also counting what it ended: the queries and
+    /// the statements still being analyzed, with an id or without.
+    fn cancel_counted(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &str) -> bool,
+    ) -> (Vec<QueryId>, usize) {
+        let ids = self.cancel_queries(reason, pick);
+        // Actions still analyzing or planning, and the rows of those that
+        // handed over after the walk above (a reservation racing this cancel).
+        let actions = self.actions.cancel_where(reason, pick);
+        self.finish_cancel(reason, ids, actions)
+    }
+
+    /// Ends what the registry walk and the actions' pass picked: the rows the picked actions
+    /// handed over are cancelled through the registry (one pass for all of them: nested actions
+    /// repeat rows). Returns the ids and how many queries and statements ended.
+    fn finish_cancel(
+        &self,
+        reason: CancelReason,
+        mut ids: Vec<QueryId>,
+        actions: crate::action::ActionsCancelled,
+    ) -> (Vec<QueryId>, usize) {
+        if !actions.rows.is_empty() {
+            let rows: std::collections::HashSet<(u64, &str)> =
+                actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
+            ids.extend(self.cancel_queries(reason, &|s, q| rows.contains(&(s, q))));
+        }
+        let mut seen = std::collections::HashSet::new();
+        ids.retain(|id| seen.insert(id.as_str().to_owned()));
+        let ended = ids.len() + actions.ended;
+        for id in actions.ids {
+            if seen.insert(id.to_string()) {
+                ids.push(QueryId::minted(id.to_string()));
+            }
+        }
+        (ids, ended)
+    }
+
+    /// Cancels, with `reason`, every query and statement of the runtime whose session number and
+    /// tagging `pick` accepts, and returns the ids of those it cancelled: statements still
+    /// analyzing or queued (the action registry) and queries already running (the live set).
+    pub(crate) fn cancel_tagged(
+        &self,
+        reason: CancelReason,
+        pick: impl Fn(u64, &crate::action::Tagging) -> bool,
+    ) -> Vec<QueryId> {
+        let actions = self.actions.cancel_tagged(reason, &pick);
+        // Running queries outlive their action, so they are picked from the live set by the
+        // tagging reserved with them.
+        let running: std::collections::HashSet<(u64, Arc<str>)> = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queries
+            .values()
+            .filter(|l| pick(l.session, &l.tagging))
+            .map(|l| (l.session, Arc::clone(&l.id)))
+            .collect();
+        let ids = self.cancel_queries(reason, &|s, q| running.contains(&(s, Arc::from(q))));
+        self.finish_cancel(reason, ids, actions).0
+    }
+
+    /// Cancels the queries and statements, of any session of the runtime, that carry a tag
+    /// matching `selector`: a bare `k` matches a pair with key `k`, `k=v` the exact pair, and a
+    /// Connect request tag (an opaque string, stored as the key of a pair) matches as written
+    /// ([`crate::resource_groups::tag_matches`]). The caller's own queries (`caller`)
+    /// end with `User` (`OPERATION_CANCELED`; ownership is the whole principal: kind, tenant, name
+    /// and delegation, as for `system.queries`, never the name alone); with `all_principals` (the caller holds `Operate`
+    /// on `System("sessions")`) other principals' queries end with `Admin`
+    /// (`KRISHIV_QUERY_KILLED`). Returns the ids and no count of what was skipped, so a guessed
+    /// tag reveals nothing about queries the caller may not touch. Not reachable from SQL.
+    pub fn cancel_by_tag(
+        &self,
+        selector: &str,
+        caller: &crate::Principal,
+        all_principals: bool,
+    ) -> Vec<crate::QueryId> {
+        let owner = crate::sessions::owner_key(caller);
+        let matches = |t: &crate::action::Tagging| {
+            t.tags
+                .iter()
+                .any(|(k, v)| crate::resource_groups::tag_matches(selector, k, v))
+        };
+        let mut ids =
+            self.cancel_tagged(CancelReason::User, |_, t| *t.owner == *owner && matches(t));
+        if all_principals {
+            ids.extend(
+                self.cancel_tagged(CancelReason::Admin, |_, t| *t.owner != *owner && matches(t)),
+            );
+        }
+        ids
+    }
+
+    /// [`Self::cancel_where`] over the registered queries only.
+    fn cancel_queries(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &str) -> bool,
     ) -> Vec<QueryId> {
         let mut pending = Vec::new();
         let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {
@@ -452,17 +747,129 @@ impl EngineRuntime {
             .is_empty()
     }
 
-    /// Closes session `session`: cancels its running queries (reason
-    /// `ClientGone`) and refuses any it attaches later; the number
-    /// cancelled.
-    pub(crate) fn cancel_session(&self, session: u64) -> usize {
+    /// [`Self::cancel`] limited to the query `id` of session `session_id`: the same id in another
+    /// session is left running (an operator who was checked against one session's row must not
+    /// end another owner's query).
+    pub fn cancel_in_session(
+        &self,
+        session_id: &str,
+        id: &crate::QueryId,
+        reason: CancelReason,
+    ) -> bool {
+        let Some((session, _)) = self.sessions.find(session_id) else {
+            return false;
+        };
+        !self
+            .cancel_where(reason, |s, q| s == session && q == id.as_str())
+            .is_empty()
+    }
+
+    /// Closes session `session`: cancels its running queries and the
+    /// statements it is still analyzing with `reason` and refuses any query it
+    /// attaches later; the number of both it ended.
+    pub(crate) fn cancel_session(&self, session: u64, reason: CancelReason) -> usize {
         self.live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .closed
             .insert(session);
-        self.cancel_where(CancelReason::ClientGone, |s, _| s == session)
-            .len()
+        self.cancel_counted(reason, &|s, _| s == session).1
+    }
+
+    /// The queries each session is running now, counted in one pass.
+    pub(crate) fn running_counts(&self) -> HashMap<u64, i64> {
+        let live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut counts = HashMap::new();
+        for l in live.queries.values().filter(|l| {
+            l.query
+                .as_ref()
+                .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+        }) {
+            *counts.entry(l.session).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// The registry as `system.sessions` reads it.
+    pub(crate) fn session_view(self: &Arc<Self>) -> Arc<crate::sessions::SessionView> {
+        let runtime = Arc::clone(self);
+        Arc::new(crate::sessions::SessionView {
+            registry: Arc::clone(&self.sessions),
+            running: Box::new(move || runtime.running_counts()),
+        })
+    }
+
+    /// Ends the live session `session_id` for `end`: its running queries are
+    /// cancelled with `reason`, it takes no new statement
+    /// (`INVALID_HANDLE.SESSION_CLOSED`) and it moves to the ended ring.
+    /// `None` for an id that is not live.
+    fn end_session(
+        &self,
+        session_id: &str,
+        reason: CancelReason,
+        end: crate::sessions::End,
+    ) -> Option<usize> {
+        let (number, state) = self.sessions.find(session_id)?;
+        // One caller ends it: a second kill, expire or `close` finds the flag set.
+        if state.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return None;
+        }
+        let n = self.cancel_session(number, reason);
+        self.sessions.retire(number, || {
+            crate::sessions::SessionRow::of(&state, Some(end), 0)
+        });
+        Some(n)
+    }
+
+    /// Ends session `session_id` as an administrator would (T066 `KillSession`,
+    /// a drain deadline): with `reason` `Admin` or `Drain` its queries end
+    /// `KRISHIV_QUERY_KILLED`, and the session's next call is
+    /// `INVALID_HANDLE.SESSION_CLOSED`. The number of queries cancelled, or
+    /// `None` for an unknown (or already ended) id. The privilege check and the
+    /// audit line belong in front of it, as for [`Self::cancel`].
+    pub fn kill_session(&self, session_id: &str, reason: CancelReason) -> Option<usize> {
+        let end = match reason {
+            CancelReason::Drain => crate::sessions::End::Killed("drain"),
+            // A caller ending its own session (T066 `KillSession` of its own): recorded as a release.
+            CancelReason::ClientGone => crate::sessions::End::Closed("release_session"),
+            _ => crate::sessions::End::Killed("admin_kill"),
+        };
+        self.end_session(session_id, reason, end)
+    }
+
+    /// Ends session `session_id` as idle (the server's sweep): its queries
+    /// are cancelled as for a vanished client. As [`Self::kill_session`]
+    /// otherwise.
+    pub fn expire_session(&self, session_id: &str) -> Option<usize> {
+        self.end_session(
+            session_id,
+            CancelReason::ClientGone,
+            crate::sessions::End::Expired,
+        )
+    }
+
+    /// Whether `session_id` ended and is still remembered (a server answers
+    /// `INVALID_HANDLE.SESSION_CLOSED` for it, `SESSION_NOT_FOUND` otherwise).
+    pub fn session_ended(&self, session_id: &str) -> bool {
+        self.sessions.ended(session_id)
+    }
+
+    /// The number of running queries of session `session`: reserved, or
+    /// attached and not finished (ended entries are only dropped lazily, by
+    /// [`Self::reserve`]).
+    pub(crate) fn running_in_session(&self, session: u64) -> usize {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queries
+            .values()
+            .filter(|l| {
+                l.session == session
+                    && l.query
+                        .as_ref()
+                        .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+            })
+            .count()
     }
 
     /// Forgets session `session` once it is gone (its closed mark).
@@ -479,6 +886,12 @@ impl EngineRuntime {
     /// gauge holds the runtime itself, so the runtime can end.
     fn register_gauges(&self) -> Result<(), KrishivError> {
         let metrics = &self.metrics;
+        if let Some(history) = &self.profile_history {
+            let history = Arc::clone(history);
+            metrics.add_gauge("krishiv.history.write_failures", Vec::new(), move || {
+                Some(history.failures())
+            })?;
+        }
         {
             let memory = Arc::clone(&self.memory_tree);
             metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
@@ -505,6 +918,24 @@ impl EngineRuntime {
                 let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
                 Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
             })?;
+        }
+        #[cfg(feature = "delta")]
+        {
+            use krishiv_connectors_delta::engine::pool::LogPool;
+            let pool = LogPool::process(&self.config);
+            metrics.add_gauge("krishiv.delta.log_pool.wait_ms", Vec::new(), move || {
+                Some(pool.waits().total_ms())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge("krishiv.delta.snapshot_cache.hits", Vec::new(), move || {
+                cache.upgrade().map(|c| c.hits())
+            })?;
+            let cache = Arc::downgrade(&self.delta);
+            metrics.add_gauge(
+                "krishiv.delta.snapshot_cache.misses",
+                Vec::new(),
+                move || cache.upgrade().map(|c| c.misses()),
+            )?;
         }
         metrics.add_gauge(
             "krishiv.build.info",
@@ -538,17 +969,11 @@ impl EngineRuntime {
     }
 }
 
-/// Whether `key` belongs to the runtime rather than to a session: a
-/// cluster-scope entry, or one of the keys fixed when the runtime's
-/// components are built (`krishiv.memory.*`, `krishiv.spill.*`,
-/// `krishiv.io.*`).
+/// Whether `key` belongs to the runtime rather than to a session: a cluster-scope entry (the
+/// memory pool, the spill directory and the I/O scheduler are built from them). A session-scope
+/// key is the session's, whatever its prefix.
 pub(crate) fn runtime_owned(key: &str) -> bool {
-    lookup(key).is_some_and(|entry| {
-        entry.scope == krishiv_common::config::Scope::Cluster
-            || crate::conf::BUILD_TIME
-                .iter()
-                .any(|p| entry.key.starts_with(p))
-    })
+    lookup(key).is_some_and(|entry| entry.scope == krishiv_common::config::Scope::Cluster)
 }
 
 #[cfg(test)]
@@ -588,7 +1013,7 @@ mod tests {
         // Closing cancels the attached query and refuses a later attach.
         let k = rt.reserve(7, "s7", "c");
         // `a`, and `c` (reserved: its reason waits); `b` already ended.
-        assert_eq!(rt.cancel_session(7), 2);
+        assert_eq!(rt.cancel_session(7, CancelReason::ClientGone), 2);
         assert!(a.is_cancelled());
         assert_eq!(
             a.check_cancelled().unwrap_err().error_class().name(),
@@ -628,5 +1053,54 @@ mod tests {
             .filter(|g| g.name == "krishiv.cache.size")
             .count();
         assert_eq!(gauges, 1);
+    }
+
+    /// A reservation made inside an action hands it over: a cancel then ends
+    /// the reserved query through the registry, names it once (the operation
+    /// id is the row id) and leaves the action to its work; a cancel taken
+    /// before the reservation is the reservation's pending reason.
+    #[test]
+    fn a_reservation_inside_an_action_takes_its_cancellation() {
+        let rt = EngineRuntime::builder().build().unwrap();
+        fn block<T>(f: impl std::future::Future<Output = T>) -> T {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(f)
+        }
+        // Reserved first, then cancelled: one id, and attach sees the reason.
+        let guard = rt.actions.begin(7, Some("op"));
+        let r = Arc::clone(&rt);
+        let (index, ids) = block(guard.run(async move {
+            let index = r.reserve(7, "s7", "op");
+            let ids = r.cancel_where(CancelReason::User, |s, _| s == 7);
+            Ok::<_, KrishivError>((index, ids))
+        }))
+        .unwrap();
+        assert_eq!(ids.len(), 1, "{ids:?}");
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            rt.memory().child("q", None),
+        );
+        assert_eq!(
+            rt.attach(index, &query, None),
+            Attached::Cancelled(CancelReason::User)
+        );
+        // Cancelled first (Admin), then reserved: the reservation keeps the reason.
+        let guard = rt.actions.begin(8, Some("op2"));
+        let ids = rt.cancel_where(CancelReason::Admin, |s, _| s == 8);
+        assert_eq!(ids.len(), 1);
+        let r = Arc::clone(&rt);
+        let out = block(guard.run(async move { Ok::<_, KrishivError>(r.reserve(8, "s8", "op2")) }));
+        // The race ended the action before the work was polled.
+        assert_eq!(
+            out.unwrap_err().error_class().name(),
+            "KRISHIV_QUERY_KILLED"
+        );
+        // A closed session counts the statement it ended, id or not.
+        let _guard = rt.actions.begin(9, None);
+        assert_eq!(rt.cancel_session(9, CancelReason::ClientGone), 1);
     }
 }

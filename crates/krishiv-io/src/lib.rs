@@ -30,11 +30,13 @@
 pub mod avro;
 mod commit;
 pub mod commit_log;
+mod constants;
 pub mod csv;
 mod error;
 mod format;
 pub mod io;
 pub mod json;
+mod name_mapping;
 mod options;
 pub mod parquet;
 mod registry;
@@ -67,12 +69,20 @@ pub use io::beneath::{AnchorError, BeneathStore};
 pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
-    FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, LATENCY_BUCKETS, LatencyHistogram,
-    ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver,
-    StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, parse_object_url,
-    query_registry, register, register_with_options,
+    FileRef, Held, InferKey, InferredSchemas, IoConfig, IoContext, IoCounters, IoScheduler,
+    KeyFact, KeyFactKey, KeyFacts, LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore,
+    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
+    StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached, is_server_scoped_option,
+    parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
+/// Refuses an `hf://` directory or glob (no listing), from `krishiv-store`.
+pub use krishiv_store::check_hf_file_path;
+/// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
+pub use krishiv_store::egress;
+/// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
+#[cfg(feature = "cloud")]
+pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
@@ -80,16 +90,22 @@ pub use options::{
 pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 pub use take::{RowFile, TakeRequest, TakeStream, take};
 
+pub use constants::{FileConstants, scalar_column};
+pub use name_mapping::{MappedField, NameMapping};
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
     escape_partition_value, partition_dir_name, partition_segment, partition_segments,
     partition_texts, partition_texts_in, renders_as_string, spark_partitioned_file_name,
+    user_value::{
+        PARTITION_VALUE_KEY, UserPartitionValue, user_partition_field, user_partition_value,
+        user_value_mode,
+    },
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,
-    project_batch, project_schema,
+    WithoutFieldIds, project_batch, project_schema,
 };
 pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
@@ -97,7 +113,7 @@ pub use runtime_filter::{
 };
 pub use scan::{ReadStats, ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
-pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
+pub use schema_map::{FIELD_ID_KEY, SchemaMapper, has_field_ids};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 pub use text_format::TextFormat;
 pub use write::{FileWriter, WriteOptions, WrittenFileInfo, effective_job_uuid, spark_file_name};

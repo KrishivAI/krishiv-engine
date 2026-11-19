@@ -14,6 +14,7 @@
 //! several workers merge ([`QueryProfile::merge`]) as their metrics do.
 
 mod json;
+mod scans;
 mod text;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
@@ -22,6 +23,7 @@ use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
 use crate::planner::ExplainNode;
 
+pub use scans::{ProfileScan, ScanColumn, profile_scans};
 pub use text::TextOptions;
 
 /// The `format` member of a profile document.
@@ -32,9 +34,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 5;
+pub const PROFILE_MINOR: u64 = 6;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,6 +229,9 @@ pub struct QueryProfile {
     /// session's context (T136). `None` outside a session. A shared profile drops them
     /// ([`QueryProfile::shareable`]).
     pub identity: Option<ProfileIdentity>,
+    /// The tables the query scanned and the columns it compared with values (minor 6): the
+    /// `scans` member, the partition advisor's input (T025). Empty for a query that scans no named table.
+    pub scans: Vec<ProfileScan>,
 }
 
 /// The principal and tags a profile's `usage` names (T136), opaque ids, never credentials.
@@ -249,6 +254,7 @@ impl QueryProfile {
             planning: None,
             trace: None,
             identity: None,
+            scans: profile_scans(plan, &|_| None),
         }
     }
 

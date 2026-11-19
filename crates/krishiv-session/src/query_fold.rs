@@ -35,6 +35,11 @@ pub(crate) struct QueryStart {
 }
 
 impl QueryStart {
+    /// Time since the query started.
+    pub(crate) fn elapsed(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+
     pub(crate) fn capture(state: &SessionState, io: &krishiv_io::IoContext) -> Self {
         let totals = state.io.totals();
         let own = io.counters();
@@ -48,6 +53,19 @@ impl QueryStart {
             bytes_written: IoCounters::get(&own.bytes_written),
             files_written: IoCounters::get(&own.files_written),
         }
+    }
+
+    /// A reader of the bytes the query has read since [`Self::capture`], for a permit that outlives
+    /// the fold (a cancelled query's tasks may still read until they end).
+    pub(crate) fn read_probe(&self) -> impl Fn() -> u64 + Send + 'static {
+        let io = self.io.clone();
+        let baseline = self.bytes_read;
+        move || IoCounters::get(&io.counters().bytes_read).saturating_sub(baseline)
+    }
+
+    /// Bytes the query's own I/O context has read since [`Self::capture`].
+    pub(crate) fn bytes_read_since(&self) -> u64 {
+        IoCounters::get(&self.io.counters().bytes_read).saturating_sub(self.bytes_read)
     }
 
     /// Folds the query's metrics with the deltas since [`Self::capture`]:
@@ -204,6 +222,87 @@ pub(crate) struct QueryFold {
     /// The statement's operation id, held until the query's stream ends, so
     /// a running query keeps its id taken even after its DataFrame drops.
     pub(crate) _operation: Option<Arc<crate::history::Operation>>,
+    /// What the persisted history needs of the query, kept only when `krishiv.history.path` is set.
+    pub(crate) history: Option<HistoryJob>,
+}
+
+/// The plan and who ran the query, held until the query ends, for the persisted history.
+pub(crate) struct HistoryJob {
+    pub(crate) plan: krishiv_exec::planner::PhysicalPlan,
+    pub(crate) sql: Option<String>,
+    /// Whether the query ran with detailed metrics (probe lengths and the like).
+    pub(crate) detailed: bool,
+    /// Where the entry waits for a file write's commit, when it is one.
+    pub(crate) hold: Option<Arc<crate::profile_history::HistoryHold>>,
+    pub(crate) identity: krishiv_exec::profile::ProfileIdentity,
+    pub(crate) trace: Option<serde_json::Value>,
+    /// The tables the query scanned and the columns it compared with values, with their statistics.
+    pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
+}
+
+impl crate::session::QueryEnv {
+    /// The persisted-history job for the query whose `system.queries` row is `row_id`, when the runtime keeps a history.
+    pub(crate) fn history_job(
+        &self,
+        session: &crate::session::Session,
+        row_id: &str,
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        detailed: bool,
+    ) -> Option<HistoryJob> {
+        session.state.runtime.profile_history.as_ref()?;
+        let scans = krishiv_exec::profile::profile_scans(plan, &|scan| {
+            use krishiv_exec::planner::TableProviderResolver as _;
+            self.catalog.provider(scan).ok()?.statistics()
+        });
+        Some(HistoryJob::of(
+            session,
+            row_id,
+            plan,
+            scans,
+            self.text.as_deref(),
+            detailed,
+            self.history_hold.clone(),
+        ))
+    }
+}
+
+impl HistoryJob {
+    /// The job for the query whose `system.queries` row is `row_id`.
+    pub(crate) fn of(
+        session: &crate::session::Session,
+        row_id: &str,
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        scans: Vec<krishiv_exec::profile::ProfileScan>,
+        sql: Option<&str>,
+        detailed: bool,
+        hold: Option<Arc<crate::profile_history::HistoryHold>>,
+    ) -> Self {
+        let who = crate::telemetry::Who::of(session);
+        let state = &session.state;
+        let mut trace = serde_json::json!({ "session_id": who.session_id });
+        if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
+            o.insert("trace_id".to_owned(), t.clone().into());
+        }
+        Self {
+            plan: plan.clone(),
+            sql: sql.map(str::to_owned),
+            detailed,
+            hold,
+            identity: krishiv_exec::profile::ProfileIdentity {
+                principal: who.principal,
+                // The tags the query's own row holds (request tags included, and not changed by a `set_tag`
+                // while it waited), as `system.queries` shows them.
+                tags: state
+                    .queries
+                    .row_tags(row_id)
+                    .unwrap_or_else(|| state.queries.tags())
+                    .into_iter()
+                    .collect(),
+            },
+            trace: Some(trace),
+            scans,
+        }
+    }
 }
 
 impl QueryFold {
@@ -213,6 +312,9 @@ impl QueryFold {
     /// query reports every task ended. Releasing it at once would let the next query start
     /// beside work still using the first one's slot and memory.
     pub(crate) fn finish_cancelled(mut self, error: Option<&KrishivError>) {
+        self.report_usage();
+        let probe = self.start.read_probe();
+        let reported = self.start.bytes_read_since();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
@@ -225,7 +327,7 @@ impl QueryFold {
             krishiv_exec::WorkloadClass::Interactive,
             Box::pin(async move {
                 query.finished().await;
-                drop(permit);
+                Self::settle_permit(permit, &probe, reported);
             }),
         ));
     }
@@ -233,6 +335,9 @@ impl QueryFold {
     /// As [`Self::finish_cancelled`] for a query dropped while `submit` was still running:
     /// `setup` reports when the submit task is done and whether it started the query.
     pub(crate) fn finish_after_setup(mut self, setup: tokio::sync::oneshot::Receiver<bool>) {
+        self.report_usage();
+        let probe = self.start.read_probe();
+        let reported = self.start.bytes_read_since();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
@@ -243,12 +348,31 @@ impl QueryFold {
                 if setup.await.unwrap_or(false) {
                     query.finished().await;
                 }
-                drop(permit);
+                Self::settle_permit(permit, &probe, reported);
             }),
         ));
     }
 
-    pub(crate) fn finish(self, error: Option<&KrishivError>) {
+    /// Reports the bytes the query scanned to its resource group's scan quota (charged when the
+    /// slot drops); a permit without a group slot has nowhere to report.
+    fn report_usage(&self) {
+        if let Some(slot) = self._permit.slot::<crate::resource_groups::GroupSlot>() {
+            slot.add_bytes_read(self.start.bytes_read_since());
+        }
+    }
+
+    /// Charges what the query read after [`Self::report_usage`] to the group, then gives the
+    /// permit back: called once the query's tasks have all ended.
+    fn settle_permit(permit: Permit, probe: &(impl Fn() -> u64 + ?Sized), reported: u64) {
+        if let Some(slot) = permit.slot::<crate::resource_groups::GroupSlot>() {
+            slot.add_bytes_read(probe().saturating_sub(reported));
+        }
+        drop(permit);
+    }
+
+    pub(crate) fn finish(mut self, error: Option<&KrishivError>) {
+        self.report_usage();
+        self.record_history(error);
         self.start.fold(
             &self.state,
             &self.query,
@@ -256,6 +380,49 @@ impl QueryFold {
             self.metrics_on,
             &self.log_id,
         );
+    }
+
+    /// Queues the query's profile for the persisted history: the queue send is all the query pays; the profile is built and written on the history thread.
+    fn record_history(&mut self, error: Option<&KrishivError>) {
+        // The plan moves into the entry: the one copy of it is the one taken when the query started.
+        let (Some(job), Some(store)) = (self.history.take(), &self.state.runtime.profile_history)
+        else {
+            return;
+        };
+        let stored = self.query.error();
+        let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
+        let metrics = self.query.metrics();
+        let wall = if metrics.wall_time.is_zero() {
+            self.start.elapsed()
+        } else {
+            metrics.wall_time
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let entry = crate::profile_history::HistoryEntry {
+            query_id: self.log_id.clone(),
+            finished_at_ms: now,
+            state: match status {
+                Status::Succeeded => "finished",
+                Status::Failed => "failed",
+                Status::Cancelled => "cancelled",
+                Status::Denied => "denied",
+            },
+            error_class,
+            sql: job.sql,
+            detailed: job.detailed,
+            duration_ns: i64::try_from(wall.as_nanos()).unwrap_or(i64::MAX),
+            plan: job.plan,
+            metrics,
+            identity: job.identity,
+            trace: job.trace,
+            scans: job.scans,
+        };
+        match &job.hold {
+            Some(hold) => hold.offer(entry, store),
+            None => store.record(entry),
+        }
     }
 }
 

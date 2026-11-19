@@ -9,16 +9,12 @@ Sort [s_suppkey#18 ASC NULLS FIRST], true
       :  +- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22]
       +- Filter (total_revenue#26 == scalar-subquery)
          :  +- Aggregate [], [max(total_revenue#28) AS max(total_revenue)#29]
-         :     +- Shift +2
-         :        +- Project [total_revenue#47 AS total_revenue#26]
-         :           +- Shift +30
-         :              +- Aggregate [l_suppkey#2], [sum((l_extendedprice#5 * (1 - l_discount#6))) AS total_revenue#17]
-         :                 +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
-         :                    +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
-         :                       +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10] (shared #1)
-         +- Project [supplier_no#46 AS supplier_no#25, total_revenue#47 AS total_revenue#26]
-            +- Shift +30
-               +- Aggregate [l_suppkey#2], [l_suppkey#2 AS supplier_no#16, sum((l_extendedprice#5 * (1 - l_discount#6))) AS total_revenue#17]
-                  +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
-                     +- Filter (((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01')) and isnotnull(l_suppkey#2))
-                        +- Shared #1, printed above
+         :     +- Project [total_revenue#28]
+         :        +- Shift +2
+         :           +- Project [supplier_no#46 AS supplier_no#25, total_revenue#47 AS total_revenue#26] (shared #1)
+         :              +- Shift +30
+         :                 +- Aggregate [l_suppkey#2], [l_suppkey#2 AS supplier_no#16, sum((l_extendedprice#5 * (1 - l_discount#6))) AS total_revenue#17]
+         :                    +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
+         :                       +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
+         :                          +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10]
+         +- Shared #1, printed above

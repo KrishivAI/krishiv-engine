@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      15
+    ],
+    "query-features": [
+      62
+    ]
+  },
+  "file": "group-by",
+  "format_version": 1
+}

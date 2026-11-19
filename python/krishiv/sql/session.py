@@ -16,9 +16,11 @@ from krishiv.errors import (
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    unsupported_attribute,
     unsupported_feature,
 )
-from krishiv.sql.conf import RuntimeConfig
+from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
+from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
@@ -52,16 +54,28 @@ class SparkSession:
         ) -> SparkSession.Builder:
             if map is not None:
                 for k, v in map.items():
-                    self.config(k, v)
+                    self._put(k, v)
             if key is not None:
-                self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+                self._put(key, value)
             return self
 
+        def _put(self, key: str, value: Any) -> None:
+            """Stores one option. Every public setter calls this directly, so the cluster-setting
+            warning is raised at the same depth (the user's line) for each of them."""
+            self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            _warn_if_cluster_setting(key, self._config[key], stacklevel=3)
+
         def appName(self, name: str) -> SparkSession.Builder:
-            return self.config("spark.app.name", name)
+            self._put("spark.app.name", name)
+            return self
 
         def master(self, master: str) -> SparkSession.Builder:
-            return self.config("spark.master", master)
+            self._put("spark.master", master)
+            return self
+
+        def enableHiveSupport(self) -> SparkSession.Builder:
+            """Not supported: there is no Hive metastore in Krishiv (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+            raise unsupported_feature("SparkSession.Builder.enableHiveSupport (there is no Hive metastore)")
 
         def remote(self, url: str) -> SparkSession.Builder:
             raise not_implemented("remote sessions")
@@ -83,7 +97,7 @@ class SparkSession:
                         )
                     for k, v in self._config.items():
                         if k not in skipped:
-                            _active.conf.set(k, v)
+                            _active.conf._set(k, v)  # the builder warned when the option was given
                 return _active
 
         def create(self) -> SparkSession:
@@ -108,6 +122,11 @@ class SparkSession:
     @property
     def version(self) -> str:
         return SPARK_VERSION
+
+    @property
+    def sparkContext(self) -> Any:
+        """Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API."""
+        raise unsupported_attribute("SparkSession.sparkContext (SparkContext and RDDs; use the DataFrame API)")
 
     @property
     def conf(self) -> RuntimeConfig:
@@ -543,49 +562,144 @@ def _verify_row(struct: StructType, values: list[Any]) -> None:
             )
 
 
-class Catalog:
-    """The catalog of temporary views, as ``pyspark.sql.catalog.Catalog``.
+def _qualified(name: str, db: str | None) -> str:
+    """``db.name`` when a database is given, as PySpark joins ``dbName`` and ``tableName``."""
+    return name if db is None else f"{db}.{name}"
 
-    The embedded engine has no databases or persistent tables: every table
-    is a temporary view in the ``default`` database.
+
+class Catalog:
+    """The catalog API, as ``pyspark.sql.catalog.Catalog``; the lists are Python lists of named tuples.
+
+    ``spark_catalog`` is the only catalog this API lists or accepts; its ``default`` database holds the
+    temporary views and the tables ``CREATE TABLE`` made.
     """
 
     def __init__(self, session: SparkSession) -> None:
         self._session = session
 
-    def _user_tables(self) -> list[str]:
-        """The temporary tables and views, without those holding ``createDataFrame`` data."""
-        return [n for n in self._session._native.temp_table_names() if not _native.Session.is_dataframe_table(n)]
+    @property
+    def _n(self) -> Any:
+        return self._session._native
+
+    def currentCatalog(self) -> str:
+        """The current catalog's name."""
+        return str(self._n.catalog_current_catalog())
+
+    def setCurrentCatalog(self, catalogName: str) -> None:
+        """Makes ``catalogName`` the current catalog; only ``spark_catalog`` is accepted.
+
+        SQL ``USE system`` still reaches the system tables.
+        """
+        if not isinstance(catalogName, str):
+            raise not_expected_type("catalogName", "str", catalogName)
+        self._n.catalog_set_current_catalog(catalogName)
+
+    def listCatalogs(self, pattern: str | None = None) -> list[CatalogMetadata]:
+        """The catalogs, filtered by the ``|``-separated glob ``pattern``.
+
+        Only ``spark_catalog`` is listed; the system tables stay reachable through SQL ``USE system``.
+        """
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        names = [str(n) for n in self._n.catalog_list_catalogs()]
+        if pattern is not None:
+            names = [n for n in names if _glob_match(pattern, n)]
+        return [CatalogMetadata(name=n, description=None) for n in names]
 
     def currentDatabase(self) -> str:
-        """The current database: always ``default`` (there is no other)."""
-        return "default"
+        """The current database's name."""
+        return str(self._n.catalog_current_database())
 
-    def listDatabases(self) -> DataFrame:
-        """The databases: just ``default``."""
-        return self._session.createDataFrame([("default",)], ["name"])
+    def setCurrentDatabase(self, dbName: str) -> None:
+        """Makes ``dbName`` the current database."""
+        if not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        self._n.catalog_set_current_database(dbName)
 
-    def tableExists(self, tableName: str, dbName: str | None = None) -> bool:
-        """Whether the temporary view ``tableName`` exists."""
-        if not isinstance(tableName, str):
-            raise not_expected_type("tableName", "str", tableName)
-        names = self._user_tables()
-        return any(n.lower() == tableName.lower() for n in names)
+    def listDatabases(self, pattern: str | None = None) -> list[Database]:
+        """The databases, filtered by the ``|``-separated glob ``pattern``."""
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        return [Database(*row) for row in self._n.catalog_list_databases(pattern)]
 
-    def listTables(self, dbName: str | None = None) -> DataFrame:
-        """The temporary views as a DataFrame of ``(name, database,
-        description, tableType, isTemporary)`` rows.
+    def getDatabase(self, dbName: str) -> Database:
+        """The database ``dbName``; ``SCHEMA_NOT_FOUND`` when there is none."""
+        if not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        return Database(*self._n.catalog_get_database(dbName))
 
-        .. note:: The engine has no catalogs or namespaces, so this is the
-            classic five-column shape rather than Spark 4.x's namespaced one.
+    def databaseExists(self, dbName: str) -> bool:
+        """Whether the database ``dbName`` exists."""
+        if not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        return bool(self._n.catalog_database_exists(dbName))
+
+    def listTables(self, dbName: str | None = None, pattern: str | None = None) -> list[Table]:
+        """The tables and views of ``dbName`` (default: the current database), filtered by ``pattern``.
+
+        Local temporary views are included in the current database, as in Spark; the tables that hold
+        ``createDataFrame`` data are not.
         """
         if dbName is not None and not isinstance(dbName, str):
             raise not_expected_type("dbName", "str", dbName)
-        rows = [(n, "default", None, "TEMPORARY", True) for n in self._user_tables()]
-        return self._session.createDataFrame(
-            rows,
-            "name string, database string, description string, tableType string, isTemporary boolean",
-        )
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        rows = self._n.catalog_list_tables(dbName, pattern)
+        return [Table(*row) for row in rows if not _native.Session.is_dataframe_table(row[0])]
+
+    def getTable(self, tableName: str) -> Table:
+        """The table or view ``tableName``; ``TABLE_OR_VIEW_NOT_FOUND`` when there is none."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        _refuse_hidden_table(tableName)
+        return Table(*self._n.catalog_get_table(tableName))
+
+    def tableExists(self, tableName: str, dbName: str | None = None) -> bool:
+        """Whether the table or view ``tableName`` exists (in ``dbName`` when given)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if dbName is not None and not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        if _is_hidden_table(tableName):
+            return False
+        return bool(self._n.catalog_table_exists(_qualified(tableName, dbName)))
+
+    def listColumns(self, tableName: str, dbName: str | None = None) -> list[Column]:
+        """The columns of ``tableName`` (in ``dbName`` when given)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if dbName is not None and not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        _refuse_hidden_table(tableName)
+        return [Column(*row) for row in self._n.catalog_list_columns(_qualified(tableName, dbName))]
+
+    def listFunctions(self, dbName: str | None = None, pattern: str | None = None) -> list[Function]:
+        """The functions, filtered by ``pattern``.
+
+        .. note:: Functions live in no database here; a ``dbName`` must name an existing database and
+            does not narrow the list.
+        """
+        if dbName is not None:
+            if not isinstance(dbName, str):
+                raise not_expected_type("dbName", "str", dbName)
+            self._n.catalog_get_database(dbName)
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        return [Function(*row) for row in self._n.catalog_list_functions(pattern)]
+
+    def getFunction(self, functionName: str) -> Function:
+        """The function ``functionName``; ``UNRESOLVED_ROUTINE`` when there is none."""
+        if not isinstance(functionName, str):
+            raise not_expected_type("functionName", "str", functionName)
+        return Function(*self._n.catalog_get_function(functionName))
+
+    def functionExists(self, functionName: str, dbName: str | None = None) -> bool:
+        """Whether the function ``functionName`` exists."""
+        if not isinstance(functionName, str):
+            raise not_expected_type("functionName", "str", functionName)
+        if dbName is not None and not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        return bool(self._n.catalog_function_exists(_qualified(functionName, dbName)))
 
     def dropTempView(self, viewName: str) -> bool:
         """Drops the temporary view ``viewName``; whether it existed."""
@@ -641,3 +755,49 @@ class Catalog:
         if not isinstance(level, StorageLevel):
             raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
         self._session.table(tableName).persist(level).count()
+
+
+def _is_hidden_table(name: str) -> bool:
+    """Whether ``name`` is one of the tables that hold ``createDataFrame`` data (listed nowhere)."""
+    return bool(_native.Session.is_dataframe_table(_last_part(name)))
+
+
+def _last_part(name: str) -> str:
+    """The last dot-separated part of ``name``; a backquoted part may hold dots (a doubled backquote is one)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quoted = False
+    i = 0
+    while i < len(name):
+        ch = name[i]
+        if ch == "`":
+            if quoted and name[i + 1 : i + 2] == "`":
+                cur.append("`")
+                i += 1
+            else:
+                quoted = not quoted
+        elif ch == "." and not quoted:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    parts.append("".join(cur))
+    return parts[-1]
+
+
+def _refuse_hidden_table(name: str) -> None:
+    """``TABLE_OR_VIEW_NOT_FOUND`` for a ``createDataFrame`` table, as for any table the catalog does not show."""
+    if _is_hidden_table(name):
+        raise AnalysisException(
+            errorClass="TABLE_OR_VIEW_NOT_FOUND",
+            messageParameters={"relationName": f"`{name}`"},
+            sqlState="42P01",
+        )
+
+
+def _glob_match(pattern: str, name: str) -> bool:
+    """Spark's ``|``-separated, ``*``-wildcard, case-insensitive name pattern."""
+    import fnmatch
+
+    return any(fnmatch.fnmatchcase(name.lower(), p.strip().lower()) for p in pattern.split("|"))

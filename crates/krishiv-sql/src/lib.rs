@@ -41,13 +41,15 @@ pub mod lexer;
 mod lower;
 mod params;
 mod parser;
+mod reads;
 mod redact;
 mod summary;
 mod types;
 mod validate;
 
 pub use classify::{
-    ExplainKind, StatementClass, Target, TargetObject, classify, explain_kind, statement_queries,
+    ExplainKind, StatementClass, Target, TargetObject, classify, classify_with, explain_kind,
+    immediate_statement, immediate_text, needs_cluster_manage, statement_queries,
     statement_targets,
 };
 pub use error::{ParseError, parse_exception_suffix};
@@ -57,6 +59,7 @@ pub use lower::{
     parse_and_lower_named_expression,
 };
 pub use params::{ParameterMarker, parameter_markers};
+pub use reads::{is_bare_default, shared_from_query, statement_reads};
 pub use redact::redact_sql;
 pub use summary::{mask_literals, query_summary, sanitize_query_text};
 

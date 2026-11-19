@@ -17,9 +17,11 @@ from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
     PySparkAttributeError,
+    PySparkException,
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
+    unsupported_attribute,
     unsupported_feature,
 )
 from krishiv.sql import _convert
@@ -27,6 +29,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.observation import Observation, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
@@ -130,7 +133,6 @@ class DataFrame:
     def __init__(self, native: _native.DataFrame, session: SparkSession) -> None:
         self._df = native
         self._session = session
-        self._storage_level = StorageLevel(False, False, False, False)
 
     @property
     def sparkSession(self) -> SparkSession:
@@ -168,6 +170,11 @@ class DataFrame:
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
+        # As in Spark, `rdd` is the RDD even when a column has that name. It is answered here, not by
+        # a property: a property that raises `AttributeError` falls through to this method, which
+        # would then hide the message.
+        if name == "rdd":
+            raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
         return Column(self._df.col(name))
@@ -247,7 +254,6 @@ class DataFrame:
         2
         """
         self._df = self._df.cache()
-        self._storage_level = StorageLevel.MEMORY_AND_DISK
         return self
 
     def persist(self, storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) -> DataFrame:
@@ -281,7 +287,6 @@ class DataFrame:
             storageLevel.deserialized,
             storageLevel.replication,
         )
-        self._storage_level = storageLevel
         return self
 
     def unpersist(self, blocking: bool = False) -> DataFrame:
@@ -306,13 +311,65 @@ class DataFrame:
         DataFrame[age: bigint, name: string]
         """
         self._df = self._df.unpersist(blocking)
-        self._storage_level = StorageLevel(False, False, False, False)
         return self
+
+    def checkpoint(self, eager: bool = True) -> DataFrame:
+        """Returns a checkpointed version of this :class:`DataFrame`: the rows are fixed (now, or
+        at the first action when ``eager`` is false) and later changes to the sources are not
+        seen. Needs ``spark.checkpoint.dir`` (set with ``spark.conf.set``); the files are
+        deleted when the result is garbage collected.
+
+        Parameters
+        ----------
+        eager : bool, optional
+            Whether to checkpoint now (default) or at the first action.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            The checkpointed frame.
+        """
+        if not isinstance(eager, bool):
+            raise not_expected_type("eager", "bool", eager)
+        return self._new(self._df.checkpoint(eager))
+
+    def localCheckpoint(self, eager: bool = True, storageLevel: StorageLevel | None = None) -> DataFrame:
+        """Returns a locally checkpointed version of this :class:`DataFrame`: as
+        :meth:`checkpoint`, held by the session, no directory needed.
+
+        Parameters
+        ----------
+        eager : bool, optional
+            Whether to checkpoint now (default) or at the first action.
+        storageLevel : :class:`krishiv.storagelevel.StorageLevel`, optional
+            The storage level; accepted, the rows are held in the session's memory.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            The checkpointed frame.
+        """
+        if not isinstance(eager, bool):
+            raise not_expected_type("eager", "bool", eager)
+        level = None
+        if storageLevel is not None:
+            if not isinstance(storageLevel, StorageLevel):
+                raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
+            level = (
+                storageLevel.useDisk,
+                storageLevel.useMemory,
+                storageLevel.useOffHeap,
+                storageLevel.deserialized,
+                storageLevel.replication,
+            )
+        return self._new(self._df.local_checkpoint(eager, level))
 
     @property
     def storageLevel(self) -> StorageLevel:
-        """This frame's storage level (all false when uncached)."""
-        return self._storage_level
+        """This frame's effective storage level (all false when uncached): what the session
+        registered, which is not always what this frame asked for."""
+        disk, memory, off_heap, deserialized, replication = self._df.storage_level()
+        return StorageLevel(disk, memory, off_heap, deserialized, replication)
 
     @property
     def is_cached(self) -> bool:
@@ -376,6 +433,29 @@ class DataFrame:
         return self._new(self._df.order_by(ordered))
 
     sort = orderBy
+
+    def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame:
+        """Observes named metrics (aggregate expressions) of this DataFrame as the first action runs
+        (``DataFrame.observe``). With an :class:`~krishiv.sql.Observation` they are read from
+        ``observation.get``; with a name only, the metrics are computed with the query."""
+        if not isinstance(observation, Observation | str):
+            raise not_expected_type("observation", "Observation or str", observation)
+        if len(exprs) == 0:
+            raise PySparkValueError(errorClass="CANNOT_BE_EMPTY", messageParameters={"item": "exprs"})
+        if not all(isinstance(c, Column) for c in exprs):
+            raise PySparkTypeError(
+                errorClass="NOT_LIST_OF_COLUMN", messageParameters={"arg_name": "exprs", "arg_type": "tuple"}
+            )
+        try:
+            if isinstance(observation, str):
+                # The engine's analysis refuses an empty name (INVALID_OBSERVED_METRICS.MISSING_NAME, as
+                # classic Spark's string form does), so no client-side check here.
+                named = Observation.__new__(Observation)
+                named._native = _native.Observation(observation)
+                observation = named
+            return self._new(self._df.observe(observation._native, [c._c for c in exprs]))
+        except PySparkException as e:
+            raise _pyspark_error(e) from e
 
     def limit(self, num: int) -> DataFrame:
         if not isinstance(num, int):
@@ -1797,8 +1877,12 @@ class DataFrame:
         """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
+        stream.use_placeholder_names()
         try:
             table = pa.table(stream)
+            # A column name with a NUL cannot cross the C data interface: the stream exports a placeholder name.
+            if table.column_names != (names := stream.names()):
+                table = table.rename_columns(names)
         except Exception:
             # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
             stream.check_error()

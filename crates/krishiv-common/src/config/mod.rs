@@ -20,21 +20,30 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
-use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
+use crate::error::{
+    KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig, KrishivUnsupportedFeature,
+};
 
 mod build_projection;
 mod direct_keys;
+mod distinct_count;
 mod join_cost;
+mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
+mod scan_instance;
+#[cfg(test)]
+mod ui_hosts_tests;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
 pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
+pub use distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE;
 pub use join_cost::JOIN_COST;
 pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
 pub use registry_join::*;
+pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
 
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +112,10 @@ pub enum ValueType {
     /// A duration: a number with an optional suffix `us`, `ms`, `s`,
     /// `m`/`min`, `h`, `d` (as Spark); no suffix means seconds.
     Duration,
+    /// A duration whose bare number is milliseconds (Spark's
+    /// `timeConf(TimeUnit.MILLISECONDS)`), with the same suffixes as
+    /// [`ValueType::Duration`]. Stored as a [`ConfigValue::Duration`].
+    Millis,
     /// Any string, stored verbatim.
     String,
     /// A session time zone, stored verbatim after validation: `Z`, a
@@ -158,6 +171,12 @@ impl ValueType {
             ValueType::Duration => parse_with_unit(s, DURATION_UNITS_US, "s")
                 .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
                 .ok_or_else(|| "expected a duration such as `500ms` or `120s`".to_owned()),
+            ValueType::Millis => parse_with_unit(s, DURATION_UNITS_US, "ms")
+                .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
+                .ok_or_else(|| {
+                    "expected a duration such as `500ms` or `120s` (a bare number is milliseconds)"
+                        .to_owned()
+                }),
             ValueType::String => Ok(ConfigValue::String(Cow::Owned(raw.to_owned()))),
             ValueType::TimeZone => {
                 if is_valid_time_zone(s) {
@@ -188,6 +207,7 @@ impl fmt::Display for ValueType {
             ValueType::Size => f.write_str("size"),
             ValueType::SignedSize => f.write_str("signed size"),
             ValueType::Duration => f.write_str("duration"),
+            ValueType::Millis => f.write_str("duration (bare number: ms)"),
             ValueType::String => f.write_str("string"),
             ValueType::TimeZone => f.write_str("time zone"),
             ValueType::Enum(allowed) => {
@@ -448,6 +468,13 @@ pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
     search(registry::INDEX, key).copied()
 }
 
+/// The key to look up for `key`: the primary key when `key` is a Spark legacy alternative of a registered
+/// one (`withAlternative`), else `key`. Reads, resets and writes all go through it so they address one entry.
+#[must_use]
+pub fn resolve_alternative(key: &str) -> &str {
+    legacy::primary_key(key)
+}
+
 /// The value for `key` in `index`, a slice ordered by (length, name) as
 /// [`registry::INDEX`] is. Public so the benchmark measures the same search
 /// on a fixed-size index (the registry's own size changes as keys are added).
@@ -514,7 +541,7 @@ impl Config {
     /// Sets `key` (a `krishiv.*` key, a Spark alias or another key) to
     /// `value`. On error the config is unchanged.
     pub fn set(&mut self, key: &str, value: &str) -> Result<Option<ConfigWarning>, KrishivError> {
-        if let Some(entry) = lookup(key) {
+        if let Some(entry) = lookup(legacy::primary_key(key)) {
             let v = entry.parse(key, value)?;
             self.values.insert(entry.key, v);
             Ok(None)
@@ -524,6 +551,26 @@ impl Config {
             }
             .into())
         } else {
+            // A Spark legacy setting Krishiv does not honour: a Spark default changes nothing, any other value
+            // asks for behaviour it does not have (P3 PR-05).
+            if key.starts_with("spark.sql.legacy.") {
+                match legacy::check(key, value) {
+                    legacy::Verdict::Refuse { since } => {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!(
+                                "the Spark setting \"{key}\" = \"{value}\" (legacy behaviour, Spark {since}); \
+                                 leave it unset or at its default"
+                            ),
+                        }
+                        .into());
+                    }
+                    legacy::Verdict::Accept => {
+                        self.unregistered.insert(key.to_owned(), value.to_owned());
+                        return Ok(None);
+                    }
+                    legacy::Verdict::Handled | legacy::Verdict::Unknown => {}
+                }
+            }
             // One warning per key: re-setting a key already seen stays silent.
             if self
                 .unregistered
@@ -543,7 +590,7 @@ impl Config {
     /// Removes the value of `key` (a `krishiv.*` key, a Spark alias or
     /// another key), so the entry has its default again.
     pub fn unset(&mut self, key: &str) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
             }
@@ -557,7 +604,7 @@ impl Config {
     /// its value in `baseline`: the value set there, or the default when
     /// neither sets it.
     pub fn reset_key(&mut self, key: &str, baseline: &Config) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
                 if let Some(value) = baseline.values.get(entry.key) {
@@ -590,6 +637,11 @@ impl Config {
             .collect()
     }
 
+    /// Whether `entry` has an explicitly set value (not its default).
+    pub fn is_set(&self, entry: &ConfigEntry) -> bool {
+        self.values.contains_key(entry.key)
+    }
+
     /// The value of `entry`: the set value, else its default.
     pub fn get<'a>(&'a self, entry: &'a ConfigEntry) -> Option<&'a ConfigValue> {
         self.values.get(entry.key).or(entry.default.as_ref())
@@ -606,7 +658,8 @@ pub fn docs_markdown() -> String {
     let mut entries: Vec<&ConfigEntry> = REGISTRY.to_vec();
     entries.sort_by_key(|e| e.key);
     let mut out = String::from(
-        "# Krishiv configuration reference\n\n\
+        "---\ndescription: \"Every krishiv.* configuration key, with its type, default, scope and Spark alias.\"\n---\n\n\
+         # Krishiv configuration reference\n\n\
          <!-- @generated by `cargo xtask docs-config`; do not edit. -->\n\n\
          Keys under `krishiv.experimental.` are experimental and off by default. \
          Spark aliases are accepted in place of the Krishiv key; other unknown \

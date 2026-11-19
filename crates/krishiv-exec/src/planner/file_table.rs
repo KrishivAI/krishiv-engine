@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_schema::SchemaRef;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use krishiv_common::config::Config;
+use krishiv_common::error::{ErrorClass, FailedReadFileNoHint, KrishivError};
 use krishiv_io::split::SplitConfig;
 use krishiv_io::{
     FileFormat, FileRef, FileStatistics, FormatOptions, IoContext, MetadataNeeds, ScalarValue,
@@ -20,7 +21,7 @@ use krishiv_types::DecimalType;
 
 use super::table::TableProvider;
 use crate::error::Result;
-use crate::operators::{FileScan, ScanPushdown};
+use crate::operators::{FileScan, PathRoots, ScanPushdown};
 
 /// Pending footer reads of [`FileTable::open`], in multiples of the
 /// stores' request limit: enough to keep that many requests in flight
@@ -51,6 +52,13 @@ pub struct FileTable {
     /// What each [`sample_distinct`](Self::sample_distinct) call did, in
     /// order; shared by the clones of the table.
     outcomes: Arc<Mutex<Vec<super::ndv_sample::SampleOutcome>>>,
+    /// Column sets a key count proved unique (design P2b A5 (d)); shared by
+    /// the clones of the table.
+    keys: Arc<Mutex<Vec<Vec<String>>>>,
+    /// Column sets the optimizer asked to have counted, not yet taken.
+    wanted: Arc<Mutex<Vec<Vec<String>>>>,
+    /// What each [`discover_unique`](Self::discover_unique) call did.
+    key_outcomes: Arc<Mutex<Vec<super::key_count::KeyOutcome>>>,
 }
 
 impl FileTable {
@@ -60,8 +68,14 @@ impl FileTable {
     /// (`spark.sql.files.maxPartitionBytes`, ...) over `worker_slots`
     /// drivers.
     ///
+    /// A file whose metadata read fails with an error the read's scan
+    /// settings skip (`ignoreCorruptFiles` for a footer that cannot be read,
+    /// `ignoreMissingFiles` for a file deleted after the listing; the read's
+    /// own option, else `spark.sql.files.*`, [`ScanOptions::for_read`]) is
+    /// left out of the table, as Spark's scan skips it.
+    ///
     /// # Errors
-    /// Errors reading a file's metadata.
+    /// Errors reading a file's metadata that the scan settings do not skip.
     pub async fn open(
         format: Arc<dyn FileFormat>,
         io: IoContext,
@@ -83,12 +97,28 @@ impl FileTable {
         // general enough), so it could not run on a multi-threaded
         // runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
+        let scan_options = ScanOptions::for_read(config, &options);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
         let mut units = Some(0_u64);
         let mut file_rows = Vec::with_capacity(files.len());
-        let read = |f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options);
-        in_order(&files, width, read, |meta| {
+        let mut kept = Vec::with_capacity(files.len());
+        in_order(&files, width, |f| {
+            let read = io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options);
+            let path = f.display_path();
+            async move {
+                match read.await {
+                    Ok(meta) => Ok(Some(meta)),
+                    Err(e) if scan_options.skips(&e) => {
+                        tracing::warn!(path, error = %e, "skipped a file whose metadata cannot be read");
+                        Ok(None)
+                    }
+                    Err(e) => Err(scan_failure(e)),
+                }
+            }
+        }, |meta| {
+            kept.push(meta.is_some());
+            let Some(meta) = meta else { return };
             let s = meta.statistics();
             known &= s.rows.exact().is_some();
             file_rows.push(s.rows.exact().copied());
@@ -104,7 +134,15 @@ impl FileTable {
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();
-        let scan_options = ScanOptions::from_config(config);
+        let files = if kept.iter().all(|k| *k) {
+            files
+        } else {
+            files
+                .into_iter()
+                .zip(kept)
+                .filter_map(|(f, k)| k.then_some(f))
+                .collect()
+        };
         let scan = FileScan::new(
             format,
             io.clone(),
@@ -113,6 +151,11 @@ impl FileTable {
             options,
             scan_options,
             SplitConfig::from_config(config, worker_slots),
+        )
+        .with_case_sensitive(
+            config
+                .get_unregistered("spark.sql.caseSensitive")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
         );
         Ok(Self {
             scan,
@@ -125,6 +168,9 @@ impl FileTable {
             scan_options,
             sampled: Arc::default(),
             outcomes: Arc::default(),
+            keys: Arc::default(),
+            wanted: Arc::default(),
+            key_outcomes: Arc::default(),
         })
     }
 }
@@ -151,6 +197,26 @@ impl TableProvider for FileTable {
     fn scan_units(&self) -> Option<u64> {
         self.units
     }
+
+    fn unique_keys(&self) -> Vec<Vec<String>> {
+        self.keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn want_unique(&self, columns: &[String]) {
+        let mut wanted = self.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+        if !wanted.iter().any(|w| w.as_slice() == columns) {
+            wanted.push(columns.to_vec());
+        }
+    }
+
+    /// Parquet files declare each row group's row count, so a scan that
+    /// reads no column still returns every row.
+    fn reads_rows_without_columns(&self) -> bool {
+        self.scan.format().name() == "parquet"
+    }
 }
 
 impl FileTable {
@@ -161,6 +227,14 @@ impl FileTable {
     pub fn with_partition_columns(mut self, columns: Vec<arrow_schema::FieldRef>) -> Self {
         self.partition_columns = columns.iter().map(|f| f.name().clone()).collect();
         self.scan = self.scan.with_partition_columns(columns);
+        self
+    }
+
+    /// The same table printing its files' `_metadata.file_path` under `roots` (see
+    /// [`FileScan::with_path_roots`]).
+    #[must_use]
+    pub fn with_path_roots(mut self, roots: PathRoots) -> Self {
+        self.scan = self.scan.with_path_roots(roots);
         self
     }
 
@@ -238,6 +312,42 @@ impl FileTable {
             .push(outcome);
     }
 
+    /// The column sets the optimizer asked to have counted since the last
+    /// call ([`TableProvider::want_unique`]), in the order asked.
+    #[must_use]
+    pub fn take_wanted(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.wanted.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// What the table's key counts did (design P2b A5 (d)), in order.
+    #[must_use]
+    pub fn key_outcomes(&self) -> Vec<super::key_count::KeyOutcome> {
+        self.key_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Keeps `outcome` for [`Self::key_outcomes`] and returns it.
+    pub(super) fn keep_outcome(
+        &self,
+        outcome: super::key_count::KeyOutcome,
+    ) -> super::key_count::KeyOutcome {
+        self.key_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(outcome.clone());
+        outcome
+    }
+
+    /// Keeps `columns` (sorted) as a proven key.
+    pub(super) fn keep_key(&self, columns: &[String]) {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        if !keys.iter().any(|k| k.as_slice() == columns) {
+            keys.push(columns.to_vec());
+        }
+    }
+
     /// Keeps the distinct count `sample` gives `name` in a table of `rows`.
     pub(super) fn keep_sample(&self, name: &str, sample: &krishiv_io::DistinctSample, rows: u64) {
         let distinct = super::ndv_sample::estimate(sample, rows);
@@ -270,6 +380,20 @@ where
         }
     }
     Ok(())
+}
+
+/// A metadata read error as the scan reports it. Schema inference read the
+/// first file (every file under `mergeSchema`) before the table opens, so a
+/// footer that fails here is one Spark meets only in its scan, which wraps
+/// it as `FAILED_READ_FILE.NO_HINT` with the footer error as its cause.
+fn scan_failure(e: KrishivError) -> KrishivError {
+    if e.error_class() != ErrorClass::FailedReadFileCannotReadFileFooter {
+        return e;
+    }
+    let Some((_, path)) = e.message_parameters().iter().find(|(k, _)| *k == "path") else {
+        return e;
+    };
+    KrishivError::from(FailedReadFileNoHint { path: path.clone() }).with_cause(e)
 }
 
 /// The statistics of two files together.

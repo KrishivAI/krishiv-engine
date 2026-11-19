@@ -6,15 +6,15 @@
 //! value implies; a value that does not fit a declared type is
 //! `INCOMPATIBLE_LITERAL_DATA_TYPE`. `NULL` is compatible with any type.
 
-use krishiv_common::error::{KrishivError, NumericValueOutOfRangeWithSuggestion};
+use krishiv_common::error::{ErrorClass, KrishivError, NumericValueOutOfRangeWithSuggestion};
 use krishiv_plan::{DayTimeField, Literal, YearMonthField};
-use krishiv_types::DecimalType;
+use krishiv_types::{ArrayType, DataType, DecimalType, MapType};
 
 use super::errors::{
     assertion, incompatible_literal, not_set, unsupported_literal_type, unsupported_variant,
 };
 use super::types::{data_type, decimal_type};
-use crate::proto::v4_2::{DataType as ProtoType, data_type::Kind, expression};
+use crate::proto::v4_3::{DataType as ProtoType, data_type::Kind, expression};
 use expression::literal::{Decimal, LiteralType};
 
 /// Spark's default for `DayTimeIntervalType()`: `DAY TO SECOND`.
@@ -30,6 +30,17 @@ pub(super) const YEAR_MONTH_DEFAULT: (i32, i32) = (0, 1);
 /// `CONNECT_INVALID_PLAN.*` for a literal with no value or a value that is
 /// out of range or does not fit its declared type.
 pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError> {
+    literal_at(lit, None, 0)
+}
+
+/// A literal inside a nested one: its type is the one the enclosing type
+/// gives it (`expected`), since Spark 4.1+ clients carry the whole type once, in the root's
+/// `data_type`, and send no type on the members. `depth` counts nested literals.
+fn literal_at(
+    lit: &expression::Literal,
+    expected: Option<&DataType>,
+    depth: usize,
+) -> Result<Literal, KrishivError> {
     let Some(value) = &lit.literal_type else {
         return Err(unsupported_literal_type("LITERALTYPE_NOT_SET(0)"));
     };
@@ -43,14 +54,20 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         None => None,
     };
     let field = value.variant().field;
-    if let Some(kind) = declared_kind
+    // A specialized array is the array kind's compact form.
+    let kind_field = declared_kind.map(|k| k.variant().field);
+    if let Some(kind_field) = kind_field
         && field != "null"
-        && kind.variant().field != field
+        && kind_field != field
+        && !(field == "specialized_array" && kind_field == "array")
     {
-        return Err(incompatible_literal(kind.variant().field, field));
+        return Err(incompatible_literal(kind_field, field));
     }
     Ok(match value {
-        LiteralType::Null(own) => null(declared.unwrap_or(own))?,
+        LiteralType::Null(own) => match (declared, expected) {
+            (None, Some(t)) => Literal::Null(Some(t.clone()).filter(|t| *t != DataType::Null)),
+            _ => null(declared.unwrap_or(own))?,
+        },
         LiteralType::Boolean(v) => Literal::Boolean(*v),
         LiteralType::Byte(v) => Literal::Byte(
             i8::try_from(*v).map_err(|_| assertion("a byte literal is outside -128..=127"))?,
@@ -63,7 +80,14 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         LiteralType::Long(v) => Literal::Long(*v),
         LiteralType::Float(v) => Literal::Float(*v),
         LiteralType::Double(v) => Literal::Double(*v),
-        LiteralType::Decimal(d) => decimal(d, declared_kind)?,
+        LiteralType::Decimal(d) => {
+            let declared = match (declared_kind, expected) {
+                (Some(Kind::Decimal(t)), _) => Some(decimal_type(t.precision, t.scale)?),
+                (None, Some(DataType::Decimal(t))) => Some(*t),
+                _ => None,
+            };
+            decimal(d, declared)?
+        }
         LiteralType::String(v) => {
             if let Some(Kind::String(s)) = declared_kind {
                 // A string literal declared with a collation is refused until Connect types are gated
@@ -81,13 +105,17 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         LiteralType::Timestamp(v) => Literal::Timestamp(*v),
         LiteralType::TimestampNtz(v) => Literal::TimestampNtz(*v),
         LiteralType::YearMonthInterval(months) => {
-            let (start, end) = match declared_kind {
-                Some(Kind::YearMonthInterval(t)) => {
-                    fields(t.start_field, t.end_field, YEAR_MONTH_DEFAULT)
+            let (start, end) = match (declared_kind, expected) {
+                (Some(Kind::YearMonthInterval(t)), _) => {
+                    let (s, e) = fields(t.start_field, t.end_field, YEAR_MONTH_DEFAULT);
+                    (year_month_field(s)?, year_month_field(e)?)
                 }
-                _ => YEAR_MONTH_DEFAULT,
+                (None, Some(DataType::YearMonthInterval { start, end })) => (*start, *end),
+                _ => (
+                    year_month_field(YEAR_MONTH_DEFAULT.0)?,
+                    year_month_field(YEAR_MONTH_DEFAULT.1)?,
+                ),
             };
-            let (start, end) = (year_month_field(start)?, year_month_field(end)?);
             if start > end {
                 return Err(assertion("an interval literal starts after it ends"));
             }
@@ -98,13 +126,17 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
             }
         }
         LiteralType::DayTimeInterval(micros) => {
-            let (start, end) = match declared_kind {
-                Some(Kind::DayTimeInterval(t)) => {
-                    fields(t.start_field, t.end_field, DAY_TIME_DEFAULT)
+            let (start, end) = match (declared_kind, expected) {
+                (Some(Kind::DayTimeInterval(t)), _) => {
+                    let (s, e) = fields(t.start_field, t.end_field, DAY_TIME_DEFAULT);
+                    (day_time_field(s)?, day_time_field(e)?)
                 }
-                _ => DAY_TIME_DEFAULT,
+                (None, Some(DataType::DayTimeInterval { start, end })) => (*start, *end),
+                _ => (
+                    day_time_field(DAY_TIME_DEFAULT.0)?,
+                    day_time_field(DAY_TIME_DEFAULT.1)?,
+                ),
             };
-            let (start, end) = (day_time_field(start)?, day_time_field(end)?);
             if start > end {
                 return Err(assertion("an interval literal starts after it ends"));
             }
@@ -119,18 +151,220 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
             days: i.days,
             micros: i.microseconds,
         },
-        LiteralType::Array(_)
-        | LiteralType::Map(_)
-        | LiteralType::Struct(_)
-        | LiteralType::SpecializedArray(_)
-        | LiteralType::Time(_) => {
+        LiteralType::Array(a) => {
+            let root = root_type(lit, expected)?;
+            array(a, root.as_ref(), depth)?
+        }
+        LiteralType::Map(m) => {
+            let root = root_type(lit, expected)?;
+            map(m, root.as_ref(), depth)?
+        }
+        LiteralType::Struct(s) => {
+            let root = root_type(lit, expected)?;
+            struct_literal(s, root.as_ref(), depth)?
+        }
+        LiteralType::SpecializedArray(a) => {
+            let root = root_type(lit, expected)?;
+            specialized(a, root.as_ref())?
+        }
+        LiteralType::Time(_)
+        | LiteralType::TimestampNtzNanos(_)
+        | LiteralType::TimestampLtzNanos(_) => {
             return Err(unsupported_variant(
-                "literal",
                 "spark.connect.Expression.Literal",
                 value.variant(),
             ));
         }
     })
+}
+
+/// The type a nested literal is declared with: its own `data_type` (the root's, from a 4.1+
+/// client), else the type its parent gives it.
+fn root_type(
+    lit: &expression::Literal,
+    expected: Option<&DataType>,
+) -> Result<Option<DataType>, KrishivError> {
+    match &lit.data_type {
+        Some(t) => Ok(Some(data_type(t)?.refuse_collations()?)),
+        None => Ok(expected.cloned()),
+    }
+}
+
+fn too_deep(depth: usize) -> Result<(), KrishivError> {
+    if depth >= DataType::MAX_NESTING_DEPTH {
+        return Err(krishiv_common::error::FailedToParseTooComplex {}.into());
+    }
+    Ok(())
+}
+
+/// A type from a message's own type field when the root carries none: an unset one is the
+/// message's missing type (golden-pending: Spark infers it from the elements).
+fn own_type(t: Option<&ProtoType>, message: &str) -> Result<DataType, KrishivError> {
+    match t {
+        Some(t) => data_type(t)?.refuse_collations(),
+        None => Err(assertion(format!(
+            "a {message} literal needs a type (the literal's data_type or its own)"
+        ))),
+    }
+}
+
+/// `Literal.Array`: the element type from the declared array type, else the message's
+/// `element_type` (`containsNull` true, as `ArrayType(t)`).
+#[expect(
+    deprecated,
+    reason = "clients before Spark 4.1 type a nested literal by the message's own type fields"
+)]
+fn array(
+    a: &expression::literal::Array,
+    declared: Option<&DataType>,
+    depth: usize,
+) -> Result<Literal, KrishivError> {
+    too_deep(depth)?;
+    let ty = match declared {
+        Some(DataType::Array(t)) => (**t).clone(),
+        Some(other) => {
+            return Err(incompatible_literal(&other.type_name(), "array"));
+        }
+        None => ArrayType::new(own_type(a.element_type.as_ref(), "array")?, true),
+    };
+    let elements = a
+        .elements
+        .iter()
+        .map(|e| literal_at(e, Some(ty.element_type()), depth + 1))
+        .collect::<Result<Vec<_>, _>>()?;
+    client_input(Literal::array(ty, elements))
+}
+
+/// `Literal.Map`: keys and values are parallel lists of one length.
+#[expect(
+    deprecated,
+    reason = "clients before Spark 4.1 type a nested literal by the message's own type fields"
+)]
+fn map(
+    m: &expression::literal::Map,
+    declared: Option<&DataType>,
+    depth: usize,
+) -> Result<Literal, KrishivError> {
+    too_deep(depth)?;
+    let ty = match declared {
+        Some(DataType::Map(t)) => (**t).clone(),
+        Some(other) => {
+            return Err(incompatible_literal(&other.type_name(), "map"));
+        }
+        None => MapType::new(
+            own_type(m.key_type.as_ref(), "map")?,
+            own_type(m.value_type.as_ref(), "map")?,
+            true,
+        ),
+    };
+    if m.keys.len() != m.values.len() {
+        return Err(assertion(
+            "a map literal has a different number of keys and values",
+        ));
+    }
+    let entries = m
+        .keys
+        .iter()
+        .zip(&m.values)
+        .map(|(k, v)| {
+            Ok((
+                literal_at(k, Some(ty.key_type()), depth + 1)?,
+                literal_at(v, Some(ty.value_type()), depth + 1)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, KrishivError>>()?;
+    client_input(Literal::key_value_map(ty, entries))
+}
+
+/// `Literal.Struct`: one element per field of the struct type.
+#[expect(
+    deprecated,
+    reason = "clients before Spark 4.1 type a nested literal by the message's own type fields"
+)]
+fn struct_literal(
+    s: &expression::literal::Struct,
+    declared: Option<&DataType>,
+    depth: usize,
+) -> Result<Literal, KrishivError> {
+    too_deep(depth)?;
+    let ty = match declared {
+        Some(DataType::Struct(t)) => t.clone(),
+        Some(other) => {
+            return Err(incompatible_literal(&other.type_name(), "struct"));
+        }
+        None => match own_type(s.struct_type.as_ref(), "struct")? {
+            DataType::Struct(t) => t,
+            other => return Err(incompatible_literal(&other.type_name(), "struct")),
+        },
+    };
+    if ty.fields().len() != s.elements.len() {
+        return Err(assertion(
+            "a struct literal has a different number of elements and fields",
+        ));
+    }
+    let fields = ty
+        .fields()
+        .iter()
+        .zip(&s.elements)
+        .map(|(f, e)| literal_at(e, Some(f.data_type()), depth + 1))
+        .collect::<Result<Vec<_>, _>>()?;
+    client_input(Literal::struct_value(ty, fields))
+}
+
+/// `Literal.SpecializedArray`: a primitive array, as an array literal of non-null elements.
+/// The root type, when there is one, must be the array of that primitive.
+fn specialized(
+    a: &expression::literal::SpecializedArray,
+    declared: Option<&DataType>,
+) -> Result<Literal, KrishivError> {
+    use expression::literal::specialized_array::ValueType as V;
+    let Some(values) = &a.value_type else {
+        return Err(not_set(
+            "spark.connect.Expression.Literal.SpecializedArray",
+            "VALUETYPE_NOT_SET",
+        ));
+    };
+    let (element, elements): (DataType, Vec<Literal>) = match values {
+        V::Bools(v) => (
+            DataType::Boolean,
+            v.values.iter().map(|x| Literal::Boolean(*x)).collect(),
+        ),
+        V::Ints(v) => (
+            DataType::Integer,
+            v.values.iter().map(|x| Literal::Integer(*x)).collect(),
+        ),
+        V::Longs(v) => (
+            DataType::Long,
+            v.values.iter().map(|x| Literal::Long(*x)).collect(),
+        ),
+        V::Floats(v) => (
+            DataType::Float,
+            v.values.iter().map(|x| Literal::Float(*x)).collect(),
+        ),
+        V::Doubles(v) => (
+            DataType::Double,
+            v.values.iter().map(|x| Literal::Double(*x)).collect(),
+        ),
+        V::Strings(v) => (
+            DataType::String,
+            v.values
+                .iter()
+                .map(|x| Literal::String(x.clone()))
+                .collect(),
+        ),
+    };
+    let ty = match declared {
+        // The declared type may allow nulls the values do not have.
+        Some(DataType::Array(t)) => (**t).clone(),
+        Some(other) => {
+            return Err(incompatible_literal(
+                &other.type_name(),
+                "specialized_array",
+            ));
+        }
+        None => ArrayType::new(element, false),
+    };
+    client_input(Literal::array(ty, elements))
 }
 
 /// A null of type `of`; the `NULL` type is Spark's `void`.
@@ -179,12 +413,12 @@ pub(super) fn day_time_field(n: i32) -> Result<DayTimeField, KrishivError> {
 /// precision and scale the message gives (Spark's `getProtoDataTypeDefault`).
 /// The unscaled value is `value` at that scale, rounded half up if the
 /// declared scale is smaller than the value's own.
-fn decimal(d: &Decimal, declared: Option<&Kind>) -> Result<Literal, KrishivError> {
+fn decimal(d: &Decimal, declared: Option<DecimalType>) -> Result<Literal, KrishivError> {
     let parsed =
         parse_decimal(&d.value).ok_or_else(|| assertion("a decimal literal is not a number"))?;
     let data_type = match declared {
-        Some(Kind::Decimal(t)) => decimal_type(t.precision, t.scale)?,
-        _ => {
+        Some(t) => t,
+        None => {
             let widest =
                 |own: i64, given: Option<i32>| given.map_or(own, |g| own.max(i64::from(g)));
             let scale = widest(parsed.scale, d.scale);
@@ -337,6 +571,19 @@ fn parse_decimal(text: &str) -> Option<Parsed> {
         magnitude,
         precision,
         scale,
+    })
+}
+
+/// A nested literal the plan crate refuses for a member that does not fit the declared type (or
+/// a null where nulls are forbidden): client input, so `CONNECT_INVALID_PLAN.ASSERTION_FAILURE`
+/// rather than the constructor's `INTERNAL_ERROR`. Other errors (too deep) pass through.
+fn client_input(r: Result<Literal, KrishivError>) -> Result<Literal, KrishivError> {
+    r.map_err(|e| {
+        if e.error_class() == ErrorClass::InternalError {
+            assertion(e.to_string())
+        } else {
+            e
+        }
     })
 }
 

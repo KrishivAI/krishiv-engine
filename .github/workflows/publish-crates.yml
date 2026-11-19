@@ -22,31 +22,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  nightly-green:
+  # Publishing needs every gate of ci.yml green on the exact commit being published: the job calls the
+  # same reusable workflow nightly.yml calls (Miri, the fuzz-target build, the wheel matrix, ...), so no
+  # earlier scheduled run is trusted.
+  ci:
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Latest scheduled CI run is green on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/require-green-nightly.sh
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
 
   publish:
-    needs: nightly-green
+    needs: ci
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 330
     environment:
       name: crates-io
       url: https://crates.io/crates/krishiv
@@ -78,6 +72,19 @@ jobs:
               continue
             fi
             echo "::group::$crate $version"
-            cargo publish -p "$crate" --locked # zizmor: ignore[use-trusted-publishing] scoped token in the gated crates-io environment
+            # crates.io limits how fast new crate names are created (429 "try again after <date>"): wait and retry.
+            for attempt in $(seq 1 40); do
+              log="$RUNNER_TEMP/publish-$crate.log"
+              if cargo publish -p "$crate" --locked >"$log" 2>&1; then cat "$log"; break; fi # zizmor: ignore[use-trusted-publishing] scoped token in the gated crates-io environment
+              cat "$log"
+              grep -q '429 Too Many Requests' "$log" || exit 1
+              [ "$attempt" -lt 40 ] || exit 1
+              after=$(grep -oE 'try again after [^.]+GMT' "$log" | head -1 | sed 's/try again after //')
+              # An empty or unparsable date (`date -d ""` is midnight today) falls back to ten minutes.
+              if [ -n "$after" ] && until=$(date -d "$after" +%s 2>/dev/null); then wait=$(( until - $(date +%s) + 20 )); else wait=600; fi
+              [ "$wait" -gt 20 ] || wait=60
+              echo "rate limited on $crate (attempt $attempt): waiting ${wait}s until $after"
+              sleep "$wait"
+            done
             echo "::endgroup::"
           done < .github/scripts/publish-crates.txt

@@ -506,13 +506,11 @@ impl Lowerer {
     }
 
     /// `TABLESAMPLE` over `plan`, as Spark's `AstBuilder.withSample` builds
-    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`;
-    /// `PERCENT` and `BUCKET x OUT OF y` are a Bernoulli sample of a
-    /// fraction, which keeps every row at a fraction of 1 or more and none
-    /// at 0 or less (Spark's `BernoulliCellSampler`). A fraction in between
-    /// keeps rows by a random draw per row seeded by Spark's partition
-    /// index, which Krishiv's partitions do not reproduce, so it stays
-    /// unsupported, as does `SYSTEM` (block) sampling.
+    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`
+    /// (a `REPEATABLE` seed is ignored); `x PERCENT` and `BUCKET x OUT OF y`
+    /// are a Bernoulli [`PlanNode::Sample`] of `[0, fraction)`, the lower
+    /// bound 0 even for a bucket, kept at a fraction of 0 or 1 as Spark keeps
+    /// it. `SYSTEM` (block) sampling stays unsupported.
     pub(super) fn sample(&mut self, plan: LogicalPlan, s: &TableSample) -> R<LogicalPlan> {
         if s.sample_type == Some(SampleType::System) {
             return Err(unsupported("TABLESAMPLE SYSTEM", s.span));
@@ -520,19 +518,16 @@ impl Lowerer {
         let Some(method) = &s.method else {
             return Err(unsupported("TABLESAMPLE", s.span));
         };
-        let limit = |l: &mut Self, plan: LogicalPlan, limit: Arc<IrExpr>| {
-            l.node(
-                PlanNode::Limit {
-                    input: arc(plan),
-                    limit,
-                },
-                s.span,
-            )
-        };
         let fraction = match &method.kind {
             SampleMethodKind::Rows(e) => {
-                let n = arc(self.expr(e)?);
-                return Ok(limit(self, plan, n));
+                let limit = arc(self.expr(e)?);
+                return Ok(self.node(
+                    PlanNode::Limit {
+                        input: arc(plan),
+                        limit,
+                    },
+                    s.span,
+                ));
             }
             SampleMethodKind::Percent { negative, value } => {
                 let sign = if *negative { -1.0 } else { 1.0 };
@@ -549,24 +544,41 @@ impl Lowerer {
             // Validation refuses these.
             _ => return Err(unsupported("TABLESAMPLE", s.span)),
         };
-        if fraction >= 1.0 {
-            Ok(plan)
-        } else if fraction <= 0.0 {
-            Ok(limit(
-                self,
-                plan,
-                arc(IrExpr::literal(IrLiteral::Integer(0))),
-            ))
-        } else {
-            Err(unsupported(
-                "TABLESAMPLE of a fraction between 0 and 1",
-                s.span,
-            ))
-        }
+        // Validation refuses a seed past `i64`.
+        let seed = match &s.seed {
+            None => None,
+            Some(text) => Some(
+                text.parse::<i64>()
+                    .map_err(|_| unsupported("this REPEATABLE seed", s.span))?,
+            ),
+        };
+        Ok(self.node(
+            PlanNode::Sample {
+                input: arc(plan),
+                bounds: krishiv_plan::SampleBounds {
+                    lower: 0.0,
+                    upper: fraction,
+                },
+                seed,
+            },
+            s.span,
+        ))
     }
 
     pub(super) fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
         let plan = self.factor_relation(tf)?;
+        // Spark's `visitTableName` samples the aliased table (`'Sample` over
+        // `'SubqueryAlias`); an aliased query is sampled under its alias.
+        if matches!(tf.kind, TableFactorKind::Table { .. }) {
+            let plan = match &tf.alias {
+                None => plan,
+                Some(a) => self.with_alias(plan, a, tf.span),
+            };
+            return match &tf.sample {
+                Some(sample) => self.sample(plan, sample),
+                None => Ok(plan),
+            };
+        }
         let plan = match &tf.sample {
             Some(sample) => self.sample(plan, sample)?,
             None => plan,
@@ -605,12 +617,12 @@ impl Lowerer {
                 let source = match &name.parts[..] {
                     // `parquet.`s3://...``: a path, kept typed so that its
                     // credentials never sit in a name.
-                    [format, path] if path.quoted && is_path(&path.value) => ReadSource::Files {
+                    [format, path] if path.quoted && is_path(&path.value) => ReadSource::files(
                         // As written: Spark names it so in errors.
-                        format: format.value.clone(),
-                        paths: vec![OptionValue::from_user("path", path.value.clone())],
-                        options: opts,
-                    },
+                        format.value.clone(),
+                        vec![OptionValue::from_user("path", path.value.clone())],
+                        opts,
+                    ),
                     _ => ReadSource::Table {
                         name: parts,
                         options: opts,
@@ -648,18 +660,20 @@ impl Lowerer {
                 if name.parts.len() > 3 {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
-                for a in args {
-                    if matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)) {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                }
                 // A named argument (`f(x => 1)`) travels as an `Alias`; the
                 // analyzer binds it for a SQL-bodied function and refuses it
-                // for any other table function.
+                // for any other table function. A `TABLE(...)` argument is a
+                // `SubqueryKind::Table` subquery, which only a Python table
+                // function takes.
                 let lowered = args
                     .iter()
                     .map(|a| {
-                        let value = self.arg(&a.expr)?;
+                        let value = match &a.expr.kind {
+                            crate::ast::ExprKind::TableArgument(t) => {
+                                arc(self.table_argument(t, a.expr.span)?)
+                            }
+                            _ => self.arg(&a.expr)?,
+                        };
                         Ok(match &a.name {
                             Some(n) => Arc::new(self.ex(
                                 ExprNode::Alias {
@@ -684,6 +698,12 @@ impl Lowerer {
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
+                    if let Some(a) = args
+                        .iter()
+                        .find(|a| matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)))
+                    {
+                        return Err(unsupported("table-valued functions", a.span));
+                    }
                     // `variant_explode` names its one parameter `input`
                     // (Spark's `FunctionSignature(InputParameter("input"))`).
                     let named = |a: &&crate::ast::FunctionArg| match &a.name {
@@ -730,6 +750,57 @@ impl Lowerer {
             }
         };
         Ok(plan)
+    }
+
+    /// `TABLE(name)` or `TABLE(query)` with its partitioning, as an
+    /// argument of a table-function call: a `SubqueryKind::Table`
+    /// subquery (Spark's `FunctionTableSubqueryArgumentExpression`). The
+    /// parser and `validate` have refused the forms Spark's parser refuses.
+    fn table_argument(
+        &mut self,
+        t: &crate::ast::TableArgument,
+        span: crate::ast::Span,
+    ) -> R<krishiv_plan::Expr> {
+        let plan = match &t.source {
+            crate::ast::TableArgumentSource::Query(q) => self.deeper(|l| l.subquery(q))?,
+            crate::ast::TableArgumentSource::Table(crate::ast::DdlName::Parts(name)) => {
+                let tf = crate::ast::TableFactor {
+                    kind: TableFactorKind::Table {
+                        name: name.clone(),
+                        temporal: None,
+                        options: Vec::new(),
+                    },
+                    sample: None,
+                    alias: None,
+                    span: name.span,
+                };
+                self.factor(&tf)?
+            }
+            crate::ast::TableArgumentSource::Table(_) => {
+                return Err(unsupported("IDENTIFIER() in a TABLE argument", span));
+            }
+        };
+        let mut spec = krishiv_plan::TableArgSpec::default();
+        if let Some(p) = &t.partitioning {
+            spec.single_partition = p.single;
+            spec.partition_by = p
+                .partition_by
+                .iter()
+                .map(|e| self.arg(e))
+                .collect::<R<Vec<_>>>()?;
+            spec.order_by = p
+                .order_by
+                .iter()
+                .map(|o| self.sort_order(o))
+                .collect::<R<Vec<_>>>()?;
+        }
+        Ok(self.ex(
+            ExprNode::Subquery {
+                kind: krishiv_plan::SubqueryKind::Table(spec),
+                plan: arc(plan),
+            },
+            span,
+        ))
     }
 
     /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the

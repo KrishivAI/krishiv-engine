@@ -58,14 +58,37 @@
 //! | GCS | `fs.gs.auth.service.account.json.keyfile` | service-account JSON file |
 //! | GCS | `fs.gs.auth.service.account.json` | service-account JSON inline |
 //! | GCS | `fs.gs.storage.root.url`, `fs.gs.endpoint` | custom endpoint (fake-gcs-server) |
-//! | Azure | `fs.azure.account.key.<account>.dfs.core.windows.net` (also `.blob.`, also bare `.<account>`, also bare `fs.azure.account.key`) | account key |
-//! | Azure | `fs.azure.sas.<container>.<account>.dfs.core.windows.net` (also `.blob.`, also `.<container>.<account>`, also bare `fs.azure.sas`) | shared access signature |
+//! | Azure | `fs.azure.account.auth.type` | `SharedKey` (the default when a key is set), `SAS` or `OAuth`; `Custom` and other values are refused |
+//! | Azure | `fs.azure.account.key` | account key (`SharedKey`) |
+//! | Azure | `fs.azure.sas.fixed.token`, `fs.azure.sas` (also `.<container>.<account>`, the older WASB form) | shared access signature (`SAS`) |
+//! | Azure | `fs.azure.account.oauth.provider.type` | `OAuth` token provider: Hadoop's `ClientCredsTokenProvider`, `WorkloadIdentityTokenProvider` or `MsiTokenProvider` (`org.apache.hadoop.fs.azurebfs.oauth2.*`); any other class is refused |
+//! | Azure | `fs.azure.account.oauth2.client.id` | client id (client credentials, workload identity; optional for a managed identity) |
+//! | Azure | `fs.azure.account.oauth2.client.secret` | client secret (client credentials) |
+//! | Azure | `fs.azure.account.oauth2.client.endpoint` | token endpoint `https://<authority>/<tenant>/oauth2/token` (client credentials: the authority and tenant are taken from it) |
+//! | Azure | `fs.azure.account.oauth2.msi.tenant`, `.msi.authority`, `.token.file` | tenant, authority (default `https://login.microsoftonline.com/`) and federated token file (default `/var/run/secrets/azure/tokens/azure-identity-token`) of workload identity |
+//! | Azure | `fs.azure.account.oauth2.msi.endpoint` | managed-identity token endpoint (default IMDS) |
+//! | Azure | `fs.azure.account.oauth2.access.token` | static bearer token for `OAuth` without a provider class (a Krishiv key: Hadoop has none); setting it again (a session `SET`) reaches the next query |
 //! | Azure | `fs.azure.account.name` | account, when the URL carries none (`az://container/key`) |
 //! | Azure | `fs.azure.endpoint` | custom endpoint (Azurite: `http://127.0.0.1:10000/<account>`); `http://` implies `allow_http` |
 //!
+//! Every Azure key above but the account name and the endpoint is read as Hadoop ABFS 3.4.3's
+//! `AbfsConfiguration` reads it: `<key>.<host>` (`fs.azure.account.auth.type.acct.dfs.core.windows.net`)
+//! beats the bare `<key>`, and a secret also has `<key>.<container>.<host>` first; the `dfs` and
+//! `blob` names of a host are one, and an Azure Storage account also takes Krishiv's older
+//! `<key>.<container>.<account>` and `<key>.<account>` forms. An explicit credential makes the store
+//! ignore the process's `AZURE_*` environment entirely; without one the builder's environment
+//! fallback applies, as for S3 and GCS (see `stores/azure.rs`).
+//!
+//! Azure URLs name an Azure Storage host (`container@account.dfs.core.windows.net`, also `.blob.`)
+//! or a OneLake host (`workspace@onelake.dfs.fabric.microsoft.com`, also `.blob.`, and the
+//! workspace private link `workspace@<id>.z<xy>.dfs.fabric.microsoft.com`), which address the
+//! Fabric endpoint as object_store's `parse_url` does; any other host is refused.
+//!
 //! Every value whose key is sensitive (see
 //! [`is_sensitive_key`](krishiv_common::secret::is_sensitive_key): every key
-//! above but the endpoints, the region and the account name) is wrapped in a
+//! above but the endpoints, the region, the account name, the Azure auth type and provider
+//! class; Azure OAuth ids, endpoints and tenants are read as secrets too, as ABFS reads
+//! them with `getPasswordString`) is wrapped in a
 //! [`krishiv_common::secret::SecretString`] the moment it is read and is only exposed at the builder
 //! call. [`StoreRegistry`]'s `Debug`, every error here and every store id
 //! and path are free of secret values: builder errors name the bucket, the
@@ -144,6 +167,34 @@ pub const AZURE_ENDPOINT: &str = "fs.azure.endpoint";
 pub const AZURE_ACCOUNT_KEY: &str = "fs.azure.account.key";
 /// `fs.azure.sas`: the shared access signature (fallback for the dotted forms).
 pub const AZURE_SAS: &str = "fs.azure.sas";
+/// `fs.azure.sas.fixed.token` (Hadoop ABFS): the shared access signature of auth type `SAS`.
+pub const AZURE_SAS_FIXED_TOKEN: &str = "fs.azure.sas.fixed.token";
+/// `fs.azure.sas.token.provider.type` (Hadoop ABFS): a SAS provider class; refused.
+pub const AZURE_SAS_TOKEN_PROVIDER_TYPE: &str = "fs.azure.sas.token.provider.type";
+/// `fs.azure.account.auth.type` (Hadoop ABFS): `SharedKey`, `SAS` or `OAuth`.
+pub const AZURE_AUTH_TYPE: &str = "fs.azure.account.auth.type";
+/// `fs.azure.account.oauth.provider.type` (Hadoop ABFS): the token provider class of `OAuth`.
+pub const AZURE_OAUTH_PROVIDER_TYPE: &str = "fs.azure.account.oauth.provider.type";
+/// `fs.azure.account.oauth2.client.id` (Hadoop ABFS): the Entra application (client) id.
+pub const AZURE_OAUTH_CLIENT_ID: &str = "fs.azure.account.oauth2.client.id";
+/// `fs.azure.account.oauth2.client.secret` (Hadoop ABFS): the client secret.
+pub const AZURE_OAUTH_CLIENT_SECRET: &str = "fs.azure.account.oauth2.client.secret";
+/// `fs.azure.account.oauth2.client.endpoint` (Hadoop ABFS): the token endpoint
+/// `https://login.microsoftonline.com/<tenant>/oauth2/token`.
+pub const AZURE_OAUTH_CLIENT_ENDPOINT: &str = "fs.azure.account.oauth2.client.endpoint";
+/// `fs.azure.account.oauth2.msi.tenant` (Hadoop ABFS): the tenant of workload identity.
+pub const AZURE_OAUTH_MSI_TENANT: &str = "fs.azure.account.oauth2.msi.tenant";
+/// `fs.azure.account.oauth2.msi.endpoint` (Hadoop ABFS): the managed-identity token endpoint.
+pub const AZURE_OAUTH_MSI_ENDPOINT: &str = "fs.azure.account.oauth2.msi.endpoint";
+/// `fs.azure.account.oauth2.msi.authority` (Hadoop ABFS): the Entra authority of workload
+/// identity (default `https://login.microsoftonline.com/`).
+pub const AZURE_OAUTH_MSI_AUTHORITY: &str = "fs.azure.account.oauth2.msi.authority";
+/// `fs.azure.account.oauth2.token.file` (Hadoop ABFS): the federated token file of workload
+/// identity.
+pub const AZURE_OAUTH_TOKEN_FILE: &str = "fs.azure.account.oauth2.token.file";
+/// `fs.azure.account.oauth2.access.token`: a static Entra bearer token. A Krishiv key (Hadoop
+/// ABFS has none: a handed token goes through a custom provider class there); a secret.
+pub const AZURE_OAUTH_ACCESS_TOKEN: &str = "fs.azure.account.oauth2.access.token";
 
 /// `fs.hf.token`: the Hugging Face access token (falls back to the
 /// `HF_TOKEN` environment variable, for the default host only). With an
@@ -184,6 +235,7 @@ impl fmt::Display for ObjectScheme {
 
 /// A cloud URL split into its store and its key.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedUrl {
     /// The scheme class.
     pub scheme: ObjectScheme,
@@ -191,18 +243,53 @@ pub struct ParsedUrl {
     pub scheme_text: String,
     /// The bucket (S3, GCS) or container (Azure).
     pub bucket: String,
-    /// The Azure account, from a `container@account.host` URL.
+    /// The Azure account, from a `container@account.host` URL, ASCII lower-cased as object_store's
+    /// `parse_url` takes it from `Url::host_str` (two labels, `<workspace>.z<xy>`, for a OneLake
+    /// workspace private link).
     pub account: Option<String>,
+    /// The Azure host of a `container@host` URL, ASCII lower-cased: an Azure Storage
+    /// (`<account>.dfs|blob.core.windows.net`) or OneLake (`<account>.dfs|blob.fabric.microsoft.com`,
+    /// `<workspace>.z<xy>.onelake|dfs|blob.fabric.microsoft.com`) host. `None` for every other URL.
+    pub host: Option<String>,
     /// The revision of an `hf://` dataset (`main` unless `@rev` is written).
     pub revision: Option<String>,
     /// The key within the bucket.
     pub key: Path,
-    /// The store id: `s3://bucket`, `gs://bucket`,
-    /// `abfss://container` or `abfss://container@account`.
+    /// The store id: `s3://bucket`, `gs://bucket`, `abfss://container` or
+    /// `abfss://container@host` (Azure Storage and OneLake: the host is kept, its `blob` name
+    /// written as the `dfs` one, so the two names of one account share a store, a OneLake
+    /// workspace never shares one with a same-named container of an Azure Storage account, and
+    /// the id re-parses to the same store). Azure hosts are lower-case in the id.
     pub store_id: StoreId,
     /// The URL in canonical form (`scheme://authority/key`); what errors
     /// print and what re-parses to the same store and key.
     pub display: String,
+}
+
+impl ParsedUrl {
+    /// The root Spark prints the store's files under (`_metadata.file_path`): the scheme as
+    /// written, lower-cased, and the authority as written, an Azure host lower-cased (Hadoop
+    /// qualifies a path with its file system's URI; Spark 4.2.0 run: `S3A://b/k` prints
+    /// `s3a://b/...`, `abfss://c@Acct.DFS.core.windows.net` prints `abfss://c@acct.dfs...`).
+    /// `None` for `hf://`, which Spark does not read.
+    #[must_use]
+    pub fn spark_root(&self) -> Option<String> {
+        if self.scheme == ObjectScheme::HuggingFace {
+            return None;
+        }
+        let (_, rest) = self.display.split_once("://")?;
+        let authority = rest.split_once('/').map_or(rest, |(a, _)| a);
+        let authority = match (self.scheme, authority.split_once('@')) {
+            (ObjectScheme::Azure, Some((container, host))) => {
+                format!("{container}@{}", host.to_ascii_lowercase())
+            }
+            _ => authority.to_owned(),
+        };
+        Some(format!(
+            "{}://{authority}",
+            self.scheme_text.to_ascii_lowercase()
+        ))
+    }
 }
 
 /// Splits `text` into its cloud store and key.
@@ -244,37 +331,41 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
     if authority.is_empty() {
         return Err(unsupported(format!("{scheme} paths without a bucket")));
     }
-    let (bucket, account) = match kind {
+    let (bucket, account, host) = match kind {
         ObjectScheme::S3 | ObjectScheme::Gcs | ObjectScheme::Http | ObjectScheme::HuggingFace => {
             if authority.contains('@') {
                 return Err(unsupported("paths with credentials".to_owned()));
             }
-            (authority.to_owned(), None)
+            (authority.to_owned(), None, None)
         }
         ObjectScheme::Azure => match authority.rsplit_once('@') {
-            None => (authority.to_owned(), None),
+            None => (authority.to_owned(), None, None),
             Some((container, host)) => {
                 if container.is_empty() || container.contains(':') || host.is_empty() {
                     return Err(unsupported("paths with credentials".to_owned()));
                 }
-                // The account is the host's first label
-                // (`account.dfs.core.windows.net`); a bare host carries no
-                // account and one comes from `fs.azure.account.name`.
-                let account = host
-                    .contains('.')
-                    .then(|| host.split('.').next().unwrap_or_default().to_owned())
-                    .filter(|a| !a.is_empty());
-                (container.to_owned(), account)
+                let azure = AzureHost::parse(host).ok_or_else(|| {
+                    unsupported(format!(
+                        "{scheme} paths whose host is not an Azure Storage \
+                         (<account>.dfs.core.windows.net) or OneLake \
+                         (<account>.dfs.fabric.microsoft.com) host ({host})"
+                    ))
+                })?;
+                (container.to_owned(), Some(azure.account), Some(azure.host))
             }
         },
     };
     let key = normalize_key(key)?;
-    let store_id = match (&kind, &account) {
-        (ObjectScheme::S3, _) => StoreId::new(format!("s3://{bucket}")),
-        (ObjectScheme::Gcs, _) => StoreId::new(format!("gs://{bucket}")),
-        (ObjectScheme::Azure, Some(account)) => StoreId::new(format!("abfss://{bucket}@{account}")),
-        (ObjectScheme::Azure, None) => StoreId::new(format!("abfss://{bucket}")),
-        (ObjectScheme::Http | ObjectScheme::HuggingFace, _) => {
+    let store_id = match (&kind, &account, &host) {
+        (ObjectScheme::S3, _, _) => StoreId::new(format!("s3://{bucket}")),
+        (ObjectScheme::Gcs, _, _) => StoreId::new(format!("gs://{bucket}")),
+        // The host is kept, written as its `dfs` name: the dfs and blob names of one account
+        // are one store, and the id (what io errors print) re-parses to this store.
+        (ObjectScheme::Azure, Some(_), Some(host)) => {
+            StoreId::new(format!("abfss://{bucket}@{}", AzureHost::store_host(host)))
+        }
+        (ObjectScheme::Azure, _, _) => StoreId::new(format!("abfss://{bucket}")),
+        (ObjectScheme::Http | ObjectScheme::HuggingFace, _, _) => {
             StoreId::new(format!("{lower}://{bucket}"))
         }
     };
@@ -288,11 +379,99 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         scheme_text: scheme.to_owned(),
         bucket,
         account,
+        host,
         revision: None,
         key,
         store_id,
         display,
     })
+}
+
+/// An Azure host of a `container@host` URL, classified as object_store 0.14.2's
+/// `MicrosoftAzureBuilder::parse_url` (`azure/builder.rs` l.720-756) classifies it, but stricter:
+/// only the exact forms below, never another host taken as an account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AzureHost {
+    /// The account object_store signs for: the first label, or `<workspace>.z<xy>` for a
+    /// workspace private link.
+    pub(crate) account: String,
+    /// The host, ASCII lower-cased.
+    pub(crate) host: String,
+}
+
+impl AzureHost {
+    /// `<account>.(dfs|blob).core.windows.net`, `<account>.(dfs|blob).fabric.microsoft.com` and
+    /// the workspace private link `<workspace>.z<xy>.(onelake|dfs|blob).fabric.microsoft.com`;
+    /// anything else (another cloud, a port, a bare name) is `None`.
+    pub(crate) fn parse(host: &str) -> Option<Self> {
+        let lower = host.to_ascii_lowercase();
+        let labels: Vec<&str> = lower.split('.').collect();
+        let plain =
+            |l: &str| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        match labels.as_slice() {
+            [a, "dfs" | "blob", "core", "windows", "net"]
+            | [a, "dfs" | "blob", "fabric", "microsoft", "com"]
+                if plain(a) =>
+            {
+                Some(Self {
+                    account: (*a).to_owned(),
+                    host: lower.clone(),
+                })
+            }
+            [
+                ws,
+                zone,
+                "onelake" | "dfs" | "blob",
+                "fabric",
+                "microsoft",
+                "com",
+            ] if plain(ws)
+                && zone.len() == 3
+                && zone.starts_with('z')
+                && zone.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+            {
+                Some(Self {
+                    account: format!("{ws}.{zone}"),
+                    host: lower.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The host part of an Azure store id: the `dfs` name for both names of an Azure Storage or
+    /// OneLake account (one service; object_store addresses the `blob` endpoint for either); a
+    /// private-link host as is.
+    pub(crate) fn store_host(host: &str) -> String {
+        for domain in ["core.windows.net", "fabric.microsoft.com"] {
+            if let Some(account) = host.strip_suffix(&format!(".blob.{domain}"))
+                && !account.contains('.')
+            {
+                return format!("{account}.dfs.{domain}");
+            }
+        }
+        host.to_owned()
+    }
+
+    /// Whether `host` (lower-cased) is an Azure Storage (`*.core.windows.net`) host.
+    #[cfg_attr(
+        not(any(feature = "cloud", test)),
+        expect(dead_code, reason = "used by the cloud builders")
+    )]
+    pub(crate) fn is_core(host: &str) -> bool {
+        host.ends_with(".core.windows.net")
+    }
+
+    /// Whether `host` (lower-cased) is a workspace private-link host
+    /// (`<workspace>.z<xy>.<service>.fabric.microsoft.com`), which object_store addresses at
+    /// `https://<host>` instead of `https://<account>.blob.fabric.microsoft.com`.
+    #[cfg_attr(
+        not(any(feature = "cloud", test)),
+        expect(dead_code, reason = "used by the cloud builders")
+    )]
+    pub(crate) fn is_private_link(host: &str) -> bool {
+        host.split('.').count() == 6
+    }
 }
 
 /// Hadoop-style normalization of a key: `.` is dropped, `..` pops, and empty
@@ -339,6 +518,13 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
             && t.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
+    if revision.starts_with('~') {
+        return Err(unsupported(format!(
+            "{scheme} revisions such as `@{revision}` (the converted-Parquet branch is not readable; \
+             name a file of the dataset's own branch, tag or commit: \
+             hf://datasets/<org>/<name>[@revision]/<path to a file>)"
+        )));
+    }
     if !plain(org) || !plain(name) || !plain(revision) {
         return Err(unsupported(format!(
             "{scheme} paths other than hf://datasets/<org>/<name>[@revision]/<path>"
@@ -356,11 +542,44 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
         scheme_text: scheme.to_owned(),
         bucket: format!("{org}/{name}"),
         account: None,
+        host: None,
         revision: Some(revision.to_owned()),
         key,
         store_id: StoreId::new(format!("hf://{authority}")),
         display,
     })
+}
+
+/// Refuses an `hf://` read path that does not name one file: the Hugging Face store has no
+/// listing, so a directory (an empty path or one ending in `/`) or a glob cannot be expanded.
+/// Other schemes pass unchanged.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming how to write the path, for an `hf://` directory or glob.
+pub fn check_hf_file_path(path: &str) -> Result<()> {
+    let Some(rest) = path
+        .split_once("://")
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("hf"))
+        .map(|(_, rest)| rest)
+    else {
+        return Ok(());
+    };
+    let is_glob = rest.contains(['*', '?', '[', '{']);
+    // `datasets/<org>/<name>[@rev]/<path>`: no path, or a path ending in `/`, is a directory.
+    let is_dir = rest.ends_with('/')
+        || rest
+            .splitn(4, '/')
+            .nth(3)
+            .is_none_or(|file| file.split('/').all(|seg| seg.is_empty() || seg == "."));
+    if is_glob || is_dir {
+        let what = if is_glob { "a glob" } else { "a directory" };
+        return Err(unsupported(format!(
+            "hf:// reading {what} ({path}): hf:// reads only named files and has no listing; \
+             name each file, e.g. hf://datasets/<org>/<name>[@revision]/data/train.parquet, \
+             or pass several paths"
+        )));
+    }
+    Ok(())
 }
 
 /// Builds cloud object stores from the session configuration, one per
@@ -523,7 +742,8 @@ impl StoreRegistry {
 
     /// The store of `url`'s bucket or container, cached by store id within
     /// this query. Credentials come from the configuration (see the module
-    /// docs) with the builders' environment fallback.
+    /// docs) with the builders' environment fallback. Never format the returned store with
+    /// `{:?}`: object_store's derived `Debug` prints its credential.
     ///
     /// # Errors
     /// Invalid configuration and storage errors (named bucket and endpoint
@@ -711,6 +931,17 @@ fn is_credential_key(key: &str) -> bool {
     .contains(&lower.as_str())
         || lower.starts_with("fs.azure.account.key.")
         || lower.starts_with("fs.azure.sas.")
+        || lower.starts_with(AZURE_AUTH_TYPE)
+        || lower.starts_with("fs.azure.account.oauth")
+}
+
+/// Whether the Azure credential `key` (lower-cased) only authenticates: an account key, a SAS, a
+/// client secret or a bearer token. The other Azure credential keys choose a token endpoint, a
+/// file or the server's own identity (`MsiTokenProvider`, client ids).
+fn is_inline_azure_key(lower: &str) -> bool {
+    !(lower.starts_with(AZURE_AUTH_TYPE) || lower.starts_with("fs.azure.account.oauth"))
+        || lower.starts_with(AZURE_OAUTH_CLIENT_SECRET)
+        || lower.starts_with(AZURE_OAUTH_ACCESS_TOKEN)
 }
 
 /// A per-read credential on a scoped location would be a second credential source for the
@@ -793,6 +1024,29 @@ fn build(
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
     // builder below).
+    // Every configured endpoint, from the startup settings or per read, passes the egress rule
+    // with no provider exemption before a store is built (design P3-T067 §5.2; review 58a1 B2):
+    // the clients of S3, GCS and Azure admit the provider literals for their ambient credential
+    // calls, so no data request may target one.
+    if let Some(clients) = clients {
+        for key in [
+            S3_ENDPOINT,
+            GCS_STORAGE_ROOT_URL,
+            GCS_ENDPOINT,
+            AZURE_ENDPOINT,
+            HF_ENDPOINT,
+        ] {
+            if let Some(endpoint) = text(config, options, key)?
+                && clients.check_endpoint(&endpoint).is_err()
+            {
+                return Err(invalid_option(
+                    key,
+                    "the egress policy refuses this endpoint's address (private address)",
+                )
+                .into());
+            }
+        }
+    }
     let path_style = match url.scheme {
         ObjectScheme::S3 => path_style_access(config, options)?,
         _ => None,
@@ -800,11 +1054,17 @@ fn build(
     match url.scheme {
         ObjectScheme::S3 => s3_store(config, options, url, path_style, scope, clients),
         ObjectScheme::Gcs => gcs_store(config, options, url, scope, clients),
-        ObjectScheme::Azure => azure_store(config, options, url, scope, clients),
+        ObjectScheme::Azure => azure::azure_store(config, options, url, scope, clients),
         ObjectScheme::Http => http_store(url, clients),
         // The token is a default header, which the shared clients' fingerprint does not see:
-        // this store always builds its own client.
-        ObjectScheme::HuggingFace => hf_store(config, options, url),
+        // this store builds its own client, a policy client when the cache enforces the egress
+        // policy (built uncached: default headers are never shared).
+        ObjectScheme::HuggingFace => hf_store(
+            config,
+            options,
+            url,
+            clients.filter(|c| c.enforces_egress()),
+        ),
     }
 }
 
@@ -819,6 +1079,7 @@ fn hf_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    egress: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let endpoint =
@@ -868,9 +1129,13 @@ fn hf_store(
         headers.insert(http::header::AUTHORIZATION, value);
         client = client.with_default_headers(headers);
     }
-    HttpBuilder::new()
+    let mut builder = HttpBuilder::new()
         .with_url(base)
-        .with_client_options(client)
+        .with_client_options(client);
+    if let Some(clients) = egress {
+        builder = builder.with_http_connector(clients.data_only());
+    }
+    builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
@@ -917,8 +1182,9 @@ fn http_store(
     let mut builder = HttpBuilder::new()
         .with_url(url.store_id.key())
         .with_client_options(object_store::ClientOptions::new().with_allow_http(plain));
+    // No ambient credential providers here: the data-only clients (review 58a1 B2).
     if let Some(clients) = clients {
-        builder = builder.with_http_connector(clients.clone());
+        builder = builder.with_http_connector(clients.data_only());
     }
     builder
         .build()
@@ -978,6 +1244,50 @@ fn relevant_options<'a>(
 /// owns (the engine's format option parsing does).
 pub fn is_store_option(key: &str) -> bool {
     key.len() > 3 && key.as_bytes()[..3].eq_ignore_ascii_case(b"fs.")
+}
+
+/// Whether `key` is a store option that only a principal with `Manage` on the cluster may set
+/// in server mode, per read, on a table or in a session (P3-T067b). That is every `fs.*` key
+/// except the inline credentials that only authenticate (access keys, secrets, session tokens,
+/// Azure keys, SAS tokens, OAuth client secrets and bearer tokens, the Hugging Face token; the
+/// other Azure OAuth keys pick a token endpoint, a file or the server's managed identity). The others choose where a store connects
+/// (endpoints, regions, accounts, proxies; the inline GCS service-account JSON too, whose
+/// `gcs_base_url` object_store follows) or which local file it opens (key files), and a store
+/// built from them could send the server's own credentials, or its requests, elsewhere.
+/// Matched ASCII case-insensitively, as the stores look keys up.
+#[must_use]
+pub fn is_server_scoped_option(key: &str) -> bool {
+    is_store_option(key) && !is_inline_credential_key(key)
+}
+
+/// A credential given inline that only authenticates: it chooses no host and no file. (A GCS
+/// key file names a file; the inline GCS JSON can name a host.)
+fn is_inline_credential_key(key: &str) -> bool {
+    (is_credential_key(key)
+        && !key.eq_ignore_ascii_case(GCS_KEYFILE)
+        && !key.eq_ignore_ascii_case(GCS_KEY)
+        && is_inline_azure_key(&key.to_ascii_lowercase()))
+        || key.eq_ignore_ascii_case(HF_TOKEN)
+}
+
+/// Checks an S3 region before object_store formats it into the S3 and STS host names
+/// (`sts.{region}.amazonaws.com`): lower-case letters, digits and `-`, at most 32 bytes, so no
+/// region can name another host.
+#[cfg(feature = "cloud")]
+fn checked_region(key: &str, region: String) -> Result<String> {
+    let valid = !region.is_empty()
+        && region.len() <= 32
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if valid {
+        return Ok(region);
+    }
+    Err(invalid_option(
+        key,
+        "an S3 region holds only lower-case letters, digits and `-` (at most 32)",
+    )
+    .into())
 }
 
 /// Finds `key` in the per-read `options`, ASCII case-insensitively.
@@ -1276,10 +1586,10 @@ fn s3_store(
             builder = builder.with_token(token.expose_secret());
         }
     }
-    if let Some(region) =
-        text(config, options, S3_ENDPOINT_REGION)?.or(text(config, options, S3_REGION)?)
-    {
-        builder = builder.with_region(region);
+    if let Some(region) = text(config, options, S3_ENDPOINT_REGION)? {
+        builder = builder.with_region(checked_region(S3_ENDPOINT_REGION, region)?);
+    } else if let Some(region) = text(config, options, S3_REGION)? {
+        builder = builder.with_region(checked_region(S3_REGION, region)?);
     }
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
@@ -1349,151 +1659,7 @@ fn gcs_store(
     Ok(refreshing(store, provider.as_ref()))
 }
 
-/// An Azure Blob store for `url`'s container.
-///
-/// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
-/// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
-/// builder rejects the configuration (never a secret).
 #[cfg(feature = "cloud")]
-fn azure_store(
-    config: &dyn StoreSettings,
-    options: &BTreeMap<String, OptionValue>,
-    url: &ParsedUrl,
-    scope: Option<&Arc<CredentialCache>>,
-    clients: Option<&SharedHttpClients>,
-) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
-    let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
-    let account = url
-        .account
-        .clone()
-        .or(text(config, options, AZURE_ACCOUNT_NAME)?);
-    if let Some(account) = &account {
-        builder = builder.with_account(account);
-    }
-    let provider = scope.map(|c| RefreshingProvider::<AzureCredential>::from_cache(Arc::clone(c)));
-    if let Some(provider) = &provider {
-        builder = builder.with_credentials(Arc::new(provider.clone()));
-    } else {
-        if let Some(key) = azure_key(config, options, url, account.as_deref())? {
-            builder = builder.with_access_key(key.expose_secret());
-        }
-        if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
-            let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
-            builder = builder.with_sas_authorization(pairs);
-        }
-    }
-    if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
-        builder = builder.with_allow_http(allows_http(Some(&endpoint)));
-        builder = builder.with_endpoint(endpoint);
-    }
-    if let Some(clients) = clients {
-        builder = builder.with_http_connector(clients.clone());
-    }
-    let store = builder
-        .build()
-        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
-    Ok(refreshing(store, provider.as_ref()))
-}
-
-/// The Azure account key: the dotted `fs.azure.account.key.<account>.*`
-/// forms first, then the bare fallback.
-///
-/// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
-/// value (see [`cred`]).
-#[cfg(feature = "cloud")]
-fn azure_key(
-    config: &dyn StoreSettings,
-    options: &BTreeMap<String, OptionValue>,
-    url: &ParsedUrl,
-    account: Option<&str>,
-) -> Result<Option<SecretString>> {
-    Ok(
-        dotted(config, options, "fs.azure.account.key", url, account)?.or(cred(
-            config,
-            options,
-            AZURE_ACCOUNT_KEY,
-        )?),
-    )
-}
-
-/// The Azure shared access signature: the dotted `fs.azure.sas.*` forms
-/// first, then the bare fallback.
-///
-/// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
-/// value (see [`cred`]).
-#[cfg(feature = "cloud")]
-fn azure_sas(
-    config: &dyn StoreSettings,
-    options: &BTreeMap<String, OptionValue>,
-    url: &ParsedUrl,
-    account: Option<&str>,
-) -> Result<Option<SecretString>> {
-    Ok(
-        dotted(config, options, "fs.azure.sas", url, account)?
-            .or(cred(config, options, AZURE_SAS)?),
-    )
-}
-
-/// The value of the most specific dotted key for `prefix`:
-/// `<prefix>.<container>.<account>.dfs.core.windows.net`,
-/// `<prefix>.<container>.<account>.blob.core.windows.net`,
-/// `<prefix>.<container>.<account>`, then `<prefix>.<account>` when the URL
-/// carries an account. Per-read options override the session value for each
-/// candidate key.
-///
-/// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
-/// value (see [`cred`]).
-#[cfg(feature = "cloud")]
-fn dotted(
-    config: &dyn StoreSettings,
-    options: &BTreeMap<String, OptionValue>,
-    prefix: &str,
-    url: &ParsedUrl,
-    account: Option<&str>,
-) -> Result<Option<SecretString>> {
-    let Some(account) = account else {
-        return Ok(None);
-    };
-    for key in [
-        format!("{prefix}.{}.{account}.dfs.core.windows.net", url.bucket),
-        format!("{prefix}.{}.{account}.blob.core.windows.net", url.bucket),
-        format!("{prefix}.{}.{account}", url.bucket),
-        format!("{prefix}.{account}"),
-    ] {
-        if let Some(value) = cred(config, options, &key)? {
-            return Ok(Some(value));
-        }
-    }
-    Ok(None)
-}
-
-/// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
-/// complaint: the token itself must never reach an error. A leading `?` (as
-/// Azure portals copy it) and surrounding whitespace are ignored.
-#[cfg(feature = "cloud")]
-fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
-    let token = secret.expose_secret().trim();
-    let token = token.strip_prefix('?').unwrap_or(token);
-    let mut pairs = Vec::new();
-    for part in token.split('&') {
-        match part.split_once('=') {
-            Some((name, value)) if !name.is_empty() && !value.is_empty() => {
-                pairs.push((name.to_owned(), value.to_owned()));
-            }
-            _ => return Err("the Azure SAS token is not `name=value&...`".to_owned()),
-        }
-    }
-    if pairs.is_empty() {
-        return Err("the Azure SAS token is not `name=value&...`".to_owned());
-    }
-    Ok(pairs)
-}
-
+mod azure;
 #[cfg(test)]
 mod tests;

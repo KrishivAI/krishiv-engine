@@ -7,7 +7,7 @@ use krishiv_common::error::ErrorClass;
 
 use crate::arrow::{
     SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, canonical_arrow_type, client_arrow_type,
-    normalize_ingest_type,
+    edge_arrow_type, normalize_ingest_type,
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
@@ -406,7 +406,6 @@ fn arrow_storage_alternatives() {
         ArrowType::UInt32,
         ArrowType::Float16,
         ArrowType::Decimal256(10, 2),
-        ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2),
     ] {
         let e = DataType::from_arrow(&a).map_err(|e| e.error_class());
         assert_eq!(e, Err(ErrorClass::KrishivUnsupportedFeature), "{a}");
@@ -932,10 +931,11 @@ fn decimal_carriers_map_through_nested_types() {
         client_arrow_type(&large),
         ArrowType::LargeList(item(ArrowType::Decimal128(3, 0)))
     );
+    // A fixed-size list of decimals is no vector carrier (design P3-T075): it enters a query as a plain list.
     let fixed = ArrowType::FixedSizeList(item(ArrowType::Decimal128(3, 0)), 2);
     assert_eq!(
         canonical_arrow_type(&fixed),
-        ArrowType::FixedSizeList(item(ArrowType::Decimal64(3, 0)), 2)
+        ArrowType::List(item(ArrowType::Decimal64(3, 0)))
     );
     assert_eq!(client_arrow_type(&ArrowType::Int32), ArrowType::Int32);
 }
@@ -1073,5 +1073,123 @@ fn calendar_intervals_ride_a_marked_struct_and_month_day_nano_only_at_the_edges(
             .iter()
             .collect::<Vec<_>>(),
         [Some(CalendarValue::new(1, 2, -3)), None]
+    );
+}
+
+/// The INDETERMINATE collation (`string collate null`) of a mixed expression's type reads back
+/// through `from_canonical_json` at any depth, as a struct field's `__COLLATIONS` entry too;
+/// Spark's `fromJson` (`from_json`) still refuses it.
+#[test]
+fn canonical_json_reads_the_indeterminate_collation_back() {
+    use crate::Collation;
+    let null = DataType::collated_string(Collation::INDETERMINATE);
+    let lcase = DataType::collated_string(Collation::UTF8_LCASE);
+    let types: Vec<DataType> = vec![
+        MapType::new(null.clone(), null.clone(), true).into(),
+        ArrayType::new(null.clone(), false).into(),
+        StructType::new(vec![
+            StructField::new("a", null.clone(), true),
+            StructField::new("b", ArrayType::new(null.clone(), true).into(), false),
+            StructField::new("c", lcase.clone(), true),
+        ])
+        .into(),
+        MapType::new(lcase, DataType::String, false).into(),
+    ];
+    for t in types {
+        let json = t.json();
+        let back = DataType::from_canonical_json(&json);
+        assert_eq!(back.as_ref(), Ok(&t), "{json}");
+        assert_eq!(back.map(|b| b.json()).as_deref(), Ok(json.as_str()));
+    }
+    assert_eq!(
+        DataType::from_canonical_json("\"string collate null\""),
+        Ok(null)
+    );
+    let indeterminate: DataType = MapType::new(
+        DataType::collated_string(Collation::INDETERMINATE),
+        DataType::String,
+        true,
+    )
+    .into();
+    assert!(DataType::from_json(&indeterminate.json()).is_err());
+    assert!(DataType::from_canonical_json("\"string collate nope\"").is_err());
+}
+
+/// A fixed-length list is a stored carrier of `array<T>` (design P3-T075): the length is not part of the Spark type,
+/// `containsNull` follows the child field, and the canonical Arrow type stays `List`.
+#[test]
+fn a_fixed_size_list_is_an_array_stored_with_a_length() {
+    let fixed = |n, nullable| {
+        ArrowType::FixedSizeList(
+            Arc::new(Field::new("item", ArrowType::Float32, nullable)),
+            n,
+        )
+    };
+    let float_array =
+        |contains_null| DataType::from(ArrayType::new(DataType::Float, contains_null));
+    assert_eq!(
+        DataType::from_arrow(&fixed(4, false)),
+        Ok(float_array(false))
+    );
+    assert_eq!(
+        DataType::from_arrow(&fixed(768, true)),
+        Ok(float_array(true))
+    );
+    // Two lengths are one Spark type, and the canonical carrier is still a `List`.
+    assert_eq!(
+        DataType::from_arrow(&fixed(3, true)),
+        DataType::from_arrow(&fixed(4, true))
+    );
+    assert!(matches!(float_array(true).to_arrow(), ArrowType::List(_)));
+    assert!(float_array(true).is_valid_storage(&fixed(4, true)));
+    // The element type still decides: a vector of strings is not storage for `array<float>`.
+    let strings = ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Utf8, true)), 4);
+    assert!(!float_array(true).is_valid_storage(&strings));
+    // Nested fixed-size lists count toward the nesting limit like lists.
+    let mut deep = fixed(2, true);
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        deep = ArrowType::FixedSizeList(Arc::new(Field::new("item", deep, true)), 2);
+    }
+    assert_eq!(
+        DataType::from_arrow(&deep).unwrap_err().error_class(),
+        ErrorClass::FailedToParseTooComplex
+    );
+}
+
+/// Design P3-T075 §3: only a top-level `FixedSizeList` of floats, `1..=65,536` long, enters a query as a vector
+/// carrier; any other becomes a plain list, and every client edge reads a plain list.
+#[test]
+fn only_a_top_level_float_vector_stays_a_carrier_and_edges_read_lists() {
+    let fixed =
+        |t: ArrowType, n| ArrowType::FixedSizeList(Arc::new(Field::new("item", t, true)), n);
+    let list = |t: ArrowType| ArrowType::List(Arc::new(Field::new("item", t, true)));
+    for keep in [
+        fixed(ArrowType::Float32, 1),
+        fixed(ArrowType::Float64, 768),
+        fixed(ArrowType::Float32, 65_536),
+    ] {
+        assert_eq!(canonical_arrow_type(&keep), keep);
+    }
+    for (becomes, from) in [
+        (list(ArrowType::Int32), fixed(ArrowType::Int32, 4)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, 0)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, 65_537)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, -1)),
+        (
+            list(list(ArrowType::Float32)),
+            fixed(fixed(ArrowType::Float32, 2), 2),
+        ),
+    ] {
+        assert_eq!(canonical_arrow_type(&from), becomes, "{from}");
+    }
+    // Nested in a list: a plain list of plain lists.
+    assert_eq!(
+        canonical_arrow_type(&list(fixed(ArrowType::Float32, 4))),
+        list(list(ArrowType::Float32))
+    );
+    // The edge reads Spark's list whatever the carrier.
+    assert_eq!(
+        edge_arrow_type(&fixed(ArrowType::Float32, 4)),
+        list(ArrowType::Float32)
     );
 }

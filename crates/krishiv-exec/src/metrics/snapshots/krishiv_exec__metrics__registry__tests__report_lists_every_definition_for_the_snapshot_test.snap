@@ -13,6 +13,7 @@ krishiv.query.output.rows counter {row} [] -> krishiv_query_output_rows_total
 krishiv.query.spill.bytes counter By [] -> krishiv_query_spill_bytes_bytes_total
 krishiv.query.spill.files counter {file} [] -> krishiv_query_spill_files_total
 krishiv.query.memory.peak histogram By [class=interactive|batch|background|agent] -> krishiv_query_memory_peak_bytes
+krishiv.history.write_failures gauge {profile} [] -> krishiv_history_write_failures
 krishiv.memory.reserved gauge By [] -> krishiv_memory_reserved_bytes
 krishiv.memory.limit gauge By [] -> krishiv_memory_limit_bytes
 krishiv.memory.arbitration.spills counter 1 [] -> krishiv_memory_arbitration_spills_total
@@ -26,4 +27,9 @@ krishiv.io.requests counter 1 [op,store_kind] -> krishiv_io_requests_total
 krishiv.io.bytes.read counter By [op,store_kind] -> krishiv_io_bytes_read_bytes_total
 krishiv.io.request.duration histogram s [op,store_kind] -> krishiv_io_request_duration_seconds
 krishiv.exec.driver.stalls counter 1 [] -> krishiv_exec_driver_stalls_total
+krishiv.delta.log_pool.wait_ms gauge ms [] -> krishiv_delta_log_pool_wait_ms
+krishiv.delta.snapshot_cache.hits gauge 1 [] -> krishiv_delta_snapshot_cache_hits
+krishiv.delta.snapshot_cache.misses gauge 1 [] -> krishiv_delta_snapshot_cache_misses
 krishiv.build.info gauge 1 [version,git_sha] -> krishiv_build_info
+krishiv.auth.failed counter {request} [surface=connect|admin|metrics|ui|flight-sql,method=token|oidc|mtls|throttle|none] -> krishiv_auth_failed_total
+krishiv.auth.denied counter {request} [surface=connect|admin|metrics|ui|flight-sql,privilege=SELECT|MODIFY|CREATE|DROP|MONITOR|USAGE|BROWSE|OPERATE|MANAGE|IMPERSONATE] -> krishiv_auth_denied_total

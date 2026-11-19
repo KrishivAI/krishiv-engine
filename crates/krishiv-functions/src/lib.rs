@@ -22,4 +22,5 @@ mod python_wrappers;
 pub mod registry;
 pub mod scalar;
 pub mod signature;
+pub mod sketch;
 pub(crate) mod uniform;

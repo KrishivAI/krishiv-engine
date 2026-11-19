@@ -4,6 +4,61 @@
 use super::*;
 
 impl Session {
+    /// [`Self::sql`] and whether the statement was a command (not a query).
+    pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
+        self.check_open()?;
+        let (session, text) = (self.clone(), query.to_owned());
+        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        let marker = Arc::clone(&row);
+        let (result, cancelled) = self
+            .on_executor_reasoned(async move {
+                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+                use tracing::Instrument as _;
+                let trace = crate::telemetry::QueryTrace::of(seq, &text);
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
+                session
+                    .sql_here_marked(&text, marker)
+                    .instrument(span)
+                    .await
+                    .map(|(df, command)| (df.with_trace(trace), command))
+            })
+            .await;
+        // A statement refused before it ran (parse, analysis, access) is a
+        // row of `system.queries` too, with the text as the session may show it.
+        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
+        // that failed while it ran): that one has its row.
+        if let Err(error) = &result
+            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
+        {
+            let id = self.state.queries.record_refused(
+                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
+                Some(krishiv_sql::redact_sql(query).as_str()),
+                None,
+                error,
+                self.operation_id(),
+            );
+            self.stamp_row(&id);
+            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
+            if let Some(reason) = cancelled {
+                self.state.queries.note_cancel_reason(&id, reason);
+            }
+        }
+        result
+    }
+
+    /// This session's parser options, from its configuration. Public under `unstable-ir`, for a
+    /// Connect server that parses `Expression.expression_string` while it translates a plan.
+    #[cfg(feature = "unstable-ir")]
+    pub fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
+    }
+
+    /// This session's parser options, from its configuration.
+    #[cfg(not(feature = "unstable-ir"))]
+    pub(crate) fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
+    }
+
     /// The directory a write of `text` goes to, as it physically is (links in
     /// its existing part resolved): the policy is asked about the directory
     /// that is written, never about a name that a link sends elsewhere.
@@ -15,25 +70,37 @@ impl Session {
         text: &str,
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
+    ) -> Result<crate::access::Checked, KrishivError> {
+        let at = self.locate_write_text(text, options, env)?;
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
+    }
+
+    /// The path a write of `text` goes to as the caller wrote it (qualified, `.` and `..` folded in the
+    /// text, no link resolved): what [`Self::locate_write_path`] resolves, and the text its denial names.
+    pub(crate) fn locate_write_text(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
         let stores = self.scoped_stores(&env.config);
-        let at = ObjectPaths::new(
+        ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
             Arc::clone(&self.state.io),
             stores,
         )
-        .locate_with_options(text, options)?;
-        crate::access::physical(at)
+        .locate_with_options(text, options)
     }
 
-    /// Before anything is written or replaced (an overwrite deletes first):
-    /// `Modify` and `Create` on the path, both whether or not it exists, so a
-    /// denial never tells whether it does.
-    pub(crate) async fn authorize_write_path(
+    /// A write's options, before its target is located: locating builds the
+    /// store from them (a key file is read then), so a server-scoped option is
+    /// refused before any store sees it. `USAGE` on the secrets the encoder
+    /// resolves, then `Manage` for a server-scoped store key.
+    pub(crate) async fn authorize_write_options(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
         options: &BTreeMap<String, OptionValue>,
+        table_options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
         let r = krishiv_plan::analyzer::authorize_secret_refs(
@@ -43,18 +110,132 @@ impl Session {
         )
         .await;
         crate::access::audit(self, StatementClass::Write, r)?;
-        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        for privilege in [Privilege::Modify, Privilege::Create] {
+        self.authorize_store_options(
+            StatementClass::Write,
+            &self.state.conf.snapshot(),
+            // A table's own stored option was authorized when it was stored.
+            options
+                .iter()
+                .filter(|(k, v)| table_options.get(*k) != Some(*v))
+                .map(|(k, _)| k.as_str()),
+        )
+        .await
+    }
+
+    /// Before anything is written or replaced (an overwrite deletes first):
+    /// `Modify` and `Create` on the path, both whether or not it exists, so a
+    /// denial never tells whether it does. The options were checked before the
+    /// path was located (`authorize_write_options`).
+    pub(crate) async fn authorize_write_path(
+        &self,
+        checked: &crate::access::Checked,
+    ) -> Result<(), KrishivError> {
+        crate::access::authorize_checked(
+            self,
+            checked,
+            &[Privilege::Modify, Privilege::Create],
+            StatementClass::Write,
+        )
+        .await
+    }
+
+    /// `Manage` on the cluster when `options` hold a server-scoped store key
+    /// (`krishiv_io::is_server_scoped_option`: endpoints, regions, accounts, key files; not inline
+    /// credentials), or when the session's configuration `config` changed one from what the
+    /// session was built with (P3-T067b). A store built from them could send the server's own
+    /// credentials to another host. Admin only in server mode; embedded use (`AllowAll`) is
+    /// unchanged.
+    pub(crate) async fn authorize_store_options<'a>(
+        &self,
+        class: StatementClass,
+        config: &krishiv_common::config::Config,
+        options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        let r = self
+            .check_store_options(&*self.state.policy, config, options)
+            .await;
+        crate::access::audit(self, class, r)
+    }
+
+    /// [`Self::authorize_store_options`] without the audit record, asking `policy`, for a caller
+    /// that logs it (an analysis, through [`crate::access::audit_read`], silent in a trial, whose
+    /// policy is quiet too).
+    pub(crate) async fn check_store_options<'a>(
+        &self,
+        policy: &dyn krishiv_plan::analyzer::AccessPolicy,
+        config: &krishiv_common::config::Config,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        if !options.any(krishiv_io::is_server_scoped_option)
+            && !self.state.conf.store_settings_changed(config)
+        {
+            return Ok(());
+        }
+        authorize(
+            policy,
+            &self.state.principal,
+            &Securable::System("cluster".to_owned()),
+            Privilege::Manage,
+        )
+        .await
+    }
+
+    /// Whether [`Self::authorize_store_options`] of `options` asks `Manage` on the cluster under the
+    /// session's stored configuration (what a DDL run passes): the analyze API lists it then.
+    pub(crate) fn store_options_asked<'a>(
+        &self,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        options.any(krishiv_io::is_server_scoped_option)
+            || self
+                .state
+                .conf
+                .store_settings_changed(&self.state.conf.snapshot())
+    }
+
+    /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
+    pub(crate) async fn unset_key(&self, key: &str) -> Result<(), KrishivError> {
+        self.authorize_set_key(key).await?;
+        self.conf().unset(key)
+    }
+
+    /// `SET key = ..` (or `RESET key`) of a key only an administrator may change is `Manage`
+    /// on the cluster (ADR 0046 §3): a registry key settable by `admin` (its Spark alias too),
+    /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
+    /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
+    /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
+    ///
+    /// Public for server adapters that set configuration outside SQL (Spark Connect's `Config`
+    /// RPC), so they ask exactly what `SET` asks; not meant as user API.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the principal lacks `Manage`; the
+    /// denial is audited and counted like every other.
+    pub async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
+        if krishiv_common::config::lookup(key)
+            .or_else(|| {
+                krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key))
+            })
+            .is_some_and(|e| e.settable_by == krishiv_common::config::SettableBy::Admin)
+        {
             let r = authorize(
                 &*self.state.policy,
                 &self.state.principal,
-                &securable,
-                privilege,
+                &Securable::System("cluster".to_owned()),
+                Privilege::Manage,
             )
             .await;
-            crate::access::audit(self, StatementClass::Write, r)?;
+            return crate::access::audit(self, StatementClass::Session, r);
         }
-        Ok(())
+        if !krishiv_io::is_server_scoped_option(key) {
+            return Ok(());
+        }
+        self.authorize_store_options(
+            StatementClass::Session,
+            &self.state.conf.snapshot(),
+            std::iter::once(key),
+        )
+        .await
     }
 
     /// The file format named `format`, which must be one the engine writes:
@@ -127,6 +308,7 @@ impl Session {
             mode,
             path,
             options,
+            table_options,
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
@@ -160,14 +342,17 @@ impl Session {
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
-        let at = self.locate_write_path(text, &options, env)?;
+        self.authorize_write_options(&options, &table_options)
+            .await?;
+        let checked = self.locate_write_path(text, &options, env)?;
+        let at = checked.at.clone();
         // The query's own context: its counters are the write's bytes.
         let io = env.io.clone();
-        self.authorize_write_path(&at, &options).await?;
+        self.authorize_write_path(&checked).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
-        crate::access::still_physical(self, &at)?;
+        crate::access::still_physical(self, &checked)?;
         // Checked only (`dry`): nothing is admitted or replaced.
         if dry {
             return Ok(Vec::new());
@@ -179,12 +364,26 @@ impl Session {
             Some(admitted) => admitted,
             None => self.admit_query(env, false).await?,
         });
+        // The query's profile waits here for the commit below.
+        let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
+        // Dropped with the future (a cancelled write), it records the held entry as cancelled.
+        let hold_guard = crate::profile_history::HoldGuard::new(
+            Arc::clone(&hold),
+            self.state.runtime.profile_history.clone(),
+        );
+        let held_env = QueryEnv {
+            history_hold: Some(Arc::clone(&hold)),
+            ..env.clone()
+        };
         let written = async {
             let job = job_uuid();
             // Every name of the write is resolved relative to the directory
             // opened here, never through a link (P2-T199). The registration
             // lives until the write is over.
-            let (store, _registration) = self.anchor_local_write(&at, &job)?;
+            let (store, _registration) = self.anchor_local_write(&checked, &job)?;
+            // An overwrite deletes what it replaces here: from now on a cancel
+            // reaches the write through its query, not by dropping it (`action.rs`).
+            crate::action::commit_point();
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -229,7 +428,7 @@ impl Session {
             })?;
             let worker = self.worker(env);
             let (rows, _, row_id) = self
-                .run_on_query_logged(&plan, worker, env, false, admitted.take())
+                .run_on_query_logged(&plan, worker, &held_env, false, admitted.take())
                 .await?;
             let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
@@ -241,7 +440,7 @@ impl Session {
             // The query's stream has ended and its `system.queries` row says `finished`: a failure
             // of the steps that follow is the write's outcome, so the row is corrected.
             let after_run = async {
-                if let Err(denied) = crate::access::still_physical(self, &at) {
+                if let Err(denied) = crate::access::still_physical(self, &checked) {
                     // The files the query wrote are under the anchor: remove
                     // them (best effort) before refusing.
                     for f in &files {
@@ -297,14 +496,19 @@ impl Session {
             }
         }
         // A store error after the anchor is open may be a link swapped into
-        // the path: the audited denial is what the caller sees then.
-        if written.is_err()
-            && let Err(denied) = crate::access::still_physical(self, &at)
-            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
-        {
-            return Err(denied);
+        // the path: the audited denial is what the caller sees then. A denial
+        // is already audited (and counted): it is not asked about again.
+        let denied = written
+            .as_ref()
+            .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
+            .then(|| crate::access::still_physical(self, &checked).err())
+            .flatten()
+            .filter(|d| d.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        hold_guard.settle(denied.as_ref().or(written.as_ref().err()));
+        match denied {
+            Some(denied) => Err(denied),
+            None => written,
         }
-        written
     }
 
     /// The store a directory write at `at` goes through: for a local path
@@ -314,9 +518,10 @@ impl Session {
     /// store of `at`.
     pub(super) fn anchor_local_write(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
+        checked: &crate::access::Checked,
         job: &str,
     ) -> Result<(StoreId, Option<StoreRegistration>), KrishivError> {
+        let at = &checked.at;
         #[cfg(unix)]
         if let Some(local) = at.display.strip_prefix("file:") {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
@@ -334,7 +539,7 @@ impl Session {
                 Err(krishiv_io::AnchorError::Swapped(_)) => {
                     // A link or file where a directory was checked: the
                     // audited denial if the path now resolves elsewhere.
-                    crate::access::still_physical(self, at)?;
+                    crate::access::still_physical(self, checked)?;
                     return Err(anchor_failed(
                         at,
                         "a component of the path is not a directory",
@@ -371,5 +576,47 @@ impl Session {
                 .locate(path)?
                 .display,
         )
+    }
+
+    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
+    ///
+    /// # Errors
+    /// What [`crate::view_schema::check_read`] raises.
+    pub(super) async fn check_stored_views(
+        &self,
+        reads: &[crate::view_schema::StoredRead],
+        env: &QueryEnv,
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
+        let compensation = crate::view_schema::compensation(&env.config);
+        let mut synced = Vec::new();
+        let mut renames = Vec::new();
+        for read in reads {
+            // A view whose query does not analyze alone is left to the outer query.
+            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
+            else {
+                continue;
+            };
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
+                continue;
+            };
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
+                synced.push((Arc::clone(&read.entry), changed));
+            }
+            renames.extend(check.rename);
+        }
+        Ok((synced, renames))
+    }
+}
+
+/// Aborts a task when dropped.
+pub(super) struct AbortOnDrop(pub(super) krishiv_exec::TaskHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }

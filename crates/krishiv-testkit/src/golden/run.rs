@@ -286,7 +286,8 @@ pub fn run_with(
     manifest: &ExclusionManifest,
     keep: &dyn Fn(&str) -> bool,
 ) -> Result<RunResult, RunError> {
-    manifest.validate(set)?;
+    // An entry naming a file the tag does not have is not an error here: the manifest is written against
+    // the default tag and an older tag may lack a file (`ExclusionManifest::validate` checks the default one).
     let mut result = RunResult {
         engine: engine.name().to_owned(),
         jdk: set.jdk,

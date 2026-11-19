@@ -7,8 +7,8 @@ use krishiv_plan::{Expr, ExprNode, FunctionCall};
 use super::super::testing::{attr, attr_with, conf, expr, fails, func, lit, proto_type};
 use super::super::{TranslateConf, translate_expression};
 use super::*;
-use crate::proto::v4_2::data_type as dt;
-use crate::proto::v4_2::expression::literal::LiteralType;
+use crate::proto::v4_3::data_type as dt;
+use crate::proto::v4_3::expression::literal::LiteralType;
 
 fn text(e: &Expression) -> String {
     translate_expression(e, &conf())
@@ -193,8 +193,84 @@ fn qualified_and_internal_functions_are_unsupported() {
         text(&expr(ExprType::UnresolvedFunction(not_internal))),
         "product()"
     );
-    let call = expr(ExprType::CallFunction(Default::default()));
-    assert!(err(&call).message().contains("CallFunction"));
+}
+
+#[test]
+fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
+    let call = |name: &str, args: Vec<Expression>| {
+        expr(ExprType::CallFunction(crate::proto::v4_3::CallFunction {
+            function_name: name.into(),
+            arguments: args,
+        }))
+    };
+    let e = translate_expression(&call("upper", vec![attr("a")]), &conf()).unwrap();
+    let f = function(&e);
+    assert_eq!(
+        (f.name.as_str(), f.qualifier.len(), f.args.len()),
+        ("upper", 0, 1)
+    );
+    assert!(f.arg_names.is_empty() && !f.distinct);
+    // `collate(value, 'name')` lowers to the COLLATE node, as the unresolved-function form does.
+    let e = translate_expression(
+        &call(
+            "collate",
+            vec![attr("a"), lit(LiteralType::String("utf8_lcase".into()))],
+        ),
+        &conf(),
+    )
+    .unwrap();
+    assert!(matches!(e.node, ExprNode::Collate { .. }));
+    // `=`, `==`, `!=` and `<>` are the canonical equality functions, as in the unresolved-function form.
+    for (op, outer) in [("=", "=="), ("==", "=="), ("!=", "not"), ("<>", "not")] {
+        let e = translate_expression(
+            &call(&format!("`{op}`"), vec![attr("a"), attr("b")]),
+            &conf(),
+        )
+        .unwrap();
+        assert_eq!(function(&e).name, outer, "{op}");
+    }
+    // A named argument keeps `collate` an ordinary call (the analyzer rejects the name).
+    let named_collate = expr(ExprType::UnresolvedFunction(
+        expression::UnresolvedFunction {
+            function_name: "collate".into(),
+            arguments: vec![
+                expr(ExprType::NamedArgumentExpression(Box::new(
+                    crate::proto::v4_3::NamedArgumentExpression {
+                        key: "bogus".into(),
+                        value: Some(Box::new(attr("a"))),
+                    },
+                ))),
+                lit(LiteralType::String("utf8_lcase".into())),
+            ],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        },
+    ));
+    let e = translate_expression(&named_collate, &conf()).unwrap();
+    assert_eq!(function(&e).name, "collate");
+    // One argument is an ordinary call.
+    let e = translate_expression(&call("collate", vec![attr("a")]), &conf()).unwrap();
+    assert_eq!(function(&e).name, "collate");
+    let e = translate_expression(&call("session.f", vec![]), &conf()).unwrap();
+    assert_eq!(function(&e).qualifier, ["session"]);
+    let named = expr(ExprType::NamedArgumentExpression(Box::new(
+        crate::proto::v4_3::NamedArgumentExpression {
+            key: "n".into(),
+            value: Some(Box::new(attr("b"))),
+        },
+    )));
+    let e = translate_expression(&call("f", vec![attr("a"), named.clone()]), &conf()).unwrap();
+    assert_eq!(function(&e).arg_names, [None, Some("n".to_owned())]);
+    // A named argument outside a call is refused, a name that does not parse is a syntax error.
+    assert_eq!(
+        err(&named).error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        err(&call("", vec![])).error_class(),
+        ErrorClass::ParseSyntaxError
+    );
 }
 
 fn alias(names: &[&str], metadata: Option<&str>) -> Expression {
@@ -310,7 +386,10 @@ fn cast_errors() {
         )))),
         0,
     ));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
     let no_input = expr(ExprType::Cast(Box::new(expression::Cast {
         cast_to_type: Some(CastToType::TypeStr("int".into())),
         ..expression::Cast::default()
@@ -419,18 +498,6 @@ fn stars() {
 }
 
 #[test]
-fn sql_expression_strings_are_unsupported_for_now() {
-    let sql = expr(ExprType::ExpressionString(expression::ExpressionString {
-        expression: "a > 1".into(),
-    }));
-    let e = err(&sql);
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("expression_string"), "{}", e.message());
-    // The expression text is not echoed into the error.
-    assert!(!e.message().contains("a > 1"));
-}
-
-#[test]
 fn unsupported_expression_kinds_are_named() {
     for (kind, name) in [
         (
@@ -448,20 +515,17 @@ fn unsupported_expression_kinds_are_named() {
             ExprType::SubqueryExpression(Default::default()),
             "subquery_expression",
         ),
-        (
-            ExprType::NamedArgumentExpression(Box::default()),
-            "named_argument_expression",
-        ),
     ] {
         let e = err(&expr(kind));
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
+        assert_eq!(e.sql_state(), Some("56K00"));
         assert!(
-            e.message()
-                .contains(&format!("spark.connect.Expression.{name}")),
+            e.message().contains("spark.connect.Expression")
+                && e.message().contains(&name.to_ascii_uppercase()),
             "{name}: {}",
             e.message()
         );
@@ -587,4 +651,56 @@ fn on_small_stack(stack: usize, f: impl FnOnce() + Send + 'static) {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn an_expression_string_is_parsed_like_select_expr() {
+    let e = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "a + 1 AS b".to_owned(),
+    }));
+    assert_eq!(text(&e), text_of_sql("a + 1 AS b"));
+    // The parser's own error, with its class, and no echo of the text.
+    let bad = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "CANARY +".to_owned(),
+    }));
+    let e = err(&bad);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::from_name("PARSE_SYNTAX_ERROR").unwrap()
+    );
+}
+
+#[test]
+fn an_expression_string_is_parsed_with_the_conf_parser_options() {
+    // `"x"` is a string literal by default and an identifier under `doubleQuotedIdentifiers`:
+    // the options are the conf's.
+    let e = expr(ExprType::ExpressionString(expression::ExpressionString {
+        expression: "\"x\"".to_owned(),
+    }));
+    let default = translate_expression(&e, &TranslateConf::default()).unwrap();
+    let conf = TranslateConf {
+        parser: krishiv_sql::ParserOptions {
+            double_quoted_identifiers: true,
+            ..krishiv_sql::ParserOptions::default()
+        },
+        ..TranslateConf::default()
+    };
+    let quoted = translate_expression(&e, &conf).unwrap();
+    assert_ne!(default, quoted);
+    // The control: the default options give the same answer as the default conf.
+    let control = TranslateConf {
+        parser: krishiv_sql::ParserOptions::default(),
+        ..TranslateConf::default()
+    };
+    assert_eq!(translate_expression(&e, &control).unwrap(), default);
+}
+
+fn text_of_sql(sql: &str) -> String {
+    krishiv_sql::parse_and_lower_named_expression(
+        sql,
+        &krishiv_sql::ParserOptions::default(),
+        krishiv_plan::SourceId(u32::MAX),
+    )
+    .unwrap()
+    .to_string()
 }

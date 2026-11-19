@@ -176,6 +176,16 @@ pub enum Statement {
     AddResource(AddResource),
     /// `LIST JAR|FILE|ARCHIVE [...]`.
     ListResource(ListResource),
+    /// `CREATE MATERIALIZED VIEW` or `CREATE STREAMING TABLE`.
+    CreatePipelineDataset(Box<CreatePipelineDataset>),
+    /// `CREATE FLOW name AS INSERT ...`.
+    CreateFlow(Box<CreateFlow>),
+    /// `LOAD DATA ... INTO TABLE ...`.
+    LoadData(Box<LoadData>),
+    /// `INSERT OVERWRITE [LOCAL] DIRECTORY ...`.
+    InsertDirectory(Box<InsertDirectory>),
+    /// `GRANT`, `REVOKE`, `SHOW GRANTS` and the role statements (P3-T062; a Krishiv extension).
+    AccessControl(Box<AccessControl>),
 }
 
 impl Statement {
@@ -220,7 +230,30 @@ impl Statement {
             Self::Repair(r) => r.span,
             Self::AddResource(r) => r.span,
             Self::ListResource(r) => r.span,
+            Self::CreatePipelineDataset(c) => c.span,
+            Self::CreateFlow(c) => c.span,
+            Self::LoadData(l) => l.span,
+            Self::InsertDirectory(i) => i.span,
+            Self::AccessControl(a) => a.span,
         }
+    }
+}
+
+/// An access-control statement (P3-T062): the command as the session runs it, and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessControl {
+    /// The command, names as written.
+    pub command: krishiv_plan::analyzer::access_control::AccessCommand,
+    /// Source text.
+    pub span: Span,
+}
+
+impl std::hash::Hash for AccessControl {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // The command's `Debug` form is a function of its value (paths print redacted, which
+        // only merges hashes, never splits equal values).
+        format!("{:?}", self.command).hash(state);
+        self.span.hash(state);
     }
 }
 
@@ -255,6 +288,10 @@ pub enum ExplainMode {
     /// `VERBOSE` (a Krishiv extension): the logical plan after each
     /// optimizer rule that changed it, then the physical plan.
     Verbose,
+    /// `FORMAT JSON` (a Krishiv extension; a syntax error in Spark): the
+    /// statement's analyze document (`krishiv.analyze.v1`), without running
+    /// it.
+    Json,
 }
 
 /// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE ...`:
@@ -766,3 +803,6 @@ pub use query_nodes::*;
 
 mod ddl_nodes;
 pub use ddl_nodes::*;
+
+mod pipeline_nodes;
+pub use pipeline_nodes::*;

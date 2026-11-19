@@ -7,8 +7,8 @@ use prost::Message;
 
 use super::testing::{attr, boxed, conf, expr, fails, func, lit, read_table, relation};
 use super::*;
-use crate::proto::v4_2::expression::{ExprType, literal::LiteralType};
-use crate::proto::v4_2::relation::RelType;
+use crate::proto::v4_3::expression::{ExprType, literal::LiteralType};
+use crate::proto::v4_3::relation::RelType;
 use krishiv_plan::{Grouping, PlanNode};
 
 fn filter_over(input: pb::Relation) -> pb::Relation {
@@ -61,8 +61,25 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
         op_type: Some(OpType::Command(Box::default())),
     };
     let e = fails(translate_plan(&command, &conf()));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Plan.command"), "{}", e.message());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    let command = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::default())),
+        }))),
+    };
+    let e = fails(translate_plan(&command, &conf()));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(
+        e.message().contains("GET_RESOURCES_COMMAND(8)"),
+        "{}",
+        e.message()
+    );
     let compressed = pb::Plan {
         op_type: Some(OpType::CompressedOperation(Box::default())),
     };
@@ -78,6 +95,34 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
     );
     assert!(e.message().contains("OP_TYPE_NOT_SET"));
+}
+
+#[test]
+fn commands_are_refused_with_their_case_name() {
+    let e = command_not_supported(&pb::Command::default());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    assert!(
+        e.message().contains("COMMANDTYPE_NOT_SET"),
+        "{}",
+        e.message()
+    );
+    let sql = pb::Command {
+        command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+    };
+    let e = command_not_supported(&sql);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message(),
+        "The Spark Connect plan is invalid. This oneOf field message in spark.connect.Command \
+         is not supported: SQL_COMMAND(5)"
+    );
 }
 
 #[test]
@@ -242,7 +287,7 @@ fn leaves_count_as_a_level_of_the_ir() {
 
 #[test]
 fn debug_of_a_write_hides_a_path_held_by_a_oneof() {
-    use crate::proto::v4_2::{WriteOperation, write_operation::SaveType};
+    use crate::proto::v4_3::{WriteOperation, write_operation::SaveType};
     let write = WriteOperation {
         save_type: Some(SaveType::Path(
             "https://h/p?X-Amz-Signature=Canary-4d1".into(),
@@ -252,4 +297,74 @@ fn debug_of_a_write_hides_a_path_held_by_a_oneof() {
     let text = format!("{write:?}");
     assert!(!text.contains("Canary-4d1"), "{text}");
     assert!(text.contains("Path(<redacted: 38 bytes>)"), "{text}");
+}
+
+#[test]
+fn a_sql_command_translates_as_the_sql_relation_of_a_query() {
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::SqlCommand {
+        sql: "SELECT 1".to_owned(),
+        pos_args: vec![pb::expression::Literal {
+            literal_type: Some(pb::expression::literal::LiteralType::Integer(5)),
+            data_type: None,
+        }],
+        ..Default::default()
+    };
+    let relation = sql_command_relation(&command).expect("a relation");
+    let Some(pb::relation::RelType::Sql(sql)) = &relation.rel_type else {
+        panic!("a SQL relation: {relation:?}");
+    };
+    assert_eq!(sql.query, "SELECT 1");
+    assert!(sql_has_parameters(sql));
+    assert!(!sql_has_parameters(&pb::Sql::default()));
+    let plan = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    };
+    assert_eq!(
+        translate_plan(&plan, &conf())
+            .expect("translates")
+            .to_string(),
+        translate_relation(&relation, &conf())
+            .expect("translates")
+            .to_string()
+    );
+    // `input` (PySpark 4.x) wins and is answered as it came, plan id included.
+    let input = pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(9),
+            ..Default::default()
+        }),
+        rel_type: Some(pb::relation::RelType::Sql(pb::Sql {
+            query: "SELECT 2".to_owned(),
+            ..Default::default()
+        })),
+    };
+    let with_input = pb::SqlCommand {
+        input: Some(input.clone()),
+        ..Default::default()
+    };
+    assert_eq!(sql_command_relation(&with_input).expect("input"), input);
+    // The `WithRelations` form is refused as an unsupported field.
+    let with_relations = pb::SqlCommand {
+        input: Some(pb::Relation {
+            common: None,
+            rel_type: Some(pb::relation::RelType::WithRelations(Box::default())),
+        }),
+        ..Default::default()
+    };
+    let e = sql_command_relation(&with_relations).expect_err("refused");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.message().contains("SqlCommand.input"), "{}", e.message());
+    // Any other relation is Spark's `SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS`.
+    let other = pb::SqlCommand {
+        input: Some(pb::Relation::default()),
+        ..Default::default()
+    };
+    let e = sql_command_relation(&other).expect_err("refused");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanSqlCommandExpectsSqlOrWithRelations
+    );
 }

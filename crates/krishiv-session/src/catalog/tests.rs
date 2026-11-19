@@ -53,11 +53,7 @@ fn files(col: &str) -> TempTable {
         known: false,
         permanent: false,
         partitions: Some(Default::default()),
-        source: ReadSource::Files {
-            format: "parquet".to_owned(),
-            paths: vec![],
-            options: Default::default(),
-        },
+        source: ReadSource::files("parquet".to_owned(), vec![], Default::default()),
         columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
     }
 }
@@ -66,6 +62,7 @@ fn first_column(t: &TempTable) -> &str {
     match t {
         TempTable::Files { columns, .. }
         | TempTable::Memory { columns, .. }
+        | TempTable::Provider { columns, .. }
         | TempTable::View { columns, .. } => &columns[0].name,
     }
 }
@@ -80,6 +77,7 @@ fn expanding_a_cycle_is_an_internal_error() {
         columns: Vec::new(),
         pins: Vec::new(),
         text: None,
+        keeps: ViewKeeps::default(),
     };
     session.put("a", view("b"));
     session.put("b", view("a"));
@@ -917,11 +915,11 @@ fn task_specs_rejects_what_it_cannot_split() {
     // A scan of files that were never opened.
     let e = catalog
         .task_specs(
-            &split_scan_plan(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: Vec::new(),
-                options: BTreeMap::new(),
-            }),
+            &split_scan_plan(ReadSource::files(
+                "parquet".to_owned(),
+                Vec::new(),
+                BTreeMap::new(),
+            )),
             2,
             2,
         )
@@ -940,4 +938,307 @@ fn task_specs_rejects_what_it_cannot_split() {
     assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
     drop(analysis);
     drop(df);
+}
+
+/// A copied catalog leaves out the script results no copied view pins: the
+/// clone has no frame that reads them, and a shared entry would keep the
+/// result alive in both catalogs once its frame is gone.
+#[test]
+fn a_copied_catalog_leaves_out_script_results() {
+    let s = int_session(vec![1]);
+    let base = s.state.catalog.entry_count();
+    let df = block_on(s.sql("BEGIN SELECT id FROM range(5); END")).unwrap();
+    assert_eq!(s.state.catalog.entry_count(), base + 1);
+    let c = s.clone_session().unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base);
+    // The source's frame still reads its result.
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    // Once the frame goes, the next change of the source's catalog drops it.
+    drop(df);
+    block_on(s.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+    assert_eq!(s.state.catalog.entry_count(), base + 1);
+    block_on(c.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base + 1);
+}
+
+/// A script result a copied view pins is kept, under a handle of the
+/// clone's own: once each session drops its view, each collects its entry
+/// (a shared handle would keep both alive while the other session lives).
+#[test]
+fn a_pinned_script_result_is_collected_in_each_session_after_its_view_goes() {
+    let s = int_session(vec![1]);
+    let base = s.state.catalog.entry_count();
+    let df = block_on(s.sql("BEGIN SELECT id FROM range(5); END")).unwrap();
+    block_on(df.create_or_replace_temp_view("pinned_v")).unwrap();
+    drop(df);
+    // The view and the result it pins.
+    assert_eq!(s.state.catalog.entry_count(), base + 2);
+    let c = s.clone_session().unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base + 2);
+    let rows: usize = block_on(block_on(c.sql("SELECT * FROM pinned_v")).unwrap().collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    for session in [&s, &c] {
+        block_on(session.sql("DROP VIEW pinned_v")).unwrap();
+        block_on(session.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+        assert_eq!(session.state.catalog.entry_count(), base + 1);
+    }
+}
+
+/// A clone shares the relation store its copied memory tables' leases live
+/// in: the batch splits of a copied table resolve through the clone's
+/// store, and its tasks read the table.
+#[test]
+fn task_specs_of_a_copied_memory_table_resolve_in_the_clone() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let s = int_session(vec![1, 2, 3]);
+    let c = s.clone_session().unwrap();
+    let df = block_on(c.sql("SELECT id FROM t")).unwrap();
+    let analysis = rt.block_on(df.analysis()).unwrap();
+    let (_, physical) = rt
+        .block_on(c.physical(&analysis.analyzed, &analysis.env))
+        .unwrap();
+    let specs = analysis.env.catalog.task_specs(&physical, 1, 1).unwrap();
+    let mut batches = 0;
+    for task in &specs {
+        for splits in task.scans.values() {
+            if let krishiv_exec::physical::ScanSplits::Batches { relation, range } = splits {
+                c.relations()
+                    .resolve(&relation.hash, range.clone())
+                    .unwrap();
+                batches += 1;
+            }
+        }
+    }
+    assert!(batches > 0, "a batch split: {specs:?}");
+    let mut union = Vec::new();
+    for task in &specs {
+        union.extend(ids_of(
+            &rt.block_on(c.run_task(&physical, &analysis.env, task))
+                .unwrap(),
+        ));
+    }
+    union.sort_unstable();
+    assert_eq!(union, vec![1, 2, 3]);
+}
+
+/// Design P3-T083 §3.8: a stage that scans a disk-cached relation is refused as an unsupported
+/// feature (the file is on the driver), not failed as an internal error; a memory-cached one is
+/// dealt as a lease-less memory table is.
+#[test]
+fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            dir.path().join("spill").to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    session.register_batches("t", schema, vec![batch]).unwrap();
+    for (level, on_disk) in [
+        (crate::StorageLevel::DISK_ONLY, true),
+        (crate::StorageLevel::MEMORY_ONLY, false),
+    ] {
+        let cached = session.table("t").persist(level);
+        assert_eq!(rt.block_on(cached.count()).unwrap(), 3);
+        let derived = cached.filter(crate::functions::col("id").gt(crate::functions::lit(1)));
+        let analysis = rt.block_on(derived.analysis()).unwrap();
+        let (physical, fill) = rt.block_on(derived.physical_cached(&analysis)).unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 1, 1);
+        if on_disk {
+            let error = specs.unwrap_err();
+            assert_eq!(
+                error.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{error}"
+            );
+        } else {
+            assert_eq!(specs.unwrap().len(), 1);
+        }
+        drop(fill);
+        rt.block_on(cached.unpersist()).unwrap();
+    }
+}
+
+/// A DataFrame view's keeps are part of its entry: an expansion reports those of the entry it
+/// inlined, and replacing the view publishes the new plan and its keeps together, leaving an
+/// entry already read with its own (no lookup by name after the fact).
+#[test]
+fn a_view_expansion_carries_the_keeps_of_the_entry_it_inlined() {
+    let catalog = SessionCatalog::default();
+    let first: Keep = Arc::new(1_u8);
+    let second: Keep = Arc::new(2_u8);
+    let put = |keep: &Keep| {
+        catalog.put_view(
+            "v",
+            Arc::new(LogicalPlan::table(["base"])),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ViewKeeps(vec![Arc::clone(keep)]),
+        );
+    };
+    let read = Arc::new(LogicalPlan::table(["v"]));
+    let keeps_of = |e: &Expansion| -> Vec<u8> {
+        e.keeps
+            .iter()
+            .map(|k| *Arc::clone(k).downcast::<u8>().unwrap())
+            .collect()
+    };
+    put(&first);
+    let before = catalog.get("v", false).unwrap();
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [1]);
+    put(&second);
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [2]);
+    let TempTable::View { keeps, .. } = &*before else {
+        panic!("not a view: {before:?}");
+    };
+    assert!(Arc::ptr_eq(&keeps.0[0], &first));
+    assert!(catalog.drop_table("v"));
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert!(expanded.keeps.is_empty());
+}
+
+/// A read with a declared schema opens with the declared table, nothing
+/// inferred: a headerless CSV would be named `_c0`, `_c1` by inference. The
+/// declared nullability follows the inferred-read rule (golden-pending).
+#[test]
+fn a_file_read_with_a_declared_schema_uses_it() {
+    use krishiv_common::secret::OptionValue;
+    use krishiv_types::{StructField, StructType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,a\n2,b\n").unwrap();
+    let s = Session::new().unwrap();
+    let source = ReadSource::files(
+        "csv",
+        vec![OptionValue::from_user("path", path.to_string_lossy())],
+        Default::default(),
+    )
+    .with_schema(StructType::new([
+        StructField::new("k", DataType::Long, true),
+        StructField::new("v", DataType::String, true),
+    ]));
+    let df = crate::dataframe::DataFrame::new(
+        s,
+        Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::Read(source),
+        )),
+    );
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    assert_eq!(names, ["k", "v"]);
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    let mut got: Vec<(String, String)> = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let cell =
+                |c: usize| arrow_cast::display::array_value_to_string(b.column(c), i).unwrap();
+            got.push((cell(0), cell(1)));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("1".to_owned(), "a".to_owned()),
+            ("2".to_owned(), "b".to_owned())
+        ]
+    );
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn task_specs_refuse_a_delta_scan_anywhere_in_the_plan() {
+    // A worker cannot open the session's Delta snapshots, so a Delta scan
+    // outside the streaming pipeline (a subquery, a join's build side) is
+    // refused as the streaming one is, for one task as for several.
+    let session = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from((0..6).collect::<Vec<_>>()))],
+    )
+    .unwrap();
+    session
+        .register_batches("t", Arc::clone(&schema), vec![batch])
+        .unwrap();
+    let delta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/delta-4.4.1/session-appends");
+    let delta = delta.to_string_lossy();
+    let in_subquery = format!("SELECT id FROM t WHERE id > (SELECT max(id) FROM delta.`{delta}`)");
+    for (sql, delta_streams) in [
+        (in_subquery, Some(false)),
+        (
+            format!("SELECT t.id FROM t JOIN delta.`{delta}` d ON t.id = d.id"),
+            None,
+        ),
+        (
+            format!("SELECT t.id FROM delta.`{delta}` d JOIN t ON t.id = d.id"),
+            None,
+        ),
+    ] {
+        let df = block_on(session.sql(&sql)).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        if let Some(streams) = delta_streams {
+            let streaming = streaming_scans(physical.root());
+            assert_eq!(
+                streaming
+                    .iter()
+                    .any(|s| crate::delta::is_delta(&s.scan.source)),
+                streams,
+                "{sql}: {streaming:?}"
+            );
+        }
+        for tasks in [1_usize, 2] {
+            let e = analysis
+                .env
+                .catalog
+                .task_specs(&physical, tasks, 2)
+                .unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{sql}"
+            );
+            assert!(e.to_string().contains("a Delta scan"), "{sql}: {e}");
+        }
+        drop(analysis);
+        drop(df);
+    }
 }

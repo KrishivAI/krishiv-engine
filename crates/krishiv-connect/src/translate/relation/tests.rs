@@ -13,8 +13,8 @@ use super::super::testing::{
 };
 use super::super::{TranslateConf, translate_relation};
 use super::*;
-use crate::proto::v4_2::expression::{self, ExprType, literal::LiteralType};
-use crate::proto::v4_2::{aggregate, join, read, relation::RelType};
+use crate::proto::v4_3::expression::{self, ExprType, literal::LiteralType};
+use crate::proto::v4_3::{aggregate, join, read, relation::RelType};
 
 fn input() -> Option<Box<Relation>> {
     boxed(read_table("t"))
@@ -86,6 +86,7 @@ fn file_reads_and_the_default_format() {
     assert_eq!(show(&read_files(None, &["/a"])), "Read parquet [/a]\n");
     let orc = TranslateConf {
         default_data_source: "orc".into(),
+        ..TranslateConf::default()
     };
     let plan = translate_relation(&read_files(None, &["/a"]), &orc).unwrap();
     assert_eq!(plan.to_string(), "Read orc [/a]\n");
@@ -129,21 +130,12 @@ fn file_read_options_and_paths_are_classified_once() {
 }
 
 #[test]
-fn a_streaming_read_a_schema_and_predicates_are_unsupported() {
+fn a_streaming_read_and_predicates_are_unsupported() {
     let mut streaming = read_files(Some("parquet"), &["/a"]);
     if let Some(RelType::Read(r)) = &mut streaming.rel_type {
         r.is_streaming = true;
     }
     assert!(message(&streaming).contains("is_streaming"));
-    let schema = data_source(read::DataSource {
-        schema: Some("a INT".into()),
-        ..read::DataSource::default()
-    });
-    assert!(
-        message(&schema).contains("Read.DataSource.schema"),
-        "{}",
-        message(&schema)
-    );
     // The client sends an empty schema string when none is given.
     let empty = data_source(read::DataSource {
         format: Some("parquet".into()),
@@ -297,7 +289,7 @@ fn project_filter_limit_and_alias() {
 
 #[test]
 fn range_builds_the_range_leaf() {
-    use crate::proto::v4_2 as pb;
+    use crate::proto::v4_3 as pb;
     let r = relation(RelType::Range(pb::Range {
         start: Some(1),
         end: 10,
@@ -350,17 +342,103 @@ fn range_builds_the_range_leaf() {
 }
 
 #[test]
-fn project_without_input_and_qualified_alias_are_unsupported() {
+fn a_project_without_input_reads_one_row() {
     let no_input = relation(RelType::Project(Box::default()));
-    let e = fails(translate(&no_input));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Project.input"), "{}", e.message());
-    let qualified = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
+    match node(&no_input) {
+        PlanNode::Project { input, exprs } => {
+            assert!(matches!(input.node, PlanNode::OneRowRelation));
+            assert!(exprs.is_empty());
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn aliased(qualifier: &[&str], alias: &str) -> Relation {
+    relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
-        alias: "x".into(),
-        qualifier: vec!["db".into()],
-    })));
-    assert!(message(&qualified).contains("SubqueryAlias.qualifier"));
+        alias: alias.into(),
+        qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+    })))
+}
+
+#[test]
+fn a_subquery_alias_qualifier_prefixes_the_alias_parts() {
+    let sep = krishiv_plan::ALIAS_PART_SEP;
+    let PlanNode::SubqueryAlias { alias, .. } = node(&aliased(&["db", "s"], "t")) else {
+        panic!("not an alias")
+    };
+    assert_eq!(alias, format!("db{sep}s{sep}t"));
+    let PlanNode::SubqueryAlias { alias, .. } = node(&aliased(&[], "t")) else {
+        panic!("not an alias")
+    };
+    assert_eq!(alias, "t");
+    // Printed dotted, as the IR prints a multi-part alias.
+    assert_eq!(
+        show(&aliased(&["db"], "t")),
+        "SubqueryAlias db.t\n+- Read t\n"
+    );
+}
+
+#[test]
+fn an_alias_part_holding_the_separator_is_refused() {
+    let sep = krishiv_plan::ALIAS_PART_SEP;
+    for r in [
+        aliased(&[&format!("a{sep}b")], "t"),
+        aliased(&["db"], &format!("t{sep}u")),
+        aliased(&[], &format!("t{sep}u")),
+    ] {
+        let e = fails(translate(&r));
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+        assert!(
+            e.message().contains("SubqueryAlias.qualifier"),
+            "{}",
+            e.message()
+        );
+    }
+}
+
+fn read_with_schema(schema: &str) -> Relation {
+    relation(RelType::Read(pb::Read {
+        is_streaming: false,
+        read_type: Some(ReadType::DataSource(read::DataSource {
+            format: Some("csv".into()),
+            paths: vec!["/a.csv".into()],
+            schema: Some(schema.into()),
+            ..read::DataSource::default()
+        })),
+    }))
+}
+
+#[test]
+fn a_data_source_schema_is_the_reads_schema() {
+    let ddl = node(&read_with_schema("a INT NOT NULL, b STRING"));
+    let PlanNode::Read(ReadSource::Files { schema, .. }) = &ddl else {
+        panic!("{ddl:?}")
+    };
+    let schema = schema.as_ref().expect("a schema");
+    assert_eq!(schema.fields().len(), 2);
+    assert!(!schema.fields()[0].nullable());
+    // JSON is the fallback.
+    let json = node(&read_with_schema(
+        r#"{"type":"struct","fields":[{"name":"a","type":"integer","nullable":false,"metadata":{}},{"name":"b","type":"string","nullable":true,"metadata":{}}]}"#,
+    ));
+    let PlanNode::Read(ReadSource::Files {
+        schema: from_json, ..
+    }) = &json
+    else {
+        panic!("{json:?}")
+    };
+    assert_eq!(from_json.as_ref(), Some(schema));
+    // A schema that is not a struct (JSON of a bare type) is an invalid plan.
+    assert_eq!(
+        fails(translate(&read_with_schema("\"integer\"")))
+            .error_class()
+            .name(),
+        "CONNECT_INVALID_PLAN.INVALID_SCHEMA_NON_STRUCT_TYPE"
+    );
+    // Neither DDL nor JSON: a parse error, and the text is not echoed.
+    let e = fails(translate(&read_with_schema("CANARY nonsense nonsense")));
+    assert!(!e.message().contains("CANARY"), "{}", e.message());
 }
 
 #[test]
@@ -407,6 +485,103 @@ fn join_of(kind: i32, condition: Option<Expression>, using: &[&str]) -> Relation
         using_columns: using.iter().map(|c| (*c).to_owned()).collect(),
         join_data_type: None,
     })))
+}
+
+fn set_op_of(
+    kind: i32,
+    all: Option<bool>,
+    by_name: Option<bool>,
+    missing: Option<bool>,
+) -> Relation {
+    relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: boxed(read_table("l")),
+        right_input: boxed(read_table("r")),
+        set_op_type: kind,
+        is_all: all,
+        by_name,
+        allow_missing_columns: missing,
+    })))
+}
+
+#[test]
+fn set_operations_follow_spark() {
+    use pb::set_operation::SetOpType as T;
+    // UNION ALL is a Union; a UNION that is not ALL (or has no is_all) is a Distinct over it.
+    match node(&set_op_of(T::Union as i32, Some(true), None, None)) {
+        PlanNode::Union {
+            inputs,
+            by_name,
+            allow_missing_columns,
+        } => {
+            assert_eq!(inputs.len(), 2);
+            assert!(!by_name && !allow_missing_columns);
+        }
+        other => panic!("{other:?}"),
+    }
+    for all in [Some(false), None] {
+        match node(&set_op_of(T::Union as i32, all, Some(true), Some(true))) {
+            PlanNode::Distinct { input } => assert!(matches!(
+                &input.node,
+                PlanNode::Union {
+                    by_name: true,
+                    allow_missing_columns: true,
+                    ..
+                }
+            )),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(matches!(
+        node(&set_op_of(T::Except as i32, Some(true), None, None)),
+        PlanNode::SetOp {
+            op: krishiv_plan::SetOperation::Except,
+            all: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        node(&set_op_of(T::Intersect as i32, None, None, None)),
+        PlanNode::SetOp {
+            op: krishiv_plan::SetOperation::Intersect,
+            all: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn set_operation_errors_are_spark_classes() {
+    use pb::set_operation::SetOpType as T;
+    assert_eq!(
+        code(&set_op_of(T::Except as i32, None, Some(true), None)),
+        ErrorClass::ConnectInvalidPlanExceptDoesNotSupportUnionByName
+    );
+    assert_eq!(
+        code(&set_op_of(T::Intersect as i32, None, Some(true), None)),
+        ErrorClass::ConnectInvalidPlanIntersectDoesNotSupportUnionByName
+    );
+    assert_eq!(
+        code(&set_op_of(T::Union as i32, None, None, Some(true))),
+        ErrorClass::ConnectInvalidPlanUnionByNameAllowMissingColRequiresByName
+    );
+    assert_eq!(
+        code(&set_op_of(0, None, None, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    assert_eq!(
+        code(&set_op_of(99, None, None, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    let one_sided = relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: boxed(read_table("l")),
+        right_input: None,
+        set_op_type: T::Union as i32,
+        ..pb::SetOperation::default()
+    })));
+    assert_eq!(
+        code(&one_sided),
+        ErrorClass::ConnectInvalidPlanSetOperationMustHaveTwoInputs
+    );
 }
 
 #[test]
@@ -594,6 +769,31 @@ fn grouping_sets() {
 }
 
 #[test]
+fn an_aliased_grouping_key_groups_by_the_bare_expression() {
+    // `groupBy((a % 2).alias("m"))` (PY-009): the output keeps the alias, the
+    // grouping expression is `a`, as `GROUP BY a` is.
+    let aliased = expr(ExprType::Alias(Box::new(expression::Alias {
+        expr: Some(Box::new(attr("a"))),
+        name: vec!["m".to_owned()],
+        metadata: None,
+    })));
+    let r = aggregate_of(1, vec![aliased], vec![func("count", vec![])]);
+    let PlanNode::Aggregate {
+        grouping,
+        aggregates,
+        ..
+    } = node(&r)
+    else {
+        panic!("not an aggregate")
+    };
+    assert_eq!(
+        show(&r),
+        "Aggregate [a], [a AS m, count()]\n+- Read t\n",
+        "{grouping:?} {aggregates:?}"
+    );
+}
+
+#[test]
 fn aggregate_errors() {
     let pivot = aggregate_of(4, vec![attr("a")], vec![]);
     let e = fails(translate(&pivot));
@@ -693,32 +893,26 @@ fn a_relations_plan_id_becomes_its_origin() {
 #[test]
 fn unsupported_relations_are_named() {
     for (kind, name) in [
-        (
-            RelType::ShowString(Box::default()),
-            "ShowString (spark.connect.Relation.show_string)",
-        ),
-        (
-            RelType::ToDf(Box::default()),
-            "ToDF (spark.connect.Relation.to_df)",
-        ),
-        (
-            RelType::SetOp(Box::default()),
-            "SetOperation (spark.connect.Relation.set_op)",
-        ),
-        (RelType::Deduplicate(Box::default()), "Deduplicate"),
-        (RelType::LocalRelation(Default::default()), "LocalRelation"),
-        (RelType::Drop(Box::default()), "Drop"),
-        (RelType::WithRelations(Box::default()), "WithRelations"),
+        (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
+        (RelType::ToDf(Box::default()), "TO_DF(18)"),
+        (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
+        (RelType::Drop(Box::default()), "DROP(21)"),
+        (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
         let e = fails(translate(&r));
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
-        assert_eq!(e.sql_state(), Some("0A000"));
-        assert!(e.message().contains(name), "{name}: {}", e.message());
+        assert_eq!(e.sql_state(), Some("56K00"));
+        assert!(
+            e.message()
+                .contains(&format!("spark.connect.Relation is not supported: {name}")),
+            "{name}: {}",
+            e.message()
+        );
     }
 }
 
@@ -775,19 +969,64 @@ fn secrets_in_read_options_reach_no_printer_key_or_error() {
     }
     let e = fails(translate(&streaming));
     assert!(!e.to_string().contains(CANARY));
-    let mut with_schema = r;
+    let mut with_predicates = r;
     if let Some(RelType::Read(pb::Read {
         read_type: Some(ReadType::DataSource(d)),
         ..
-    })) = &mut with_schema.rel_type
+    })) = &mut with_predicates.rel_type
     {
-        d.schema = Some("a INT".into());
+        d.predicates = vec!["a < 1".into()];
     }
-    assert!(!fails(translate(&with_schema)).to_string().contains(CANARY));
+    assert!(
+        !fails(translate(&with_predicates))
+            .to_string()
+            .contains(CANARY)
+    );
     // The printed plan still names the options.
     assert!(
         plan.to_string().contains("password=*********(redacted)"),
         "{plan}"
     );
     let _ = conf();
+}
+
+#[test]
+fn collect_metrics_is_the_observe_node() {
+    let r = with_id(
+        relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: input(),
+            name: "obs".into(),
+            metrics: vec![func("count", vec![lit(LiteralType::Integer(1))])],
+        }))),
+        9,
+    );
+    let plan = root(&r);
+    let PlanNode::CollectMetrics { name, metrics, .. } = &plan.node else {
+        panic!("a CollectMetrics node, got {:?}", plan.node);
+    };
+    assert_eq!((name.as_str(), metrics.len()), ("obs", 1));
+    assert_eq!(plan.origin.plan_id.map(|p| p.0), Some(9));
+}
+
+#[test]
+fn collect_metrics_without_an_input_is_refused() {
+    let r = relation(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+        input: None,
+        name: "obs".into(),
+        metrics: vec![],
+    })));
+    // The required-input check's own error, not the unsupported-variant fallback's.
+    let e = fails(translate(&r));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message_parameters(),
+        [(
+            "message",
+            "CollectMetrics needs an input relation".to_owned()
+        )]
+    );
 }

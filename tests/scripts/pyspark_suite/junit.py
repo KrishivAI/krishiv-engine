@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+"""JUnit XML (pytest `--junitxml`) to per-test records and back to ids."""
+
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
+
+STATUSES = ("pass", "fail", "error", "skip", "timeout")
+
+
+@dataclass(frozen=True)
+class Record:
+    version: str
+    file: str
+    cls: str
+    test: str
+    status: str
+    ms: int
+    reason_class: str | None = None
+
+    @property
+    def test_id(self) -> str:
+        return f"{self.file}::{self.cls}::{self.test}"
+
+    def as_dict(self) -> dict:
+        d = {
+            "version": self.version,
+            "file": self.file,
+            "class": self.cls,
+            "test": self.test,
+            "status": self.status,
+            "ms": self.ms,
+        }
+        if self.reason_class:
+            d["reason_class"] = self.reason_class
+        return d
+
+
+def parse(xml_path: Path, version: str, file: str) -> list[Record]:
+    """`file` is the path relative to the connect tests dir; pytest's classname is `<mod path>.<Class>`."""
+    out = []
+    for case in ET.parse(xml_path).getroot().iter("testcase"):
+        cls = (case.get("classname") or "").rsplit(".", 1)[-1]
+        ms = int(float(case.get("time") or 0) * 1000)
+        status = "pass"
+        reason = None
+        for child in case:
+            if child.tag == "skipped":
+                status = "skip"
+            elif child.tag == "failure":
+                status = "timeout" if "Timeout" in (child.get("message") or "") else "fail"
+            elif child.tag == "error":
+                status = "error"
+            if status != "pass":
+                reason = (child.get("type") or None) if child.tag != "skipped" else None
+                break
+        out.append(Record(version, file, cls, case.get("name") or "", status, ms, reason))
+    return out
+
+
+_CONDITIONAL_SKIP = ("jvm", "remote")
+
+
+def _conditional(message: str) -> bool:
+    """A skip that is about the client mode (remote-only, "Requires JVM access"), not a missing optional package."""
+    m = message.lower()
+    return any(k in m for k in _CONDITIONAL_SKIP)
+
+
+def oracle_skips(oracle_dir: Path, version: str) -> set[str]:
+    """Ids the Spark oracle skipped, from the per-file JUnit XML of an oracle run (`<rel with / as __>.xml`).
+
+    These are the conditional skips: tests Spark itself does not run under this client package because of the
+    client mode (remote-only, "Requires JVM access"). A skip for a missing optional package (pandas, pyarrow...)
+    is an incomplete oracle environment and stays in the denominator (design 2, rule 3), as does a failure.
+    """
+    out: set[str] = set()
+    for xml in sorted(oracle_dir.glob("*.xml")):
+        rel = xml.stem.replace("__", "/")
+        skipped = {
+            f"{rel}::{(c.get('classname') or '').rsplit('.', 1)[-1]}::{c.get('name') or ''}"
+            for c in ET.parse(xml).getroot().iter("testcase")
+            if any(k.tag == "skipped" and _conditional(k.get("message") or "") for k in c)
+        }
+        out |= skipped
+    return out

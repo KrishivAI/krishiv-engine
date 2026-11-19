@@ -5,11 +5,6 @@
     ],
     "fn-array": [
       85
-    ],
-    "query-features": [
-      27,
-      28,
-      84
     ]
   },
   "file": "cte-recursion",

@@ -1,10 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
-      84
-    ],
     "sql-commands": [
-      83,
       209,
       210,
       254

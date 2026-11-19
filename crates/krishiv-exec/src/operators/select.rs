@@ -15,16 +15,18 @@
 //! when the stage dropped at least half of the batch, only the rows it kept
 //! (a copy of them, as the scan made), else the whole batch (it cannot
 //! raise, so rows the stage dropped change no result). A row is selected when
-//! both keep it (a NULL predicate value does not).
+//! both keep it (a NULL predicate value does not). The copy holds only the
+//! columns the predicate reads when the planner compiled it over those
+//! ([`Narrow`]).
 
 use std::sync::Arc;
 
 use arrow_array::{Array, BooleanArray, RecordBatch, UInt32Array};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, ScalarBuffer};
 use krishiv_types::batch::Batch;
 
 use super::expr::Predicate;
-use super::runtime_filter::SharedStage;
+use super::runtime_filter::{SharedStage, scatter};
 use crate::error::{Result, internal};
 
 /// The selected rows of one batch: ascending row ids, each below the
@@ -96,18 +98,41 @@ pub(crate) fn batch_rows(selection: Option<&Selection>, ids: &[u32]) -> Result<U
     })
 }
 
+/// A fused predicate compiled over only the columns it reads: column
+/// `columns[i]` of the batches received is its column `i`. The copy of the
+/// rows a selective row stage kept holds those columns only (module docs).
+#[derive(Debug, Clone)]
+pub(crate) struct Narrow {
+    /// The columns of the batches received the predicate reads, ascending.
+    pub(crate) columns: Vec<usize>,
+    /// Those columns' schema.
+    pub(crate) schema: arrow_schema::SchemaRef,
+    /// The same predicate over those columns.
+    pub(crate) predicate: Arc<dyn Predicate>,
+}
+
 /// What a fused operator keeps of each input batch: the rows `predicate`
 /// is TRUE for and the row stage keeps. One per driver.
 #[derive(Debug)]
 pub(crate) struct RowSelect {
     predicate: Option<Arc<dyn Predicate>>,
+    narrow: Option<Narrow>,
     runtime: Option<SharedStage>,
 }
 
 impl RowSelect {
-    /// A selection by `predicate` and the row stage `runtime`.
-    pub(crate) fn new(predicate: Option<Arc<dyn Predicate>>, runtime: Option<SharedStage>) -> Self {
-        Self { predicate, runtime }
+    /// A selection by `predicate` (also compiled as `narrow`, for the copy
+    /// of a selective row stage's rows) and the row stage `runtime`.
+    pub(crate) fn new(
+        predicate: Option<Arc<dyn Predicate>>,
+        narrow: Option<Narrow>,
+        runtime: Option<SharedStage>,
+    ) -> Self {
+        Self {
+            predicate,
+            narrow,
+            runtime,
+        }
     }
 
     /// The rows of `batch` kept, as a mask without NULLs (`None`: every
@@ -122,7 +147,13 @@ impl RowSelect {
             Some(stage) if n > 0 => stage.mask(batch.data())?.map(|m| m.values().clone()),
             _ => None,
         };
-        let all = predicate_after(self.predicate.as_deref(), batch.data(), partition, runtime)?;
+        let all = predicate_after(
+            self.predicate.as_deref(),
+            self.narrow.as_ref(),
+            batch.data(),
+            partition,
+            runtime,
+        )?;
         Ok(all
             .filter(|m| m.count_set_bits() < n)
             .map(|m| BooleanArray::new(m, None)))
@@ -143,12 +174,15 @@ impl RowSelect {
 /// The rows of `data` that `predicate` is TRUE for among those the row
 /// stage kept (`runtime`, `None`: every row), as a mask over all of `data`
 /// (`None`: every row). With a stage that dropped at least half of the rows,
-/// the predicate sees only the rows kept (module docs).
+/// the predicate sees only the rows kept (module docs), through `narrow`
+/// when there is one.
 ///
 /// # Errors
-/// The predicate's errors; `INTERNAL_ERROR` for a mask of the wrong length.
+/// The predicate's errors; `INTERNAL_ERROR` for a mask of the wrong length
+/// or a narrow column past the batch.
 fn predicate_after(
     predicate: Option<&dyn Predicate>,
+    narrow: Option<&Narrow>,
     data: &RecordBatch,
     partition: u32,
     runtime: Option<BooleanBuffer>,
@@ -168,27 +202,40 @@ fn predicate_after(
             None => mask.values().clone(),
         })
     };
-    match runtime {
-        Some(kept) if kept.count_set_bits() * 2 <= n => {
-            let rows = kept.count_set_bits();
+    let kept_rows = runtime.as_ref().map(BooleanBuffer::count_set_bits);
+    match (runtime, kept_rows) {
+        (Some(kept), Some(rows)) if rows * 2 <= n => {
             if rows == 0 {
                 return Ok(Some(kept));
             }
             let stage = BooleanArray::new(kept.clone(), None);
-            let copy = arrow_select::filter::filter_record_batch(data, &stage)
-                .map_err(|e| internal(format!("a fused row stage's copy: {e}")))?;
-            let inner = truth(&predicate.evaluate_in(&copy, partition)?, rows)?;
-            // Spread the kept rows' values back over the batch.
-            let mut out = BooleanBufferBuilder::new(n);
-            out.append_n(n, false);
-            for (i, row) in kept.set_indices().enumerate() {
-                if inner.value(i) {
-                    out.set_bit(row, true);
+            let inner = match narrow {
+                Some(narrow) => {
+                    let picked = narrow
+                        .columns
+                        .iter()
+                        .map(|&c| {
+                            data.columns().get(c).cloned().ok_or_else(|| {
+                                internal(format!("a fused filter's column {c} is past the batch"))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let columns = RecordBatch::try_new(Arc::clone(&narrow.schema), picked)
+                        .map_err(|e| internal(format!("a fused filter's columns: {e}")))?;
+                    let copy = arrow_select::filter::filter_record_batch(&columns, &stage)
+                        .map_err(|e| internal(format!("a fused row stage's copy: {e}")))?;
+                    truth(&narrow.predicate.evaluate_in(&copy, partition)?, rows)?
                 }
-            }
-            Ok(Some(out.finish()))
+                None => {
+                    let copy = arrow_select::filter::filter_record_batch(data, &stage)
+                        .map_err(|e| internal(format!("a fused row stage's copy: {e}")))?;
+                    truth(&predicate.evaluate_in(&copy, partition)?, rows)?
+                }
+            };
+            // Spread the kept rows' values back over the batch.
+            Ok(Some(scatter(&kept, &inner)))
         }
-        runtime => {
+        (runtime, _) => {
             let p = truth(&predicate.evaluate_in(data, partition)?, n)?;
             Ok(Some(match runtime {
                 Some(r) => &p & &r,
@@ -206,7 +253,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use krishiv_types::batch::Batch;
 
-    use super::{RowSelect, Selection, batch_rows, predicate_after};
+    use super::{Narrow, RowSelect, Selection, batch_rows, predicate_after};
     use crate::operators::FnPredicate;
 
     fn batch(v: &[i64]) -> Batch {
@@ -239,7 +286,7 @@ mod tests {
             );
             Ok(v.iter().map(|x| x.map(|x| x % 2 == 0)).collect())
         });
-        let mut select = RowSelect::new(Some(Arc::new(even)), None);
+        let mut select = RowSelect::new(Some(Arc::new(even)), None, None);
         let s = select.select(&batch(&[1, 2, 3, 4]), 0);
         let s = s.unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(s.map(|s| s.array().values().to_vec()), Some(vec![1, 3]));
@@ -249,7 +296,9 @@ mod tests {
         let none = none.unwrap_or_else(|e| unreachable!("{e}"));
         assert!(none.is_some_and(|s| s.is_empty()));
         assert_eq!(
-            RowSelect::new(None, None).select(&batch(&[1]), 0).ok(),
+            RowSelect::new(None, None, None)
+                .select(&batch(&[1]), 0)
+                .ok(),
             Some(None)
         );
     }
@@ -272,7 +321,7 @@ mod tests {
         let data = batch(&[0, 1, 2, 3, 4, 5, 6, 7]);
         let bits = |b: &[bool]| BooleanBuffer::from(b.to_vec());
         let ids = |m: Option<BooleanBuffer>| m.map(|m| m.set_indices().collect::<Vec<_>>());
-        let run = |runtime| predicate_after(Some(&even), data.data(), 0, runtime);
+        let run = |runtime| predicate_after(Some(&even), None, data.data(), 0, runtime);
         // The stage keeps 2 of 8: the predicate reads those 2 only.
         let sparse = bits(&[false, true, false, false, false, false, true, false]);
         let got = run(Some(sparse)).unwrap_or_else(|e| unreachable!("{e}"));
@@ -299,5 +348,100 @@ mod tests {
         let got = run(None).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(ids(got), Some(vec![0, 2, 4, 6]));
         assert_eq!(seen.swap(0, Ordering::Relaxed), 8);
+    }
+
+    #[test]
+    fn the_copy_holds_only_the_columns_a_narrow_predicate_reads() {
+        use std::sync::Mutex;
+
+        use arrow_array::StringArray;
+        use arrow_buffer::BooleanBuffer;
+
+        // Columns (s, v, t): the predicate reads v only, as column 0 of
+        // its narrow form; NULL v is not selected.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, false),
+            Field::new("v", DataType::Int64, true),
+            Field::new("t", DataType::Utf8, false),
+        ]));
+        let s: Vec<String> = (0..8).map(|i| format!("s{i}")).collect();
+        let v = Int64Array::from(vec![
+            Some(0),
+            None,
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ]);
+        let data = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(s.clone())),
+                Arc::new(v),
+                Arc::new(StringArray::from(s)),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let shapes = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&shapes);
+        let even_at = |column: usize| {
+            move |b: &RecordBatch| {
+                let v = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int64Type>(
+                    b.column(column),
+                );
+                Ok(v.iter().map(|x| x.map(|x| x % 2 == 0)).collect())
+            }
+        };
+        let full = FnPredicate(even_at(1));
+        let narrow_even = even_at(0);
+        let narrow = Narrow {
+            columns: vec![1],
+            schema: Arc::new(
+                data.schema()
+                    .project(&[1])
+                    .unwrap_or_else(|e| unreachable!("{e}")),
+            ),
+            predicate: Arc::new(FnPredicate(move |b: &RecordBatch| {
+                if let Ok(mut s) = seen.lock() {
+                    s.push((b.num_columns(), b.num_rows()));
+                }
+                narrow_even(b)
+            })),
+        };
+        let bits = |b: &[bool]| BooleanBuffer::from(b.to_vec());
+        let ids = |m: Option<BooleanBuffer>| m.map(|m| m.set_indices().collect::<Vec<_>>());
+        // The stage keeps rows 1 (v NULL), 2 and 5 of 8: the narrow form
+        // reads one column of those three rows; only row 2 is selected.
+        let kept = bits(&[false, true, true, false, false, true, false, false]);
+        let got = predicate_after(Some(&full), Some(&narrow), &data, 0, Some(kept.clone()));
+        assert_eq!(
+            ids(got.unwrap_or_else(|e| unreachable!("{e}"))),
+            Some(vec![2])
+        );
+        assert_eq!(shapes.lock().map(|s| s.clone()).ok(), Some(vec![(1, 3)]));
+        // Without the narrow form the same rows are selected.
+        let got = predicate_after(Some(&full), None, &data, 0, Some(kept));
+        assert_eq!(
+            ids(got.unwrap_or_else(|e| unreachable!("{e}"))),
+            Some(vec![2])
+        );
+        // A dense stage reads the whole batch through the full predicate.
+        let dense = bits(&[true, true, true, true, true, false, false, false]);
+        let got = predicate_after(Some(&full), Some(&narrow), &data, 0, Some(dense));
+        assert_eq!(
+            ids(got.unwrap_or_else(|e| unreachable!("{e}"))),
+            Some(vec![0, 2, 4])
+        );
+        assert_eq!(shapes.lock().map(|s| s.len()).ok(), Some(1));
+        // A narrow column past the batch is an error, never a wrong row.
+        let broken = Narrow {
+            columns: vec![3],
+            schema: Arc::clone(&narrow.schema),
+            predicate: Arc::new(FnPredicate(even_at(0))),
+        };
+        let sparse = bits(&[true, false, false, false, false, false, false, false]);
+        assert!(predicate_after(Some(&full), Some(&broken), &data, 0, Some(sparse)).is_err());
     }
 }

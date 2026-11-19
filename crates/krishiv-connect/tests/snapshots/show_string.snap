@@ -1,4 +1,4 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[KRISHIV_UNSUPPORTED_FEATURE] The feature Spark Connect relation ShowString (spark.connect.Relation.show_string) is not supported by Krishiv yet. SQLSTATE: 0A000
+[CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED] The Spark Connect plan is invalid. This oneOf field message in spark.connect.Relation is not supported: SHOW_STRING(20) SQLSTATE: 56K00

@@ -62,9 +62,20 @@ pub(in crate::analyzer) fn subst_distinct(
 }
 
 pub(in crate::analyzer) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
+    out_attr_at(b, scope, usize::MAX)
+}
+
+/// [`out_attr`] for the item at `position` of a select list: a column read from the same position of the
+/// scope (what a projection that passes columns through does) is found without a scan. Relies on one
+/// `AttrId` meaning one attribute (same qualifier, source, duplicate flag) within a scope.
+pub(in crate::analyzer) fn out_attr_at(b: &Bound, scope: &[Attr], position: usize) -> Attr {
     match &b.expr.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-            match scope.iter().find(|a| a.col.id == c.id) {
+            let hit = scope
+                .get(position)
+                .filter(|a| a.col.id == c.id)
+                .or_else(|| scope.iter().find(|a| a.col.id == c.id));
+            match hit {
                 Some(a) => Attr {
                     col: c.clone(),
                     ..a.clone()
@@ -133,7 +144,13 @@ pub(in crate::analyzer) fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
 /// resolve on their own; [`Expr::for_each_child`] does not enter them).
 /// Expressions are DAGs, so shared nodes are visited once.
 pub(in crate::analyzer) fn has_generator(e: &Arc<Expr>) -> bool {
-    let mut seen: HashSet<*const ()> = HashSet::new();
+    // A leaf (a column, a literal) is its own answer: no set, no stack.
+    let mut leaf = true;
+    e.for_each_child(&mut |_| leaf = false);
+    if leaf {
+        return is_generator(e);
+    }
+    let mut seen: crate::walk::PtrSet<*const ()> = crate::walk::PtrSet::default();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x).cast::<()>()) {

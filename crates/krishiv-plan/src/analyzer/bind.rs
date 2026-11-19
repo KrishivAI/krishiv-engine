@@ -160,6 +160,30 @@ enum Found<'a> {
     FileScan(&'a ReadSource, &'a [BoundColumn], Origin),
     /// The scopes of the secret references in a table read's options (E12).
     Secrets(Vec<String>, Origin),
+    /// A table read whose options (`FROM t WITH (...)`) hold a server-scoped store key.
+    StoreOptions(Origin),
+}
+
+/// Whether read `options` hold a server-scoped store key (`krishiv_io::is_server_scoped_option`).
+fn server_scoped(options: &BTreeMap<String, OptionValue>) -> bool {
+    options
+        .keys()
+        .any(|k| krishiv_io::is_server_scoped_option(k))
+}
+
+/// `Manage` on the cluster, for a read whose options hold a server-scoped store key (an
+/// endpoint, region, account or key file could point the store, and the server's credentials,
+/// at another host; P3-T067b), asked before anything is listed.
+async fn authorize_store_options(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    let cluster = Securable::System("cluster".to_owned());
+    authorize_as(ctx, b, checked, cluster, Privilege::Manage, origin)
+        .await
+        .map(|_| ())
 }
 
 /// One node of the walk: reports what it reads, checks its functions, and
@@ -180,6 +204,9 @@ fn visit<'a>(
                     if !scopes.is_empty() {
                         found.push(Found::Secrets(scopes, p.origin));
                     }
+                    if server_scoped(options) {
+                        found.push(Found::StoreOptions(p.origin));
+                    }
                     let shadowed = name.len() == 1 && env.iter().any(|c| same(c, &name[0], cs));
                     if !shadowed {
                         found.push(Found::Table(name, p.origin));
@@ -188,6 +215,9 @@ fn visit<'a>(
                 PlanNode::Read(source @ ReadSource::Files { .. }) => {
                     found.push(Found::Files(source, p.origin));
                 }
+                // `Read(Local)` falls to the wildcard below on purpose:
+                // content-addressed data in the session's store has nothing
+                // to load and no securable to check.
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
                     ReadSource::Table { name, options } => {
@@ -195,11 +225,15 @@ fn visit<'a>(
                         if !scopes.is_empty() {
                             found.push(Found::Secrets(scopes, p.origin));
                         }
+                        if server_scoped(options) {
+                            found.push(Found::StoreOptions(p.origin));
+                        }
                         found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
                     source @ ReadSource::Files { .. } => {
                         found.push(Found::FileScan(source, &s.output, p.origin));
                     }
+                    ReadSource::Local(_) => {}
                 },
                 PlanNode::WithCte { input, ctes } => {
                     p.for_each_expr(&mut |e| next.push((Node::Expr(e), Arc::clone(env))));
@@ -268,35 +302,13 @@ fn sql_function_roots(
         let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
             if let Node::Plan(p) = node
                 && let PlanNode::TableFunction { name, .. } = &p.node
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &name
-                        .split(crate::TABLE_FUNCTION_NAME_SEP)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>(),
-                    ctx.profile,
-                )
+                && let Some(def) = sql_table_function(ctx, name)
             {
                 defs.push(def);
             }
             if let Node::Expr(e) = node
                 && let ExprNode::Function(f) = &e.node
-                && is_registry_call(&f.name)
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &if is_session_qualifier(&f.qualifier) {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    } else if f.qualifier.is_empty() {
-                        vec![f.name.clone()]
-                    } else if is_builtin_qualifier(&f.qualifier) {
-                        return ControlFlow::Continue(());
-                    } else {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    },
-                    ctx.profile,
-                )
+                && let Some(def) = sql_call(ctx, f)
             {
                 defs.push(def);
             }
@@ -324,6 +336,43 @@ fn sql_function_roots(
         }
     }
     Ok(())
+}
+
+/// The SQL-bodied table function `name` (a `FROM f(..)` table function name, parts joined by
+/// [`crate::TABLE_FUNCTION_NAME_SEP`]), if it is one.
+pub(super) fn sql_table_function(
+    ctx: &AnalysisContext,
+    name: &str,
+) -> Option<Arc<super::SqlFunction>> {
+    let parts: Vec<String> = name
+        .split(crate::TABLE_FUNCTION_NAME_SEP)
+        .map(str::to_owned)
+        .collect();
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
+}
+
+/// The SQL-bodied function an unresolved call `f` calls, if it calls one (a `builtin.` call never does).
+pub(super) fn sql_call(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+) -> Option<Arc<super::SqlFunction>> {
+    if !is_registry_call(&f.name) || is_builtin_qualifier(&f.qualifier) {
+        return None;
+    }
+    let parts = if f.qualifier.is_empty() {
+        vec![f.name.clone()]
+    } else {
+        let mut parts = f.qualifier.clone();
+        parts.push(f.name.clone());
+        parts
+    };
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
 }
 
 /// Whether a call of `name` is for the function registry to answer: not a
@@ -603,7 +652,7 @@ fn lower_sql(
         return Err(unsupported("SQL text without a SQL front end", origin));
     };
     let source = SourceId(u32::try_from(b.sql.len()).unwrap_or(u32::MAX));
-    let lowered = Arc::clone(frontend.lower(query, source)?.root());
+    let lowered = super::time_window::rewrite(Arc::clone(frontend.lower(query, source)?.root()))?;
     // SQL text follows the session's CTE precedence like the plan around it.
     let policy = super::legacy::CtePolicy {
         precedence: ctx.conf.cte_precedence,
@@ -670,9 +719,11 @@ fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
     }
 }
 
-/// Asks the policy about `securable` once per query; a denial or any policy
-/// error fails closed, without the policy's reason or error text, and row
-/// filters and column masks are rejected until they can be applied.
+/// Asks the policy about the read of `securable` (a catalog table or view) once per query, as the
+/// analysis' [`AnalysisMode::read_privilege`](super::AnalysisMode::read_privilege) (`Select`, or
+/// `Browse` for a metadata analysis; paths always ask `Select`, see [`bind_files`]); a denial or
+/// any policy error fails closed, without the policy's reason or error text, and row filters and
+/// column masks on a `Select` are rejected until they can be applied.
 async fn authorize(
     ctx: &AnalysisContext,
     b: &mut Bindings,
@@ -680,7 +731,15 @@ async fn authorize(
     securable: Securable,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
-    authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
+    authorize_as(
+        ctx,
+        b,
+        checked,
+        securable,
+        ctx.mode.read_privilege(),
+        origin,
+    )
+    .await
 }
 
 /// `USAGE` on each secret scope in `scopes` (E12).
@@ -715,7 +774,17 @@ async fn authorize_as(
     {
         return Ok(*i);
     }
-    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
+    // A policy that decides columns is asked only whether the schema may be seen here; the rows
+    // are asked per referenced column once the query is resolved (`authorize_columns`).
+    let asked = if privilege == Privilege::Select
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && ctx.policy.column_level()
+    {
+        Privilege::Browse
+    } else {
+        privilege
+    };
+    super::access::authorize_reported(&*ctx.policy, &ctx.principal, &securable, asked, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
@@ -766,6 +835,10 @@ async fn load(
             }
             Found::Secrets(scopes, origin) => {
                 authorize_usage(ctx, b, &mut checked, &scopes, origin).await?;
+                continue;
+            }
+            Found::StoreOptions(origin) => {
+                authorize_store_options(ctx, b, &mut checked, origin).await?;
                 continue;
             }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
@@ -859,7 +932,17 @@ async fn load(
             for first in [ident.clone(), fold(&ident, cs)] {
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
-            let failed = |_| {
+            let failed = |e: krishiv_common::error::KrishivError| {
+                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as
+                // they are.
+                if matches!(
+                    e.error_class(),
+                    krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
+                        | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                ) {
+                    return AnalysisError::new(e, origin);
+                }
                 AnalysisError::new(
                     KrishivCatalogFailure {
                         catalog: quoted(std::slice::from_ref(&ident.catalog)),
@@ -975,11 +1058,11 @@ async fn path_read(
         }
         SourceKind::Unknown => return Ok(BoundTable::Missing),
     }
-    let source = ReadSource::Files {
-        format: format.clone(),
-        paths: vec![OptionValue::from_user("path", path)],
-        options: BTreeMap::new(),
-    };
+    let source = ReadSource::files(
+        format.clone(),
+        vec![OptionValue::from_user("path", path)],
+        BTreeMap::new(),
+    );
     Ok(BoundTable::Files(
         bind_files(ctx, b, checked, &source, origin).await?,
     ))
@@ -1045,6 +1128,7 @@ async fn bind_files(
             format,
             paths,
             options,
+            schema,
         },
         Some(files),
     ) = (source, &ctx.files)
@@ -1057,31 +1141,49 @@ async fn bind_files(
         .map(|p| files.qualify(p))
         .collect::<Result<Vec<_>, _>>()
         .map_err(fail)?;
+    // `Select`, even in a metadata analysis: a path has no stored schema, and inferring one reads
+    // the files' contents (with CSV `header=true` the column names are the first line of the file;
+    // JSON keys and inferred types are content too), so `Browse` on a path would show a viewer the
+    // first line of any file under the allowed roots. Only catalog tables and views get `Browse`.
     for path in &qualified {
-        authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
+        let path = Securable::Path(path.clone());
+        authorize_as(ctx, b, checked, path, Privilege::Select, origin).await?;
     }
     // A `secret('scope', 'key')` reference in the options (or a path) is
     // resolved for the principal only with USAGE on its scope (E12), checked
     // before anything is listed or inferred.
     let scopes = super::access::secret_scopes(options.values().chain(&qualified));
     authorize_usage(ctx, b, checked, &scopes, origin).await?;
-    let columns = files
-        .infer(format, &qualified, options)
-        .await
-        .map_err(fail)?
-        .into_iter()
-        // Spark reads every file column as nullable.
-        .map(|c| TableColumn {
-            nullable: true,
-            ..c
-        })
-        .collect();
+    // A server-scoped store option (endpoint, region, account, key file) could point the store,
+    // and the server's credentials, at another host: `Manage` on the cluster (admin in server
+    // mode, P3-T067b), before anything is listed.
+    if server_scoped(options) {
+        authorize_store_options(ctx, b, checked, origin).await?;
+    }
+    // A user schema is never checked against inference: the files are read
+    // as it says (Spark's `userSpecifiedSchema`). Either way every file
+    // column is nullable, nested elements, values and fields too
+    // (`HadoopFsRelation` over `dataSchema.asNullable`), as the scan's rows
+    // are typed.
+    let columns = match schema {
+        Some(schema) => files.with_schema(format, &qualified, options, schema).await,
+        None => files.infer(format, &qualified, options).await,
+    }
+    .map_err(fail)?
+    .into_iter()
+    .map(|c| TableColumn {
+        nullable: true,
+        data_type: c.data_type.as_nullable(),
+        ..c
+    })
+    .collect();
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {
             format: format.to_lowercase(),
             paths: qualified,
             options: options.clone(),
+            schema: schema.clone(),
         },
         columns,
     });

@@ -537,6 +537,9 @@ pub struct Buffer {
     pub sunk: AtomicU64,
     /// Set once `finalize` has started.
     pub finalizing: AtomicBool,
+    /// Lets the driver join small input batches
+    /// ([`Sink::coalesce_input`]); off by default.
+    pub joins_input: AtomicBool,
     /// `sunk` at each spill.
     spilled_at: Mutex<Vec<u64>>,
     /// Every driver's spill signal.
@@ -578,6 +581,7 @@ impl Buffer {
             finalize_yields,
             sunk: AtomicU64::new(0),
             finalizing: AtomicBool::new(false),
+            joins_input: AtomicBool::new(false),
             spilled_at: Mutex::new(Vec::new()),
             signals: Mutex::new(Vec::new()),
         })
@@ -605,6 +609,10 @@ impl Buffer {
 }
 
 impl Sink for Buffer {
+    fn coalesce_input(&self) -> bool {
+        self.joins_input.load(Ordering::Relaxed)
+    }
+
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(Buffered::default()))
     }

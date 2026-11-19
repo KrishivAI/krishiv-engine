@@ -12,7 +12,7 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
@@ -25,8 +25,7 @@ use krishiv_exec::planner::MemoryTable;
 use krishiv_memory::MemoryPool;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
-    AccessDecision, AccessPolicy, BoxFuture, Catalog, NameForm, Principal, Privilege, Securable,
-    TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::history::QueryHistory;
@@ -44,13 +43,17 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 6] = [
+const TABLES: [&str; 10] = [
     "capabilities",
     "caches",
+    "catalogs",
     "memory",
     "metrics",
     "operators",
+    "partition_advice",
     "queries",
+    "resource_groups",
+    "sessions",
 ];
 
 /// The names of the tables of the catalog.
@@ -99,55 +102,9 @@ fn table_known(table: &str) -> bool {
     TABLES.iter().any(|t| t.eq_ignore_ascii_case(table))
 }
 
-/// The cargo features this build was made with and whether each is on, set
-/// once by the binary (the library cannot see its dependents' features).
-static BUILD_FEATURES: OnceLock<Vec<(String, bool)>> = OnceLock::new();
-
-/// Records the cargo features of the running binary for
-/// `system.capabilities`: `(name, enabled)` for every feature that can be
-/// switched. The first call wins; later calls change nothing.
-pub fn register_build_features(features: &[(&str, bool)]) {
-    let owned = features
-        .iter()
-        .map(|(name, on)| ((*name).to_owned(), *on))
-        .collect();
-    let _ = BUILD_FEATURES.set(owned);
-}
-
-/// The rows of `system.capabilities`: `(kind, name, value, detail)`.
-fn capability_rows() -> Vec<[String; 4]> {
-    let row = |kind: &str, name: &str, value: &str, detail: &str| {
-        [
-            kind.to_owned(),
-            name.to_owned(),
-            value.to_owned(),
-            detail.to_owned(),
-        ]
-    };
-    let state = |on: bool| if on { "enabled" } else { "disabled" };
-    let mut rows = vec![
-        row("build", "engine", "krishiv", env!("CARGO_PKG_VERSION")),
-        row("build", "spark_versions", "3.5,4.0,4.1,4.2", ""),
-        row("surface", "system_tables", SCHEMA_VERSION, ""),
-        row("surface", "agent_result", "1", ""),
-        row("feature", "cloud", state(cfg!(feature = "cloud")), ""),
-    ];
-    if let Some(features) = BUILD_FEATURES.get() {
-        let mut sorted: Vec<&(String, bool)> = features.iter().collect();
-        sorted.sort();
-        rows.extend(
-            sorted
-                .into_iter()
-                .filter(|(name, _)| name != "cloud")
-                .map(|(name, on)| row("feature", name, state(*on), "")),
-        );
-    }
-    rows
-}
-
 /// What a column holds.
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Text,
     Long,
     /// `INT`.
@@ -198,6 +155,10 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("evictions", Long, false),
             ("invalidations", Long, false),
             ("loads_in_flight", Long, false),
+            ("memory_bytes", Long, false),
+            ("disk_bytes", Long, false),
+            ("entries_pending", Long, false),
+            ("spills", Long, false),
         ],
         "metrics" => vec![
             ("worker_id", Text, false),
@@ -253,6 +214,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("peak_memory_bytes", Long, true),
             ("error_class", Text, true),
             ("workload_class", Text, true),
+            ("resource_group", Text, true),
+            ("queued_ns", Long, true),
             ("cpu_ns", Long, true),
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
@@ -270,13 +233,19 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("sqlstate", Text, true),
             ("error_message", Text, true),
             ("partial", Flag, false),
+            ("delegated_by", Text, true),
         ],
+        "partition_advice" => crate::partition_advice::layout(),
+        "resource_groups" => crate::system_groups::layout(),
+        "catalogs" => crate::system_catalogs::layout(),
+        "sessions" => crate::sessions::layout(),
         _ => return None,
     })
 }
 
-/// The columns of `table`, `None` for an unknown table.
-fn columns(table: &str) -> Option<Vec<TableColumn>> {
+/// The columns of `table`, `None` for an unknown table (also what `DESCRIBE` and `SHOW COLUMNS`
+/// print, which need `Browse`, not the `Select` that building its rows does).
+pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
     Some(
         layout(table)?
             .into_iter()
@@ -337,7 +306,7 @@ fn int_list_column(rows: &[&[i32]]) -> ArrayRef {
 }
 
 /// A `MAP<STRING, STRING>` column of `rows` label sets.
-fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
+pub(crate) fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
     use arrow_array::{MapArray, StringViewArray, StructArray};
     use arrow_buffer::OffsetBuffer;
     let ArrowType::Map(entries, _) = labels_type().to_arrow() else {
@@ -383,11 +352,11 @@ fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
 }
 
 /// Rows of text cells, column by column.
-fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
+pub(crate) fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
     Arc::new(StringArray::from_iter(cells))
 }
 
-fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
+pub(crate) fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
     Arc::new(Int64Array::from_iter(cells))
 }
 
@@ -396,23 +365,11 @@ fn bytes(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// The trace id of a W3C `traceparent` (`version-trace_id-parent_id-flags`,
-/// lower-case hex), `None` if the header is malformed: version `ff`, an
-/// all-zero id, or the wrong lengths.
-pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
-    let hex = |s: &str, n: usize| {
-        s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    };
-    let parts: Vec<&str> = header.trim().split('-').collect();
-    let [version, trace, parent, flags, ..] = parts.as_slice() else {
-        return None;
-    };
-    let zero = |s: &str| s.bytes().all(|b| b == b'0');
-    // Version 00 has exactly four fields; later versions may add more.
-    let shape = hex(version, 2) && *version != "ff" && (*version != "00" || parts.len() == 4);
-    (shape && hex(trace, 32) && !zero(trace) && hex(parent, 16) && !zero(parent) && hex(flags, 2))
-        .then(|| (*trace).to_owned())
-}
+#[cfg(test)]
+use crate::trace_context::{MAX_BAGGAGE_BYTES, MAX_BAGGAGE_ENTRIES};
+pub(crate) use crate::trace_context::{RemoteParent, parse_baggage, parse_remote_parent};
+#[cfg(test)]
+use krishiv_plan::analyzer::Principal;
 
 /// The name of the memory pool of the query whose `system.queries` row is `query_id`.
 pub(crate) fn pool_name(query_id: &str) -> String {
@@ -510,47 +467,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         ];
     }
     if table.eq_ignore_ascii_case("caches") {
-        let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
-        let meta = sources.io.cache().stats();
-        let io = sources.io.totals();
-        let relation = sources.relations.stats();
-        let rows = [
-            CacheRow {
-                cache: "file_metadata",
-                entries: n(meta.entries),
-                bytes: n(meta.bytes),
-                capacity: Some(n(meta.limit)),
-                hits: n(krishiv_io::IoCounters::get(&io.cache_hits)),
-                misses: n(krishiv_io::IoCounters::get(&io.cache_misses)),
-                evictions: n(meta.evictions),
-                invalidations: n(meta.invalidations),
-                loads_in_flight: n(meta.loads_in_flight),
-            },
-            CacheRow {
-                cache: "relation",
-                entries: n(relation.entries),
-                bytes: n(relation.bytes),
-                capacity: None,
-                hits: n(relation.hits),
-                misses: n(relation.misses),
-                evictions: 0,
-                invalidations: n(relation.invalidations),
-                loads_in_flight: 0,
-            },
-        ];
-        let l = |f: fn(&CacheRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
-        return vec![
-            text(rows.iter().map(|_| Some(LOCAL_WORKER))),
-            text(rows.iter().map(|r| Some(r.cache))),
-            l(|r| r.entries),
-            l(|r| r.bytes),
-            long(rows.iter().map(|r| r.capacity)),
-            l(|r| r.hits),
-            l(|r| r.misses),
-            l(|r| r.evictions),
-            l(|r| r.invalidations),
-            l(|r| r.loads_in_flight),
-        ];
+        return caches::columns(sources);
     }
     if table.eq_ignore_ascii_case("operators") {
         let rows = sources.queries.operators(sources.monitor.sees_all());
@@ -588,6 +505,18 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.workers)))),
         ];
     }
+    if table.eq_ignore_ascii_case("sessions") {
+        return crate::sessions::columns(sources);
+    }
+    if table.eq_ignore_ascii_case("partition_advice") {
+        return crate::partition_advice::columns(sources);
+    }
+    if table.eq_ignore_ascii_case("resource_groups") {
+        return crate::system_groups::columns(sources);
+    }
+    if table.eq_ignore_ascii_case("catalogs") {
+        return crate::system_catalogs::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -621,6 +550,8 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.peak_memory_bytes)),
             text(rows.iter().map(|r| r.error_class.as_deref())),
             text(rows.iter().map(|r| r.workload_class)),
+            text(rows.iter().map(|r| r.resource_group.as_deref())),
+            long(rows.iter().map(|r| r.queued_ns)),
             long(rows.iter().map(|r| r.cpu_ns)),
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
@@ -647,6 +578,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| r.error_message.as_deref())),
             // One process, one worker: every row is whole (design §2.7 for the merged rows).
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
+            text(rows.iter().map(|r| r.delegated_by.as_deref())),
         ];
     }
     let rows = capability_rows();
@@ -695,19 +627,6 @@ impl MetricRow {
     }
 }
 
-/// One row of `system.caches`.
-struct CacheRow {
-    cache: &'static str,
-    entries: i64,
-    bytes: i64,
-    capacity: Option<i64>,
-    hits: i64,
-    misses: i64,
-    evictions: i64,
-    invalidations: i64,
-    loads_in_flight: i64,
-}
-
 /// What the tables read: the process's state.
 pub(crate) struct Sources {
     /// The session's memory pool tree.
@@ -722,56 +641,18 @@ pub(crate) struct Sources {
     pub(crate) metrics: Arc<krishiv_exec::MetricsRegistry>,
     /// Whether the query's principal sees every principal's queries.
     pub(crate) monitor: Arc<Monitor>,
+    /// The runtime's sessions.
+    pub(crate) sessions: Arc<crate::sessions::SessionView>,
+    /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
+    pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
+    /// The advice of the persisted query history (`krishiv.history.path`), read off the executor when the
+    /// `partition_advice` table loads.
+    pub(crate) advice: Arc<crate::partition_advice::AdviceCell>,
+    /// The declared catalogs the query's principal sees (`system.catalogs`, name resolution).
+    pub(crate) catalogs: crate::catalog_registry::DeclaredView,
 }
 
-/// Whether one query's principal holds `MONITOR` on the `system` securable,
-/// which shows every principal's rows in `system.queries` and
-/// `system.operators` (ADR 0036 update 2026-11-05). Asked once per query,
-/// when analysis loads one of those tables; until then, and when the policy
-/// says anything but a plain allow, the principal sees its own rows only.
-pub(crate) struct Monitor {
-    principal: Arc<Principal>,
-    policy: Arc<dyn AccessPolicy>,
-    decided: OnceLock<bool>,
-}
-
-impl std::fmt::Debug for Monitor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Monitor")
-            .field("decided", &self.decided.get())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Monitor {
-    pub(crate) fn new(principal: Arc<Principal>, policy: Arc<dyn AccessPolicy>) -> Self {
-        Self {
-            principal,
-            policy,
-            decided: OnceLock::new(),
-        }
-    }
-
-    /// Asks the policy, once.
-    async fn decide(&self) {
-        if self.decided.get().is_some() {
-            return;
-        }
-        let securable = Securable::System(SYSTEM.to_owned());
-        let allowed = matches!(
-            self.policy
-                .check(&self.principal, &securable, Privilege::Monitor)
-                .await,
-            Ok(AccessDecision::Allow)
-        );
-        let _ = self.decided.set(allowed);
-    }
-
-    /// Whether every principal's rows show.
-    pub(crate) fn sees_all(&self) -> bool {
-        self.decided.get().copied().unwrap_or(false)
-    }
-}
+pub(crate) use crate::monitor::Monitor;
 
 /// Most tags a session carries, and the longest key and value.
 pub(crate) const MAX_TAGS: usize = 32;
@@ -784,6 +665,10 @@ pub(crate) struct QueryRow {
     pub(crate) id: String,
     pub(crate) session_id: String,
     pub(crate) principal: String,
+    /// The service principal that ran the query for `principal` (trusted impersonation, P3-T061).
+    pub(crate) delegated_by: Option<String>,
+    /// [`crate::sessions::owner_key`] of the principal: what the own-rows filter compares.
+    pub(crate) owner: String,
     pub(crate) tags: Vec<(String, String)>,
     pub(crate) trace_id: Option<String>,
     /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN` (T137); `None` when the
@@ -817,6 +702,11 @@ pub(crate) struct QueryRow {
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
     pub(crate) workload_class: Option<&'static str>,
+    /// The resource group the controller placed the query in (`None` without one).
+    pub(crate) resource_group: Option<String>,
+    /// How long admission held the query queued, in nanoseconds (`None` for a query that never
+    /// reached admission; 0 when it started at once).
+    pub(crate) queued_ns: Option<i64>,
     /// Busy time of its drivers.
     pub(crate) cpu_ns: Option<i64>,
     pub(crate) rows_produced: Option<i64>,
@@ -970,8 +860,15 @@ pub(crate) struct QueryLog {
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
-    /// The W3C trace the session's next queries belong to.
-    trace_id: Mutex<Option<String>>,
+    /// The service principal acting for `principal`, if any (fixed for life, as the principal).
+    delegated_by: Option<String>,
+    /// [`crate::sessions::owner_key`] of the principal.
+    owner: String,
+    /// The W3C trace the session's next queries belong to, and the caller's
+    /// span they are children of.
+    trace: Mutex<Option<RemoteParent>>,
+    /// The `baggage` of the inbound request (untrusted, bounded).
+    baggage: Mutex<Vec<(String, String)>>,
     /// The session's tags, by key.
     tags: Mutex<std::collections::BTreeMap<String, String>>,
 }
@@ -985,10 +882,15 @@ pub(crate) fn now_ms() -> i64 {
 impl QueryLog {
     /// The log of a new session of the runtime that keeps `history`, run by
     /// `principal`.
-    pub(crate) fn new(history: Arc<QueryHistory>, principal: &str) -> Self {
+    pub(crate) fn new(
+        history: Arc<QueryHistory>,
+        principal: &krishiv_plan::analyzer::Principal,
+    ) -> Self {
         Self {
             session_id: history.mint(now_ms()),
-            principal: principal.to_owned(),
+            principal: principal.name.clone(),
+            delegated_by: principal.delegated_by.clone(),
+            owner: crate::sessions::owner_key(principal),
             history,
             ..Self::default()
         }
@@ -1029,14 +931,32 @@ impl QueryLog {
             .collect()
     }
 
-    /// Sets (or clears) the trace id the session's next queries record.
-    pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
-        *self.trace_id.lock().unwrap_or_else(PoisonError::into_inner) = trace_id;
+    /// Sets (or clears) the trace the session's next queries record.
+    pub(crate) fn set_trace(&self, trace: Option<RemoteParent>) {
+        *self.trace.lock().unwrap_or_else(PoisonError::into_inner) = trace;
+    }
+
+    /// The trace now in effect.
+    pub(crate) fn trace(&self) -> Option<RemoteParent> {
+        self.trace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The trace id now in effect.
     pub(crate) fn trace_id(&self) -> Option<String> {
-        self.trace_id
+        self.trace().map(|t| t.trace_id)
+    }
+
+    /// Replaces the inbound baggage.
+    pub(crate) fn set_baggage(&self, baggage: Vec<(String, String)>) {
+        *self.baggage.lock().unwrap_or_else(PoisonError::into_inner) = baggage;
+    }
+
+    /// The inbound baggage now.
+    pub(crate) fn baggage(&self) -> Vec<(String, String)> {
+        self.baggage
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -1062,6 +982,8 @@ impl QueryLog {
             id,
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
+            delegated_by: self.delegated_by.clone(),
+            owner: self.owner.clone(),
             tags: self.tags(),
             trace_id: self.trace_id(),
             statement_class: class,
@@ -1079,6 +1001,8 @@ impl QueryLog {
             policy,
             operators: Arc::default(),
             workload_class: None,
+            resource_group: None,
+            queued_ns: None,
             cpu_ns: None,
             rows_produced: None,
             bytes_read: None,
@@ -1165,6 +1089,13 @@ impl QueryLog {
     /// or ended before its run): its wall time is the time since it was submitted, so the
     /// queue time is not lost.
     pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        // A statement dropped while it waited because its action was cancelled
+        // (`action.rs`; the drop runs with the action current): name the reason.
+        if state == "cancelled"
+            && let Some(reason) = crate::action::current_reason()
+        {
+            self.note_cancel_reason(id, reason);
+        }
         let waited = self
             .history
             .submitted_at(&self.session_id, id)
@@ -1184,6 +1115,16 @@ impl QueryLog {
         );
     }
 
+    /// Records `reason` as the `cancel_reason` of row `id` unless it has one
+    /// (the first reason wins, as for a running query).
+    pub(crate) fn note_cancel_reason(&self, id: &str, reason: crate::CancelReason) {
+        self.history.update(&self.session_id, id, |row| {
+            if row.cancel_reason.is_none() {
+                row.cancel_reason = Some(reason.as_str());
+            }
+        });
+    }
+
     /// Sets the state of the live row `id` (`queued` while admission waits,
     /// `running` once it is admitted).
     pub(crate) fn set_state(&self, id: &str, state: &'static str) {
@@ -1192,9 +1133,12 @@ impl QueryLog {
     }
 
     /// Stamps the start of live row `id`: admission let it run.
-    pub(crate) fn mark_started(&self, id: &str) {
+    pub(crate) fn mark_started(&self, id: &str, group: Option<&str>, queued_ns: u64) {
         self.history.update(&self.session_id, id, |row| {
             row.started_ms = Some(now_ms());
+            // What the controller held the query in its queue (0 when it started at once).
+            row.queued_ns = Some(i64::try_from(queued_ns).unwrap_or(i64::MAX));
+            row.resource_group = group.map(str::to_owned);
         });
     }
 
@@ -1294,14 +1238,13 @@ impl QueryLog {
     /// or of every principal when `all`, oldest query first.
     pub(crate) fn operators(&self, all: bool) -> Vec<OperatorRow> {
         self.history
-            .operators((!all).then_some(self.principal.as_str()))
+            .operators((!all).then_some(self.owner.as_str()))
     }
 
     /// The rows of this session's principal, or of every principal when
     /// `all`, oldest first.
     pub(crate) fn snapshot(&self, all: bool) -> Vec<QueryRow> {
-        self.history
-            .snapshot((!all).then_some(self.principal.as_str()))
+        self.history.snapshot((!all).then_some(self.owner.as_str()))
     }
 }
 
@@ -1360,6 +1303,8 @@ pub(crate) fn provider(
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
     monitor: Arc<Monitor>,
+    /// The history's advice, which `partition_advice` reads once the decision is made.
+    advice: Arc<crate::partition_advice::AdviceCell>,
     /// The session catalog of the query, asked first for a bare name: a temporary table or view of the
     /// session wins over a system table of the same name, as it does over any table.
     temps: Option<Arc<crate::catalog::QueryCatalog>>,
@@ -1376,6 +1321,7 @@ impl SystemCatalog {
     pub(crate) fn of(sources: &Sources) -> Self {
         Self {
             monitor: Arc::clone(&sources.monitor),
+            advice: Arc::clone(&sources.advice),
             temps: None,
         }
     }
@@ -1417,11 +1363,21 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators"]
-                .iter()
-                .any(|t| id.name.eq_ignore_ascii_case(t))
+            if [
+                "queries",
+                "operators",
+                "sessions",
+                "resource_groups",
+                "partition_advice",
+            ]
+            .iter()
+            .any(|t| id.name.eq_ignore_ascii_case(t))
             {
                 self.monitor.decide().await;
+                // The history read is file I/O: done here, in the async load, on the blocking pool.
+                if id.name.eq_ignore_ascii_case("partition_advice") && self.monitor.sees_all() {
+                    self.advice.load().await;
+                }
             }
             Ok(columns(&id.name).map(|columns| TableMeta {
                 ident: TableIdent {
@@ -1463,6 +1419,8 @@ impl QueryRow {
             + self.id.len()
             + self.session_id.len()
             + self.principal.len()
+            + self.delegated_by.as_ref().map_or(0, String::len)
+            + self.owner.len()
             + self
                 .tags
                 .iter()
@@ -1492,8 +1450,10 @@ impl crate::table_commands::TableName {
 /// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
 /// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
 impl Session {
-    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    /// The namespace a bare name of a stored object resolves in, refused under `system` and under a
+    /// declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         let (catalog, namespace) = self.state.catalog.position_pair();
         if is_system(&catalog) {
             return Err(krishiv_common::error::SchemaNotFound {
@@ -1507,7 +1467,7 @@ impl Session {
     /// The permit of a query that reads only `system.*` (never queued behind the load it
     /// inspects): it starts at once, so its row has a start time.
     pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
-        self.state.queries.mark_started(log_id);
+        self.state.queries.mark_started(log_id, None, 0);
         crate::admission::Permit::unlimited()
     }
 
@@ -1527,8 +1487,28 @@ impl Session {
         self.function_namespace(ns)
     }
 
-    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
+    /// Refuses a namespace or table command that would resolve in the current catalog when that is
+    /// a declared one: a declared catalog resolves names in queries only for now (design P3-T067
+    /// PR-58a), and the embedded catalog is never read or changed in its name. `spark_catalog.<ns>`
+    /// forms, `global_temp` and temporary views are not refused.
+    pub(crate) fn refuse_declared_current(&self) -> Result<(), KrishivError> {
+        let catalog = self.state.catalog.current_catalog();
+        if is_system(&catalog) || catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+            return Ok(());
+        }
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "namespace and table commands in the declared catalog `{}`",
+                catalog.replace('`', "``")
+            ),
+        }
+        .into())
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
+    /// and under a declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         if is_system(&self.state.catalog.current_catalog()) {
             return Err(krishiv_common::error::SchemaNotFound {
                 schema_name: format!("`system`.`{ns}`"),
@@ -1589,6 +1569,12 @@ impl Session {
             }
             .into());
         }
+        if !global
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
+        {
+            self.refuse_declared_current()?;
+        }
         Ok(env.catalog.namespace().join("."))
     }
 
@@ -1604,394 +1590,21 @@ impl Session {
             }
             .into());
         }
+        self.refuse_declared_current()?;
         Ok(env.catalog.namespace().join("."))
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn an_error_message_is_masked_by_quotes_not_by_sql_tokens() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let keep = TextPolicy {
-            max_bytes: 4096,
-            mask: false,
-        };
-        let m = "The value 'abc' of the type \"STRING\" can't be cast -- see 'x'";
-        assert_eq!(
-            mask.apply_message(m),
-            "The value '?' of the type \"STRING\" can't be cast -- see '?'"
-        );
-        assert_eq!(keep.apply_message(m), m);
-        // An unclosed quote hides nothing after it.
-        assert_eq!(mask.apply_message("it's fine"), "it's fine");
-    }
-
-    #[test]
-    fn a_backquoted_value_is_masked_but_a_backquoted_name_stays() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let got = mask.apply_message(
-            "The variant value `\"secret_canary\"` cannot be cast; table `db`.`t_1` is missing.",
-        );
-        assert!(!got.contains("secret_canary"), "{got}");
-        assert!(got.contains("`db`.`t_1`"), "{got}");
-    }
-
-    #[test]
-    fn an_embedded_backquote_does_not_end_a_masked_value() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let got =
-            mask.apply_message("The variant value `\"x`secret_canary\"` cannot be cast to `INT`.");
-        assert!(!got.contains("secret_canary"), "{got}");
-        assert!(got.contains("`INT`"), "{got}");
-    }
-
-    #[test]
-    fn a_backquote_before_whitespace_inside_a_masked_value_does_not_end_it() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let got =
-            mask.apply_message("The variant value `\"x` secret_canary\"` cannot be cast to `INT`.");
-        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
-        // An escaped double quote in the rendered value does not close its JSON string.
-        let got = mask
-            .apply_message("The variant value `\"x\\\"` secret_canary\"` cannot be cast to `INT`.");
-        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
-    }
-
-    #[test]
-    fn a_raw_value_parameter_is_masked_and_a_long_value_is_linear() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let got = mask.apply_message_with(
-            "Malformed records: {\"a\":\"secret_canary\", in parsing.",
-            &[("badRecord", "{\"a\":\"secret_canary\",".to_owned())],
-        );
-        assert_eq!(got, "Malformed records: ? in parsing.");
-        // 40,000 backquote-space pairs inside one open JSON string: one pass, not a rescan per backquote.
-        let long = format!("The value `\"{}` cannot be cast.", "x` ".repeat(40_000));
-        let started = std::time::Instant::now();
-        let got = mask.apply_message(&long);
-        assert!(started.elapsed() < std::time::Duration::from_secs(20));
-        assert!(!got.contains("x` x`"));
-    }
-
-    #[test]
-    fn scientific_notation_and_other_bare_numbers_are_masked_in_a_message() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let got = mask.apply_message(
-            "The value 1e400 and 1.5E-3 and 7e+2 and v2 and 42P01x cannot be cast. SQLSTATE: 22003",
-        );
-        assert_eq!(
-            got,
-            "The value ? and ? and ? and v2 and 42P01x cannot be cast. SQLSTATE: 22003"
-        );
-    }
-
-    #[test]
-    fn an_escaped_quote_does_not_end_a_masked_value() {
-        let mask = TextPolicy {
-            max_bytes: 4096,
-            mask: true,
-        };
-        let m = "The value 'x\\' secret_canary' of the type \"STRING\" cannot be cast.";
-        let got = mask.apply_message(m);
-        assert!(!got.contains("secret_canary"), "{got}");
-        assert_eq!(
-            mask.apply_message("a 'b\\\\' then 'c' end"),
-            "a '?' then '?' end"
-        );
-    }
-
-    #[test]
-    fn capabilities_has_one_row_per_fact() {
-        let rows = capability_rows();
-        assert!(rows.iter().any(|r| r[0] == "build" && r[1] == "engine"));
-        assert!(rows.iter().any(|r| r[0] == "feature" && r[1] == "cloud"));
-        let memory: Arc<dyn MemoryPool> =
-            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
-        let sources = Sources {
-            queries: Arc::new(QueryLog::default()),
-            io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
-            relations: crate::cache::RelationCache::new(&memory),
-            metrics: Arc::new(krishiv_exec::MetricsRegistry::new()),
-            memory,
-            monitor: Arc::new(Monitor::new(
-                Arc::new(Principal::local_user()),
-                Arc::new(krishiv_plan::analyzer::AllowAll),
-            )),
-        };
-        assert!(provider("capabilities", &sources).unwrap().is_some());
-        assert!(provider("nope", &sources).unwrap().is_none());
-    }
-
-    #[test]
-    fn a_finished_query_can_be_turned_into_a_failed_one() {
-        let log = QueryLog::default();
-        let id = log.begin(Some("INSERT"), Some("write"));
-        log.finish(
-            &id,
-            &Finished {
-                state: "finished",
-                wall_ns: 5,
-                peak_memory_bytes: 7,
-                error_class: None,
-                operators: Vec::new(),
-                totals: None,
-            },
-        );
-        let error: KrishivError = krishiv_common::error::PathNotFound {
-            path: "x".to_owned(),
-        }
-        .into();
-        log.fail(&id, &error);
-        let row = &log.snapshot(false)[0];
-        assert_eq!(row.state, "failed");
-        assert_eq!(row.error_class.as_deref(), Some("PATH_NOT_FOUND"));
-        assert_eq!(row.wall_ns, Some(5));
-        // A row evicted meanwhile is just gone.
-        log.fail("unknown", &error);
-        let cancelled: KrishivError = krishiv_common::error::OperationCanceled {}.into();
-        log.fail(&id, &cancelled);
-        let row = &log.snapshot(false)[0];
-        assert_eq!(row.state, "cancelled");
-        assert_eq!(row.error_class, None);
-    }
-
-    #[test]
-    fn concurrent_tags_never_exceed_the_limit() {
-        let log = QueryLog::default();
-        let taken: usize = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..MAX_TAGS * 2)
-                .map(|i| {
-                    let log = &log;
-                    scope.spawn(move || log.try_set_tag(&format!("k{i}"), "v"))
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| usize::from(h.join().unwrap_or(false)))
-                .sum()
-        });
-        assert_eq!(taken, MAX_TAGS);
-        assert_eq!(log.tags().len(), MAX_TAGS);
-        // A known key can still change; an unknown one is refused until a tag is removed.
-        assert!(log.try_set_tag("k0", "other") || log.tags().iter().all(|(k, _)| k != "k0"));
-        assert!(!log.try_set_tag("new", "v"));
-        let (key, _) = log.tags()[0].clone();
-        log.remove_tag(&key);
-        assert!(log.try_set_tag("new", "v"));
-    }
-
-    #[test]
-    fn a_replayed_query_is_a_finished_row() {
-        let log = QueryLog::default();
-        log.set_trace_id(Some("trace".to_owned()));
-        assert!(log.try_set_tag("team", "etl"));
-        let id = log.record_replayed(TextPolicy::default(), Some("SELECT 1"), Some("READ"), None);
-        let row = &log.snapshot(false)[0];
-        assert_eq!(row.id, id);
-        assert_eq!(row.state, "finished");
-        assert_eq!(row.statement_class, Some("READ"));
-        assert_eq!(row.tags, [("team".to_owned(), "etl".to_owned())]);
-        assert_eq!(row.error_class, None);
-    }
-
-    #[test]
-    fn an_error_is_masked_by_the_policy_the_query_started_under() {
-        let log = QueryLog::default();
-        let mask = TextPolicy {
-            mask: true,
-            ..TextPolicy::default()
-        };
-        let id = log.begin_as(mask, Some("SELECT 'a'"), None, None).unwrap();
-        // Another statement of the session runs under `keep` before this one fails.
-        let _ = log.begin_as(TextPolicy::default(), Some("SELECT 'b'"), None, None);
-        log.note_error(
-            &id,
-            &KrishivError::from(InternalError {
-                message: "bad value 'secret'".to_owned(),
-            }),
-        );
-        let rows = log.snapshot(false);
-        let row = rows.iter().find(|r| r.id == id).unwrap();
-        let message = row.error_message.clone().unwrap();
-        assert!(!message.contains("secret"), "{message}");
-    }
-
-    #[test]
-    fn a_query_pool_is_named_by_its_history_id_and_found_again() {
-        let log = QueryLog::default();
-        let id = log.begin(Some("SELECT 1"), None);
-        let pool = pool_name(&id);
-        assert_eq!(query_of_path(&format!("process/{pool}")), Some(id.clone()));
-        assert_eq!(
-            query_of_path(&format!("process/{pool}/hash-join")),
-            Some(id)
-        );
-        assert_eq!(
-            query_of_path(&format!("process/session:abc/{pool}/sort")),
-            query_of_path(&format!("process/{pool}"))
-        );
-        assert_eq!(query_of_path("process/session:abc"), None);
-        assert_eq!(query_of_path("process/shuffle"), None);
-        assert_eq!(query_of_path("process"), None);
-    }
-
-    #[test]
-    fn query_ids_are_uuid_v7_and_unique() {
-        let log = QueryLog::default();
-        let a = log.begin(Some("SELECT 1"), Some("read"));
-        let b = log.begin(None, None);
-        assert_ne!(a, b);
-        for id in [&a, &b] {
-            let p: Vec<&str> = id.split('-').collect();
-            assert_eq!(
-                p.iter().map(|x| x.len()).collect::<Vec<_>>(),
-                [8, 4, 4, 4, 12],
-                "{id}"
-            );
-            assert!(p[2].starts_with('7') && "89ab".contains(&p[3][..1]), "{id}");
-        }
-        log.finish(
-            &a,
-            &Finished {
-                state: "finished",
-                wall_ns: 5,
-                peak_memory_bytes: 7,
-                error_class: None,
-                operators: Vec::new(),
-                totals: None,
-            },
-        );
-        let rows = log.snapshot(false);
-        assert_eq!((rows[0].state, rows[1].state), ("finished", "running"));
-    }
-
-    #[test]
-    fn a_history_copy_shares_the_operator_rows() {
-        let log = QueryLog::default();
-        let id = log.begin(None, None);
-        let op = OperatorRow {
-            query_id: id.clone(),
-            operator_id: 0,
-            node_id: None,
-            name: "Scan".to_owned(),
-            role: "source",
-            drivers: 1,
-            rows_in: 0,
-            rows_out: 3,
-            batches_in: 0,
-            batches_out: 1,
-            compute_ns: 0,
-            max_driver_compute_ns: 0,
-            blocked_io_ns: 0,
-            blocked_memory_ns: 0,
-            blocked_sink_ns: 0,
-            peak_reserved_bytes: 0,
-            spills: 0,
-            spilled_bytes: 0,
-            spill_files: 0,
-            spill_write_bytes: 0,
-            pipelines: vec![0],
-            extra: Vec::new(),
-            workers: 1,
-        };
-        log.finish(
-            &id,
-            &Finished {
-                state: "finished",
-                wall_ns: 1,
-                peak_memory_bytes: 0,
-                error_class: None,
-                operators: vec![op],
-                totals: None,
-            },
-        );
-        let (a, b) = (log.snapshot(false), log.snapshot(false));
-        assert!(Arc::ptr_eq(&a[0].operators, &b[0].operators));
-        let ops = log.operators(false);
-        assert_eq!((ops.len(), ops[0].rows_out), (1, 3));
-    }
-
-    #[test]
-    fn history_is_bounded_and_long_text_is_cut_on_a_char() {
-        let log = QueryLog::default();
-        for _ in 0..(crate::history::PRINCIPAL_ROWS + 5) {
-            let id = log.begin(None, None);
-            log.finish(
-                &id,
-                &Finished {
-                    state: "finished",
-                    wall_ns: 1,
-                    peak_memory_bytes: 0,
-                    error_class: None,
-                    operators: Vec::new(),
-                    totals: None,
-                },
-            );
-        }
-        assert_eq!(log.snapshot(false).len(), crate::history::PRINCIPAL_ROWS);
-        let long = "é".repeat(TEXT_BYTES);
-        log.begin(Some(&long), None);
-        let last = log.snapshot(false).pop().unwrap();
-        assert!(last.truncated && last.text.unwrap().len() <= TEXT_BYTES);
-    }
-
-    #[test]
-    fn traceparent_is_checked_as_w3c_says() {
-        let ok = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-        assert_eq!(
-            parse_traceparent(ok).as_deref(),
-            Some("4bf92f3577b34da6a3ce929d0e0e4736")
-        );
-        for bad in [
-            "",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
-            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
-            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
-        ] {
-            assert!(parse_traceparent(bad).is_none(), "{bad}");
-        }
-        assert!(
-            parse_traceparent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
-        );
-    }
-
-    #[test]
-    fn names_are_matched_without_case() {
-        assert!(is_system("SYSTEM"));
-        assert!(is_system_table(&[
-            "System".to_owned(),
-            "Capabilities".to_owned()
-        ]));
-        assert!(!is_system_table(&["system".to_owned(), "x".to_owned()]));
-        assert!(!is_system_table(&["system".to_owned()]));
-    }
-}
-
+mod caches;
+mod capabilities;
+mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]
 use text::*;
+
+use capabilities::capability_rows;
+pub use capabilities::{capabilities, register_build_features, register_surface};

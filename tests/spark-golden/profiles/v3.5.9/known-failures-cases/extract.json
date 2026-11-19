@@ -1,12 +1,8 @@
 {
   "cases": {
-    "depends-on-command": [
-      127
-    ],
     "other-version": [
       81,
-      83,
-      128
+      83
     ]
   },
   "file": "extract",

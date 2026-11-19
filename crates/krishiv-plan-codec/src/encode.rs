@@ -16,9 +16,9 @@ use krishiv_exec::physical::{
     AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
     JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
     ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
-    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, WritePlan,
+    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest, WritePlan,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{ExplainNode, RowLevelOperation, WriteMode};
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
@@ -56,7 +56,11 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
     let features = plan_features(plan);
     let mut e = Encoder::default();
     for tree in plan.roots() {
-        let order = post_order(tree, PhysNode::children);
+        let order = post_order(tree, |n| {
+            let mut v = n.children();
+            v.extend(n.measure());
+            v
+        });
         for node in &order {
             let message = e.node(node)?;
             e.nodes.insert(std::ptr::from_ref(*node), e.table.len());
@@ -306,6 +310,30 @@ impl Encoder {
                 limit: *limit,
                 offset: *offset,
             }),
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => Kind::Sample(pb::SampleNode {
+                input: self.node_index(input)?,
+                lower: *lower,
+                upper: *upper,
+                seed: *seed,
+            }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => Kind::CollectMetrics(pb::CollectMetricsNode {
+                input: self.node_index(input)?,
+                name: name.clone(),
+                measure: self.node_index(measure)?,
+                instance: *instance,
+                limit: *limit,
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout: l,
@@ -334,6 +362,72 @@ impl Encoder {
                     })
                     .collect::<Result<_>>()?,
             }),
+            PhysNode::PythonMap { input, udf } => Kind::PythonMap(pb::PythonMapNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+            }),
+            PhysNode::PythonUdtf { input, udf, call } => Kind::PythonUdtf(pb::PythonUdtfNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+                arg_names: call
+                    .arg_names
+                    .iter()
+                    .map(|n| pb::PythonUdtfArgName { name: n.clone() })
+                    .collect(),
+                table: call.table.as_ref().map(|t| pb::PythonUdtfTable {
+                    position: t.position as u64,
+                    columns: indexes(&t.columns),
+                    names: t.names.clone(),
+                    partition_child_indexes: indexes(&t.partition_child_indexes),
+                }),
+                carried: indexes(&call.carried),
+                analyzed: call.analyzed.clone(),
+            }),
+            PhysNode::PythonGroupMap { input, keys, udf } => {
+                Kind::PythonGroupMap(pb::PythonGroupMapNode {
+                    input: self.node_index(input)?,
+                    keys: indexes(keys),
+                    udf: Some(self.python_relation(udf)?),
+                })
+            }
+            PhysNode::PythonCoGroupMap {
+                input,
+                keys,
+                side,
+                udf,
+            } => Kind::PythonCoGroupMap(pb::PythonCoGroupMapNode {
+                input: self.node_index(input)?,
+                keys: indexes(keys),
+                side: u64::try_from(*side).map_err(|_| {
+                    CodecError::Unsupported("a side column out of range".to_owned())
+                })?,
+                udf: Some(self.python_relation(udf)?),
+            }),
+            PhysNode::PythonAggregate {
+                input,
+                layout: l,
+                keys,
+                key_values,
+                calls,
+                window,
+            } => Kind::PythonAggregate(pb::PythonAggregateNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                keys: indexes(keys),
+                key_values: indexes(key_values),
+                window: window.as_ref().map(|bounded| pb::PythonWindow {
+                    bounded: bounded.clone(),
+                }),
+                calls: calls
+                    .iter()
+                    .map(|c| {
+                        Ok(pb::PythonCall {
+                            call: self.expr(&c.call)?,
+                            output: c.output.0,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            }),
             PhysNode::Generate {
                 input,
                 layout: l,
@@ -351,6 +445,7 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::VariantExplode => {
                         pb::GeneratorKind::VariantExplode
                     }
+                    krishiv_plan::GeneratorKind::PythonUdtf => pb::GeneratorKind::PythonUdtf,
                 }
                 .into(),
                 outer: *outer,
@@ -404,6 +499,11 @@ impl Encoder {
                     .map(|w| write_plan(w, &self.nested))
                     .transpose()?,
             }),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => Kind::TableWrite(self.table_write(input, table, request)?),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
                 input,
@@ -606,6 +706,79 @@ impl Encoder {
         })
     }
 
+    fn table_write(
+        &mut self,
+        input: &PhysNode,
+        table: &Scan,
+        request: &TableWriteRequest,
+    ) -> Result<pb::TableWriteNode> {
+        use pb::table_write_node::Request;
+        let Scan {
+            source,
+            output,
+            version,
+        } = table;
+        let options = |o: &std::collections::BTreeMap<String, String>| {
+            o.iter()
+                .map(|(k, v)| map_entry(k, v))
+                .collect::<Result<Vec<_>>>()
+        };
+        let request = match request {
+            TableWriteRequest::Write(w) => {
+                let (mode, filter) = match &w.mode {
+                    WriteMode::Append => (pb::TableWriteMode::Append, None),
+                    WriteMode::Truncate => (pb::TableWriteMode::Truncate, None),
+                    WriteMode::OverwriteByFilter(f) => {
+                        (pb::TableWriteMode::OverwriteByFilter, Some(self.expr(f)?))
+                    }
+                    WriteMode::OverwriteDynamic => (pb::TableWriteMode::OverwriteDynamic, None),
+                    other => {
+                        return Err(CodecError::Unsupported(format!("the write mode {other:?}")));
+                    }
+                };
+                Request::Write(pb::TableWriteRequest {
+                    mode: mode.into(),
+                    filter,
+                    table_name: w.table_name.clone(),
+                    input_schema: flagged_schema_bytes(&w.input_schema, &self.nested),
+                    options: options(&w.options)?,
+                    write_id: w.write_id.clone(),
+                })
+            }
+            TableWriteRequest::RowLevel(r) => Request::RowLevel(pb::RowLevelWriteRequest {
+                op: match r.op {
+                    RowLevelOperation::Delete => pb::RowLevelOperation::Delete,
+                    RowLevelOperation::Update => pb::RowLevelOperation::Update,
+                    RowLevelOperation::Merge => pb::RowLevelOperation::Merge,
+                    other => {
+                        return Err(CodecError::Unsupported(format!(
+                            "the row-level operation {other:?}"
+                        )));
+                    }
+                }
+                .into(),
+                table_name: r.table_name.clone(),
+                input_schema: flagged_schema_bytes(&r.input_schema, &self.nested),
+                touched: r.touched.clone(),
+                read_filter: r.read_filter.as_ref().map(|f| self.expr(f)).transpose()?,
+                options: options(&r.options)?,
+                write_id: r.write_id.clone(),
+            }),
+        };
+        Ok(pb::TableWriteNode {
+            input: self.node_index(input)?,
+            table: Some(pb::TableRef {
+                source: Some(read_source(source, &self.nested)?),
+                output: output
+                    .iter()
+                    .map(|c| bound_column(c, &self.nested))
+                    .collect::<Result<_>>()?,
+                version: version.map(|v| v.0),
+            }),
+            request: Some(request),
+        })
+    }
+
     fn scan(&mut self, node: &ScanNode) -> Result<pb::ScanNode> {
         let Scan {
             source,
@@ -625,7 +798,7 @@ impl Encoder {
             .transpose()?;
         Ok(pb::ScanNode {
             id: node.id.0,
-            source: Some(read_source(source)?),
+            source: Some(read_source(source, &self.nested)?),
             output: output
                 .iter()
                 .map(|c| bound_column(c, &self.nested))
@@ -740,6 +913,48 @@ impl Encoder {
         Ok(pb::Expr {
             origin: origin(e.origin),
             kind: Some(kind),
+        })
+    }
+
+    /// A Python relation node's UDF, frame sides and declared result.
+    fn python_relation(
+        &self,
+        r: &krishiv_exec::physical::PythonRelationPlan,
+    ) -> Result<pb::PythonRelation> {
+        Ok(pb::PythonRelation {
+            udf: Some(pb::PythonUdfFunction {
+                name: r.udf.name.clone(),
+                version: u64::from(r.udf.version),
+                eval_type: r.udf.eval_type.code(),
+                thread_safe: r.udf.thread_safe,
+            }),
+            deterministic: r.udf.deterministic,
+            sides: r
+                .sides
+                .iter()
+                .map(|s| {
+                    Ok(pb::PythonFrameSide {
+                        columns: indexes(&s.columns),
+                        names: s.names.clone(),
+                        types: s
+                            .types
+                            .iter()
+                            .map(|t| spark_type(t, &self.nested))
+                            .collect::<Result<_>>()?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+            output: r
+                .output
+                .iter()
+                .map(|c| {
+                    Ok(pb::PythonOutputColumn {
+                        name: c.name.clone(),
+                        data_type: Some(spark_type(&c.data_type, &self.nested)?),
+                        nullable: c.nullable,
+                    })
+                })
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -1064,6 +1279,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
             ..
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        AggregateFunction::HistogramNumeric { nb } => *nb < 2,
+        AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
         _ => false,
     };
     if invalid {
@@ -1083,6 +1300,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::CollectSet => (pb::AggregateFunction::CollectSet, false),
         AggregateFunction::VectorSum => (pb::AggregateFunction::VectorSum, false),
         AggregateFunction::VectorAvg => (pb::AggregateFunction::VectorAvg, false),
+        AggregateFunction::BitmapConstructAgg => (pb::AggregateFunction::BitmapConstructAgg, false),
+        AggregateFunction::BitmapOrAgg => (pb::AggregateFunction::BitmapOrAgg, false),
+        AggregateFunction::BitmapAndAgg => (pb::AggregateFunction::BitmapAndAgg, false),
         AggregateFunction::BitAnd => (pb::AggregateFunction::BitAnd, false),
         AggregateFunction::BitOr => (pb::AggregateFunction::BitOr, false),
         AggregateFunction::BitXor => (pb::AggregateFunction::BitXor, false),
@@ -1170,6 +1390,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
+        AggregateFunction::HistogramNumeric { nb } => {
+            let mut e = percentile_expr(
+                pb::AggregateFunction::HistogramNumeric,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            );
+            e.histogram_bins = *nb;
+            return Ok(e);
+        }
         AggregateFunction::ApproxCountDistinct { p } => {
             return Ok(percentile_expr(
                 pb::AggregateFunction::ApproxCountDistinct,
@@ -1179,6 +1414,32 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 0,
                 false,
                 *p,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::HllSketchAgg { lg_k } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::HllSketchAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_k),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::HllUnionAgg { allow_different } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::HllUnionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*allow_different),
                 a,
                 nested,
             ));
@@ -1195,12 +1456,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::AnyValue { ignore_nulls } => {
             (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
-        // `min`/`max` of a collated string have no wire form yet: the plan stays on one node.
-        AggregateFunction::MaxByKeyFirst | AggregateFunction::MinByKeyFirst => {
-            return Err(CodecError::Unsupported(
-                "min/max of a collated string".to_owned(),
-            ));
-        }
+        AggregateFunction::MaxByKeyFirst => (pb::AggregateFunction::MaxByKeyFirst, false),
+        AggregateFunction::MinByKeyFirst => (pb::AggregateFunction::MinByKeyFirst, false),
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
         AggregateFunction::Udf(call) => {
@@ -1296,7 +1553,7 @@ fn percentile_expr(
     }
 }
 
-fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
+fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSource> {
     use pb::read_source::Kind;
     let options = |options: &std::collections::BTreeMap<String, OptionValue>| {
         options
@@ -1313,6 +1570,8 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
             format,
             paths,
             options: o,
+            schema,
+            ..
         } => Kind::Files(pb::FilesSource {
             format: format.clone(),
             paths: paths
@@ -1320,6 +1579,18 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
                 .map(|p| option("path", p))
                 .collect::<Result<_>>()?,
             options: options(o)?,
+            // Written only when declared: a plan that infers keeps its bytes.
+            schema: schema
+                .as_ref()
+                .map(|s| spark_type(&DataType::Struct(s.clone()), nested))
+                .transpose()?,
+        }),
+        ReadSource::Local(l) => Kind::Local(pb::LocalSource {
+            hash: l.relation().hash.as_bytes().to_vec(),
+            schema: flagged_schema_bytes(l.schema(), nested),
+            rows: l.rows(),
+            batches: l.batches() as u64,
+            bytes: l.bytes(),
         }),
         _ => {
             return Err(CodecError::Unsupported(
@@ -1472,8 +1743,8 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
         DataType::CollatedString(c) => {
-            // By canonical name: ids index an ICU build's table.
-            if c.is_indeterminate() || c.is_utf8_binary() {
+            // By canonical name: ids index an ICU build's table. INDETERMINATE is `null`.
+            if c.is_utf8_binary() {
                 return Err(CodecError::Unsupported(format!(
                     "a string type of collation {c}"
                 )));
@@ -1551,6 +1822,38 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
                 .map(|(key, value)| map_entry(key, value))
                 .collect::<Result<_>>()?,
         }),
+        Literal::Array {
+            data_type,
+            elements,
+        } => Kind::Array(pb::ArrayLiteral {
+            data_type: Some(spark_type(&DataType::Array(Arc::clone(data_type)), nested)?),
+            elements: elements
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
+        Literal::KeyValueMap { data_type, entries } => Kind::KeyValueMap(pb::KeyValueMapLiteral {
+            data_type: Some(spark_type(&DataType::Map(Arc::clone(data_type)), nested)?),
+            entries: entries
+                .iter()
+                .map(|(k, v)| {
+                    Ok(pb::KeyValueEntry {
+                        key: Some(nested_member(k, nested)?),
+                        value: Some(nested_member(v, nested)?),
+                    })
+                })
+                .collect::<Result<_>>()?,
+        }),
+        Literal::Struct { data_type, fields } => Kind::Struct(pb::StructLiteral {
+            data_type: Some(spark_type(
+                &DataType::Struct((**data_type).clone()),
+                nested,
+            )?),
+            fields: fields
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
         _ => {
             return Err(CodecError::Unsupported(
                 "a literal kind this version does not know".to_owned(),
@@ -1558,6 +1861,18 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
         }
     };
     Ok(pb::Literal { kind: Some(kind) })
+}
+
+/// A value inside a nested literal. The options map is its own feature
+/// (`options_map_literals`), which the walk reports for an expression, not for
+/// a member, so it does not travel inside one.
+fn nested_member(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
+    if matches!(l, Literal::Map(_)) {
+        return Err(CodecError::Unsupported(
+            "an options map inside an array, map or struct literal".to_owned(),
+        ));
+    }
+    literal(l, nested)
 }
 
 fn year_month_field(f: YearMonthField) -> pb::YearMonthField {

@@ -425,9 +425,37 @@ pub(super) fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivEr
     ))
 }
 
+/// Spark's `HistogramNumeric.dataType` (with
+/// `spark.sql.legacy.histogramNumericPropagateInputType`, default true):
+/// `array<struct<x: the input's type, y: double>>`, NULL for no value.
+///
+/// Known difference: like Spark's, the bins depend on where partial histograms
+/// merge, and Krishiv merges at its own points (several drivers per partition,
+/// partial flushes, the adaptive bypass, spills; a merge does not combine equal
+/// x values), so results can differ from Spark's for the same data when the
+/// plan is split differently (a local `VALUES` is one partition here).
+pub(super) fn histogram_numeric(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    use krishiv_types::{StructField, StructType};
+    let x = c.data_type(0).cloned().unwrap_or(DataType::Double);
+    let fields = vec![
+        StructField::new("x".to_owned(), x, true),
+        StructField::new("y".to_owned(), DataType::Double, true),
+    ];
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::Struct(StructType::new(fields)), true).into()),
+        true,
+    ))
+}
+
 /// `approx_count_distinct`: `bigint`, never NULL (an empty group is 0).
 pub(super) fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Long, false))
+}
+
+/// The bitmap aggregates: a `BINARY` that is never NULL (an empty group is
+/// the bitmap of no bits, or of every bit for `bitmap_and_agg`).
+pub(super) fn bitmap_agg(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Binary, false))
 }
 
 pub(super) fn aggregates() -> Vec<Spec> {
@@ -524,6 +552,51 @@ pub(super) fn aggregates() -> Vec<Spec> {
         // as `listagg` throughout for Spark's display name.
         aggregate("listagg", string_or_bytes(), listagg, Aggregate::ListAgg),
         aggregate("string_agg", string_or_bytes(), listagg, Aggregate::ListAgg),
+        // The bitmap aggregates (P3-T086): `bitmap_construct_agg` casts its
+        // position to `BIGINT`; the others take a `BINARY` as it is.
+        aggregate(
+            "bitmap_construct_agg",
+            Inputs::Expects(vec![exact(DataType::Long)]),
+            bitmap_agg,
+            Aggregate::BitmapConstructAgg,
+        ),
+        aggregate(
+            "bitmap_or_agg",
+            Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
+            bitmap_agg,
+            Aggregate::BitmapOrAgg,
+        ),
+        aggregate(
+            "bitmap_and_agg",
+            Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
+            bitmap_agg,
+            Aggregate::BitmapAndAgg,
+        ),
+        // The HLL sketch aggregates (P3-T086). Spark's `ExpectsInputTypes` without implicit casts: the types as they are;
+        // `lgConfigK` and `allowDifferentLgConfigK` are constants the analyzer fills in when omitted.
+        aggregate(
+            "hll_sketch_agg",
+            Inputs::Expects(vec![
+                InputType::StrictOneOf(vec![
+                    DataType::Integer,
+                    DataType::Long,
+                    DataType::String,
+                    DataType::Binary,
+                ]),
+                InputType::Strict(DataType::Integer),
+            ]),
+            bitmap_agg,
+            Aggregate::HllSketchAgg,
+        ),
+        aggregate(
+            "hll_union_agg",
+            Inputs::Expects(vec![
+                InputType::Strict(DataType::Binary),
+                InputType::Strict(DataType::Boolean),
+            ]),
+            bitmap_agg,
+            Aggregate::HllUnionAgg,
+        ),
         // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
         // an overflow error, ANSI on or off.
         aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),
@@ -557,6 +630,17 @@ pub(super) fn aggregates() -> Vec<Spec> {
             Inputs::Any,
             percentile_ordered,
             Aggregate::PercentileDisc,
+        ),
+        // `histogram_numeric(x, nb)`: the analyzer folds `nb` (see
+        // `histogram_call`).
+        aggregate(
+            "histogram_numeric",
+            Inputs::Expects(vec![
+                InputType::NumericOrTemporal,
+                InputType::Exact(DataType::Integer),
+            ]),
+            histogram_numeric,
+            Aggregate::HistogramNumeric,
         ),
         aggregate(
             "approx_count_distinct",

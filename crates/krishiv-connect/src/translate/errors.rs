@@ -8,8 +8,8 @@
 use krishiv_common::error::{
     ConnectInvalidPlanAssertionFailure, ConnectInvalidPlanFieldCannotBeEmpty,
     ConnectInvalidPlanIncompatibleLiteralDataType, ConnectInvalidPlanInvalidEnum,
-    ConnectInvalidPlanInvalidOneOfFieldNotSet, ConnectInvalidPlanUnsupportedLiteralType,
-    KrishivError, KrishivUnsupportedFeature,
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ConnectInvalidPlanUnsupportedLiteralType, KrishivError, KrishivUnsupportedFeature,
 };
 
 use crate::proto::Variant;
@@ -22,14 +22,17 @@ pub(crate) fn unsupported(feature: impl Into<String>) -> KrishivError {
     .into()
 }
 
-/// A `oneof` variant (`kind` is `relation` or `expression`) that is not
-/// translated: `parent` is the message that holds it.
-pub(crate) fn unsupported_variant(kind: &str, parent: &str, variant: Variant) -> KrishivError {
-    unsupported(format!(
-        "Spark Connect {kind} {} ({parent}.{})",
-        variant.short_type(),
-        variant.field
-    ))
+/// A `oneof` variant that is not translated: Spark's `INVALID_ONE_OF_FIELD_NOT_SUPPORTED`
+/// (SQLSTATE 56K00, decision 6), built as `InvalidInputErrors.invalidOneOfField` does: `parent`
+/// is the message's full name (`spark.connect.Relation`), the name is the field name upper-cased
+/// (`ZIP`) and the number is the field number.
+pub(crate) fn unsupported_variant(parent: &str, variant: Variant) -> KrishivError {
+    ConnectInvalidPlanInvalidOneOfFieldNotSupported {
+        full_name: parent.to_owned(),
+        name: variant.field.to_ascii_uppercase(),
+        number: variant.number.to_string(),
+    }
+    .into()
 }
 
 /// A field of a supported message that is set to something not supported:

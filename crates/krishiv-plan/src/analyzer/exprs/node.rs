@@ -546,6 +546,26 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
+                // A Python UDAF takes no `DISTINCT` or `FILTER` (Spark 4.2.0
+                // `checkUnsupportedAggregateClause`); its `prettyName` has no
+                // alias tag, so it is the class name `pythonudaf`.
+                if entry.kind == FunctionKind::Aggregate
+                    && matches!(entry.id, FunctionId::PythonUdf { .. })
+                    && (f.distinct || f.filter.is_some())
+                {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: "`pythonudaf`".to_owned(),
+                            syntax: if f.distinct {
+                                "DISTINCT"
+                            } else {
+                                "FILTER CLAUSE"
+                            }
+                            .to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it
                 // as `collect_list` throughout.
@@ -619,7 +639,7 @@ impl Resolver<'_> {
                     return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {
-                    call_checks(&entry, e, &kids, n)?;
+                    call_checks(&entry, e, &kids, n, self.observing)?;
                 }
                 // `struct(a, ...)`: children with names keep them (a column
                 // contributes its name, a struct field its field name), so a
@@ -997,28 +1017,19 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
-                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
-                    // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
-                    // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+                } else if is_builtin_entry(&entry)
+                    && let Some(default) = hll_default(entry.id.name(), n, e.origin)
+                {
+                    // Spark's constructors write the omitted constants (see `hll_default`).
                     owned = kids[..n].to_vec();
-                    owned.push(if kids[1].ty.data_type == Some(DataType::TimestampNtz) {
-                        default_argument(
-                            Literal::TimestampNtz(0),
-                            DataType::TimestampNtz,
-                            false,
-                            e.origin,
-                        )
-                    } else {
-                        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
-                            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
-                        });
-                        default_argument(
-                            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
-                            DataType::Timestamp,
-                            false,
-                            e.origin,
-                        )
-                    });
+                    owned.push(default);
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n + 1)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
+                    owned = kids[..n].to_vec();
+                    owned.push(self.time_bucket_origin(&kids[1], e.origin));
                     if let Some(filter) = kids.get(n) {
                         owned.push(filter.clone());
                     }
@@ -1309,6 +1320,64 @@ impl Resolver<'_> {
                     return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `histogram_numeric(x, nb)`: `nb` is foldable and at least 2
+                // (Spark's `checkInputDataTypes`, after the implicit casts);
+                // the executor reads the folded literal.
+                if is_builtin_entry(&entry) && entry.id.name() == "histogram_numeric" && n == 2 {
+                    let sql = || {
+                        let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                        format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone))
+                    };
+                    match self.fold(&call_kids[1].expr, self.ctx.conf.ansi) {
+                        Some(Constant::Integral(nb)) if (2..=i64::from(i32::MAX)).contains(&nb) => {
+                            let shown = call_kids[1].shown();
+                            call_kids[1].expr = Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::Integer(
+                                    i32::try_from(nb).unwrap_or(i32::MAX),
+                                )))
+                                .with_origin(e.origin),
+                            );
+                            call_kids[1].shown = Some(shown);
+                        }
+                        Some(Constant::Integral(nb)) => {
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchValueOutOfRange {
+                                    expr_name: "nb".to_owned(),
+                                    value_range: format!("[2, {}]", i32::MAX),
+                                    current_value: nb.to_string(),
+                                    sql_expr: sql(),
+                                },
+                                e.origin,
+                            ));
+                        }
+                        Some(Constant::Null) => {
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchUnexpectedNull {
+                                    expr_name: "nb".to_owned(),
+                                    sql_expr: sql(),
+                                },
+                                e.origin,
+                            ));
+                        }
+                        Some(Constant::Error(err)) => {
+                            return Err(AnalysisError::new(err, e.origin));
+                        }
+                        _ => {
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchNonFoldableInput {
+                                    sql_expr: sql(),
+                                    input_name: "`nb`".to_owned(),
+                                    input_type: "\"INT\"".to_owned(),
+                                    input_expr: format!(
+                                        "\"{}\"",
+                                        pretty(&kids[1].shown(), self.ctx.conf.session_zone)
+                                    ),
+                                },
+                                e.origin,
+                            ));
+                        }
+                    }
+                }
                 // `arrays_zip(a, b)` names its struct fields after columns,
                 // struct fields and aliases (`0`, `1`, ... otherwise): the
                 // result is renamed and the names follow the arrays as
@@ -1680,9 +1749,9 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Subquery { kind, plan } => {
+                // A TABLE argument is refused here (`Table` below never runs); no lambda scope reaches a subquery.
+                super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
-                // A subquery resolves without the enclosing lambda scopes:
-                // its columns must not bind to enclosing lambda variables.
                 let saved = std::mem::take(&mut self.lambdas);
                 let rel = self.rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
@@ -1704,7 +1773,7 @@ impl Resolver<'_> {
                         )
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
-                    SubqueryKind::In(_) => (Some(DataType::Boolean), true),
+                    SubqueryKind::In(_) | SubqueryKind::Table(_) => (Some(DataType::Boolean), true),
                 };
                 let (kind, plan, values) = match kind {
                     SubqueryKind::In(_) => {

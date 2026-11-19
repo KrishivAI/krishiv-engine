@@ -16,11 +16,12 @@ use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
     AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
     ChangeColumnAction, CreatePermanentView, DdlName, Delete, Describe, DescribeKind, DescribeMode,
-    DropPermanentView, FunctionScope, Ident, Insert, InsertClause, ListResource, Merge,
-    MergeAction, MergeClause, MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec,
-    PartitionSpecPart, PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind,
-    Relation, RelationExt, Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause,
-    SetExprKind, Show, ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
+    DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
+    InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
+    MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
+    PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
+    Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause, SetExprKind, Show,
+    ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
 };
 use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
 
@@ -42,6 +43,8 @@ impl<'s> Parser<'s> {
             self.describe_command()
         } else if self.kw_at(0, "INSERT") {
             self.insert_command()
+        } else if self.kw_at(0, "LOAD") {
+            self.load_data_command()
         } else if self.kw_at(0, "DELETE") {
             self.delete_command()
         } else if self.kw_at(0, "UPDATE") {
