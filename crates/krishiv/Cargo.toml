@@ -32,7 +32,7 @@ futures = { workspace = true, features = ["alloc", "executor"] }
 # ICU collations are on by default (ADR 0043 decision 5; +1.7% binary size); turn off with default-features = false.
 default = ["collations-icu"]
 # Strictly additive (ADR 0027). Forwarded to crates as they gain code. The empty ones below
-# (kafka, iceberg, cdc, connect, flight-sql, mcp, python, celeborn, mimalloc) are RESERVED: they
+# (kafka, iceberg, cdc, connect, flight-sql, mcp, python, celeborn, mimalloc, wasm-udf) are RESERVED: they
 # enable nothing yet (RS-17); see the crate docs.
 kafka = []
 iceberg = []

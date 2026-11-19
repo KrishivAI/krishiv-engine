@@ -10,7 +10,7 @@ Facade crate: the public Rust API re-exporting the engine.
 Paths are relative to this crate.
 - `src/lib.rs` the re-exports that form the Rust API
 - `public-api.txt` the reviewed public surface; a change here is a public-surface change (ADR)
-- `Cargo.toml` the `mimalloc` feature (wires `krishiv-alloc` into the CLI)
+- `Cargo.toml` the cargo features; the empty ones are reserved forwards (the CLI's own `mimalloc` feature wires `krishiv-alloc`)
 
 ## Extension points
 - New public item: re-export it from `src/lib.rs` and update `public-api.txt` in the same PR.

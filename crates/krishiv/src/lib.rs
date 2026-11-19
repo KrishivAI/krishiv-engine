@@ -49,11 +49,14 @@
 //! # Cargo features
 //!
 //! Working features: `cloud` (S3, GCS and Azure object stores), `delta`, `ui`, `unstable-ir`,
-//! `wasm-udf`, `telemetry-logs`, `telemetry-otlp`, `tokio-console` and `collations-icu` (on by
-//! default). `cdc`, `celeborn`, `connect`, `flight-sql`, `iceberg`, `kafka`, `mcp`, `mimalloc` and
-//! `python` are **reserved**: they are accepted and enable nothing yet (features are additive, so
-//! they will start to do something without a breaking change). Those integrations ship as their own
-//! `krishiv-*` crates and the `krishiv` binary today.
+//! `telemetry-logs`, `telemetry-otlp`, `tokio-console` and `collations-icu` (on by default).
+//! `cdc`, `celeborn`, `connect`, `flight-sql`, `iceberg`, `kafka`, `mcp`, `mimalloc`, `python` and
+//! `wasm-udf` are **reserved**: they are accepted and enable nothing yet (features are additive, so
+//! they can start to do something without a breaking change). `connect`, `flight-sql`, `mcp`,
+//! `python`, `kafka`, `iceberg` and `cdc` ship as their own `krishiv-*` crates and in the
+//! `krishiv` binary; `celeborn` is not implemented yet; `mimalloc` is the binary's allocator (set
+//! in `krishiv-cli`), which a library never links; `wasm-udf` is forwarded from the CLI's feature
+//! of the same name.
 
 #![forbid(unsafe_code)]
 
