@@ -65,11 +65,14 @@ const VERIFIED_CHAIN: usize = 32;
 /// address. Those passes are functions of a node and what is under it, so a later analysis whose result
 /// shares such a node (the resolver hands the prefix's resolved nodes back as the same `Arc`s) does not
 /// walk it again. An address is only trusted while its node is alive, so `keep` holds the roots the
-/// addresses came from; a chain that grows past [`VERIFIED_CHAIN`] results starts over.
+/// addresses came from; a chain that grows past [`VERIFIED_CHAIN`] results starts over. Those pinned roots
+/// (up to [`VERIFIED_CHAIN`] per session slot) are not counted in any memory budget: chained plans share
+/// their nodes, so a chain costs about one plan plus its steps.
 #[derive(Clone)]
 pub(super) struct Verified {
     keep: Vec<Arc<LogicalPlan>>,
-    /// The `time_type` conf the checks ran under (not every conf is in the context fingerprint).
+    /// The `time_type` conf the checks ran under. The context fingerprint holds the whole conf, so a state
+    /// from another `time_type` is already unreachable; this keeps the check from depending on that.
     time_type: bool,
     pub(super) unexecutable: crate::walk::PtrSet<usize>,
     pub(super) heights: crate::walk::PtrMap<usize, usize>,

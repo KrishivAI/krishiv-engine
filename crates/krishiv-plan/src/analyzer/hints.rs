@@ -28,7 +28,6 @@ use crate::{Expr, ExprNode, JoinStrategy, Literal, LogicalPlan, PlanNode, ReadSo
 
 type R<T> = Result<T, AnalysisError>;
 
-/// `root` with its hints resolved, and the warnings they raised.
 /// Whether a `Hint` relation is anywhere in `root` (a walk of the whole plan).
 pub(super) fn has_hint(root: &Arc<LogicalPlan>) -> bool {
     visit_distinct(Node::Plan(root), |n| match n {
@@ -40,6 +39,7 @@ pub(super) fn has_hint(root: &Arc<LogicalPlan>) -> bool {
     .is_break()
 }
 
+/// `root` with its hints resolved, and the warnings they raised.
 pub(super) fn resolve(
     root: &Arc<LogicalPlan>,
     case_sensitive: bool,
