@@ -57,7 +57,7 @@ thread_local! {
 /// The SQL conf keys Spark's Python worker reads for these eval types
 /// (PySpark 4.2.0 `worker.py:113-184`, `RunnerConf`); the wrappers apply
 /// Spark's defaults to the unset ones.
-const RUNNER_KEYS: [&str; 8] = [
+const RUNNER_KEYS: [&str; 9] = [
     "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
     "spark.sql.execution.arrow.useLargeVarTypes",
     "spark.sql.execution.pandas.convertToArrowArraySafely",
@@ -66,6 +66,7 @@ const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.session.timeZone",
     "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype",
     "spark.sql.execution.pythonUDF.arrow.concurrency.level",
+    "spark.sql.pyspark.udf.profiler",
 ];
 
 /// The values of [`RUNNER_KEYS`] one query prepared its calls with.

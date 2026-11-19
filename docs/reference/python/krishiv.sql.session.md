@@ -216,6 +216,33 @@ def uncacheTable(self, tableName: str) -> None
 
 Drops the cached relations reading `tableName`.
 
+## `Profile`
+
+```python
+class Profile
+```
+
+`pyspark.sql.profiler.Profile`: `show`, `dump` and `clear` of the UDF profiles (P3-T080).
+`render` (flame graphs through `flameprof`) is not supported.
+
+### `clear`
+
+```python
+def clear(self, id: int | None=None, *, type: str | None=None) -> None
+```
+
+### `dump`
+
+```python
+def dump(self, path: str, id: int | None=None, *, type: str | None=None) -> None
+```
+
+### `show`
+
+```python
+def show(self, id: int | None=None, *, type: str | None=None) -> None
+```
+
 ## `SparkSession`
 
 ```python
@@ -323,6 +350,15 @@ def newSession(self) -> SparkSession
 A new session with separate SQL configuration and temporary views,
 as `pyspark.sql.SparkSession.newSession`: it starts from the options
 this session was built with, not from later `conf.set` changes.
+
+### `profile`
+
+```python
+@property
+def profile(self) -> Profile
+```
+
+`spark.profile`: the Python UDF profiles collected under `spark.sql.pyspark.udf.profiler`.
 
 ### `range`
 

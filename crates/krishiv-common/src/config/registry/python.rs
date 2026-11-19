@@ -54,6 +54,20 @@ pub static PYTHON_UDF_ARROW_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
 };
 
+/// `krishiv.sql.pyspark.udf.profiler` (Spark's `spark.sql.pyspark.udf.profiler`, 4.0+: unset, `perf` or `memory`).
+pub static PYTHON_UDF_PROFILER: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.pyspark.udf.profiler",
+    value_type: ValueType::Enum(&["perf", "memory"]),
+    default: None,
+    doc: "Profiles the Python UDFs of the session: `perf` records cProfile statistics and \
+          `memory` the peak memory of each UDF call, summed per UDF and shown by \
+          `spark.profile.show()` and `dump()`. Unset (the default) adds no overhead.",
+    scope: Scope::Session,
+    version_added: "0.2.1",
+    spark_alias: Some("spark.sql.pyspark.udf.profiler"),
+    settable_by: SettableBy::User,
+};
+
 /// `krishiv.sql.execution.pythonUDTF.arrow.enabled` (Spark's
 /// `spark.sql.execution.pythonUDTF.arrow.enabled`, `SQLConf.scala` at
 /// v4.2.0: `true`; `false` at v3.5 to v4.1).

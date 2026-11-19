@@ -129,6 +129,11 @@ class SparkSession:
         raise unsupported_attribute("SparkSession.sparkContext (SparkContext and RDDs; use the DataFrame API)")
 
     @property
+    def profile(self) -> Profile:
+        """``spark.profile``: the Python UDF profiles collected under ``spark.sql.pyspark.udf.profiler``."""
+        return Profile()
+
+    @property
     def conf(self) -> RuntimeConfig:
         return self._conf
 
@@ -801,3 +806,23 @@ def _glob_match(pattern: str, name: str) -> bool:
     import fnmatch
 
     return any(fnmatch.fnmatchcase(name.lower(), p.strip().lower()) for p in pattern.split("|"))
+
+
+class Profile:
+    """``pyspark.sql.profiler.Profile``: ``show``, ``dump`` and ``clear`` of the UDF profiles (P3-T080).
+    ``render`` (flame graphs through ``flameprof``) is not supported."""
+
+    def show(self, id: int | None = None, *, type: str | None = None) -> None:
+        from krishiv._udf import profiler
+
+        profiler.show(id, type)
+
+    def dump(self, path: str, id: int | None = None, *, type: str | None = None) -> None:
+        from krishiv._udf import profiler
+
+        profiler.dump(path, id, type)
+
+    def clear(self, id: int | None = None, *, type: str | None = None) -> None:
+        from krishiv._udf import profiler
+
+        profiler.clear(id, type)

@@ -403,7 +403,7 @@ def scalar_arrow_wrapper(f: Callable[..., Any], return_type: DataType) -> Callab
     return func
 
 
-def make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -> Callable[..., Any]:
+def _make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -> Callable[..., Any]:
     """The wrapper of ``f`` for ``eval_type``; ``SQL_BATCHED_UDF`` (100) runs on the Arrow-batched path
     (design owner question 2: the pickled-row path is not implemented, a documented divergence)."""
     if eval_type in (SQL_BATCHED_UDF, SQL_ARROW_BATCHED_UDF):
@@ -415,3 +415,15 @@ def make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -
     from krishiv._udf._host import not_implemented
 
     raise not_implemented(f"Python UDFs of eval type {eval_type}")
+
+
+def make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -> Callable[..., Any]:
+    """``_make_wrapper`` plus the UDF profiler (P3-T080) in-process; a pool worker runs the bare wrapper."""
+    wrapper = _make_wrapper(f, eval_type, return_type)
+    from krishiv._udf import _host
+
+    if _host.IN_WORKER:
+        return wrapper
+    from krishiv._udf.profiler import new_udf_id, profiled
+
+    return profiled(new_udf_id(getattr(f, "__name__", "udf")), wrapper)

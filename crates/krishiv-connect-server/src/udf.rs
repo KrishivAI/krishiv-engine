@@ -45,7 +45,7 @@ use sha2::{Digest, Sha256};
 /// The session conf a worker gets with each batch (Spark's runner conf; the keys the embedded runtime
 /// sends, `krishiv-python`'s `RUNNER_KEYS`), read from the session's live conf when a query's calls are
 /// prepared, so each query sends the values current when it starts, as Spark sends them per execution.
-const RUNNER_KEYS: [&str; 8] = [
+const RUNNER_KEYS: [&str; 9] = [
     "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
     "spark.sql.execution.arrow.useLargeVarTypes",
     "spark.sql.execution.pandas.convertToArrowArraySafely",
@@ -54,6 +54,7 @@ const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.session.timeZone",
     "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype",
     "spark.sql.execution.pythonUDF.arrow.concurrency.level",
+    "spark.sql.pyspark.udf.profiler",
 ];
 
 /// A session's Python artifacts, as [`SessionUdfRuntime::set_artifacts`] takes them.

@@ -104,6 +104,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    ("spark.sql.pyspark.udf.profiler", &PYTHON_UDF_PROFILER),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -146,6 +147,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
+    ("krishiv.sql.pyspark.udf.profiler", &PYTHON_UDF_PROFILER),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     (
         "spark.sql.cteRecursionLevelLimit",
