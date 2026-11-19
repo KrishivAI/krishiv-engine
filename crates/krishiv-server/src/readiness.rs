@@ -408,17 +408,20 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    /// Runs on a paused clock: the age of a result is exact, with no real sleeping.
+    #[tokio::test(start_paused = true)]
     async fn a_result_older_than_three_intervals_is_not_ready() {
         let up = Arc::new(AtomicBool::new(true));
         let (r, _) = readiness(vec![Arc::new(Fixed("store", up))], 20);
         r.run_round().await;
         assert!(r.is_ready());
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        tokio::time::advance(Duration::from_millis(59)).await;
+        assert!(r.is_ready(), "inside three intervals");
+        tokio::time::advance(Duration::from_millis(22)).await;
         assert!(!r.is_ready(), "no new round for over three intervals");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_background_checker_keeps_the_result_fresh() {
         let up = Arc::new(AtomicBool::new(true));
         let (r, _) = readiness(vec![Arc::new(Fixed("store", up))], 20);
