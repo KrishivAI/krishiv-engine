@@ -264,6 +264,11 @@ impl Graph {
         let mut out = Vec::new();
         let mut child = |c: &Arc<LogicalPlan>, d: Option<Attrs>| out.push((self.id(c), d));
         match &p.node {
+            // A projection computing a required `cse_*` column keeps every
+            // entry (see `has_required_cse`), so its input is read whole.
+            PlanNode::Project { input, exprs } if has_required_cse(exprs, req) => {
+                child(input, Some(refs(exprs)));
+            }
             PlanNode::Project { input, exprs } => child(input, Some(refs(&keep_read(exprs, req)))),
             PlanNode::Aggregate {
                 input, aggregates, ..
