@@ -120,6 +120,37 @@ fn a_write_larger_than_the_pool_streams_into_rolled_files() {
     assert_eq!(ids(&back).len(), rows);
 }
 
+/// A spill request that reaches a driver while its batch is being written (its writer locked,
+/// so the spill frees nothing) is not lost: the driver's seat holds, so the asking round waits,
+/// and the write flushes when it ends. Every batch's write stalls a little while it holds the
+/// writer, which keeps that window open; the write finishes within the pool.
+#[test]
+fn a_spill_request_during_a_batch_write_waits_for_it() {
+    const LIMIT: usize = 12 << 20;
+    let env = Env::with_limit(LIMIT);
+    let table = new_table(&env, &modes_schema(), &["p"]);
+    let write_id = "spill-during-a-batch-write";
+    super::super::test_hooks::set(
+        write_id,
+        Arc::new(|at, _| {
+            (at == super::super::test_hooks::Point::Sunk)
+                .then_some(std::time::Duration::from_millis(20))
+        }),
+    );
+    let batches: Vec<RecordBatch> = (0..96).map(|b| wide_rows(b * 8192, 8192)).collect();
+    let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+    env.write_as(
+        &table,
+        WriteMode::Append,
+        batches,
+        &[("maxRecordsPerFile", "100000")],
+        write_id,
+    )
+    .unwrap();
+    let back = env.read(&env.open().unwrap());
+    assert_eq!(ids(&back).len(), rows);
+}
+
 /// A batch the pool can never hold fails with the memory class (no endless `NeedMemory`), and
 /// nothing is left behind.
 #[test]

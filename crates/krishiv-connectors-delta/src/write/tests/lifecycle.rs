@@ -39,12 +39,10 @@ fn cancelled_at(point: Point, write_id: &str) {
     test_hooks::set(
         write_id,
         Arc::new(move |at, query| {
-            if at == point {
+            (at == point).then(|| {
                 query.cancel();
-                true
-            } else {
-                false
-            }
+                std::time::Duration::from_secs(30)
+            })
         }),
     );
     let batches: Vec<RecordBatch> = (0..6).map(|b| wide_rows(100 + b * 100, 100)).collect();

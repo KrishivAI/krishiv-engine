@@ -2,7 +2,7 @@
 //! [`DeltaWriteSink`] and [`NewDeltaTable`] (see the parent module).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::cast::AsArray;
@@ -26,7 +26,7 @@ use krishiv_exec::{
     CancellationToken, GlobalState, LocalState, QueryContext, ScanPushdown, Sink, SinkStatus,
     TaskContext,
 };
-use krishiv_memory::SpillSignal;
+use krishiv_memory::{Seat, SeatState, SpillSignal};
 use krishiv_types::batch::Batch;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
@@ -423,7 +423,39 @@ struct WriteLocal {
     engine: DeltaEngine,
     writer: Arc<AsyncMutex<DriverWriter>>,
     signal: Arc<SpillSignal>,
+    /// The driver's seat in [`WRITE_COHORT`], holding while a batch is written: the writer is
+    /// locked then, so a spill request cannot reach it, and another driver's round waits for
+    /// the write to end instead of failing.
+    seat: Arc<Mutex<Option<Seat>>>,
+    /// A spill request found the writer busy: the batch's write flushes when it ends.
+    flush_wanted: Arc<AtomicBool>,
     combined: bool,
+}
+
+/// The cohort of a query's Delta writers ([`WriteLocal::seat`]).
+const WRITE_COHORT: &str = "delta-write";
+
+/// Sets the driver's seat while a batch's write runs; idle again when it drops, also when the
+/// write's future is dropped (cancellation).
+struct Holding(Arc<Mutex<Option<Seat>>>);
+
+impl Holding {
+    fn new(seat: &Arc<Mutex<Option<Seat>>>) -> Self {
+        set_seat(seat, SeatState::Holding);
+        Self(Arc::clone(seat))
+    }
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        set_seat(&self.0, SeatState::Idle);
+    }
+}
+
+fn set_seat(seat: &Mutex<Option<Seat>>, state: SeatState) {
+    if let Some(seat) = seat.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        seat.set(state);
+    }
 }
 
 impl Drop for WriteLocal {
@@ -477,6 +509,8 @@ impl Sink for DeltaWriteSink {
                 memory.reservation(),
             ))),
             signal: Arc::clone(memory.signal()),
+            seat: Arc::new(Mutex::new(memory.join_cohort(WRITE_COHORT))),
+            flush_wanted: Arc::new(AtomicBool::new(false)),
             combined: false,
         }))
     }
@@ -513,11 +547,13 @@ impl Sink for DeltaWriteSink {
         w.deficit = 0;
         let global = Arc::clone(global);
         let signal = Arc::clone(&l.signal);
+        let flush_wanted = Arc::clone(&l.flush_wanted);
+        let holding = Holding::new(&l.seat);
         Ok(SinkStatus::Blocked(Box::pin(async move {
             let Ok(g) = global_of(&global) else {
                 return;
             };
-            let out = match g.planned().await {
+            let mut out = match g.planned().await {
                 Ok(p) => match &*p {
                     Planned::Ready { plan, .. } => w.write(plan, &batch).await,
                     Planned::Landed => {
@@ -534,6 +570,10 @@ impl Sink for DeltaWriteSink {
             if out.is_ok() {
                 super::test_hooks::at(&g.write_id, super::test_hooks::Point::Sunk, &g.query).await;
             }
+            // A round asked this driver to spill while the batch was written.
+            if out.is_ok() && flush_wanted.swap(false, Ordering::AcqRel) {
+                out = w.flush().await.map(drop);
+            }
             if let Err(e) = out {
                 // Clean up before failing the query: its cancellation drops this future.
                 w.abort().await;
@@ -542,6 +582,8 @@ impl Sink for DeltaWriteSink {
                 w.failed = Some(e);
             }
             signal.set_spillable_bytes(w.reservation().size());
+            // The memory a waiting round counted on is given back (or the write failed).
+            drop(holding);
         })))
     }
 
@@ -551,15 +593,15 @@ impl Sink for DeltaWriteSink {
             .map_err(|_| internal("wrong local state for the Delta write"))?;
         l.combined = true;
         // The driver ends here: nothing will service a spill request on its signal again
-        // (review 2, N3). The writer's bytes stay in its reservation until `finalize`.
+        // (review 2, N3), so its buffered row groups are shipped now instead.
         l.signal.set_spillable_bytes(0);
         let g = global_of(global)?;
         let writer = Arc::clone(&l.writer);
-        settle_deficit(&g.engine, &writer);
         if g.failed.load(Ordering::Acquire) {
             abandon(&g.engine, writer);
             return Ok(());
         }
+        release_combined(&g.engine, &writer, &l.seat);
         g.writers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -584,8 +626,11 @@ impl Sink for DeltaWriteSink {
                 return Err(internal("wrong local state for the Delta write"));
             };
             let Ok(mut w) = l.writer.try_lock() else {
+                // A batch is being written (its seat holds): it flushes when it ends.
+                l.flush_wanted.store(true, Ordering::Release);
                 return Ok(0);
             };
+            l.flush_wanted.store(false, Ordering::Release);
             let freed = w.flush().await?;
             l.signal.set_spillable_bytes(w.reservation().size());
             Ok(freed)
@@ -625,7 +670,7 @@ impl Sink for DeltaWriteSink {
             for w in &writers {
                 let mut w = w.lock().await;
                 let one = match w.failed.clone() {
-                    // Its deficit's background flush failed (`settle_deficit`).
+                    // Its background flush after `combine` failed (`release_combined`).
                     Some(e) => Err(e),
                     None => w.finish(plan).await,
                 };
@@ -683,29 +728,32 @@ impl Sink for DeltaWriteSink {
     }
 }
 
-/// Accounts for the bytes `writer`'s open files held past its reservation after the driver's
-/// last batch (review 2, N3): reserved now, or, when the pool refuses, given back by encoding
-/// and shipping the buffered row groups in the background (`finalize` waits on the writer's
-/// lock; a failure there fails the write).
-fn settle_deficit(engine: &DeltaEngine, writer: &Arc<AsyncMutex<DriverWriter>>) {
-    let Ok(mut w) = writer.try_lock() else {
-        return;
-    };
-    let deficit = w.deficit;
-    if deficit == 0 {
-        return;
-    }
-    if w.reservation().try_grow(deficit).is_ok() {
-        w.deficit = 0;
-        return;
-    }
-    drop(w);
+/// Gives back what a driver's writer holds once the driver has ended (`combine`): no spill
+/// request reaches it again, but another driver may still need memory (`UnableToAcquireMemory`
+/// on CI, 2026-11-19, when one driver ran out of input first). No more rows come to its files,
+/// so their buffered row groups are encoded and shipped now, in the background, rather than at
+/// `finalize`, which changes no file's layout. While that runs the driver's seat holds, so
+/// another driver's round waits for the bytes instead of failing; the bytes still held past the
+/// reservation after it are reserved or left as the deficit, as after a batch. `finalize`
+/// waits on the writer's lock; a failure here fails the write.
+fn release_combined(
+    engine: &DeltaEngine,
+    writer: &Arc<AsyncMutex<DriverWriter>>,
+    seat: &Arc<Mutex<Option<Seat>>>,
+) {
+    let holding = Holding::new(seat);
     let writer = Arc::clone(writer);
     drop(engine.handle().spawn(async move {
         let mut w = writer.lock().await;
-        if let Err(e) = w.settle().await {
+        let out = match w.flush().await {
+            Ok(_) => w.settle().await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = out {
             w.failed.get_or_insert(e);
         }
+        drop(w);
+        drop(holding);
     }));
 }
 

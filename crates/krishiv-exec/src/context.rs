@@ -14,7 +14,7 @@ use krishiv_common::config::{
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
-    ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal, SpillStats,
+    ConsumerHandle, ConsumerId, MemoryPool, Reservation, Seat, SpillOwner, SpillSignal, SpillStats,
 };
 
 use crate::cancel::CancellationToken;
@@ -1047,6 +1047,14 @@ impl MemoryHandle {
     /// The spill signal: publish spillable bytes here.
     pub fn signal(&self) -> &Arc<SpillSignal> {
         &self.signal
+    }
+
+    /// A seat of this consumer in the query's cohort `name` (`None` outside a query): see
+    /// [`ConsumerHandle::join_cohort`]. While it holds, another driver's arbitration round
+    /// waits for this consumer's memory before it fails a request.
+    #[must_use]
+    pub fn join_cohort(&self, name: &'static str) -> Option<Seat> {
+        self.consumer.join_cohort(name)
     }
 
     pub(crate) fn consumer(&self) -> &Arc<ConsumerHandle> {

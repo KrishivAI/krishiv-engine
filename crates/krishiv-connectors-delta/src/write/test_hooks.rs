@@ -18,9 +18,10 @@ pub(crate) enum Point {
     Finished,
 }
 
-/// A hook: given the point and the write's query; returns whether the write then stalls (a
-/// long sleep a cancellation drops).
-pub(crate) type Hook = Arc<dyn Fn(Point, &Arc<QueryContext>) -> bool + Send + Sync>;
+/// A hook: given the point and the write's query; returns how long the write then stalls (an
+/// async sleep, which a cancellation drops), if at all.
+pub(crate) type Hook =
+    Arc<dyn Fn(Point, &Arc<QueryContext>) -> Option<std::time::Duration> + Send + Sync>;
 
 static HOOKS: Mutex<BTreeMap<String, Hook>> = Mutex::new(BTreeMap::new());
 
@@ -42,8 +43,8 @@ pub(crate) async fn at(write_id: &str, point: Point, query: &Arc<QueryContext>) 
         .unwrap_or_else(PoisonError::into_inner)
         .get(write_id)
         .cloned();
-    if hook.is_some_and(|h| h(point, query)) {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    if let Some(stall) = hook.and_then(|h| h(point, query)) {
+        tokio::time::sleep(stall).await;
     }
 }
 
