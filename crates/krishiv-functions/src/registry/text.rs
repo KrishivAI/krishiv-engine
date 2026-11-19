@@ -46,7 +46,18 @@ fn concat_ws_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let strings = DataType::Array(ArrayType::new(DataType::String, true).into());
     (0..c.args().len().max(1))
         .map(|i| match c.data_type(i) {
-            Some(DataType::Array(_)) if i > 0 => exact(strings.clone()),
+            // Atomic elements are cast to strings; arrays, maps and structs
+            // are refused, as Spark refuses them.
+            Some(DataType::Array(a)) if i > 0 => {
+                if matches!(
+                    a.element_type(),
+                    DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
+                ) {
+                    InputType::Strict(strings.clone())
+                } else {
+                    exact(strings.clone())
+                }
+            }
             _ => exact(DataType::String),
         })
         .collect()
