@@ -8,7 +8,9 @@
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest, Any,
-    CommandGetSqlInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
+    CommandGetTables, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
     CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
@@ -43,6 +45,8 @@ pub(crate) enum FlightRpc {
     Fetch,
     /// `GetFlightInfo` or `DoGet` of `CommandGetSqlInfo`.
     SqlInfo,
+    /// `GetFlightInfo` or `DoGet` of a catalog listing or a key command (design §5).
+    Metadata,
     /// The `CancelFlightInfo` action.
     CancelFlightInfo,
     /// The deprecated `CancelQuery` action.
@@ -65,12 +69,28 @@ pub(crate) enum FlightRpc {
     Unsupported(String),
 }
 
+/// Whether `type_url` is one of the metadata commands of design §5.
+fn is_metadata(type_url: &str) -> bool {
+    [
+        CommandGetCatalogs::type_url(),
+        CommandGetDbSchemas::type_url(),
+        CommandGetTables::type_url(),
+        CommandGetTableTypes::type_url(),
+        CommandGetPrimaryKeys::type_url(),
+        CommandGetExportedKeys::type_url(),
+        CommandGetImportedKeys::type_url(),
+        CommandGetCrossReference::type_url(),
+    ]
+    .contains(&type_url)
+}
+
 impl FlightRpc {
     /// A `GetFlightInfo` descriptor's command.
     fn of_descriptor(descriptor: &FlightDescriptor) -> Self {
         match Any::decode(descriptor.cmd.as_ref()) {
             Ok(any) if any.type_url == CommandStatementQuery::type_url() => Self::StatementInfo,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) if any.type_url == CommandPreparedStatementQuery::type_url() => {
                 Self::PreparedInfo
             }
@@ -84,6 +104,7 @@ impl FlightRpc {
         match Any::decode(ticket.ticket.as_ref()) {
             Ok(any) if any.type_url == TicketStatementQuery::type_url() => Self::Fetch,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) => Self::Unsupported(format!("DoGet of {:?}", any.type_url)),
             Err(_) => Self::Malformed("a ticket"),
         }
@@ -127,6 +148,7 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::StatementInfo
         | FlightRpc::Fetch
         | FlightRpc::SqlInfo
+        | FlightRpc::Metadata
         | FlightRpc::CancelFlightInfo
         | FlightRpc::CancelQuery
         | FlightRpc::Update
@@ -422,7 +444,11 @@ mod tests {
     #[test]
     fn unknown_commands_and_actions_are_unimplemented() {
         let catalogs = FlightDescriptor::new_cmd(any_of(&arrow_flight::sql::CommandGetCatalogs {}));
-        let rpc = FlightRpc::of_descriptor(&catalogs);
+        assert_eq!(FlightRpc::of_descriptor(&catalogs), FlightRpc::Metadata);
+        let substrait = FlightDescriptor::new_cmd(any_of(
+            &arrow_flight::sql::CommandStatementSubstraitPlan::default(),
+        ));
+        let rpc = FlightRpc::of_descriptor(&substrait);
         assert!(matches!(rpc, FlightRpc::Unsupported(_)), "{rpc:?}");
         assert_eq!(
             check_flight(&rpc).map_err(|s| s.code()),

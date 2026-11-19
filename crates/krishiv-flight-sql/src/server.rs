@@ -18,7 +18,8 @@ use krishiv_common::config::{
     FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_BATCH_ROWS,
     FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES, FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
-    FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_PROVISIONAL_TTL,
+    FLIGHT_SQL_MAX_SCHEMA_TABLES, FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_METADATA_TIMEOUT,
+    FLIGHT_SQL_PROVISIONAL_TTL,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_connect_server::execute::ResponseBudget;
@@ -57,6 +58,10 @@ pub struct FlightSqlConfig {
     pub max_operations_per_session: usize,
     /// `maxBatchRows`: the most parameter rows one prepared update binds (design §4.4).
     pub max_batch_rows: usize,
+    /// `metadataTimeout`: the time limit of one metadata listing (design §5).
+    pub metadata_timeout: Duration,
+    /// `maxSchemaTables`: the most tables a `GetTables` with `include_schema` loads (design §5).
+    pub max_schema_tables: usize,
 }
 
 impl Default for FlightSqlConfig {
@@ -71,6 +76,8 @@ impl Default for FlightSqlConfig {
             encode: EncodeLimits::default(),
             max_operations_per_session: ExecuteLimits::default().max_operations_per_session,
             max_batch_rows: 10_000,
+            metadata_timeout: Duration::from_secs(60),
+            max_schema_tables: 1_000,
         }
     }
 }
@@ -132,6 +139,8 @@ impl FlightSqlConfig {
             max_operations_per_session: ExecuteLimits::from_config(config)
                 .max_operations_per_session,
             max_batch_rows: size(config, &FLIGHT_SQL_MAX_BATCH_ROWS, d.max_batch_rows),
+            metadata_timeout: duration(config, &FLIGHT_SQL_METADATA_TIMEOUT, d.metadata_timeout),
+            max_schema_tables: size(config, &FLIGHT_SQL_MAX_SCHEMA_TABLES, d.max_schema_tables),
         }
     }
 }
