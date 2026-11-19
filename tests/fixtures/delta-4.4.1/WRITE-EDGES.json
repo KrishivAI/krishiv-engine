@@ -9,7 +9,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-633b238c-63ac-4eb8-8626-48810e0c0daa.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0d3e81be-b2f2-4355-ba19-d72729295ad2.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3,
@@ -48,7 +48,7 @@
      "removes": [
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-8221b022-29e2-4afd-a19c-3b084addc640.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-f3361b4c-cf53-49c7-9c42-7fe97dc0a2c3.c000.snappy.parquet"
       }
      ],
      "version": 2
@@ -77,7 +77,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-1c234fa4-fb4b-47d6-973f-bea60d524d6b.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-9ed7ff43-a103-40ae-b6f7-93ba6390e97c.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 5,
@@ -183,7 +183,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-f4c3fc7b-3599-4e59-913d-b5f4138ad87d.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-a9fb18b7-0e41-454a-accc-54b13458270a.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 7,
@@ -225,11 +225,11 @@
      "removes": [
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-633b238c-63ac-4eb8-8626-48810e0c0daa.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-9ed7ff43-a103-40ae-b6f7-93ba6390e97c.c000.snappy.parquet"
       },
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-1c234fa4-fb4b-47d6-973f-bea60d524d6b.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0d3e81be-b2f2-4355-ba19-d72729295ad2.c000.snappy.parquet"
       }
      ],
      "version": 4
@@ -260,7 +260,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-dbafbd56-97c0-47a1-b24d-7e9226d4667b-c000.snappy.parquet",
+       "path": "part-00000-d3aaff47-eb47-47d1-9eeb-9c59577c49c3-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 1
@@ -276,7 +276,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-fb74f733-b07e-4e8e-811c-2bbe3ff628af-c001.snappy.parquet",
+       "path": "part-00000-df2d4ecf-1041-4193-8552-140e336715f7-c001.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3
@@ -292,7 +292,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-ab7957f6-da10-4fed-9d1d-f5a00b0650aa-c002.snappy.parquet",
+       "path": "part-00000-ded900c2-a07b-4d7a-8896-559c8faa92b2-c002.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -356,7 +356,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-407f4633-5df6-429f-bd50-e166ad75de0f-c000.snappy.parquet",
+       "path": "part-00000-53e6892a-133b-495f-9da8-69ac7cedc638-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 0
@@ -372,7 +372,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-12914f75-f891-4076-9abf-fdb5e4ef4959-c001.snappy.parquet",
+       "path": "part-00000-751bcca9-8744-402c-acce-8c78213ff0e4-c001.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 1
@@ -388,7 +388,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-20382a4a-06fb-43a5-b090-65023026e56b-c002.snappy.parquet",
+       "path": "part-00000-6850f5b6-3988-44cf-a39f-edb8191c3518-c002.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 2
@@ -404,7 +404,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-7406cd02-76f3-409b-89c4-d34eeafcee2b-c003.snappy.parquet",
+       "path": "part-00000-0d2509d5-6f55-425e-b62e-a7bafcae75bd-c003.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3
@@ -420,7 +420,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-dc7c4096-6521-4808-83c3-349edbc54e17-c004.snappy.parquet",
+       "path": "part-00000-0d5b51dd-6e1d-4df1-9167-5d340ae6e085-c004.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -537,7 +537,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-d4d1e5cf-2fb6-4965-bdb0-9fc6cf6d1608-c000.snappy.parquet",
+       "path": "part-00000-04244396-c28e-4168-9703-af7825267ceb-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -627,7 +627,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-8f0744a8-0df2-4c98-a10f-30bad7c18c27-c000.snappy.parquet",
+       "path": "part-00000-0bc8fbef-3fcb-47de-a234-c8cdf9b27b03-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -725,6 +725,445 @@
     ]
    ],
    "step": "append_negative"
+  }
+ ],
+ "max_records_table": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-2efb4f7f-c48a-42fd-96ac-d3e30ce1edb3-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-62c03012-a7d4-4c46-b7be-6a01cb9497ff-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-ea34ae6c-1b2c-4d22-96dd-f9bcc81de359-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-897c415b-9c71-4c8e-861a-f80b53f9df92-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-38ba4692-de8b-41a9-a127-1daf817739da-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 0
+     },
+     "removes": [],
+     "version": 1
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_one"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-ee442423-5669-442d-886a-a500afeb4d09-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-2e562d39-f61f-409c-abbb-333ab993f0d1-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cfa6c9d5-fe4a-4be4-821f-0529c6f1a097-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cd091b48-93e8-471a-8985-4a4bf8f5eda8-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-95c5d870-90b1-4b1a-b82d-ce67c0581407-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5",
+       "numRemovedBytes": "2400",
+       "numRemovedFiles": "5"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-897c415b-9c71-4c8e-861a-f80b53f9df92-c003.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-2efb4f7f-c48a-42fd-96ac-d3e30ce1edb3-c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-38ba4692-de8b-41a9-a127-1daf817739da-c004.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-62c03012-a7d4-4c46-b7be-6a01cb9497ff-c001.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-ea34ae6c-1b2c-4d22-96dd-f9bcc81de359-c002.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_overwrite_one"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": null,
+    "message": "For input string: \"abc\"",
+    "parameters": {},
+    "sqlstate": null
+   },
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_not_a_number"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-2cf31b87-d253-46fc-8cf0-7b756172dee4-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-c2e236ad-864d-4599-813f-c7d18fd7390f-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-a7f2f3f1-c385-47df-ac81-b9d6db9a7e4f-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-8988a41d-c655-4622-a91f-0905965976fe-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cb994d66-5e70-4f6e-a205-e4a662ba2d52-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "save_as_table_append_one"
   }
  ],
  "not_null": [

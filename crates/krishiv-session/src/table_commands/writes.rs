@@ -650,12 +650,14 @@ impl Session {
     /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
     /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
     /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
-    /// statement runs it.
+    /// statement runs it. The writer's `options` reach a Delta table's writer, as Spark's v2
+    /// `insertInto` passes them (`maxRecordsPerFile`).
     pub(crate) async fn exec_insert_into(
         &self,
         df: &DataFrame,
         table: &str,
         mode: krishiv_io::SaveMode,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         let overwrite = mode == krishiv_io::SaveMode::Overwrite;
         let env = self.query_env();
@@ -685,7 +687,7 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
-            options: None,
+            options: Some(options),
         };
         self.insert_rows(&name, &found, df, &target).await
     }

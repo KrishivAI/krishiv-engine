@@ -857,7 +857,8 @@ def write_edges(spark: SparkSession, out: str) -> None:
     an empty-string partition value (stored as null) under a dynamic overwrite, an append and
     ``replaceWhere``; a NULL written into a ``NOT NULL`` column (top level and nested) through
     the DataFrame writer and SQL; a ``''`` into a ``NOT NULL`` partition column;
-    ``maxRecordsPerFile`` (a number, ``0``, ``-1`` and a value that is not one)."""
+    ``maxRecordsPerFile`` (a number, ``0``, ``-1`` and a value that is not one; also through
+    ``insertInto`` and ``saveAsTable`` on a catalog table)."""
     record: dict = {
         "format_version": FORMAT_VERSION,
         "generator": "tests/scripts/gen_delta_fixtures.py",
@@ -963,7 +964,40 @@ def write_edges(spark: SparkSession, out: str) -> None:
             ("append_negative", max_records("-1", "append")),
         ],
     )
-    for d in (empty, nn, np_, mr):
+    # The same option on the catalog-table writers: ``insertInto`` (append and overwrite) and
+    # ``saveAsTable`` append (review of 1254d3d76, finding 1).
+    mt = os.path.join(out, "write-max-records-table")
+    spark.sql(f"CREATE TABLE mrt (id BIGINT) USING delta LOCATION '{mt}'")
+
+    def table_write(value: str, how: str):
+        def step(s: SparkSession) -> None:
+            w = (
+                s.sql("SELECT CAST(id AS BIGINT) AS id FROM range(5)")
+                .repartition(1)
+                .write.format("delta")
+                .option("maxRecordsPerFile", value)
+            )
+            if how == "insert_into":
+                w.mode("append").insertInto("mrt")
+            elif how == "insert_into_overwrite":
+                w.mode("overwrite").insertInto("mrt")
+            else:
+                w.mode("append").saveAsTable("mrt")
+
+        return step
+
+    record["max_records_table"] = run_steps(
+        spark,
+        mt,
+        [
+            ("insert_into_one", table_write("1", "insert_into")),
+            ("insert_into_overwrite_one", table_write("1", "insert_into_overwrite")),
+            ("insert_into_not_a_number", table_write("abc", "insert_into")),
+            ("save_as_table_append_one", table_write("1", "save_as_table")),
+        ],
+    )
+    spark.sql("DROP TABLE mrt")
+    for d in (empty, nn, np_, mr, mt):
         shutil.rmtree(d, ignore_errors=True)
     with open(os.path.join(out, "WRITE-EDGES.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
