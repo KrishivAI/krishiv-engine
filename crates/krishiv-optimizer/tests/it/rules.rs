@@ -930,3 +930,50 @@ fn windows_are_pruned() {
         insta::assert_snapshot!(name, optimized.root().to_string(), sql);
     }
 }
+
+/// Column pruning leaves a file scan no column when nothing above reads one
+/// (`count(*)`, Spark's empty `requiredSchema`) when it is Parquet, CSV or
+/// JSON; a table scan and a text read keep one.
+#[test]
+fn a_file_scan_may_read_no_column() {
+    let ctx = support::ctx();
+    let plan = support::resolve("SELECT count(*) AS n FROM t", &ctx);
+    let scan_width = |p: &Plan| {
+        let mut node = Arc::clone(p.root());
+        loop {
+            if let PlanNode::Scan(s) = &node.node {
+                return s.output.len();
+            }
+            let mut next = None;
+            node.for_each_child(&mut |c| next = Some(Arc::clone(c)));
+            node = next.expect("a scan below");
+        }
+    };
+    assert_eq!(scan_width(&optimize(&plan).unwrap()), 1, "table scan");
+    let read_as = |format: &str| {
+        let root = Arc::clone(plan.root())
+            .transform_up(&mut |n: Arc<LogicalPlan>| {
+                Ok::<_, std::convert::Infallible>(match &n.node {
+                    PlanNode::Scan(s) => Arc::new(LogicalPlan {
+                        node: PlanNode::Scan(Scan {
+                            source: krishiv_plan::ReadSource::files(
+                                format,
+                                Vec::new(),
+                                std::collections::BTreeMap::new(),
+                            ),
+                            ..s.clone()
+                        }),
+                        origin: n.origin,
+                    }),
+                    _ => n,
+                })
+            })
+            .unwrap();
+        scan_width(&optimize(&Plan::try_new(root).unwrap()).unwrap())
+    };
+    for format in ["parquet", "csv", "CSV", "json"] {
+        assert_eq!(read_as(format), 0, "{format}");
+    }
+    // A text read keeps its column.
+    assert_eq!(read_as("text"), 1, "text");
+}

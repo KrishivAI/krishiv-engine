@@ -25,8 +25,9 @@ use super::commit_tests::{Case, Fault, Foreign, INIT, MINE, OURS, When, case, ex
 use super::provider_tests::{Env, data_file, env};
 use super::scan::read_manifest_files;
 use super::validate::{
-    CHECK_ADDED_DATA, CHECK_ADDED_DELETES, CHECK_ADDED_DVS, CHECK_HISTORY, CHECK_REMOVED, Change,
-    Checks, Fired, History, Isolation, Judge, Validation, check, validate, walk,
+    CHECK_ADDED_DATA, CHECK_ADDED_DELETES, CHECK_ADDED_DVS, CHECK_HISTORY, CHECK_NEW_DELETES,
+    CHECK_REMOVED, Change, Checks, Fired, History, Isolation, Judge, Validation, check, validate,
+    walk,
 };
 use crate::plan::encode;
 use crate::plan::entry::{
@@ -298,6 +299,7 @@ const ADDED_DATA: Checks = Checks {
     added_delete_files: false,
     added_dvs: false,
     removed_data_files: false,
+    new_deletes_for_replaced: false,
 };
 
 fn added(id: i64, op: Operation, path: &str, x: i32) -> (i64, Operation, Vec<LiveEntry>) {
@@ -386,6 +388,7 @@ const ADDED_DELETES: Checks = Checks {
     added_delete_files: true,
     added_dvs: false,
     removed_data_files: false,
+    new_deletes_for_replaced: false,
 };
 
 #[test]
@@ -437,6 +440,75 @@ fn added_delete_files_that_cannot_apply_do_not_conflict() {
         d.entry.data_sequence_number = None;
     }
     assert!(check(&unknown, &v, &judge()).is_some());
+}
+
+const NEW_DELETES: Checks = Checks {
+    added_data_files: false,
+    added_delete_files: false,
+    added_dvs: false,
+    removed_data_files: false,
+    new_deletes_for_replaced: true,
+};
+
+/// Java's `validateNoNewDeletesForDataFiles` (CoW): a delete added since S0
+/// that applies to a replaced data file conflicts (a DV of it, a
+/// partition-scoped position delete of its partition); one of another file
+/// or partition, at or below S0's sequence number, in an `append`, or with
+/// no replaced file does not.
+#[test]
+fn new_deletes_for_replaced_files_conflict() {
+    let mut v = validation(NEW_DELETES);
+    v.filter = None;
+    v.replaced = vec![entry(
+        EntryStatus::Added,
+        1,
+        1,
+        content(ContentKind::Data, "a.parquet", 1),
+    )];
+    let fired = |id| Fired {
+        check: CHECK_NEW_DELETES,
+        snapshot_id: Some(id),
+        message: "Cannot commit, found new delete for replaced data file: a.parquet".to_owned(),
+    };
+    let h = history(vec![(
+        2,
+        Operation::Delete,
+        vec![dv(2, "a.dv", "a.parquet", 1)],
+    )]);
+    assert_eq!(check(&h, &v, &judge()), Some(fired(2)));
+    let h = history(vec![(
+        3,
+        Operation::Overwrite,
+        vec![pos_delete(3, 3, "p.parquet", 1)],
+    )]);
+    assert_eq!(check(&h, &v, &judge()), Some(fired(3)));
+    let none = [
+        history(vec![(
+            2,
+            Operation::Delete,
+            vec![dv(2, "b.dv", "b.parquet", 1)],
+        )]),
+        history(vec![(
+            2,
+            Operation::Delete,
+            vec![pos_delete(2, 2, "p.parquet", 2)],
+        )]),
+        history(vec![(
+            2,
+            Operation::Delete,
+            vec![pos_delete(2, 1, "p.parquet", 1)],
+        )]),
+        history(vec![(
+            2,
+            Operation::Append,
+            vec![pos_delete(2, 2, "p.parquet", 1)],
+        )]),
+    ];
+    for h in &none {
+        assert_eq!(check(h, &v, &judge()), None);
+    }
+    v.replaced.clear();
+    assert!(!v.runs());
 }
 
 /// `d` as an `EXISTING` entry carried over from snapshot `by`.
@@ -543,6 +615,7 @@ const ADDED_DVS: Checks = Checks {
     added_delete_files: false,
     added_dvs: true,
     removed_data_files: false,
+    new_deletes_for_replaced: false,
 };
 
 #[test]
@@ -592,6 +665,7 @@ const REMOVED: Checks = Checks {
     added_delete_files: false,
     added_dvs: false,
     removed_data_files: true,
+    new_deletes_for_replaced: false,
 };
 
 #[test]

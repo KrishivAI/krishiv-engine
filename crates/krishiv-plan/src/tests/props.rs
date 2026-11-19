@@ -984,11 +984,14 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,
-                SubqueryKind::Exists | SubqueryKind::In(_) => SubqueryKind::Scalar,
+                SubqueryKind::Exists | SubqueryKind::In(_) | SubqueryKind::Table(_) => {
+                    SubqueryKind::Scalar
+                }
             };
             site!(w, *kind = other);
             let values = match kind {
                 SubqueryKind::In(v) => m_exprs(v, w),
+                SubqueryKind::Table(t) => m_exprs(&mut t.partition_by, w),
                 SubqueryKind::Scalar | SubqueryKind::Exists => false,
             };
             values || m_plan(plan, w)
@@ -1240,8 +1243,14 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             table_arg,
             udf,
             output,
+            lateral,
+            analyzed,
         } => {
             site!(w, udf.version += 1);
+            site!(w, *analyzed = Some(Arc::from(vec![7_u8])));
+            if lateral.as_mut().is_some_and(|l| m_plan(l, w)) {
+                return true;
+            }
             site!(w, *table_arg = None);
             m_exprs(args, w)
                 || output.iter_mut().any(|c| m_bound(c, w))

@@ -3,6 +3,7 @@
   "pyspark-migration": "Migrate a PySpark job",
   "deploy": "Deploy",
   "check-compat": "Check a project with check-compat",
+  "embedded-connect": "Connect stock PySpark to an in-process server",
   "run-sql-from-the-command-line": "Run SQL from the command line",
   "tokio-console": "Task diagnostics with tokio-console",
   "data-sources": "Data sources: files, S3, GCS and Azure",

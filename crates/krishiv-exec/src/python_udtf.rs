@@ -24,9 +24,6 @@
 
 use std::sync::Arc;
 
-use arrow_array::ArrayRef;
-use krishiv_types::DataType;
-
 /// One argument of a UDTF call: the frame column it reads, and its name
 /// when it is a named argument (`f(x => 1)`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,70 +49,15 @@ pub struct UdtfCall {
     pub table_arg_offsets: Vec<usize>,
     /// `analyze`'s pickled `AnalyzeResult`, when the UDTF was analyzed.
     pub analyze_result: Option<Arc<[u8]>>,
+    /// A `LATERAL` call's input columns (frame columns after the
+    /// arguments): no argument reads them; each result row carries the
+    /// values of the input row whose `eval` gave it (the last row's for
+    /// `terminate`'s rows; nulls after no row), ahead of the UDTF's columns,
+    /// as Spark's `EvalPythonUDTFExec` joins them. The call site's declared
+    /// result starts with them.
+    pub passthrough: Vec<usize>,
 }
 
-/// One argument of an `analyze` call (Spark's `AnalyzeArgument`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct UdtfAnalyzeArg {
-    /// The argument's type (a struct for a `TABLE` argument).
-    pub data_type: DataType,
-    /// The value of a constant argument: a one-row array of the type's
-    /// Arrow form ([`DataType::to_arrow`]), its row null for a `NULL`
-    /// constant; `None` for an argument that is not constant. The worker
-    /// gives `analyze` the Python value Spark gives (`analyze_udtf.py`
-    /// L76-82 at v4.2.0: the internal value through `fromInternal`).
-    pub value: Option<ArrayRef>,
-    /// Whether it is a `TABLE` argument.
-    pub is_table: bool,
-    /// Its name, when named.
-    pub name: Option<String>,
-}
-
-/// What `analyze` is run for: a registered UDTF and one call's arguments.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UdtfAnalyzeSpec {
-    /// The UDTF's canonical (lower-case) name.
-    pub name: String,
-    /// The registration version.
-    pub version: u32,
-    /// The call's arguments.
-    pub args: Vec<UdtfAnalyzeArg>,
-}
-
-/// One `ORDER BY` column `analyze` asked for (Spark's `OrderingColumn`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UdtfOrdering {
-    /// The column (an expression's text, as Spark parses it).
-    pub name: String,
-    /// Ascending.
-    pub ascending: bool,
-    /// `overrideNullsFirst`: `None` keeps the direction's default.
-    pub nulls_first: Option<bool>,
-}
-
-/// One column `analyze` selected from the `TABLE` argument (Spark's
-/// `SelectedColumn`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UdtfSelect {
-    /// The column (an expression's text).
-    pub name: String,
-    /// Its alias (empty for none).
-    pub alias: String,
-}
-
-/// `analyze`'s result (Spark's `AnalyzeResult`, as the JVM reads it back).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UdtfAnalysis {
-    /// The result schema: a struct.
-    pub schema: DataType,
-    /// The pickled `AnalyzeResult`, passed to the UDTF's `__init__`.
-    pub pickled: Arc<[u8]>,
-    /// `withSinglePartition`.
-    pub with_single_partition: bool,
-    /// `partitionBy`: the column expressions' text.
-    pub partition_by: Vec<String>,
-    /// `orderBy`.
-    pub order_by: Vec<UdtfOrdering>,
-    /// `select`.
-    pub select: Vec<UdtfSelect>,
-}
+pub use krishiv_plan::udtf::{
+    UdtfAnalysis, UdtfAnalyzeArg, UdtfAnalyzeSpec, UdtfOrdering, UdtfSelect,
+};

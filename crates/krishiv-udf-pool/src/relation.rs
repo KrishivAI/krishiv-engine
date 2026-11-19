@@ -165,6 +165,17 @@ pub(crate) fn prepare(
             .map(|((n, t), f)| StructField::new(n.clone(), t.clone(), f.is_nullable())),
     );
     let udtf = udtf_message(spec, &declared)?;
+    // A lateral UDTF's result leads with the input columns it carries; its own result is the rest.
+    let declared = match &spec.udtf {
+        Some(call) if !call.passthrough.is_empty() => StructType::new(
+            declared
+                .fields()
+                .iter()
+                .skip(call.passthrough.len())
+                .cloned(),
+        ),
+        _ => declared,
+    };
     let check = SchemaCheck::new(spec.eval_type.code(), declared, validate);
     Ok(Arc::new(PreparedRelation {
         pool,
@@ -198,7 +209,11 @@ fn udtf_message(
         (None, false) => Ok(None),
         (Some(call), true) => Ok(Some(serde_json::json!({
             "name": spec.name,
-            "return_type": krishiv_types::DataType::Struct(declared.clone()).json(),
+            "return_type": krishiv_types::DataType::Struct(StructType::new(
+                declared.fields().iter().skip(call.passthrough.len()).cloned()
+            ))
+            .json(),
+            "passthrough": call.passthrough,
             "args": call
                 .args
                 .iter()
