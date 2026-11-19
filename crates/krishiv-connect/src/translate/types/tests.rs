@@ -358,3 +358,33 @@ fn time_and_spatial_kinds() {
         assert_eq!(e.error_class(), ErrorClass::StInvalidSridValue);
     }
 }
+
+fn udt_proto(ty: &str, sql: Option<Proto>) -> Proto {
+    use dt::Udt;
+    Proto {
+        kind: Some(Kind::Udt(Box::new(Udt {
+            r#type: ty.to_owned(),
+            jvm_class: Some("org.apache.spark.ml.linalg.VectorUDT".to_owned()),
+            python_class: Some("pyspark.ml.linalg.VectorUDT".to_owned()),
+            serialized_python_class: None,
+            sql_type: sql.map(Box::new),
+        }))),
+    }
+}
+
+/// P3-T079: a Connect UDT is the engine's, with Spark's checks (`toCatalystUDT`).
+#[test]
+fn a_connect_udt_maps_with_its_classes_and_storage_type() {
+    let int = Proto {
+        kind: Some(Kind::Integer(dt::Integer::default())),
+    };
+    let got = data_type(&udt_proto("udt", Some(int.clone()))).unwrap();
+    let krishiv_types::DataType::Udt(u) = got else {
+        panic!("not a UDT");
+    };
+    assert_eq!(u.sql_type(), &krishiv_types::DataType::Integer);
+    assert_eq!(u.python_class(), Some("pyspark.ml.linalg.VectorUDT"));
+    assert_eq!(u.jvm_class(), Some("org.apache.spark.ml.linalg.VectorUDT"));
+    assert!(data_type(&udt_proto("struct", Some(int))).is_err());
+    assert!(data_type(&udt_proto("udt", None)).is_err());
+}

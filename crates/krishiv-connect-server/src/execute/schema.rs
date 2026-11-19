@@ -154,6 +154,13 @@ pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
         DataType::Variant => kind(Kind::Variant(dt::Variant {
             type_variation_reference: v,
         })),
+        DataType::Udt(u) => kind(Kind::Udt(Box::new(dt::Udt {
+            r#type: "udt".to_owned(),
+            jvm_class: u.jvm_class().map(str::to_owned),
+            python_class: u.python_class().map(str::to_owned),
+            serialized_python_class: u.serialized_python_class().map(str::to_owned),
+            sql_type: Some(Box::new(proto_type(u.sql_type())?)),
+        }))),
         DataType::Array(a) => kind(Kind::Array(Box::new(dt::Array {
             element_type: Some(Box::new(proto_type(a.element_type())?)),
             contains_null: a.contains_null(),

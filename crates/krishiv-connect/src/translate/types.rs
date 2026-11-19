@@ -3,7 +3,7 @@
 
 use krishiv_common::error::{KrishivError, UnsupportedTimePrecision};
 use krishiv_types::{
-    ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType,
+    ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType, UdtType,
 };
 
 use super::errors::{assertion, not_set, unsupported_variant};
@@ -84,6 +84,24 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         }
         Kind::CalendarInterval(_) => DataType::CalendarInterval,
         Kind::Variant(_) => DataType::Variant,
+        // Spark's `toCatalystUDT`: the type must say `udt`; the storage type is required.
+        Kind::Udt(u) => {
+            if u.r#type != "udt" {
+                return Err(assertion(format!(
+                    "Expected type 'udt' but {} found.",
+                    u.r#type
+                )));
+            }
+            if u.sql_type.is_none() {
+                return Err(not_set("spark.connect.DataType.UDT", "SQL_TYPE_NOT_SET"));
+            }
+            DataType::Udt(std::sync::Arc::new(UdtType::new(
+                child(u.sql_type.as_deref())?,
+                u.python_class.clone(),
+                u.jvm_class.clone(),
+                u.serialized_python_class.clone(),
+            )))
+        }
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {
