@@ -10,6 +10,7 @@ pub mod cookies;
 pub mod encode;
 mod gate;
 pub mod handles;
+mod metadata;
 pub mod metrics;
 mod prepared;
 pub mod server;
