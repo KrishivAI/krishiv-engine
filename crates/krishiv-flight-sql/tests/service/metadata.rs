@@ -524,7 +524,7 @@ async fn xdbc_type_info_lists_the_spark_types() {
 }
 
 /// A policy for the metadata access tests: `ops` may do anything; `other` may only browse
-/// (a viewer), and not namespace `hr` or what is in it.
+/// (a viewer), and not namespace `hr` or `global_temp` or what is in them.
 struct BrowseButHr;
 
 impl AccessPolicy for BrowseButHr {
@@ -539,7 +539,9 @@ impl AccessPolicy for BrowseButHr {
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         let shown = securable.to_string();
-        let in_hr = shown.split('.').any(|p| p.trim_matches('`') == "hr");
+        let in_hr = shown
+            .split('.')
+            .any(|p| matches!(p.trim_matches('`'), "hr" | "global_temp"));
         let allowed = principal.name == "ops" || (privilege == Privilege::Browse && !in_hr);
         Box::pin(std::future::ready(Ok(if allowed {
             AccessDecision::Allow
@@ -675,6 +677,39 @@ async fn a_hidden_namespace_is_absent_from_table_listings() {
     .expect("an exact name is refused as SHOW TABLES IN hr is");
     assert_eq!(e.code(), Code::PermissionDenied, "{e:?}");
     assert_eq!(class_of(&e), Some("KRISHIV_INSUFFICIENT_PERMISSIONS"));
+    // An exact `global_temp` (`_` is a wildcard, so `global\_temp`) answers as
+    // `SHOW TABLES IN global_temp` does; the plain spelling is a pattern, so a refused namespace
+    // it matches is absent.
+    let show = match info(&mut h, OTHER, None, "SHOW TABLES IN global_temp").await {
+        Ok((i, cookie)) => fetch(&mut h, OTHER, cookie.as_deref(), ticket(&i))
+            .await
+            .map(|b| rows(&b)),
+        Err(e) => Err(e),
+    };
+    let exact = listing(
+        &mut h,
+        OTHER,
+        None,
+        &tables(None, Some(r"global\_temp"), None, &[], false),
+    )
+    .await;
+    assert_eq!(
+        show.as_ref().map_err(Status::code).err(),
+        exact.as_ref().map_err(Status::code).err(),
+        "SHOW {show:?} vs listing"
+    );
+    // Whether or not `global_temp` may be listed, an unfiltered `GetDbSchemas` answers (a refused
+    // one hides the temporary views' schemas, review of 969a350b4 nit 1) and lists the rest.
+    let l = listing(&mut h, OTHER, None, &schemas(None, None))
+        .await
+        .expect("schemas");
+    let names = column(&l.batches, "db_schema_name");
+    assert!(names.iter().any(|n| n == "sales"), "{names:?}");
+    assert_eq!(
+        names.iter().any(|n| n == "global_temp"),
+        show.is_ok(),
+        "{names:?}"
+    );
 }
 
 /// A listing past `metadataTimeout` is `DEADLINE_EXCEEDED` with its class (design §6).

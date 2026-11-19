@@ -69,7 +69,8 @@ Paths are relative to this crate.
   temp views exist); a namespace a pattern matched whose `SHOW TABLES IN` is refused is absent (an exact name is
   refused); Flight SQL patterns (`%`, `_`, `\`) ignoring case; `include_schema` reads each schema through
   `schema_for_metadata` (`Browse`, as `DESCRIBE`), over `maxSchemaTables` is `KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT`
-  (54000), a table whose schema fails is skipped and logged; the statement-gate wait is inside the timeout; key
+  (54000), a table whose schema fails is skipped and logged; a refused `global_temp` hides the temporary views and
+  their schemas unless named exactly (`global\_temp`); the statement-gate wait is inside the timeout; key
   commands empty with FlightSql.proto's schemas after a `tableExists` check (a catalog alone means its current
   database)
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call

@@ -304,6 +304,26 @@ async fn temporary_views(session: &Session) -> Result<Vec<Table>, KrishivError> 
         .collect())
 }
 
+/// The temporary views a listing with the schema `pattern` shows: `None` when the caller may not
+/// list them (`SHOW TABLES IN global_temp` refused) and the pattern does not name one of their
+/// schemas exactly, so they are absent as a hidden namespace is; an exact `global_temp` (or the
+/// empty schema) is refused as `SHOW TABLES IN global_temp` is.
+async fn shown_temporary_views(
+    session: &Session,
+    pattern: Option<&str>,
+) -> Result<Option<Vec<Table>>, KrishivError> {
+    match temporary_views(session).await {
+        Ok(views) => Ok(Some(views)),
+        Err(e)
+            if is_refusal(&e)
+                && !(is_exact(pattern) && (kept(pattern, GLOBAL_TEMP) || kept(pattern, ""))) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// A temporary view's schema: `global_temp` or the empty one.
 fn temporary_schema(t: &Table) -> String {
     t.namespace
@@ -377,7 +397,10 @@ async fn table_rows(
         }
     }
     if selects(catalog, "") {
-        for t in temporary_views(session).await? {
+        let views = shown_temporary_views(session, schema_pattern)
+            .await?
+            .unwrap_or_default();
+        for t in views {
             let schema = temporary_schema(&t);
             if !kept(schema_pattern, &schema) || !kept(name_pattern, &t.name) {
                 continue;
@@ -534,15 +557,15 @@ async fn run_listing(
             }
             if selects(c.catalog.as_deref(), "") {
                 let pattern = c.db_schema_filter_pattern.as_deref();
-                let local = temporary_views(session)
-                    .await?
-                    .iter()
-                    .any(|t| temporary_schema(t).is_empty());
-                if local && kept(pattern, "") {
-                    builder.append("", "");
-                }
-                if kept(pattern, GLOBAL_TEMP) {
-                    builder.append("", GLOBAL_TEMP);
+                // Hidden temporary views hide their schemas too.
+                if let Some(views) = shown_temporary_views(session, pattern).await? {
+                    let local = views.iter().any(|t| temporary_schema(t).is_empty());
+                    if local && kept(pattern, "") {
+                        builder.append("", "");
+                    }
+                    if kept(pattern, GLOBAL_TEMP) {
+                        builder.append("", GLOBAL_TEMP);
+                    }
                 }
             }
             builder
