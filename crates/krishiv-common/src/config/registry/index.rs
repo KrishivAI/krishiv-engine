@@ -48,6 +48,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.ui.embed.linkTtl", &UI_EMBED_LINK_TTL),
+    ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
@@ -68,6 +69,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.flightSql.handleTtl", &FLIGHT_SQL_HANDLE_TTL),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
@@ -98,6 +100,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
+    ("krishiv.flightSql.maxBatchRows", &FLIGHT_SQL_MAX_BATCH_ROWS),
     ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("krishiv.optimizer.discoverKeys", &DISCOVER_KEYS),
@@ -142,6 +145,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
+        "krishiv.flightSql.provisionalTtl",
+        &FLIGHT_SQL_PROVISIONAL_TTL,
+    ),
+    (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
@@ -182,6 +189,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_SMJ_BUFFER_BYTES,
     ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
+    (
+        "krishiv.flightSql.maxSchemaTables",
+        &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    ),
+    (
+        "krishiv.flightSql.metadataTimeout",
+        &FLIGHT_SQL_METADATA_TIMEOUT,
+    ),
     (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
@@ -245,6 +260,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
+        "krishiv.flightSql.fetchIdleTimeout",
+        &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
+    ),
+    (
         "krishiv.iceberg.write.maxOpenFiles",
         &ICEBERG_WRITE_MAX_OPEN_FILES,
     ),
@@ -292,6 +311,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
+    ),
+    (
+        "krishiv.flightSql.maxStatementBytes",
+        &FLIGHT_SQL_MAX_STATEMENT_BYTES,
     ),
     (
         "krishiv.iceberg.manifestCache.bytes",
@@ -399,6 +422,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     ),
     (
+        "krishiv.flightSql.maxHandlesPerSession",
+        &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    ),
+    (
         "krishiv.io.objectStore.allowedPrefixes",
         &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     ),
@@ -463,6 +490,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.flightSql.maxCommandResultBytes",
+        &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    ),
+    (
         "krishiv.optimizer.payloadAboveAggregate",
         &PAYLOAD_ABOVE_AGGREGATE,
     ),
@@ -501,6 +532,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.closedTombstones",
         &CONNECT_SESSION_TOMBSTONES,
+    ),
+    (
+        "krishiv.flightSql.maxHandlesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
     ),
     (
         "krishiv.iceberg.write.statistics.enabled",
@@ -581,6 +616,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.http2.maxPendingAcceptResets",
         &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    ),
+    (
+        "krishiv.flightSql.maxHandleBytesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     ),
     (
         "spark.sql.execution.arrow.maxRecordsPerBatch",

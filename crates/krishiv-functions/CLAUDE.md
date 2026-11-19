@@ -40,6 +40,9 @@ Paths are relative to this crate.
 - `src/registry/defs.rs` string, datetime and aggregate signatures; `src/registry/math.rs` math and `try_*` signatures
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
+- `src/registry/groups.rs` `spark_function_groups()`: Spark's math/string/datetime/misc doc groups from
+  `vendored/spark-function-groups.tsv` (derived from `vendored/spark-function-docs.jsonl`; a test keeps them equal), for
+  Flight SQL's `GetSqlInfo` function lists
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
 - `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
 - `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand

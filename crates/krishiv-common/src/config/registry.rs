@@ -29,6 +29,7 @@ mod optimizer;
 mod result_cache;
 mod runtime_filter_bloom;
 mod server;
+mod ui_embed;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
 };
@@ -46,20 +47,10 @@ pub use optimizer::{
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter_bloom::{RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER};
-pub use server::{
-    CONNECT_ADDRESS, CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
-    CONNECT_ARTIFACTS_MAX_TOTAL_BYTES, CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
-    CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_EXECUTE_DETACHED_TIMEOUT,
-    CONNECT_EXECUTE_MAINTENANCE_INTERVAL, CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
-    CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION, CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
-    CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
-    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
-    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
-    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE, CONNECT_MAX_OPERATIONS_PER_SESSION,
-    CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
-    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
-    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_ALLOWED_HOSTS,
-    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+// Every public item of `server` is a config entry (Connect, Flight SQL, server).
+pub use server::*;
+pub use ui_embed::{
+    UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -270,6 +261,18 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
     &SERVER_ALLOWED_HOSTS,
+    &FLIGHT_SQL_ENABLED,
+    &FLIGHT_SQL_HANDLE_TTL,
+    &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
+    &FLIGHT_SQL_MAX_BATCH_ROWS,
+    &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    &FLIGHT_SQL_METADATA_TIMEOUT,
+    &FLIGHT_SQL_PROVISIONAL_TTL,
+    &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
+    &FLIGHT_SQL_MAX_STATEMENT_BYTES,
+    &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -732,68 +735,6 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(256 << 20)),
     doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
           takes the store past this, the oldest files go first, so the newest queries stay.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
-pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.allowedHosts",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
-          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
-          another name that resolves to this server cannot read it (DNS rebinding). A server \
-          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
-          `[::1]`. A server bound to another address checks the `Host` header only when this is \
-          set (it already requires authentication, and TLS for bearer methods). The \
-          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// The origins that may frame the web UI's embeddable views (P3-T071).
-pub static UI_ALLOWED_ORIGINS: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.allowedOrigins",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Comma-separated origins (`https://console.example.com`, scheme and host, an optional \
-          port) that may put the UI's embeddable views (`?embed=1`) in a frame: they become the \
-          `frame-ancestors` of those pages, and the same origins may send the embed theme with \
-          `postMessage`. Unset, the default, is `'none'`: no page can be framed. Every other \
-          page of the UI is never framable. An entry that is not an origin (a path, a wildcard, \
-          a quote or a space inside it) makes the server refuse to start.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// Whether an embedded UI view drops the "Powered by Krishiv" mark (P3-T071).
-pub static UI_EMBED_HIDE_ATTRIBUTION: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.embed.hideAttribution",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "When true, an embedded view (`?embed=1`) does not show the small \"Powered by Krishiv\" \
-          mark. The embedded view never shows the Krishiv header either way.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// The longest life of a signed embed link (P3-T071).
-pub static UI_EMBED_LINK_TTL: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.embed.linkTtl",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(900))),
-    doc: "How long a signed embed link stays valid, at most. A link grants read-only access to \
-          one query's profile and nothing else; a request for a longer life gets this one. The \
-          signing key is made at start-up, so every link also ends when the server restarts.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",
