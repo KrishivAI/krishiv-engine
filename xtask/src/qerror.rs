@@ -149,8 +149,17 @@ mod tests {
 
     #[test]
     fn every_variable_the_run_sets_is_cleared_first() {
-        let (_, env) = invocation(&QerrorArgs::default());
-        assert!(env.iter().all(|(k, _)| RUN_ENV.contains(&k.as_str())));
+        let args = parse_args(&[
+            "--data", "d", "--scale", "5", "--suite", "tpch", "--ndv", "theta",
+        ])
+        .unwrap();
+        let (_, env) = invocation(&args);
+        let mut keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        let mut cleared = RUN_ENV.to_vec();
+        keys.sort_unstable();
+        cleared.sort_unstable();
+        assert!(!keys.is_empty());
+        assert_eq!(keys, cleared);
     }
 
     #[test]

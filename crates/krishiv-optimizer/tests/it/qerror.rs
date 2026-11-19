@@ -671,3 +671,28 @@ fn theta_distinct_counts_stay_near_exact() {
         "median {m_theta} sketched, {m_exact} exact"
     );
 }
+
+/// `Ndv::Theta` really reads the sketch: above the sketch's capacity a column's distinct count differs from
+/// the exact count (a fallback to exact counts would make them equal) yet stays within 10% of it, and below
+/// capacity the two are equal.
+#[test]
+fn theta_statistics_come_from_the_sketch_not_the_exact_count() {
+    let rows: Vec<Vec<V>> = (0..60_000_i64)
+        .map(|i| vec![V::int(i % 20_000), V::int(i % 100)])
+        .collect();
+    let mut db = Db::default();
+    db.tables.insert(
+        "t".to_owned(),
+        (vec!["big".to_owned(), "small".to_owned()], rows),
+    );
+    let (exact, theta) = (stats_with(&db, Ndv::Exact), stats_with(&db, Ndv::Theta));
+    let column = |s: &DataStats, c: &str| s.0["t"].columns[c].distinct.unwrap();
+    assert_eq!(column(&exact, "big"), 20_000);
+    let sketched = column(&theta, "big");
+    assert_ne!(
+        sketched, 20_000,
+        "the same as the exact count: not a sketch"
+    );
+    assert!(sketched.abs_diff(20_000) <= 2_000, "{sketched}");
+    assert_eq!(column(&theta, "small"), 100);
+}
