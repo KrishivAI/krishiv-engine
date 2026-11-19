@@ -389,6 +389,93 @@ fn delegated_metadata_cache_keyed_by_identity() {
     );
 }
 
+/// Review 58b2 F3 (§3.5): with both users granted, each gets an answer of their own (two loads,
+/// each with its own exchanged token, then one cache entry each); once Bob's grant is revoked in
+/// the catalog, Alice's cached entry never answers him. A catalog that is not delegated keeps one
+/// entry for every caller.
+#[test]
+fn delegated_metadata_cache_one_entry_per_identity() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let revoked = Arc::new(AtomicBool::new(false));
+    let bob_revoked = Arc::clone(&revoked);
+    let server = serve(move |r| match path(r) {
+        "/token" => {
+            let subject = url::form_urlencoded::parse(r.body.as_bytes())
+                .find(|(k, _)| k == "subject_token")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            Reply::Json(
+                200,
+                format!(r#"{{"access_token": "x-{subject}", "token_type": "bearer"}}"#),
+            )
+        }
+        "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
+        "/v1/namespaces/db/tables/t"
+            if r.header("authorization") == Some("Bearer x-bob-jwt")
+                && bob_revoked.load(Ordering::SeqCst) =>
+        {
+            Reply::Json(
+                403,
+                r#"{"error": {"message": "no", "type": "ForbiddenException", "code": 403}}"#.into(),
+            )
+        }
+        "/v1/namespaces/db/tables/t" => Reply::Json(200, table_body()),
+        _ => Reply::Json(404, NO_TABLE.into()),
+    });
+    let table_loads = |server: &Server| -> Vec<String> {
+        server
+            .seen()
+            .iter()
+            .filter(|s| path(s) == "/v1/namespaces/db/tables/t")
+            .map(|s| s.header("authorization").unwrap_or("").to_owned())
+            .collect()
+    };
+    let catalog = delegated_catalog(&server);
+    let alice = oidc_caller("alice", "alice-jwt");
+    let bob = oidc_caller("bob", "bob-jwt");
+    let t = ident(&["db"], "t");
+    for _ in 0..2 {
+        assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+        assert!(load_as(&catalog, &bob, &t).unwrap().is_some());
+    }
+    assert_eq!(
+        table_loads(&server),
+        ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]
+    );
+    // Bob's grant is revoked; a new catalog (no entry of his) asks the catalog for him, and
+    // Alice's entry, loaded first, does not answer him.
+    revoked.store(true, Ordering::SeqCst);
+    let catalog = delegated_catalog(&server);
+    assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+    let r = load_as(&catalog, &bob, &t);
+    assert!(!matches!(r, Ok(Some(_))), "{r:?}");
+    assert_eq!(
+        table_loads(&server)[2..],
+        ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]
+    );
+
+    // Not delegated: one entry for the catalog, whoever calls.
+    let server = catalog_server();
+    let catalog = IcebergRestFactory
+        .build(
+            &decl(
+                &[
+                    ("krishiv.catalog.lake.type", "iceberg-rest"),
+                    ("krishiv.catalog.lake.uri", server.base.as_str()),
+                ],
+                DeclMode::Embedded,
+            ),
+            &deps(DeclMode::Embedded, PrivateAddresses::Allow),
+        )
+        .unwrap();
+    load_as(&catalog, &alice, &t).unwrap().unwrap();
+    load_as(&catalog, &bob, &t).unwrap().unwrap();
+    load_as(&catalog, &CatalogCaller::server("lake"), &t)
+        .unwrap()
+        .unwrap();
+    assert_eq!(table_loads(&server).len(), 1);
+}
+
 fn caller_with(groups: &[&str], scope: &str, expires_in: i64) -> CatalogCaller {
     use krishiv_common::principal::{Principal, PrincipalKind};
     use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};

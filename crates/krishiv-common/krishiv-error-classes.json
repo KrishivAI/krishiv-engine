@@ -71,6 +71,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_CATALOG_TABLE_UNSUPPORTED" : {
+    "message" : [
+      "The catalog <catalog> serves <relationName> with <feature>, which Krishiv does not support yet, so the table was not read."
+    ],
+    "sqlState" : "0A000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."

@@ -26,7 +26,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_connectors_iceberg::plan::VersionSpec;
 use krishiv_connectors_iceberg::{
     IcebergMetadata, IcebergTable, IcebergTableProvider, StorageRegistration,
@@ -42,6 +44,26 @@ use krishiv_session::catalog_registry::{
 };
 
 use super::{quoted, rest_caller};
+
+/// Iceberg's metadata table names (`MetadataTableType` at apache-iceberg-1.12.0), lower case.
+const METADATA_TABLES: [&str; 16] = [
+    "entries",
+    "files",
+    "data_files",
+    "delete_files",
+    "history",
+    "metadata_log_entries",
+    "snapshots",
+    "refs",
+    "manifests",
+    "partitions",
+    "all_data_files",
+    "all_delete_files",
+    "all_files",
+    "all_manifests",
+    "all_entries",
+    "position_deletes",
+];
 use crate::iceberg_rest::{LoadedTable, RestClient, RestError, RestLimits};
 use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy};
 
@@ -104,6 +126,41 @@ impl RestCatalog {
             IdentityKey::server(self.name.clone())
         };
         (identity, namespace.to_vec(), name.to_owned())
+    }
+
+    /// Design §4.1: an Iceberg metadata table of a declared table (`cat.ns.t.files`) is refused,
+    /// as its bounds would show values a masked column hides and reading it reads manifests. The
+    /// name is refused when its last part is a metadata table name (Iceberg 1.12.0
+    /// `MetadataTableType`, any letter case) and its prefix is a table this caller can load;
+    /// otherwise it is an ordinary table name in a nested namespace.
+    async fn refuse_metadata_table(
+        &self,
+        caller: &CatalogCaller,
+        id: &TableIdent,
+    ) -> Result<(), KrishivError> {
+        let [parent @ .., table] = id.namespace.as_slice() else {
+            return Ok(());
+        };
+        if parent.is_empty()
+            || !METADATA_TABLES
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(&id.name))
+            || self.loaded(caller, parent, table).await?.is_none()
+        {
+            return Ok(());
+        }
+        let relation = id
+            .namespace
+            .iter()
+            .map(|p| quoted(p))
+            .collect::<Vec<_>>()
+            .join(".");
+        Err(KrishivCatalogTableUnsupported {
+            catalog: quoted(&self.name),
+            relation_name: relation,
+            feature: format!("the Iceberg metadata table {}", quoted(&id.name)),
+        }
+        .into())
     }
 
     /// Runs the blocking client call `call` off the compute workers (on the blocking pool inside
@@ -254,6 +311,7 @@ impl CallerCatalog for RestCatalog {
             if form.temporary_only || id.namespace.is_empty() {
                 return Ok(None);
             }
+            self.refuse_metadata_table(caller, id).await?;
             let Some(loaded) = self.loaded(caller, &id.namespace, &id.name).await? else {
                 return Ok(None);
             };
@@ -304,6 +362,9 @@ impl CallerCatalog for RestCatalog {
         id: &'a TableIdent,
     ) -> BoxFuture<'a, Result<bool, KrishivError>> {
         Box::pin(async move {
+            // REST identifiers go to the catalog as written, by the analyzer and by `REFRESH
+            // TABLE` alike (the catalog decides what a spelling names), so the entries of this
+            // exact spelling are the ones a refresh drops.
             self.cache
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)

@@ -478,3 +478,66 @@ async fn oidc_session_reads_rows_of_a_delegated_catalog_table() {
         .collect();
     assert_eq!(loads, ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]);
 }
+
+/// Review 58b2 F5 (§3.3): `spark.readStream.table("lake.db.t")` is refused before the catalog is
+/// asked: no streaming read of a declared table exists, so none can reach a delegated catalog
+/// without the user's token rules. When streaming reads land, this test fails first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_stream_of_a_delegated_catalog_table_refused() {
+    use krishiv_connect::proto::v4_3::read::{NamedTable, ReadType};
+    let (base, seen) = fake_catalog(None);
+    let (channel, _stop) = start(&base, DeclMode::Server).await;
+    let plan = pb::Plan {
+        op_type: Some(OpType::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::Read(pb::Read {
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    unparsed_identifier: "lake.db.t".to_owned(),
+                    ..Default::default()
+                })),
+                is_streaming: true,
+            })),
+        }))),
+    };
+    let request = pb::ExecutePlanRequest {
+        session_id: session_of("alice-jwt").to_owned(),
+        user_context: Some(pb::UserContext {
+            user_id: "anyone".to_owned(),
+            ..Default::default()
+        }),
+        plan: Some(plan),
+        ..Default::default()
+    };
+    let mut r = tonic::Request::new(request);
+    r.metadata_mut()
+        .insert("authorization", "Bearer alice-jwt".parse().expect("ascii"));
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    let result = async {
+        let mut s = grpc
+            .server_streaming(
+                r,
+                "/spark.connect.SparkConnectService/ExecutePlan"
+                    .parse()
+                    .expect("path"),
+                tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(
+                ),
+            )
+            .await?
+            .into_inner();
+        while s.message().await?.is_some() {}
+        Ok::<(), tonic::Status>(())
+    }
+    .await;
+    let s = result.expect_err("a streaming read is refused");
+    assert_eq!(error_class(&s), "KRISHIV_UNSUPPORTED_FEATURE", "{s:?}");
+    assert!(s.message().contains("is_streaming"), "{s:?}");
+    assert!(
+        !seen
+            .lock()
+            .expect("seen")
+            .iter()
+            .any(|(p, _, _)| p.starts_with("/v1/namespaces")),
+        "the catalog was asked for a table"
+    );
+}

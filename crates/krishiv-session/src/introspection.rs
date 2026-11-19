@@ -584,14 +584,17 @@ impl Session {
             ShowKind::Namespaces {
                 pattern, namespace, ..
             } => {
-                // A declared catalog (named, or current without a name): its own namespaces.
+                // Spark's `CatalogAndNamespace`: a first part naming a catalog is that catalog,
+                // anything else a namespace of the current catalog (`LookupCatalog`, v4.2.0).
                 let parts = match namespace {
                     Some(n) => crate::access::ddl_parts(n, &self.query_env())?,
-                    None => vec![self.state.catalog.current_catalog()],
+                    None => Vec::new(),
                 };
-                if let [catalog, parent @ ..] = parts.as_slice()
-                    && let Some(found) = self.declared_namespaces(catalog, parent).await
-                {
+                let (catalog, parent) = match parts.split_first() {
+                    Some((first, rest)) if self.is_catalog_name(first) => (first.clone(), rest),
+                    _ => (self.state.catalog.current_catalog(), parts.as_slice()),
+                };
+                if let Some(found) = self.declared_namespaces(&catalog, parent).await {
                     let rows: Vec<Vec<Cell>> = found?
                         .iter()
                         .map(|n| n.join("."))
@@ -600,15 +603,35 @@ impl Session {
                         .collect();
                     return self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await;
                 }
-                // `system` has no namespaces; never list the session catalog's under it.
-                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                self.refuse_declared_current()?;
-                let rows = store
-                    .namespaces()
-                    .into_iter()
-                    .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
-                    .map(|(n, _)| vec![s(n)])
-                    .collect();
+                let rows = if crate::system::is_system(&catalog) {
+                    // `system` has no namespaces; never list the session catalog's under it.
+                    if !parent.is_empty() {
+                        return Err(crate::catalog_registry::schema_not_found("system", parent));
+                    }
+                    Vec::new()
+                } else {
+                    if !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                        // The current catalog is a declared one that lists nothing here.
+                        self.refuse_declared_current()?;
+                    }
+                    // `V2SessionCatalog.listNamespaces`: every database at the top, none under an
+                    // existing one, `SCHEMA_NOT_FOUND` for anything else.
+                    let all = store.namespaces();
+                    match parent {
+                        [] => all
+                            .into_iter()
+                            .filter(|(n, _)| keep(pattern.as_ref(), n))
+                            .map(|(n, _)| vec![s(n)])
+                            .collect(),
+                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db)) => Vec::new(),
+                        _ => {
+                            return Err(crate::catalog_registry::schema_not_found(
+                                crate::catalog::CATALOG,
+                                parent,
+                            ));
+                        }
+                    }
+                };
                 self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {

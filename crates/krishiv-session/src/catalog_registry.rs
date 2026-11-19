@@ -1153,7 +1153,7 @@ impl crate::Session {
 }
 
 /// `SCHEMA_NOT_FOUND` for `namespace` of the declared catalog `catalog`.
-fn schema_not_found(catalog: &str, namespace: &[String]) -> KrishivError {
+pub(crate) fn schema_not_found(catalog: &str, namespace: &[String]) -> KrishivError {
     let quote = |p: &str| format!("`{}`", p.replace('`', "``"));
     krishiv_common::error::SchemaNotFound {
         schema_name: std::iter::once(catalog)

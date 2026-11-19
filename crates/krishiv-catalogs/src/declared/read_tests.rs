@@ -206,20 +206,27 @@ fn declared_table_read_restrictions_refused_before_data() {
         FORM,
     ))
     .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogTableUnsupported);
     assert!(e.to_string().contains("read restrictions"), "{e}");
     // Through SQL the query fails and no data file is opened: the data directory's files are
     // moved away, so a read would fail with a missing file instead.
     std::fs::rename(dir.path().join("db/t/data"), dir.path().join("moved")).unwrap();
     let s = session(&server, None);
+    // Review 58b2 F2: the refusal itself, not a generic catalog failure, for SQL and `spark.table`.
     let e = run(&s, "SELECT id FROM lake.db.t").unwrap_err();
-    assert!(
-        matches!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature | ErrorClass::KrishivCatalogFailure
-        ),
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogTableUnsupported,
         "{e}"
     );
+    assert!(e.to_string().contains("read restrictions"), "{e}");
+    let e = block_on(s.table("lake.db.t").collect()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogTableUnsupported,
+        "{e}"
+    );
+    assert!(e.to_string().contains("read restrictions"), "{e}");
 }
 
 #[test]
@@ -393,6 +400,9 @@ fn declared_metadata_cache_ttl_and_refresh() {
         2,
         "served from the entry the refresh loaded"
     );
+    // Review 58b2 nit: names reach the catalog as written; another letter case is another name.
+    let e = run(&s, "REFRESH TABLE lake.DB.T").unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     let e = run(&s, "REFRESH TABLE lake.db.missing").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
 }
@@ -453,4 +463,76 @@ fn table_config_signer_and_refresh_urls_never_followed() {
         assert!(e.to_string().contains("remote signing"), "{e}");
     }
     assert!(probe.seen().is_empty());
+}
+
+/// Review 58b2 F4 (§4.1): `lake.db.t.files` and the other Iceberg metadata tables of a declared
+/// table are refused, never loaded as the table `files` of namespace `db.t`; a metadata table name
+/// under a prefix that is no table is an ordinary (here absent) name.
+#[test]
+fn declared_metadata_tables_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    for name in ["files", "SNAPSHOTS", "all_manifests", "position_deletes"] {
+        let e = run(&s, &format!("SELECT * FROM lake.db.t.{name}")).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivCatalogTableUnsupported,
+            "{e}"
+        );
+        assert!(e.to_string().contains("Iceberg metadata table"), "{e}");
+        assert!(
+            e.to_string().contains("catalog `lake` serves `db`.`t`"),
+            "{e}"
+        );
+    }
+    let e = run(&s, "SELECT * FROM lake.db.nope.files").unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{e}");
+    // A refused name never reached the catalog as a table of namespace `db.t`.
+    let asked: Vec<String> = server
+        .seen()
+        .iter()
+        .map(|r| path(r).to_owned())
+        .filter(|p| p.contains("/tables/"))
+        .collect();
+    assert!(
+        !asked
+            .iter()
+            .any(|p| p.starts_with("/v1/namespaces/db%1Ft/")),
+        "{asked:?}"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|p| p == "/v1/namespaces/db%1Fnope/tables/files"),
+        "{asked:?}"
+    );
+}
+
+/// Review 58b2 F5 (§3.3): no streaming read of a declared table exists yet. A streaming SQL source
+/// over one is refused before the catalog is asked (never an internal error, never a batch read):
+/// when the first streaming catalog read lands, this test fails and the delegated-catalog rules
+/// must be applied to it. The Connect `readStream.table` leg is in krishiv-connect-server
+/// `tests/delegated_catalog.rs`.
+#[test]
+fn declared_streaming_on_delegated_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    for (sql, class) in [
+        (
+            "SELECT * FROM STREAM(lake.db.t)",
+            "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+        ),
+        (
+            "CREATE STREAMING TABLE st AS SELECT * FROM STREAM(lake.db.t)",
+            "UNSUPPORTED_FEATURE.CREATE_PIPELINE_DATASET_QUERY_EXECUTION",
+        ),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(e.error_class().name(), class, "{sql}: {e}");
+    }
+    assert_eq!(loads(&server), 0, "no streaming source loaded the table");
 }
