@@ -88,7 +88,10 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
   segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
   also accepts absolute `file:` locations). Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
-  connector's `testing::write_table` wrote, served by the fake REST server).
+  connector's `testing::write_table` wrote, served by the fake REST server); `declared/vended_read_tests.rs`: a table
+  `testing::write_table_with` wrote to `s3://bucket/wh` with a writer key on `src/s3_test_server.rs` (a loopback S3 stand-in, tests only:
+  PUT/GET range/HEAD/DELETE in memory, records each request's SigV4 key id, `deny` per key id), read by a session with no S3 key:
+  every request signed with the vended key, a credential inside the refresh skew replaced through `loadCredentials`).
 - Not here yet: Unity vended credentials, distributed reads of declared tables (refused by the session), a fuzz
   target for the REST and the Unity Catalog response parsers (§5.6), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
   Hive catalog, the Docker acceptance against a real metastore and a real Unity Catalog server

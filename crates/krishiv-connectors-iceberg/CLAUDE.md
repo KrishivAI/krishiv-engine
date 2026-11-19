@@ -11,7 +11,7 @@ and the manifest cache since PR-25d; commits T027.
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
 
 ## Layout
-`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, feature `testing`: `testing::write_table`, a small table for other crates' tests) · `src/iceberg_v0/` (private; every item
+`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, feature `testing`: `testing::write_table`, a small table for other crates' tests, and `write_table_with`, the same table under any warehouse URL through the stores of a caller's path locator) · `src/iceberg_v0/` (private; every item
 that names `iceberg`): `storage.rs` iceberg's `Storage`/`StorageFactory` (`#[typetag::serde]`, tag `krishiv`)
 over `krishiv-io`'s `IoContext`, the process registry of registration names, `iceberg::Runtime` on the
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·

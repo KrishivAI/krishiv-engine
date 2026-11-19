@@ -15,6 +15,9 @@ mod http_test_server;
 #[cfg(feature = "iceberg-rest")]
 pub mod iceberg_rest;
 pub mod location;
+#[cfg(test)]
+#[cfg(feature = "session")]
+mod s3_test_server;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "unity")]

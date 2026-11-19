@@ -84,3 +84,5 @@ tempfile.workspace = true
 # The declared-table read tests serve a table the connector's test helper writes.
 krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
 arrow-array = { workspace = true }
+# The vended read tests place the writer's `s3://` table through a store id of their own.
+krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }

@@ -3003,6 +3003,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-connectors-iceberg",
  "krishiv-exec",
+ "krishiv-io",
  "krishiv-plan",
  "krishiv-session",
  "krishiv-store",

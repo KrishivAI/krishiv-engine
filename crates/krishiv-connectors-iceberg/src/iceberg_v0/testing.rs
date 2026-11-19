@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Test tables for other crates (feature `testing`): a small Iceberg table written into a local
-//! directory by iceberg-rust's in-memory catalog over Krishiv's I/O, with Parquet data files, so a
-//! catalog test can serve its metadata and read it back through [`crate::IcebergTableProvider`].
+//! directory (or, `write_table_with`, any store a path locator places) by iceberg-rust's in-memory
+//! catalog over Krishiv's I/O, with Parquet data files, so a catalog test can serve its metadata and
+//! read it back through [`crate::IcebergTableProvider`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -15,8 +16,8 @@ use iceberg::spec::{
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use krishiv_common::error::{InternalError, KrishivError};
-use krishiv_exec::files::LocalPaths;
-use krishiv_io::{FIELD_ID_KEY, IoConfig, IoScheduler, StoreId};
+use krishiv_exec::files::{LocalPaths, PathLocator};
+use krishiv_io::{FIELD_ID_KEY, IoConfig, IoContext, IoScheduler, StoreId};
 
 use super::storage::{KrishivStorageFactory, StorageRegistration, from_iceberg};
 
@@ -44,28 +45,70 @@ fn internal(message: String) -> KrishivError {
 /// # Errors
 /// Any failure of the runtime, the catalog or the writes, as `INTERNAL_ERROR`.
 pub fn write_table(dir: &Path) -> Result<WrittenTable, KrishivError> {
+    let root = dir.to_string_lossy().into_owned();
+    write_table_with(&format!("file://{}", dir.display()), move |sched| {
+        let id = StoreId::new("file://");
+        sched.register_store(
+            id.clone(),
+            Arc::new(object_store::local::LocalFileSystem::new()),
+        );
+        Arc::new(LocalPaths::new(id, root))
+    })
+}
+
+/// [`write_table`]'s table under `warehouse` (a URL such as `s3://bucket/wh`), every byte written
+/// through the stores of the locator `paths` builds on the writer's own I/O scheduler (where it
+/// registers them): metadata, manifests and the Parquet data files under `<warehouse>/db/t/data/`.
+///
+/// # Errors
+/// As [`write_table`].
+pub fn write_table_with(
+    warehouse: &str,
+    paths: impl FnOnce(&Arc<IoScheduler>) -> Arc<dyn PathLocator>,
+) -> Result<WrittenTable, KrishivError> {
     let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+        .enable_all()
         .build()
         .map_err(|e| internal(format!("a runtime: {e}")))?;
     let sched = IoScheduler::with_runtime(IoConfig::default(), rt.handle().clone());
-    let id = StoreId::new("file://");
-    sched.register_store(
-        id.clone(),
-        Arc::new(object_store::local::LocalFileSystem::new()),
-    );
-    let paths = Arc::new(LocalPaths::new(id, dir.to_string_lossy().into_owned()));
+    let paths = paths(&sched);
+    let io = sched.context();
     let reg = {
         let _entered = rt.enter();
-        StorageRegistration::new(sched.context(), paths)
+        StorageRegistration::new(io.clone(), Arc::clone(&paths))
     };
-    let warehouse = format!("file://{}", dir.display());
-    rt.block_on(write(&reg, dir, &warehouse))
+    let files = Files {
+        io,
+        paths: paths.as_ref(),
+    };
+    rt.block_on(write(&reg, &files, warehouse))
+}
+
+/// Where [`write`] puts the data files and reads the metadata back from.
+struct Files<'a> {
+    io: IoContext,
+    paths: &'a dyn PathLocator,
+}
+
+impl Files<'_> {
+    async fn put(&self, url: &str, bytes: Vec<u8>) -> Result<(), KrishivError> {
+        let at = self.paths.locate(url)?;
+        self.io.put_object(&at.store, &at.path, bytes.into()).await
+    }
+
+    async fn get(&self, url: &str) -> Result<Vec<u8>, KrishivError> {
+        let at = self.paths.locate(url)?;
+        self.io
+            .get_object(&at.store, &at.path)
+            .await?
+            .map(|b| b.to_vec())
+            .ok_or_else(|| internal(format!("{url} is missing")))
+    }
 }
 
 async fn write(
     reg: &StorageRegistration,
-    dir: &Path,
+    files: &Files<'_>,
     warehouse: &str,
 ) -> Result<WrittenTable, KrishivError> {
     let catalog = iceberg::memory::MemoryCatalogBuilder::default()
@@ -107,18 +150,19 @@ async fn write(
         )
         .await
         .map_err(from_iceberg)?;
-    let data = dir.join("db").join("t").join("data");
-    std::fs::create_dir_all(&data).map_err(|e| internal(format!("a data directory: {e}")))?;
+    let data = format!("{}/data", table.metadata().location().trim_end_matches('/'));
     let mut snapshots = Vec::new();
     for (n, rows) in [vec![(1, "a"), (2, "b")], vec![(3, "c")]]
         .into_iter()
         .enumerate()
     {
-        let file = data.join(format!("{n}.parquet"));
-        let size = write_parquet(&file, &rows)?;
+        let file = format!("{data}/{n}.parquet");
+        let bytes = parquet_bytes(&rows)?;
+        let size = bytes.len() as u64;
+        files.put(&file, bytes).await?;
         let entry = DataFileBuilder::default()
             .content(DataContentType::Data)
-            .file_path(format!("file://{}", file.display()))
+            .file_path(file)
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(size)
             .record_count(rows.len() as u64)
@@ -141,10 +185,7 @@ async fn write(
         .metadata_location()
         .ok_or_else(|| internal("the table has no metadata location".to_owned()))?
         .to_owned();
-    let local = metadata_location
-        .strip_prefix("file://")
-        .unwrap_or(&metadata_location);
-    let text = std::fs::read(local).map_err(|e| internal(format!("the metadata file: {e}")))?;
+    let text = files.get(&metadata_location).await?;
     let metadata = serde_json::from_slice(&text)
         .map_err(|e| internal(format!("the metadata file's JSON: {e}")))?;
     Ok(WrittenTable {
@@ -155,8 +196,8 @@ async fn write(
     })
 }
 
-/// `rows` as one Parquet file at `path` with the table's field ids; its size.
-fn write_parquet(path: &Path, rows: &[(i64, &str)]) -> Result<u64, KrishivError> {
+/// `rows` as one Parquet file with the table's field ids.
+fn parquet_bytes(rows: &[(i64, &str)]) -> Result<Vec<u8>, KrishivError> {
     let field = |name: &str, ty: DataType, nullable: bool, id: i32| {
         Field::new(name, ty, nullable)
             .with_metadata(HashMap::from([(FIELD_ID_KEY.to_owned(), id.to_string())]))
@@ -169,14 +210,12 @@ fn write_parquet(path: &Path, rows: &[(i64, &str)]) -> Result<u64, KrishivError>
     let names: ArrayRef = Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.1)));
     let batch = RecordBatch::try_new(Arc::clone(&schema), vec![ids, names])
         .map_err(|e| internal(format!("a batch: {e}")))?;
-    let file = std::fs::File::create(path).map_err(|e| internal(format!("a data file: {e}")))?;
-    let mut w = parquet::arrow::ArrowWriter::try_new(file, schema, None)
+    let mut out = Vec::new();
+    let mut w = parquet::arrow::ArrowWriter::try_new(&mut out, schema, None)
         .map_err(|e| internal(format!("a Parquet writer: {e}")))?;
     w.write(&batch)
         .map_err(|e| internal(format!("a Parquet write: {e}")))?;
     w.close()
         .map_err(|e| internal(format!("a Parquet close: {e}")))?;
-    std::fs::metadata(path)
-        .map(|m| m.len())
-        .map_err(|e| internal(format!("a data file's size: {e}")))
+    Ok(out)
 }
