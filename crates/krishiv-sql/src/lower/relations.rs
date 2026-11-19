@@ -598,7 +598,8 @@ impl Lowerer {
                 options,
             } => {
                 if let Some(t) = temporal {
-                    return Err(unsupported("time travel", t.span));
+                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
+                    return Err(crate::error::time_travel_unsupported(&parts, t.span));
                 }
                 let mut opts = BTreeMap::new();
                 for o in options {

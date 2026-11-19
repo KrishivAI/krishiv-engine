@@ -21,9 +21,10 @@ use krishiv_common::error::{
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
-    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053, ParseEmptyStatement,
-    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    InvalidStatementOrClause, InvalidTempObjQualifier, InvalidTimeTravelTimestampFormat,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0035, LegacyErrorTemp0045,
+    LegacyErrorTemp0053, MultipleTimeTravelSpec, ParseEmptyStatement, ParseSyntaxError,
+    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment, UnsupportedFeatureTimeTravel,
 };
 
 use crate::ast::Span;
@@ -272,6 +273,43 @@ pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {
 /// (Spark's message names what the change needs).
 pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError {
     at(LegacyErrorTemp0035 { message }, span)
+}
+
+/// `UNSUPPORTED_FEATURE.TIME_TRAVEL`: the relation does not support time travel. The name is qualified as Spark
+/// shows it for the session catalog: a bare name is in `default` (a `USE` of another namespace is not known to
+/// the parser, so its message names `default`; the class is right).
+pub(crate) fn time_travel_unsupported(parts: &[String], span: Span) -> ParseError {
+    let quote = |p: &str| format!("`{}`", p.replace('`', "``"));
+    let mut full: Vec<String> = Vec::new();
+    if parts.len() < 3 {
+        full.push("spark_catalog".to_owned());
+    }
+    if parts.len() < 2 {
+        full.push("default".to_owned());
+    }
+    full.extend(parts.iter().cloned());
+    at(
+        UnsupportedFeatureTimeTravel {
+            relation_id: full.iter().map(|p| quote(p)).collect::<Vec<_>>().join("."),
+        },
+        span,
+    )
+}
+
+/// `MULTIPLE_TIME_TRAVEL_SPEC`: the `@` suffix of a table name and a time-travel clause together.
+pub(crate) fn multiple_time_travel_spec(span: Span) -> ParseError {
+    at(MultipleTimeTravelSpec {}, span)
+}
+
+/// `INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT`: a `@<digits>` suffix that is not `yyyyMMddHHmmssSSS`.
+pub(crate) fn invalid_time_travel_timestamp_format(timestamp: String, span: Span) -> ParseError {
+    at(
+        InvalidTimeTravelTimestampFormat {
+            timestamp,
+            format: "yyyyMMddHHmmssSSS".to_owned(),
+        },
+        span,
+    )
 }
 
 /// `INVALID_SQL_SYNTAX.CREATE_TEMP_FUNC_WITH_DATABASE`: a temporary

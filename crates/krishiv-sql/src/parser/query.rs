@@ -1210,7 +1210,18 @@ impl Parser<'_> {
                     args,
                 }
             } else {
-                let temporal = self.temporal_clause()?;
+                let at = self.at_suffix_clause()?;
+                let clause_at = self.start();
+                let mut temporal = self.temporal_clause()?;
+                if let Some(at) = at {
+                    // The `@` suffix, a `VERSION AS OF` / `TIMESTAMP AS OF` clause and the read options
+                    // each name a version: Spark allows one of them.
+                    if temporal.is_some() {
+                        let span = self.span_from(clause_at);
+                        return Self::fatal(error::multiple_time_travel_spec(span));
+                    }
+                    temporal = Some(at);
+                }
                 let options = self.table_options()?;
                 match name {
                     DdlName::Parts(name) => TableFactorKind::Table {
@@ -1375,6 +1386,51 @@ impl Parser<'_> {
         })
     }
 
+    /// The `@v<n>` (version) or `@<yyyyMMddHHmmssSSS>` (timestamp) suffix of a table name (Spark 4.3), if one
+    /// starts here. Spark's lexer takes `@v` or `@` with the number right behind it: a space, or no number, is
+    /// a syntax error.
+    #[inline(never)]
+    fn at_suffix_clause(&mut self) -> PR<Option<TemporalClause>> {
+        if !(self.kind(0) == Some(TokenKind::Unrecognized) && self.text(0) == "@") {
+            return Ok(None);
+        }
+        let start = self.start();
+        let end_of_at = start + 1;
+        self.bump();
+        let at = self.start();
+        let (kind, digits) = match self.kind(0) {
+            Some(TokenKind::Word)
+                if at == end_of_at
+                    && self.text(0).len() > 1
+                    && self.text(0)[..1].eq_ignore_ascii_case("v")
+                    && self.text(0)[1..].bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (TemporalKind::Version, self.text(0)[1..].to_owned())
+            }
+            Some(TokenKind::Number(NumKind::Int)) if at == end_of_at => {
+                (TemporalKind::Timestamp, self.text(0).to_owned())
+            }
+            _ => return self.fail(),
+        };
+        self.bump();
+        let span = self.span_from(start);
+        if kind == TemporalKind::Timestamp && digits.len() != 17 {
+            return Self::fatal(error::invalid_time_travel_timestamp_format(digits, span));
+        }
+        Ok(Some(TemporalClause {
+            kind,
+            value: Expr {
+                kind: ExprKind::Literal(Literal::Number {
+                    text: digits,
+                    kind: NumKind::Int,
+                }),
+                span,
+            },
+            at_suffix: true,
+            span,
+        }))
+    }
+
     /// `[FOR] (VERSION | SYSTEM_VERSION) AS OF version` or `[FOR]
     /// (TIMESTAMP | SYSTEM_TIME) AS OF expression`, if one starts here.
     #[inline(never)]
@@ -1419,6 +1475,7 @@ impl Parser<'_> {
         Ok(Some(TemporalClause {
             kind,
             value,
+            at_suffix: false,
             span: self.span_from(start),
         }))
     }
