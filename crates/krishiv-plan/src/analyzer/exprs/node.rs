@@ -1017,28 +1017,19 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
-                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
-                    // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
-                    // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+                } else if is_builtin_entry(&entry)
+                    && let Some(default) = hll_default(entry.id.name(), n, e.origin)
+                {
+                    // Spark's constructors write the omitted constants (see `hll_default`).
                     owned = kids[..n].to_vec();
-                    owned.push(if kids[1].ty.data_type == Some(DataType::TimestampNtz) {
-                        default_argument(
-                            Literal::TimestampNtz(0),
-                            DataType::TimestampNtz,
-                            false,
-                            e.origin,
-                        )
-                    } else {
-                        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
-                            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
-                        });
-                        default_argument(
-                            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
-                            DataType::Timestamp,
-                            false,
-                            e.origin,
-                        )
-                    });
+                    owned.push(default);
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n + 1)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
+                    owned = kids[..n].to_vec();
+                    owned.push(self.time_bucket_origin(&kids[1], e.origin));
                     if let Some(filter) = kids.get(n) {
                         owned.push(filter.clone());
                     }
@@ -1758,9 +1749,9 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Subquery { kind, plan } => {
+                // A TABLE argument is refused here (`Table` below never runs); no lambda scope reaches a subquery.
+                super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
-                // A subquery resolves without the enclosing lambda scopes:
-                // its columns must not bind to enclosing lambda variables.
                 let saved = std::mem::take(&mut self.lambdas);
                 let rel = self.rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
@@ -1782,7 +1773,7 @@ impl Resolver<'_> {
                         )
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
-                    SubqueryKind::In(_) => (Some(DataType::Boolean), true),
+                    SubqueryKind::In(_) | SubqueryKind::Table(_) => (Some(DataType::Boolean), true),
                 };
                 let (kind, plan, values) = match kind {
                     SubqueryKind::In(_) => {

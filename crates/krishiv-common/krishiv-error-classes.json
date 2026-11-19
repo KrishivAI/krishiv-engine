@@ -46,6 +46,12 @@
     ],
     "sqlState" : "42501"
   },
+  "KRISHIV_CATALOG_DELEGATION_UNAVAILABLE" : {
+    "message" : [
+      "The catalog <catalog> needs a delegated user token: <reason>. The server never uses its own identity for a catalog with \"auth\" = delegated."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."

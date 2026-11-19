@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The append commit loop (P3-T027, PR-36a; design note
 //! `P3-T026-T027-iceberg-scan-and-commit.md` §7, Tier U): [`commit_append`]
-//! sends the attempts [`prepare_attempt`] builds through a [`CommitTable`]
+//! sends the attempts [`prepare_attempt`](super::append::prepare_attempt) builds through a [`CommitTable`]
 //! until one is known to be in the table, the retry budget runs out, or the
 //! write fails.
 //!
@@ -28,7 +28,7 @@
 //!   never moved) stays unresolved until a later load shows the branch off its
 //!   base.
 //! - **Rebase** (§7.3 steps 4a.0, 4a.1, 4a.3): an append validates nothing; it
-//!   keeps its manifests (reset to unassigned by [`prepare_attempt`]) and
+//!   keeps its manifests (reset to unassigned by [`prepare_attempt`](super::append::prepare_attempt)) and
 //!   recomputes the list, sequence number, totals, v3 row ids and timestamp
 //!   against the refreshed table. Across a v2 → v3 upgrade it takes the v3
 //!   lineage fields; any other change of format version, or a replaced table
@@ -36,6 +36,12 @@
 //!   toward refusal: Java reuses its manifests across any upgrade
 //!   (apache-iceberg 1.12.0 `FastAppend.apply`, `SnapshotProducer.apply`),
 //!   v1 → v2 and v1 → v3 included.
+//! - **Validation** (§7.3 steps 2 and 3, PR-36b): [`commit_validated`] runs a
+//!   [`Validation`] (`validate.rs`) on every rebase, after the own-key search
+//!   and the format and UUID checks, before the next attempt is built; a check
+//!   that fires is `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the intervening
+//!   snapshot and the check, with §7.4's cleanup. [`commit_append`] passes
+//!   [`Validation::none`] and walks nothing.
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -53,7 +59,7 @@
 //!   that is not a number is `KRISHIV_UNSUPPORTED_FEATURE` (Java:
 //!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
-//!   the manifest lists of every other attempt and the manifests the found
+//!   the manifest lists (and statistics files) of every other attempt and the manifests the found
 //!   snapshot does not list are deleted (this write's new manifests a listed
 //!   merged manifest absorbed, and merged manifests of an attempt that did
 //!   not commit, `merge.rs`), never a data file and never a base manifest. Every outcome known
@@ -72,6 +78,16 @@
 //!   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **nothing is deleted**:
 //!   a late request would otherwise reference deleted files.
 //!
+//! - **Statistics** (PR-54b, `statistics_file.rs`): an attempt's
+//!   `set-statistics` and its Puffin file are rebuilt with the attempt (a
+//!   resend repeats them); the statistics files are cleaned up as the lists
+//!   are (kept when the committed metadata names them). Any known refusal
+//!   ([`CommitOutcome::Failed`] to an attempt's first request, a 403 or 404, or
+//!   a refused update: one extra request on a failure that was fatal anyway)
+//!   of a request carrying `set-statistics` is resent once without it, the
+//!   statistics dropped for the rest of the write (counted as skipped), so a
+//!   catalog that does not take the update never fails the data commit.
+//!
 //! This differs from Java, which never resends and throws
 //! `CommitStateUnknownException` once its status check gives up (R:B2).
 //! A resend repeats the attempt exactly, `timestamp-ms` included.
@@ -88,8 +104,15 @@ use krishiv_common::error::{
     KrishivIcebergCommitStateUnknown, KrishivUnsupportedFeature,
 };
 
-use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt};
+use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
+use super::filter::FilterError;
 use super::scan::{read_manifest_files, snapshot_refs};
+use super::statistics_file::skipped;
+use super::validate::{Validation, validate};
+
+/// The check named by a conflict whose overwrite found a file to remove no
+/// longer live (Java's `failMissingDeletePaths`).
+pub(crate) const CHECK_MISSING: &str = "files to delete";
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -205,7 +228,7 @@ pub(crate) struct CommitContext<'a> {
 /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` for a format-version change other than
 /// v2 → v3 or a replaced table, `KRISHIV_UNSUPPORTED_FEATURE` for a commit
 /// property that is not a number, a failure answered to an attempt's first
-/// request, or [`prepare_attempt`]'s errors. A refresh after a conflict that
+/// request, or [`prepare_attempt`](super::append::prepare_attempt)'s errors. A refresh after a conflict that
 /// never succeeds is `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`.
 ///
 /// # Cancellation
@@ -225,6 +248,36 @@ pub(crate) async fn commit_append(
     new: &mut NewManifests,
     ids: WriteIds<'_>,
 ) -> Result<TableMetadata, KrishivError> {
+    commit_validated(table, cx, base, new, ids, &Validation::none()).await
+}
+
+/// [`commit_append`] validating `validation` on every rebase (design note
+/// §7.3 steps 2 and 3, `validate.rs`), after the own-key search and the
+/// format and UUID checks, before the next attempt is built. A check that
+/// fires ends the loop with `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the
+/// intervening snapshot, the check and Java's message, and the §7.4 cleanup
+/// of a conflict follows. [`Validation::none`] is [`commit_append`].
+///
+/// S0, where validation starts, is `base`'s head of the branch: `base` must
+/// be the metadata the write read when it was planned, never a refreshed
+/// one, or the validated window shrinks silently (review nit 7).
+///
+/// # Errors
+/// As [`commit_append`]; a validation read that fails ends the write with
+/// its error, cleaned up as any other error: the files removed when every
+/// request's outcome is known, kept after an unknown answer, and
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` while an attempt is unresolved.
+///
+/// # Cancellation
+/// As [`commit_append`].
+pub(crate) async fn commit_validated(
+    table: &dyn CommitTable,
+    cx: CommitContext<'_>,
+    base: &TableMetadata,
+    new: &mut NewManifests,
+    ids: WriteIds<'_>,
+    validation: &Validation,
+) -> Result<TableMetadata, KrishivError> {
     let budget = match Budget::from_properties(base.properties()) {
         Ok(b) => b,
         Err(e) => {
@@ -241,6 +294,8 @@ pub(crate) async fn commit_append(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
+        s0: branch_head(base, ids.branch).flatten(),
+        validation,
         requests: 0,
         lists: Vec::new(),
         unresolved: Vec::new(),
@@ -354,6 +409,10 @@ struct Loop<'a> {
     start_ms: i64,
     s0_version: FormatVersion,
     s0_uuid: String,
+    /// The branch's head when the write started (S0; `None`: no snapshot).
+    s0: Option<i64>,
+    /// What every rebase validates (`validate.rs`).
+    validation: &'a Validation,
     /// Requests sent.
     requests: u32,
     /// Every manifest list an attempt wrote.
@@ -381,7 +440,7 @@ impl Loop<'_> {
     ) -> Result<TableMetadata, End> {
         'attempts: loop {
             self.before_request().await?;
-            let attempt = prepare_attempt(
+            let mut attempt = match prepare(
                 self.cx.io,
                 &current,
                 new,
@@ -390,7 +449,15 @@ impl Loop<'_> {
                 self.cx.max_metadata_bytes,
             )
             .await
-            .map_err(End::Error)?;
+            {
+                Ok(a) => a,
+                // An overwrite's file is no longer live in this base
+                // (`filter.rs`, Java's `failMissingDeletePaths`).
+                Err(FilterError::Missing(message)) => {
+                    return Err(self.conflict(&current, CHECK_MISSING, message));
+                }
+                Err(FilterError::Error(e)) => return Err(End::Error(e)),
+            };
             self.lists.push(attempt.snapshot.manifest_list().to_owned());
             let base = attempt_base(&attempt);
             let mut unknown = false;
@@ -407,7 +474,19 @@ impl Loop<'_> {
                     .await;
                 match outcome {
                     CommitOutcome::Committed(m) => return Ok(*m),
-                    CommitOutcome::Failed(e) if !unknown => return Err(End::Error(e)),
+                    CommitOutcome::Failed(e) if !unknown => {
+                        if drop_statistics(&mut attempt) {
+                            new.statistics = None;
+                            skipped(&format!(
+                                "the catalog refused the request that carried them ({e}); \
+                                 sent again without them"
+                            ));
+                            // Known not applied: the same attempt, at once.
+                            first = true;
+                            continue;
+                        }
+                        return Err(End::Error(e));
+                    }
                     CommitOutcome::Failed(e) => self.last_answer = e.to_string(),
                     CommitOutcome::Unknown(reason) => {
                         if !unknown {
@@ -435,6 +514,7 @@ impl Loop<'_> {
                         }
                         self.resolve(&m);
                         self.check_rebase(&m)?;
+                        self.validate(&m).await?;
                         current = m;
                         continue 'attempts;
                     }
@@ -443,6 +523,7 @@ impl Loop<'_> {
                     Probe::Found(m) => return Ok(m),
                     Probe::Moved(m) => {
                         self.check_rebase(&m)?;
+                        self.validate(&m).await?;
                         current = m;
                         continue 'attempts;
                     }
@@ -577,15 +658,31 @@ impl Loop<'_> {
     }
 
     /// The branch's head in `m` (`Some(None)`: no such branch), as
-    /// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+    /// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
     fn head(&self, m: &TableMetadata) -> Option<Option<i64>> {
-        let refs = snapshot_refs(m).ok()?;
-        let branch = self.ids.branch;
-        Some(match refs.get(branch) {
-            Some(r) => Some(r.snapshot_id),
-            None if branch == "main" => m.current_snapshot_id(),
-            None => None,
-        })
+        branch_head(m, self.ids.branch)
+    }
+
+    /// §7.3 steps 2 and 3 against the refreshed table `m` (`validate.rs`).
+    async fn validate(&self, m: &TableMetadata) -> Result<(), End> {
+        if !self.validation.runs() {
+            return Ok(());
+        }
+        let head = self.head(m).flatten();
+        match validate(
+            self.cx.io,
+            m,
+            head,
+            self.s0,
+            self.validation,
+            self.cx.max_metadata_bytes,
+        )
+        .await
+        {
+            Ok(None) => Ok(()),
+            Ok(Some(fired)) => Err(self.conflict_at(fired.snapshot_id, fired.check, fired.message)),
+            Err(e) => Err(End::Error(e)),
+        }
     }
 
     /// Settles the unresolved attempts whose base the branch has left in
@@ -628,13 +725,15 @@ impl Loop<'_> {
 
     /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against `m`'s branch head.
     fn conflict(&self, m: &TableMetadata, check: &str, message: String) -> End {
+        self.conflict_at(self.head(m).flatten(), check, message)
+    }
+
+    /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against the snapshot `at`.
+    fn conflict_at(&self, at: Option<i64>, check: &str, message: String) -> End {
         End::Conflict(Box::new(KrishivIcebergCommitConflict {
             table: self.table.name(),
             snapshot_id: self.snapshot_id.to_string(),
-            conflicting_snapshot_id: self
-                .head(m)
-                .flatten()
-                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            conflicting_snapshot_id: at.map_or_else(|| "none".to_owned(), |id| id.to_string()),
             check: check.to_owned(),
             message,
             files: REMOVED.to_owned(),
@@ -659,6 +758,17 @@ impl Loop<'_> {
         let named: HashSet<&str> = m.snapshots().map(|s| s.manifest_list()).collect();
         for list in self.lists.iter().filter(|l| !named.contains(l.as_str())) {
             let _ = self.cx.io.delete(list).await;
+        }
+        let stats: HashSet<&str> = m
+            .statistics_iter()
+            .map(|f| f.statistics_path.as_str())
+            .collect();
+        for path in new
+            .statistics_files
+            .iter()
+            .filter(|p| !stats.contains(p.as_str()))
+        {
+            let _ = self.cx.io.delete(path).await;
         }
         let Ok(listed) = read_manifest_files(
             self.cx.io,
@@ -739,6 +849,26 @@ const KEPT: &str = "the written files were kept, since an earlier request of thi
      again, or its rows may appear twice (remove_orphan_files removes the files if \
      it never lands)";
 
+/// Removes `attempt`'s `set-statistics`; whether it had one.
+fn drop_statistics(attempt: &mut Attempt) -> bool {
+    let before = attempt.updates.len();
+    attempt
+        .updates
+        .retain(|u| !matches!(u, TableUpdate::SetStatistics { .. }));
+    attempt.updates.len() != before
+}
+
+/// The head of `branch` in `m` (`Some(None)`: no such branch), as
+/// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
+fn branch_head(m: &TableMetadata, branch: &str) -> Option<Option<i64>> {
+    let refs = snapshot_refs(m).ok()?;
+    Some(match refs.get(branch) {
+        Some(r) => Some(r.snapshot_id),
+        None if branch == "main" => m.current_snapshot_id(),
+        None => None,
+    })
+}
+
 /// The base an attempt asserts for its branch (`assert-ref-snapshot-id`).
 fn attempt_base(attempt: &Attempt) -> Option<i64> {
     attempt.requirements.iter().find_map(|r| match r {
@@ -756,6 +886,7 @@ async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
         .iter()
         .chain(manifests)
         .chain(&new.merged)
+        .chain(&new.statistics_files)
         .chain(lists)
     {
         let _ = io.delete(path).await;

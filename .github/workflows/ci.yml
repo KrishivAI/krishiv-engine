@@ -863,6 +863,13 @@ jobs:
               echo "::notice::$dep has no wheel for this interpreter; its tests are skipped"
             fi
           done
+          # The stock Spark Connect client (krishiv.start_local() tests): PyPI publishes only a
+          # source distribution of pyspark-client (pure Python), so it alone is built from source.
+          if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" \
+              --constraint "$GITHUB_WORKSPACE/python/ci-interop-constraints.txt" "pyspark-client"; then
+            if [ "$COVERAGE" = "true" ]; then exit 1; fi
+            echo "::notice::pyspark-client could not be installed; its tests are skipped"
+          fi
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -c "import krishiv, sys; print(krishiv.__version__, sys.version)"
           if [ "$COVERAGE" = "true" ]; then

@@ -1,0 +1,301 @@
+{
+ "alter_add_columns": {
+  "error": null,
+  "sql": "ALTER TABLE d ADD COLUMNS (extra INT)"
+ },
+ "alter_set_properties": {
+  "error": null,
+  "sql": "ALTER TABLE d SET TBLPROPERTIES ('k' = 'v')"
+ },
+ "corrupt_commit": {
+  "error": {
+   "condition": "FAILED_READ_FILE.NO_HINT",
+   "jvm_class": "org.apache.spark.SparkException",
+   "message": "[FAILED_READ_FILE.NO_HINT] Encountered error while reading file file://<path>/_delta_log/00000000000000000001.json.  SQLSTATE: KD001",
+   "parameters": {
+    "path": "file://<path>/_delta_log/00000000000000000001.json"
+   },
+   "sqlstate": "KD001"
+  },
+  "sql": "SELECT * FROM delta.`<path>`"
+ },
+ "create_empty_location": {
+  "error": null,
+  "sql": "CREATE TABLE hollow USING delta LOCATION '<path>'"
+ },
+ "create_matching_columns": {
+  "error": {
+   "condition": "DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING",
+   "message": "[DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING] The specified partitioning does not match the existing partitioning at file:<path>.",
+   "parameters": {
+    "existingColumns": "p",
+    "path": "file:<path>",
+    "specifiedColumns": ""
+   },
+   "sqlstate": "42KD7"
+  },
+  "sql": "CREATE TABLE same (id BIGINT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) USING delta LOCATION '<path>'"
+ },
+ "create_matching_columns_partitioned": {
+  "error": null,
+  "sql": "CREATE TABLE same2 (id BIGINT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) USING delta PARTITIONED BY (p) LOCATION '<path>'"
+ },
+ "create_missing_location": {
+  "error": null,
+  "sql": "CREATE TABLE gone USING delta LOCATION '<path>'"
+ },
+ "create_missing_location_with_columns": {
+  "error": null,
+  "sql": "CREATE TABLE gone2 (id BIGINT) USING delta LOCATION '<path>'"
+ },
+ "create_without_columns": {
+  "error": null,
+  "sql": "CREATE TABLE d USING delta LOCATION '<path>'"
+ },
+ "create_without_location": {
+  "error": null,
+  "sql": "CREATE TABLE managed (id BIGINT) USING delta"
+ },
+ "ctas": {
+  "error": null,
+  "sql": "CREATE TABLE c USING delta AS SELECT 1 AS id"
+ },
+ "delta_spark": "4.4.1",
+ "describe": {
+  "columns": [
+   "col_name",
+   "data_type",
+   "comment"
+  ],
+  "error": null,
+  "rows": [
+   [
+    "id",
+    "bigint",
+    null
+   ],
+   [
+    "name",
+    "string",
+    null
+   ],
+   [
+    "amount",
+    "decimal(10,2)",
+    null
+   ],
+   [
+    "ts",
+    "timestamp",
+    null
+   ],
+   [
+    "p",
+    "string",
+    null
+   ],
+   [
+    "# Partition Information",
+    "",
+    ""
+   ],
+   [
+    "# col_name",
+    "data_type",
+    "comment"
+   ],
+   [
+    "p",
+    "string",
+    null
+   ]
+  ],
+  "sql": "DESCRIBE d"
+ },
+ "describe_matching_columns": {
+  "columns": [
+   "col_name",
+   "data_type",
+   "comment"
+  ],
+  "error": null,
+  "rows": [
+   [
+    "id",
+    "bigint",
+    null
+   ],
+   [
+    "name",
+    "string",
+    null
+   ],
+   [
+    "amount",
+    "decimal(10,2)",
+    null
+   ],
+   [
+    "ts",
+    "timestamp",
+    null
+   ],
+   [
+    "p",
+    "string",
+    null
+   ],
+   [
+    "# Partition Information",
+    "",
+    ""
+   ],
+   [
+    "# col_name",
+    "data_type",
+    "comment"
+   ],
+   [
+    "p",
+    "string",
+    null
+   ]
+  ],
+  "sql": "DESCRIBE same2"
+ },
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "insert": {
+  "error": null,
+  "sql": "INSERT INTO d VALUES (3, 'c', 3.00, NULL, 'x')"
+ },
+ "refused_catalog_table": {
+  "error": {
+   "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+   "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+   "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"default.refused\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+   "parameters": {
+    "deltaVersion": "4.4.1",
+    "tableNameOrPath": "default.refused",
+    "unsupported": "krishivProbeFeature"
+   },
+   "sqlstate": "56038"
+  },
+  "sql": "SELECT * FROM refused"
+ },
+ "refused_path_reader": {
+  "error": {
+   "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+   "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+   "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"file:<path>\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+   "parameters": {
+    "deltaVersion": "4.4.1",
+    "tableNameOrPath": "file:<path>",
+    "unsupported": "krishivProbeFeature"
+   },
+   "sqlstate": "56038"
+  }
+ },
+ "refused_path_sql": {
+  "error": {
+   "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+   "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+   "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"file:<path>\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+   "parameters": {
+    "deltaVersion": "4.4.1",
+    "tableNameOrPath": "file:<path>",
+    "unsupported": "krishivProbeFeature"
+   },
+   "sqlstate": "56038"
+  },
+  "sql": "SELECT * FROM delta.`<path>`"
+ },
+ "refused_path_trailing_slash": {
+  "error": {
+   "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+   "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+   "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"file:<path>\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+   "parameters": {
+    "deltaVersion": "4.4.1",
+    "tableNameOrPath": "file:<path>",
+    "unsupported": "krishivProbeFeature"
+   },
+   "sqlstate": "56038"
+  },
+  "sql": "SELECT * FROM delta.`<path>/`"
+ },
+ "refused_qualified_catalog_table": {
+  "error": {
+   "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+   "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+   "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"default.refused\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+   "parameters": {
+    "deltaVersion": "4.4.1",
+    "tableNameOrPath": "default.refused",
+    "unsupported": "krishivProbeFeature"
+   },
+   "sqlstate": "56038"
+  },
+  "sql": "SELECT * FROM default.refused"
+ },
+ "schema_mismatch": {
+  "error": {
+   "condition": "DELTA_CREATE_TABLE_SCHEME_MISMATCH",
+   "message": "[DELTA_CREATE_TABLE_SCHEME_MISMATCH] The specified schema does not match the existing schema at file:<path>.",
+   "parameters": {
+    "existingSchema": "root\n |-- id: long (nullable = true)\n |-- name: string (nullable = true)\n |-- amount: decimal(10,2) (nullable = true)\n |-- ts: timestamp (nullable = true)\n |-- p: string (nullable = true)\n",
+    "path": "file:<path>",
+    "schemaDifferences": "- Specified schema is missing field(s): name, ts, amount, p\n- Specified schema has additional field(s): other",
+    "specifiedSchema": "root\n |-- id: long (nullable = true)\n |-- other: string (nullable = true)\n"
+   },
+   "sqlstate": "42KD7"
+  },
+  "sql": "CREATE TABLE m (id BIGINT, other STRING) USING delta LOCATION '<path>'"
+ },
+ "schema_mismatch_type": {
+  "error": {
+   "condition": "DELTA_CREATE_TABLE_SCHEME_MISMATCH",
+   "message": "[DELTA_CREATE_TABLE_SCHEME_MISMATCH] The specified schema does not match the existing schema at file:<path>.",
+   "parameters": {
+    "existingSchema": "root\n |-- id: long (nullable = true)\n |-- name: string (nullable = true)\n |-- amount: decimal(10,2) (nullable = true)\n |-- ts: timestamp (nullable = true)\n |-- p: string (nullable = true)\n",
+    "path": "file:<path>",
+    "schemaDifferences": "- Specified type for id is different from existing schema:\n  Specified: integer\n  Existing:  long",
+    "specifiedSchema": "root\n |-- id: integer (nullable = true)\n |-- name: string (nullable = true)\n |-- amount: decimal(10,2) (nullable = true)\n |-- ts: timestamp (nullable = true)\n |-- p: string (nullable = true)\n"
+   },
+   "sqlstate": "42KD7"
+  },
+  "sql": "CREATE TABLE m2 (id INT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) USING delta LOCATION '<path>'"
+ },
+ "select": {
+  "columns": [
+   "id",
+   "name",
+   "amount",
+   "ts",
+   "p"
+  ],
+  "error": null,
+  "rows": [
+   [
+    1,
+    "a",
+    {
+     "decimal": "1.50"
+    },
+    {
+     "timestamp": "2024-01-01T00:00:00"
+    },
+    "x"
+   ],
+   [
+    2,
+    null,
+    null,
+    null,
+    "y"
+   ]
+  ],
+  "sql": "SELECT * FROM d ORDER BY id"
+ },
+ "spark": "4.2.0"
+}

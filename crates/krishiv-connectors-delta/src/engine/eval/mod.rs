@@ -22,9 +22,9 @@
 //! Differences from the kernel's evaluator, all toward the declared output: a widenable leaf
 //! (an `Int32` where `long` is declared) is cast rather than left as it is, and `IN` over a
 //! literal array gives one value per row rather than one value. Unsupported (the kernel's
-//! `Unsupported`, never a wrong value): `Opaque` nodes (the kernel's Arrow adaptors), a named
-//! reader zone in `MapToStruct`, and a `timestamp` partition value ending in an IANA zone name
-//! (Krishiv has no zone database; see `partition`).
+//! `Unsupported`, never a wrong value): `Opaque` nodes (the kernel's Arrow adaptors). Zone names
+//! in `MapToStruct` (a named reader zone, a partition value ending in one) resolve through
+//! jiff's bundled zone database (see `partition`).
 
 pub(crate) mod expr;
 pub(crate) mod json;
@@ -44,7 +44,6 @@ use delta_kernel::{
     EngineData, EvaluationHandler, ExpressionEvaluator, KernelError, KernelResult,
     PredicateEvaluator,
 };
-use krishiv_exec::CancellationToken;
 
 use self::expr::{evaluate_expression, extract_column};
 use self::predicate::evaluate_predicate;
@@ -69,7 +68,7 @@ pub(crate) fn arrow_err(e: ArrowError) -> KernelError {
 
 /// The query's cancellation as the evaluation handler sees it: none for a standalone handler.
 #[derive(Debug, Clone, Default)]
-struct Cancel(Option<Arc<CancellationToken>>);
+struct Cancel(Option<crate::engine::Cancel>);
 
 impl Cancel {
     /// The kernel's `Cancelled` once the query is cancelled, as the other handlers return.
@@ -100,7 +99,7 @@ impl KrishivEvaluationHandler {
     }
 
     /// A handler of the query whose cancellation is `cancel`.
-    pub(crate) fn with_cancel(limits: DeltaLimits, cancel: Arc<CancellationToken>) -> Self {
+    pub(crate) fn with_cancel(limits: DeltaLimits, cancel: crate::engine::Cancel) -> Self {
         Self {
             ctx: Ctx { limits },
             cancel: Cancel(Some(cancel)),

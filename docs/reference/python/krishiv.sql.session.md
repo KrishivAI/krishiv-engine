@@ -377,6 +377,15 @@ accepted and ignored (one node has nothing to partition).
 def read(self) -> DataFrameReader
 ```
 
+### `sparkContext`
+
+```python
+@property
+def sparkContext(self) -> Any
+```
+
+Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API.
+
 ### `sql`
 
 ```python

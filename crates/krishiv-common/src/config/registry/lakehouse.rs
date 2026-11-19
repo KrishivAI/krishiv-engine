@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the lakehouse connectors: the Delta log pool, the catalog parse
-//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and the Iceberg
-//! manifest cache (P3-T026 design note section 2.3).
+//! The config entries of the lakehouse connectors: the Delta log pool and snapshot cache, the
+//! catalog parse limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and
+//! the Iceberg manifest cache (P3-T026 design note section 2.3).
 
 use std::time::Duration;
 
@@ -17,6 +17,22 @@ pub static DELTA_LOG_THREADS: ConfigEntry = ConfigEntry {
           replay, snapshots, commits, checkpoints): at most this many Delta kernel calls run at \
           once across all queries, and a query waits for a free thread (a cancellable wait, \
           measured by the `delta.log_pool.wait_ms` metric). Read when the pool first starts.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most bytes the runtime's cache of Delta snapshots holds.
+pub static DELTA_SNAPSHOT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.delta.snapshotCache.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Experimental. Most bytes, estimated, the runtime's cache of Delta snapshots holds: \
+          each table's latest snapshot and its live-file listing, kept across \
+          queries so the next one reads only the newer log. The least recently used table \
+          leaves first; a table whose listing alone is larger keeps only its snapshot, and its \
+          files are listed again by each query. Read when the runtime starts.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
@@ -70,6 +86,38 @@ pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Most token exchanges per minute for one principal and one set of exchange claims (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(60)),
+    doc: "Most RFC 8693 token exchanges a catalog with `auth = delegated` makes in one minute for \
+          one principal and one set of exchange claims (scope, audience, groups). An exchanged \
+          token is reused until it expires, so a client that sends a fresh token with the same \
+          claims on every call costs one exchange per exchanged-token lifetime. Past the limit a \
+          catalog call fails with `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most distinct claim sets exchanged per minute for one principal (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(20)),
+    doc: "Most distinct sets of exchange claims (scope, audience, groups) a catalog with \
+          `auth = delegated` exchanges tokens for in one minute for one principal: the ceiling a \
+          client meets that varies its claims to get past \
+          `krishiv.catalog.delegation.maxExchangesPerMinute`. Past it a catalog call fails with \
+          `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// How long one catalog call may take before it fails.
 pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.requestTimeout",
@@ -99,3 +147,67 @@ pub static ICEBERG_WRITE_MAX_OPEN_FILES: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
 };
+
+/// How many snapshots an Iceberg commit validates between its start and the
+/// branch's head.
+pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.commit.maxIntervening",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(1000)),
+    doc: "Most snapshots committed to a branch between the snapshot an Iceberg write (an \
+          overwrite, delete, update or merge) started from and the branch's current head that \
+          its commit validates for conflicts. A commit that finds more fails with \
+          KRISHIV_ICEBERG_COMMIT_CONFLICT rather than validating part of the history; appends \
+          validate nothing and ignore it. Read when the write is planned. Krishiv does not run \
+          Iceberg overwrites, deletes, updates or merges yet, so until it does this has no effect.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether an Iceberg append writes Theta sketches of its columns into a Puffin statistics file.
+pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.write.statistics.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether an append into an Iceberg table (`INSERT`, CTAS) also writes a distinct-count \
+          sketch (`apache-datasketches-theta-v1`) of each of its first 100 top-level primitive columns \
+          (not `uuid`) into a Puffin statistics file, committed with the snapshot in the same request, \
+          so the optimizer and other engines read the table's distinct counts without a scan. A \
+          snapshot gets statistics only when every row it holds is sketched: the table was empty, or \
+          the previous snapshot has statistics of the column; otherwise the column, or the whole \
+          file, is left out. Statistics never fail a write: on any failure, or a catalog refusing \
+          the update, the write commits without them. A table opts out with the table property \
+          `krishiv.write.statistics.enabled=false`. Off by default until the write cost of the sketches \
+          is measured. Read when the write is planned.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::ICEBERG_WRITE_STATISTICS_ENABLED;
+    use crate::config::{Config, ConfigValue, Scope};
+
+    /// PR-54b: statistics on Iceberg writes, off by default until U3 measures the write cost.
+    #[test]
+    fn iceberg_write_statistics_enabled_parses_and_defaults() {
+        let mut c = Config::new();
+        let get = |c: &Config| {
+            c.get(&ICEBERG_WRITE_STATISTICS_ENABLED)
+                .and_then(ConfigValue::as_bool)
+        };
+        assert_eq!(get(&c), Some(false));
+        c.set("krishiv.iceberg.write.statistics.enabled", "true")
+            .unwrap();
+        assert_eq!(get(&c), Some(true));
+        assert!(
+            c.set("krishiv.iceberg.write.statistics.enabled", "sometimes")
+                .is_err()
+        );
+        assert_eq!(ICEBERG_WRITE_STATISTICS_ENABLED.scope, Scope::Session);
+    }
+}

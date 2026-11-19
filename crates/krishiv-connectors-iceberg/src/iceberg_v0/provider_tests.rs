@@ -241,6 +241,14 @@ pub(super) fn session(tables: Vec<(&str, StructType, Arc<dyn TableProvider>)>) -
 impl Session {
     /// Runs `sql` (joins in the optimizer's default order) to completion.
     pub(super) fn run(&self, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
+        Ok(self.run_metrics(sql)?.0)
+    }
+
+    /// [`Self::run`] with the query's metrics.
+    pub(super) fn run_metrics(
+        &self,
+        sql: &str,
+    ) -> Result<(Vec<RecordBatch>, krishiv_exec::QueryMetrics), KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
@@ -271,7 +279,7 @@ impl Session {
                 out.push(b?.into_parts().0);
             }
             query.finished().await;
-            Ok(out)
+            Ok((out, query.metrics()))
         })
     }
 

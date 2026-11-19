@@ -2,6 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.initcap("a"), F.col("b"))
-df = spark.sql("SELECT schema_of_variant_agg(a) FROM t5")
-df = df.select(F.legacy_fn_12("a"), F.col("b"))
+df = df.select(F.try_validate_utf8("a"), F.col("b"))
+df = df.select(F.kll_sketch_merge_float("a"), F.col("b"))
+df = df.select(F.array_agg("a"), F.col("b"))
+df = spark.sql("SELECT tuple_sketch_estimate_integer(a) FROM t5")
+df = spark.sql("SELECT xpath_int(a) FROM t5")

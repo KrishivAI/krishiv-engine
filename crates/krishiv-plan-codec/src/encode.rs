@@ -366,6 +366,23 @@ impl Encoder {
                 input: self.node_index(input)?,
                 udf: Some(self.python_relation(udf)?),
             }),
+            PhysNode::PythonUdtf { input, udf, call } => Kind::PythonUdtf(pb::PythonUdtfNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+                arg_names: call
+                    .arg_names
+                    .iter()
+                    .map(|n| pb::PythonUdtfArgName { name: n.clone() })
+                    .collect(),
+                table: call.table.as_ref().map(|t| pb::PythonUdtfTable {
+                    position: t.position as u64,
+                    columns: indexes(&t.columns),
+                    names: t.names.clone(),
+                    partition_child_indexes: indexes(&t.partition_child_indexes),
+                }),
+                carried: indexes(&call.carried),
+                analyzed: call.analyzed.clone(),
+            }),
             PhysNode::PythonGroupMap { input, keys, udf } => {
                 Kind::PythonGroupMap(pb::PythonGroupMapNode {
                     input: self.node_index(input)?,
@@ -1263,6 +1280,7 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
+        AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
         _ => false,
     };
     if invalid {
@@ -1282,6 +1300,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::CollectSet => (pb::AggregateFunction::CollectSet, false),
         AggregateFunction::VectorSum => (pb::AggregateFunction::VectorSum, false),
         AggregateFunction::VectorAvg => (pb::AggregateFunction::VectorAvg, false),
+        AggregateFunction::BitmapConstructAgg => (pb::AggregateFunction::BitmapConstructAgg, false),
+        AggregateFunction::BitmapOrAgg => (pb::AggregateFunction::BitmapOrAgg, false),
+        AggregateFunction::BitmapAndAgg => (pb::AggregateFunction::BitmapAndAgg, false),
         AggregateFunction::BitAnd => (pb::AggregateFunction::BitAnd, false),
         AggregateFunction::BitOr => (pb::AggregateFunction::BitOr, false),
         AggregateFunction::BitXor => (pb::AggregateFunction::BitXor, false),
@@ -1393,6 +1414,32 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 0,
                 false,
                 *p,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::HllSketchAgg { lg_k } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::HllSketchAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_k),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::HllUnionAgg { allow_different } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::HllUnionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*allow_different),
                 a,
                 nested,
             ));

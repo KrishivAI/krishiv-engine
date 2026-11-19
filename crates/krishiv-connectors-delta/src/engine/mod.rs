@@ -28,7 +28,7 @@ use krishiv_common::config::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, Config, ConfigValue,
 };
 use krishiv_common::error::{InternalError, KrishivError};
-use krishiv_exec::CancellationToken;
+use krishiv_exec::{CancellationToken, QueryContext};
 use krishiv_io::{IoContext, StoreId};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
@@ -97,7 +97,37 @@ pub(crate) struct Shared {
     pub(crate) root: TableRoot,
     pub(crate) handle: Handle,
     pub(crate) limits: DeltaLimits,
-    pub(crate) cancel: Arc<CancellationToken>,
+    pub(crate) cancel: Cancel,
+    /// The size and modification time (ms) of each commit file (`_delta_log/*.json`) the
+    /// engine's listings returned, by URL: what a snapshot built through this engine read, so
+    /// the snapshot cache binds its entry to those files and not to a later `head`.
+    pub(crate) listed: std::sync::Mutex<std::collections::HashMap<String, (u64, i64)>>,
+}
+
+/// What ends an engine's kernel calls: a token of its own (planning), or the running query's
+/// cancellation (a scan's engine, [`DeltaEngine::for_query`]).
+#[derive(Debug, Clone)]
+pub(crate) enum Cancel {
+    Token(Arc<CancellationToken>),
+    Query(Arc<QueryContext>),
+}
+
+impl Cancel {
+    /// Whether it fired (one atomic load).
+    pub(crate) fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Token(t) => t.is_cancelled(),
+            Self::Query(q) => q.is_cancelled(),
+        }
+    }
+
+    /// Completes once it fired.
+    pub(crate) async fn cancelled(&self) {
+        match self {
+            Self::Token(t) => t.cancelled().await,
+            Self::Query(q) => q.cancelled().await,
+        }
+    }
 }
 
 impl Shared {
@@ -196,10 +226,32 @@ impl DeltaEngine {
                 root: TableRoot::new(root),
                 handle,
                 limits,
-                cancel,
+                cancel: Cancel::Token(cancel),
+                listed: std::sync::Mutex::default(),
             }),
             pool,
         })
+    }
+
+    /// This engine with its kernel calls ended by `query`'s cancellation instead of its own
+    /// token: a scan's engine, so a cancelled query's Delta work (the filtered re-listing, the
+    /// deletion-vector reads) stops waiting for a log-pool slot and ends at its next handler
+    /// call.
+    #[must_use]
+    pub fn for_query(&self, query: &Arc<QueryContext>) -> Self {
+        let s = &self.shared;
+        Self {
+            shared: Arc::new(Shared {
+                io: s.io.clone(),
+                store: s.store.clone(),
+                root: s.root.clone(),
+                handle: s.handle.clone(),
+                limits: s.limits,
+                cancel: Cancel::Query(Arc::clone(query)),
+                listed: std::sync::Mutex::default(),
+            }),
+            pool: self.pool,
+        }
     }
 
     /// The table root (ends with `/`).
@@ -213,6 +265,16 @@ impl DeltaEngine {
         &self.shared.root
     }
 
+    /// The parse limits.
+    pub(crate) fn limits(&self) -> &DeltaLimits {
+        &self.shared.limits
+    }
+
+    /// Completes once this engine's cancellation fired.
+    pub(crate) async fn cancelled(&self) {
+        self.shared.cancel.cancelled().await;
+    }
+
     /// The query's I/O.
     #[must_use]
     pub fn io(&self) -> &IoContext {
@@ -223,6 +285,18 @@ impl DeltaEngine {
     #[must_use]
     pub fn store(&self) -> &StoreId {
         &self.shared.store
+    }
+
+    /// The size and modification time (ms) of the commit file at `url` as this engine's last
+    /// listing of it returned it, if one did.
+    #[must_use]
+    pub(crate) fn listed_commit(&self, url: &url::Url) -> Option<(u64, i64)> {
+        self.shared
+            .listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(url.as_str())
+            .copied()
     }
 
     /// The storage handler.
@@ -248,14 +322,14 @@ impl DeltaEngine {
     pub fn evaluation(&self) -> Arc<KrishivEvaluationHandler> {
         Arc::new(KrishivEvaluationHandler::with_cancel(
             self.shared.limits,
-            Arc::clone(&self.shared.cancel),
+            self.shared.cancel.clone(),
         ))
     }
 
     /// The query's cancellation as the kernel's token, for `with_cancellation_token`.
     #[must_use]
     pub fn kernel_cancellation(&self) -> CancellationTokenRef {
-        Arc::new(KernelCancel(Arc::clone(&self.shared.cancel)))
+        Arc::new(KernelCancel(self.shared.cancel.clone()))
     }
 
     /// Runs the kernel call `f` with this engine on the log pool (see [`LogPool::run`]). The
@@ -277,7 +351,9 @@ impl DeltaEngine {
         F: FnOnce(&DeltaEngine) -> T + Send + 'static,
     {
         let engine = self.clone();
-        self.pool.run(&self.shared.cancel, move || f(&engine)).await
+        self.pool
+            .run(self.shared.cancel.cancelled(), move || f(&engine))
+            .await
     }
 }
 
@@ -302,7 +378,7 @@ impl delta_kernel::Engine for DeltaEngine {
 }
 
 /// The query's cancellation, as the kernel sees it.
-struct KernelCancel(Arc<CancellationToken>);
+struct KernelCancel(Cancel);
 
 impl KernelToken for KernelCancel {
     fn is_cancelled(&self) -> bool {

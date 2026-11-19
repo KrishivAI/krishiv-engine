@@ -33,23 +33,32 @@ use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use arrow_schema::{FieldRef, SchemaRef};
-use krishiv_common::config::{Config, ConfigValue, ICEBERG_WRITE_MAX_OPEN_FILES};
+use krishiv_common::config::{
+    Config, ConfigValue, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED,
+};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_exec::planner::{TableCapabilities, TableProvider, WriteRequest};
+use krishiv_exec::planner::{
+    RowLevelOperation, RowLevelTable, TableCapabilities, TableProvider, WriteRequest,
+};
 use krishiv_exec::{
-    FileScan, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, Sink, Source,
+    FileScan, FilterPushdown, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown,
+    ScanPushdowns, Sink, Source, TakeRows,
 };
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, SplitConfig};
 use krishiv_io::{
     ColumnPath, FieldMapping, FileConstants, FileFormat, FileRef, FormatOptions, IoContext,
-    NameMapping, PushdownExpr, ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
+    NameMapping, PushdownExpr, RowFile, ScalarValue, ScanOptions, TakeRequest, TakeStream,
+    VersionToken, WithoutFieldIds,
 };
 use krishiv_optimizer::TableStats;
 
 use super::eq_deletes::{self, EqProjection, FILE_ORDINAL};
 use super::lazy::{self, DeleteEnv, DeleteSource, DeleteState, LazySelections, Locate, ScanTask};
+use super::lineage::{self, LineageSource, LineageSplit};
 use super::sink::{IcebergWriteSink, WriteTarget};
+use super::statistics_file::enabled as statistics_enabled;
 use super::table::IcebergTable;
 use super::types::arrow_schema;
 use super::write::DEFAULT_MAX_OPEN_FILES;
@@ -58,6 +67,7 @@ use crate::plan::{
     DataFileEntry, FileFormatKind, PartitionValue, PruneOptions, Pruner, ScanPlan, TableSnapshot,
     Transform, VersionSpec, WriterMetrics, decode,
 };
+use futures::future::BoxFuture;
 
 /// The table property naming a name mapping for files without field ids.
 const NAME_MAPPING: &str = "schema.name-mapping.default";
@@ -110,13 +120,30 @@ impl IcebergTableProvider {
                 .and_then(ConfigValue::as_int)
                 .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(DEFAULT_MAX_OPEN_FILES);
+            let statistics = config
+                .get(&ICEBERG_WRITE_STATISTICS_ENABLED)
+                .and_then(ConfigValue::as_bool)
+                .or_else(|| {
+                    ICEBERG_WRITE_STATISTICS_ENABLED
+                        .default
+                        .as_ref()
+                        .and_then(ConfigValue::as_bool)
+                })
+                .unwrap_or(false);
+            let base = table.table.metadata();
             provider.write = Some(Arc::new(WriteTarget {
                 committer: Arc::clone(committer),
-                base: table.table.metadata().clone(),
+                statistics: statistics_enabled(statistics, base.properties()),
+                base: base.clone(),
                 registered: table.registered.clone(),
                 file_io: table.table.file_io().clone(),
                 max_metadata_bytes: table.max_metadata_bytes,
                 max_open_files,
+                max_intervening: config
+                    .get(&ICEBERG_COMMIT_MAX_INTERVENING)
+                    .and_then(ConfigValue::as_int)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(super::validate::DEFAULT_MAX_INTERVENING),
             }));
         }
         Ok(provider)
@@ -195,6 +222,89 @@ impl IcebergTableProvider {
         &self.scan.files
     }
 
+    /// The table's scan with the v3 row lineage columns `_row_id` and
+    /// `_last_updated_sequence_number` after the table's columns
+    /// ([`super::lineage`]): what a copy-on-write rewrite reads, so the rows
+    /// it moves keep their lineage (design note §8 item 3). Deletes apply
+    /// before the values are derived. A scan that asks for neither column
+    /// reads as [`TableProvider::scan`] does.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` on a format v1 or v2 table and when the
+    /// table has a column named like either lineage column.
+    #[cfg(test)]
+    pub(crate) fn lineage_scan(&self) -> Result<Arc<dyn ScanPushdown>, KrishivError> {
+        lineage::check_table(self.scan.snapshot.format_version, &self.scan.parts.table)?;
+        Ok(Arc::new(self.scan.with_lineage()) as Arc<dyn ScanPushdown>)
+    }
+
+    /// The scan a row-level statement reads (`row_level.rs`): the table's
+    /// scan, or with `lineage` its lineage scan; restricted to `files` (values
+    /// of `_krishiv_row_file`) when given.
+    ///
+    /// # Errors
+    /// [`Self::lineage_scan`]'s; `INTERNAL_ERROR` for a file value that does
+    /// not decode or a file the snapshot does not hold.
+    pub(super) fn row_level_scan(
+        &self,
+        lineage: bool,
+        files: Option<&[Vec<u8>]>,
+    ) -> Result<Arc<dyn ScanPushdown>, KrishivError> {
+        let scan = if lineage {
+            lineage::check_table(self.scan.snapshot.format_version, &self.scan.parts.table)?;
+            self.scan.with_lineage()
+        } else {
+            (*self.scan).clone()
+        };
+        let scan = match files {
+            None => scan,
+            Some(files) => scan.restricted(&self.ordinals_of(files)?),
+        };
+        Ok(Arc::new(scan))
+    }
+
+    /// The snapshot's entries of `files` (values of `_krishiv_row_file`), in
+    /// plan order, each with the deletes that apply to it.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a value that does not decode or a file the
+    /// snapshot does not hold; the delete assignment's errors.
+    pub(super) fn touched(
+        &self,
+        files: &[Vec<u8>],
+    ) -> Result<Vec<(Arc<DataFileEntry>, crate::plan::TaskDeletes)>, KrishivError> {
+        self.ordinals_of(files)?
+            .into_iter()
+            .map(|i| {
+                let e = Arc::clone(&self.scan.entries[i]);
+                let d = self.scan.index.for_data_file(&e)?;
+                Ok((e, d))
+            })
+            .collect()
+    }
+
+    /// The scan's ordinals of `files`, sorted, each once.
+    fn ordinals_of(&self, files: &[Vec<u8>]) -> Result<Vec<usize>, KrishivError> {
+        let mut out = Vec::with_capacity(files.len());
+        for bytes in files {
+            let f = RowFile::decode(bytes)?;
+            let i = *self
+                .scan
+                .ordinals
+                .get(&file_key(&f))
+                .ok_or_else(|| lazy::unknown_file(&f))?;
+            out.push(i);
+        }
+        out.sort_unstable();
+        out.dedup();
+        Ok(out)
+    }
+
+    /// The write target (a committer and the current version).
+    pub(super) fn write_target(&self) -> Option<&Arc<WriteTarget>> {
+        self.write.as_ref()
+    }
+
     /// The columns read from the manifests' identity-partition values instead
     /// of the files.
     #[must_use]
@@ -229,6 +339,18 @@ impl IcebergTableProvider {
     /// How many files a scan with the pushed filter `expr` opens.
     pub(super) fn files_read(&self, expr: PushdownExpr) -> usize {
         self.scan.pruned(&[expr]).files().len()
+    }
+}
+
+#[cfg(test)]
+impl IcebergTableProvider {
+    /// How many splits the file scan of the lineage scan plans.
+    pub(super) fn lineage_splits(&self) -> usize {
+        self.scan
+            .with_lineage()
+            .base
+            .source(ScanPushdowns::default())
+            .map_or(0, |s| s.partitions().len())
     }
 }
 
@@ -294,6 +416,16 @@ impl TableProvider for IcebergTableProvider {
         let mut caps = TableCapabilities::default();
         caps.batch_write = self.write.is_some();
         caps
+    }
+
+    /// A copy-on-write row-level table (`row_level.rs`) when the provider
+    /// can write (a committer, the current version).
+    fn row_level(&self, op: RowLevelOperation) -> Option<Arc<dyn RowLevelTable>> {
+        self.write.as_ref()?;
+        Some(Arc::new(super::row_level::IcebergRowLevel::new(
+            self.clone(),
+            op,
+        )))
     }
 
     /// The append sink, committing when it finalizes (`sink.rs`).
@@ -442,6 +574,7 @@ impl IcebergScan {
             constant_columns,
             constants: Arc::new(constants),
             ordinal,
+            lineage: false,
             io,
             format_options: FormatOptions::defaults(ParquetFormat.options()),
             scan_options: ScanOptions::from_config(config),
@@ -553,6 +686,10 @@ struct ScanParts {
     /// With equality deletes: the table with [`FILE_ORDINAL`] appended, the
     /// schema the file scan reads.
     ordinal: Option<SchemaRef>,
+    /// A lineage scan ([`super::lineage`]): the file scan also reads the
+    /// stored lineage values and the per-file `first_row_id` and data
+    /// sequence number (after the ordinal in `constants`).
+    lineage: bool,
     io: IoContext,
     format_options: FormatOptions,
     scan_options: ScanOptions,
@@ -562,10 +699,14 @@ struct ScanParts {
 impl ScanParts {
     /// The file scan of `files` (with Spark's split planning).
     fn file_scan(&self, files: Vec<FileRef>) -> FileScan {
+        let mut read = Arc::clone(self.ordinal.as_ref().unwrap_or(&self.table));
+        if self.lineage {
+            read = lineage::with_inputs(&read);
+        }
         let scan = FileScan::new(
             Arc::new(ParquetFormat) as Arc<dyn FileFormat>,
             self.io.clone(),
-            Arc::clone(self.ordinal.as_ref().unwrap_or(&self.table)),
+            read,
             files,
             self.format_options.clone(),
             self.scan_options,
@@ -574,6 +715,9 @@ impl ScanParts {
         let mut columns = self.constant_columns.clone();
         if self.ordinal.is_some() {
             columns.push(Arc::new(eq_deletes::ordinal_field()));
+        }
+        if self.lineage {
+            columns.extend(lineage::constant_fields());
         }
         if columns.is_empty() {
             scan
@@ -584,6 +728,107 @@ impl ScanParts {
 }
 
 impl IcebergScan {
+    /// This scan with the lineage columns (see
+    /// [`IcebergTableProvider::lineage_scan`]): every file's constants gain
+    /// its `first_row_id` and data sequence number.
+    fn with_lineage(&self) -> Self {
+        if self.parts.lineage {
+            return self.clone();
+        }
+        let mut scan = self.clone();
+        let mut constants = FileConstants::new();
+        for (e, f) in self.entries.iter().zip(self.files.iter()) {
+            let mut values = self
+                .parts
+                .constants
+                .get(&f.store, &f.path)
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
+            values.extend(lineage::constants_of(e));
+            constants.insert(f.store.clone(), f.path.clone(), values);
+        }
+        scan.parts.constants = Arc::new(constants);
+        scan.parts.lineage = true;
+        scan.base = scan.parts.file_scan(self.files.to_vec());
+        scan.planned = Arc::default();
+        scan
+    }
+
+    /// This scan reading only the files at `ordinals` (sorted): filters
+    /// prune nothing more (a row-level scan pushes none).
+    fn restricted(&self, ordinals: &[usize]) -> Self {
+        let mut scan = self.clone();
+        let files: Vec<FileRef> = ordinals
+            .iter()
+            .filter_map(|i| self.files.get(*i).cloned())
+            .collect();
+        scan.base = scan.parts.file_scan(files);
+        scan.prune = false;
+        scan.planned = Arc::default();
+        scan
+    }
+
+    /// Whether `column` is read from the files by [`ScanPushdown::take`]: not
+    /// an identity-partition constant, the equality deletes' file ordinal, a
+    /// lineage column or `_metadata`.
+    fn takes(&self, column: &str) -> bool {
+        !self
+            .parts
+            .constant_columns
+            .iter()
+            .any(|f| f.name() == column)
+            && column != FILE_ORDINAL
+            && column != lineage::ROW_ID
+            && column != lineage::LAST_UPDATED
+            && column != krishiv_exec::METADATA_COLUMN
+    }
+
+    /// The table's columns and, for a lineage scan, the two lineage columns.
+    fn outward_schema(&self) -> SchemaRef {
+        let table = &self.parts.table;
+        if !self.parts.lineage {
+            return Arc::clone(table);
+        }
+        let mut fields: Vec<FieldRef> = table.fields().iter().cloned().collect();
+        fields.extend(lineage::lineage_fields());
+        Arc::new(arrow_schema::Schema::new_with_metadata(
+            fields,
+            table.metadata().clone(),
+        ))
+    }
+
+    /// For a lineage scan: the inner pushdowns and the split of the caller's
+    /// columns (`None`: the scan reads no lineage column, and `p` is
+    /// returned with an explicit projection of the table's columns).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for lineage columns with `_metadata`
+    /// columns; [`LineageSplit::new`]'s.
+    fn lineage_pushdowns(
+        &self,
+        mut p: ScanPushdowns,
+    ) -> Result<(ScanPushdowns, Option<LineageSplit>), KrishivError> {
+        let split = LineageSplit::new(&self.parts.table, p.projection.as_deref(), p.row_id)?;
+        // Filters naming a lineage column are not pushed
+        // (`filter_pushdown`); any that arrive stay with the filter above.
+        p.filters.retain(|f| !names_lineage(f));
+        p.projection = Some(split.inner.clone());
+        // The row position is read as the file scan's row id, which does not
+        // combine with `_metadata` (review nit 6: refused here, not as the
+        // file scan's internal error).
+        if (split.wanted || p.row_id) && eq_deletes::any_metadata(&p.metadata) {
+            return Err(unsupported(
+                "the Iceberg row lineage or row id columns together with _metadata columns"
+                    .to_owned(),
+            ));
+        }
+        if !split.wanted {
+            return Ok((p, None));
+        }
+        p.row_id = true;
+        Ok((p, Some(split)))
+    }
+
     /// `p` with the table's field mapping.
     fn mapped(&self, mut p: ScanPushdowns) -> ScanPushdowns {
         p.mapping = self.mapping.clone();
@@ -593,7 +838,8 @@ impl IcebergScan {
     /// The pushdowns of the inner scan of an [`EqDeleteSource`] for `p`: the
     /// equality columns and [`FILE_ORDINAL`] are read too, and no limit is
     /// pushed (deleted rows would count towards it). Also the paths of the
-    /// output in the inner batches: `p`'s columns, then `_metadata`.
+    /// output in the inner batches: `p`'s columns, then `_metadata` or the
+    /// row id.
     fn with_equality_columns(
         &self,
         mut p: ScanPushdowns,
@@ -613,6 +859,11 @@ impl IcebergScan {
         let mut output = wanted;
         if eq_deletes::any_metadata(&p.metadata) {
             output.push(ColumnPath::new(krishiv_exec::METADATA_COLUMN));
+        }
+        // The row id the file scan appends (a lineage scan's row positions).
+        if p.row_id {
+            output.push(ColumnPath::new(ROW_FILE_COLUMN));
+            output.push(ColumnPath::new(ROW_POSITION_COLUMN));
         }
         p.projection = Some(read);
         p.limit = None;
@@ -649,7 +900,7 @@ impl IcebergScan {
 
 impl ScanPushdown for IcebergScan {
     fn table_schema(&self) -> SchemaRef {
-        Arc::clone(&self.parts.table)
+        self.outward_schema()
     }
 
     fn supports_selection(&self) -> bool {
@@ -659,7 +910,11 @@ impl ScanPushdown for IcebergScan {
 
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
         // Files are pruned by it (a superset of the matching rows is kept);
-        // the filter above the scan stays.
+        // the filter above the scan stays. A lineage column is not in the
+        // files' columns the pruner and the file scan know.
+        if self.parts.lineage && names_lineage(filter) {
+            return FilterPushdown::Unsupported;
+        }
         if filter.expr.is_some() {
             FilterPushdown::Inexact
         } else {
@@ -668,28 +923,16 @@ impl ScanPushdown for IcebergScan {
     }
 
     fn build(&self, pushdowns: ScanPushdowns) -> krishiv_exec::Result<Arc<dyn Source>> {
-        let mut p = self.mapped(pushdowns);
-        let planned = self.planned(&p.filters)?;
-        let scan = planned.scan.clone();
-        if planned.tasks.is_empty() && self.parts.ordinal.is_none() {
-            return scan.build(p);
+        if !self.parts.lineage {
+            return self.build_inner(pushdowns);
         }
-        let columns = &planned.columns;
-        let state = Arc::new(DeleteState::new(
-            Arc::clone(&self.env),
-            planned.tasks.clone(),
-        ));
-        if state.has_positions() {
-            p.selection = Some(Arc::new(LazySelections(Arc::clone(&state))));
-        }
-        if self.parts.ordinal.is_none() {
-            let source = scan.build(p)?;
-            return Ok(Arc::new(DeleteSource::new(source, state, None)));
-        }
-        let (inner, output) = self.with_equality_columns(p, columns);
-        let source = scan.build(inner)?;
-        let eq = EqProjection::new(&source.schema(), output)?;
-        Ok(Arc::new(DeleteSource::new(source, state, Some(eq))))
+        let (inner, split) = self.lineage_pushdowns(pushdowns)?;
+        let source = self.build_inner(inner)?;
+        let Some(split) = split else {
+            return Ok(source);
+        };
+        let projection = split.projection(&source.schema())?;
+        Ok(Arc::new(LineageSource::new(source, projection)))
     }
 
     /// `Snapshot: <id>, DataFiles: <read>/<total>, DeleteFiles: [position=..,
@@ -712,6 +955,54 @@ impl ScanPushdown for IcebergScan {
         ))
     }
 
+    /// As the file scan's: rows of a built scan are read again by position.
+    /// The positions a scan returned are live (its deletes applied), so a take
+    /// applies no delete.
+    fn supports_take(&self) -> bool {
+        self.base.supports_take()
+    }
+
+    // `in_files` stays false (the default): a late fetch over Iceberg is not
+    // planned yet, so only row-level statements take rows.
+
+    /// The file scan's take with the table's field mapping. Identity-partition
+    /// constants, lineage columns and `_metadata` are not in the files and are
+    /// refused (`KRISHIV_UNSUPPORTED_FEATURE`).
+    fn take(&self, take: TakeRows) -> BoxFuture<'_, krishiv_exec::Result<TakeStream>> {
+        Box::pin(async move {
+            let TakeRows {
+                file,
+                rows,
+                projection,
+                mem,
+                gate,
+            } = take;
+            if let Some(c) = projection.iter().find(|c| !self.takes(c.root())) {
+                return Err(unsupported(format!(
+                    "reading the Iceberg column {} by row position",
+                    c.root()
+                )));
+            }
+            let request = TakeRequest::new(
+                file,
+                Arc::clone(&self.parts.table),
+                projection,
+                self.mapping.clone(),
+                rows,
+            );
+            let stream = krishiv_io::take(
+                &ParquetFormat,
+                &self.parts.io,
+                request,
+                &self.parts.format_options,
+                mem,
+                self.parts.scan_options,
+            )
+            .await?;
+            Ok(stream.with_gate(gate))
+        })
+    }
+
     fn with_file_splits(
         &self,
         files: Vec<FileRef>,
@@ -725,6 +1016,30 @@ impl ScanPushdown for IcebergScan {
     }
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
+        if !self.parts.lineage {
+            return self.inner_output_schema(pushdowns);
+        }
+        let (inner, split) = self.lineage_pushdowns(pushdowns.clone())?;
+        let schema = self.inner_output_schema(&inner)?;
+        match split {
+            None => Ok(schema),
+            Some(split) => Ok(split.projection(&schema)?.schema()),
+        }
+    }
+}
+
+/// Whether `f` reads a lineage column.
+fn names_lineage(f: &PushedFilter) -> bool {
+    f.expr.as_ref().is_some_and(|e| {
+        e.columns()
+            .iter()
+            .any(|c| c.root() == lineage::ROW_ID || c.root() == lineage::LAST_UPDATED)
+    })
+}
+
+impl IcebergScan {
+    /// The output schema of the delete-aware scan for `pushdowns`.
+    fn inner_output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
         let p = self.mapped(pushdowns.clone());
         if self.parts.ordinal.is_none() {
             return self.base.output_schema(&p);
@@ -734,6 +1049,35 @@ impl ScanPushdown for IcebergScan {
         let (inner, output) = self.with_equality_columns(p, &[]);
         let schema = self.base.output_schema(&inner)?;
         krishiv_io::project_schema(&schema, &output)
+    }
+}
+
+impl IcebergScan {
+    /// The delete-aware source for `pushdowns` (the scan of a plain
+    /// provider, the inner scan of a lineage scan).
+    fn build_inner(&self, pushdowns: ScanPushdowns) -> krishiv_exec::Result<Arc<dyn Source>> {
+        let mut p = self.mapped(pushdowns);
+        let planned = self.planned(&p.filters)?;
+        let scan = planned.scan.clone();
+        if planned.tasks.is_empty() && self.parts.ordinal.is_none() {
+            return scan.build(p);
+        }
+        let columns = &planned.columns;
+        let state = Arc::new(DeleteState::new(
+            Arc::clone(&self.env),
+            planned.tasks.clone(),
+        ));
+        if state.has_positions() {
+            p.selection = Some(Arc::new(LazySelections(Arc::clone(&state))));
+        }
+        if self.parts.ordinal.is_none() {
+            let source = scan.build(p)?;
+            return Ok(Arc::new(DeleteSource::new(source, state, None)));
+        }
+        let (inner, output) = self.with_equality_columns(p, columns);
+        let source = scan.build(inner)?;
+        let eq = EqProjection::new(&source.schema(), output)?;
+        Ok(Arc::new(DeleteSource::new(source, state, Some(eq))))
     }
 }
 

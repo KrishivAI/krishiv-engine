@@ -717,7 +717,12 @@ fn table_arguments() {
             "{sql}"
         );
     }
-    assert!(unsupported("SELECT * FROM f(TABLE(t))").contains("table-valued functions"));
+    // A TABLE argument lowers to a `SubqueryKind::Table` subquery with its partitioning (PR-26c-4); the
+    // analyzer gives it to a Python table function only.
+    let q = ok("SELECT * FROM f(TABLE(t) PARTITION BY g ORDER BY id DESC)");
+    let plan = lower(&q, krishiv_plan::SourceId(0)).unwrap();
+    let text = format!("{:?}", plan.root());
+    assert!(text.contains("Table(TableArgSpec"), "{text}");
 }
 
 #[test]

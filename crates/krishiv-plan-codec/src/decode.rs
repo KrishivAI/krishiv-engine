@@ -586,6 +586,40 @@ impl Decoder {
                 input: self.boxed(p.input)?,
                 udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
             },
+            Kind::PythonUdtf(p) => PhysNode::PythonUdtf {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+                call: krishiv_exec::physical::PythonUdtfPlan {
+                    arg_names: p.arg_names.iter().map(|n| n.name.clone()).collect(),
+                    table: p
+                        .table
+                        .as_ref()
+                        .map(|t| {
+                            let table = krishiv_exec::physical::PythonUdtfTable {
+                                position: usize_of(t.position)?,
+                                columns: usizes(&t.columns)?,
+                                names: t.names.clone(),
+                                partition_child_indexes: usizes(&t.partition_child_indexes)?,
+                            };
+                            // One struct of named input columns, at an argument's place.
+                            if table.names.len() != table.columns.len()
+                                || table.position >= p.arg_names.len()
+                                || table
+                                    .partition_child_indexes
+                                    .iter()
+                                    .any(|&i| i >= table.columns.len())
+                            {
+                                return Err(corrupt(
+                                    "a Python UDTF TABLE argument of uneven shape",
+                                ));
+                            }
+                            Ok(table)
+                        })
+                        .transpose()?,
+                    carried: usizes(&p.carried)?,
+                    analyzed: p.analyzed.clone(),
+                },
+            },
             Kind::PythonGroupMap(p) => PhysNode::PythonGroupMap {
                 input: self.boxed(p.input)?,
                 keys: usizes(&p.keys)?,
@@ -1297,6 +1331,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         MinBy => AggregateFunction::MinBy,
         MaxByKeyFirst => AggregateFunction::MaxByKeyFirst,
         MinByKeyFirst => AggregateFunction::MinByKeyFirst,
+        BitmapConstructAgg => AggregateFunction::BitmapConstructAgg,
+        BitmapOrAgg => AggregateFunction::BitmapOrAgg,
+        BitmapAndAgg => AggregateFunction::BitmapAndAgg,
+        HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
+        HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {

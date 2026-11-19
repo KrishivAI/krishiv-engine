@@ -43,11 +43,11 @@ use krishiv_connect_server::{
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
 use krishiv_session::auth::{
-    AuthConfig, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
+    AuthConfig, Authenticated, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
 };
 use krishiv_session::catalog_decl::{DeclMode, is_declaration_key};
 use krishiv_session::catalog_registry::CatalogSetup;
-use krishiv_session::{EngineRuntime, Session};
+use krishiv_session::{EngineRuntime, Session, Transport};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -539,8 +539,15 @@ fn admin_router(
                 .runtime(Arc::clone(runtime))
                 .build()
                 .map_err(|e| e.to_string())?;
+            // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
+            // statement arrived (P3-T101 §2 H3).
             let factory = role_sessions(base, config, denials).map_err(|e| e.to_string())?;
-            source = source.with_caller_sessions(Arc::from(factory));
+            source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
+                let session = factory(caller, Transport::Ui)?;
+                // `system.sessions` shows the transport the denials count under.
+                session.set_client_info(Transport::Ui, None, None, None);
+                Ok(session)
+            }));
         }
         // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and
         // `krishiv.ui.allowedHosts`; on another address only when names are configured. The environment variable

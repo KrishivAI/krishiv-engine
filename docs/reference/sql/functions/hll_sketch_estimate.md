@@ -9,7 +9,7 @@ description: "Returns the estimated number of unique values given the binary rep
 Returns the estimated number of unique values given the binary representation
 of a Datasketches HllSketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -21,9 +21,9 @@ hll_sketch_estimate(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 3.5.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | 1 |
@@ -34,12 +34,13 @@ hll_sketch_estimate(expr)
 ```sql
 -- hll_sketch_estimate, example 1
 > SELECT hll_sketch_estimate(hll_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

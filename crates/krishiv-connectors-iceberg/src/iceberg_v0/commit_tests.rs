@@ -29,25 +29,29 @@ use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
 
 use super::append::{NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt, write_new_manifests};
 use super::append_tests::{MAX, create, file, iceberg_rust_files, ids, rows};
-use super::commit::{CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append};
+use super::commit::{
+    CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append, commit_validated,
+};
 use super::provider_tests::{Env, env};
 use super::scan::read_manifest_files;
+use super::statistics_tests::sketches;
+use super::validate::Validation;
 
 /// One commit request's body.
-type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
+pub(super) type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
 
 /// A foreign writer's request, built on the metadata it is given.
-type Foreign =
+pub(super) type Foreign =
     Box<dyn FnOnce(TableMetadata) -> Pin<Box<dyn Future<Output = Request> + Send>> + Send>;
 
 /// The snapshot id and write key of the write under test.
-const OURS: i64 = 7_000;
-const OUR_KEY: &str = "w-ours";
-const OUR_UUID: &str = "uuid-ours";
+pub(super) const OURS: i64 = 7_000;
+pub(super) const OUR_KEY: &str = "w-ours";
+pub(super) const OUR_UUID: &str = "uuid-ours";
 
 /// What the catalog does with one request.
 #[derive(Debug, Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     /// Applied (or refused) and answered.
     Answer,
     /// Applied; the answer is lost (a timeout).
@@ -82,14 +86,14 @@ enum Action {
 
 /// When a foreign writer commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum When {
+pub(super) enum When {
     BeforeRequest(usize),
     AfterRequest(usize),
     BeforeLoad(usize),
 }
 
 /// Why a catalog refused a request.
-enum Refusal {
+pub(super) enum Refusal {
     Conflict,
     Stale,
     Duplicate,
@@ -103,7 +107,7 @@ struct Pending {
     loads_left: Option<usize>,
 }
 
-struct State {
+pub(super) struct State {
     meta: TableMetadata,
     location: String,
     version: u32,
@@ -118,8 +122,8 @@ struct State {
 }
 
 /// The catalog under test: one table, a script of faults.
-struct TestCatalog {
-    state: Mutex<State>,
+pub(super) struct TestCatalog {
+    pub(super) state: Mutex<State>,
 }
 
 /// The table `m` after the catalog applies `request`, or why not.
@@ -157,7 +161,7 @@ fn error(message: &str) -> KrishivError {
 
 impl State {
     /// Applies `request` and writes the metadata file; the refusal if any.
-    fn land(&mut self, request: &Request) -> Result<TableMetadata, Refusal> {
+    pub(super) fn land(&mut self, request: &Request) -> Result<TableMetadata, Refusal> {
         let next = apply(&self.meta, &self.location, request)?;
         self.persist(next.clone());
         Ok(next)
@@ -270,7 +274,7 @@ fn refs_only(m: &TableMetadata) -> TableMetadata {
 }
 
 impl TestCatalog {
-    fn new(meta: TableMetadata, location: String) -> Self {
+    pub(super) fn new(meta: TableMetadata, location: String) -> Self {
         Self {
             state: Mutex::new(State {
                 meta,
@@ -286,11 +290,11 @@ impl TestCatalog {
         }
     }
 
-    fn script(&self, faults: &[Fault]) {
+    pub(super) fn script(&self, faults: &[Fault]) {
         self.state.lock().unwrap().script.extend(faults);
     }
 
-    fn on(&self, when: When, f: Foreign) {
+    pub(super) fn on(&self, when: When, f: Foreign) {
         self.state
             .lock()
             .unwrap()
@@ -317,12 +321,12 @@ impl TestCatalog {
         self.state.lock().unwrap().land_held()
     }
 
-    fn metadata(&self) -> (TableMetadata, String) {
+    pub(super) fn metadata(&self) -> (TableMetadata, String) {
         let s = self.state.lock().unwrap();
         (s.meta.clone(), s.location.clone())
     }
 
-    fn requests(&self) -> usize {
+    pub(super) fn requests(&self) -> usize {
         self.state.lock().unwrap().requests
     }
 
@@ -409,11 +413,11 @@ impl CommitTable for TestCatalog {
 }
 
 /// Virtual time: a sleep advances the clock at once and is recorded.
-struct TestClock {
-    now: AtomicI64,
-    waits: Mutex<Vec<u64>>,
+pub(super) struct TestClock {
+    pub(super) now: AtomicI64,
+    pub(super) waits: Mutex<Vec<u64>>,
     /// Jitter at its largest (`bound - 1`) rather than 0.
-    max_jitter: AtomicBool,
+    pub(super) max_jitter: AtomicBool,
 }
 
 #[async_trait]
@@ -460,6 +464,21 @@ fn foreign_keyed(
     branch: &str,
     key: Option<&str>,
 ) -> Foreign {
+    foreign_full(env, clock, m, name, id, branch, key, None)
+}
+
+/// [`foreign_keyed`] with statistics of `id` over `sketched` (PR-54b).
+#[expect(clippy::too_many_arguments, reason = "a test helper's knobs")]
+pub(super) fn foreign_full(
+    env: &Env,
+    clock: &Arc<TestClock>,
+    m: &TableMetadata,
+    name: &str,
+    id: i64,
+    branch: &str,
+    key: Option<&str>,
+    sketched: Option<std::ops::Range<i64>>,
+) -> Foreign {
     let f = file(env, m, name, 1, &[(id, name)]);
     let key = key.map_or_else(|| format!("uuid-{id}"), str::to_owned);
     let io = env.reg.file_io();
@@ -471,6 +490,7 @@ fn foreign_keyed(
             let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid, &mut Vec::new())
                 .await
                 .unwrap();
+            new.statistics = sketched.map(sketches);
             let ts = clock.now_ms().max(m.last_updated_ms() + 1);
             let ids = WriteIds {
                 branch: &branch,
@@ -531,15 +551,25 @@ fn upgrade(to: FormatVersion) -> Foreign {
 /// A table of format `version` with one committed snapshot (row `1|1|init`),
 /// the catalog over it, the clock and the write under test: one data file
 /// (`10|2|ours`) and its manifests, written against that snapshot.
-struct Case {
-    env: Env,
-    cat: TestCatalog,
-    clock: Arc<TestClock>,
-    base: TableMetadata,
-    new: NewManifests,
+pub(super) struct Case {
+    pub(super) env: Env,
+    pub(super) cat: TestCatalog,
+    pub(super) clock: Arc<TestClock>,
+    pub(super) base: TableMetadata,
+    pub(super) new: NewManifests,
 }
 
-fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
+pub(super) fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
+    case_on(version, properties, None)
+}
+
+/// [`case_with`] with the initial snapshot's statistics over `init` and the
+/// write's over `ours` (PR-54b), when given.
+pub(super) fn case_on(
+    version: u8,
+    properties: &[(&str, &str)],
+    stats: Option<(std::ops::Range<i64>, std::ops::Range<i64>)>,
+) -> Case {
     let env = env();
     let t = create(&env, version);
     let mut m0 = t.metadata().clone();
@@ -562,7 +592,17 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
         waits: Mutex::new(Vec::new()),
         max_jitter: AtomicBool::new(false),
     });
-    let init = foreign(&env, &clock, &m0, "init.parquet", 1, "main");
+    let (init_stats, our_stats) = stats.unzip();
+    let init = foreign_full(
+        &env,
+        &clock,
+        &m0,
+        "init.parquet",
+        1,
+        "main",
+        None,
+        init_stats,
+    );
     env.rt.block_on(async {
         let request = init(m0.clone()).await;
         cat.state.lock().unwrap().land(&request).ok().unwrap();
@@ -570,7 +610,7 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     let base = cat.metadata().0;
     let ours = file(&env, &base, "ours.parquet", 2, &[(10, "ours")]);
     let io = env.reg.file_io();
-    let new = env
+    let mut new = env
         .rt
         .block_on(write_new_manifests(
             &io,
@@ -581,6 +621,7 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
             &mut Vec::new(),
         ))
         .unwrap();
+    new.statistics = our_stats.map(sketches);
     Case {
         env,
         cat,
@@ -590,12 +631,12 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     }
 }
 
-fn case() -> Case {
+pub(super) fn case() -> Case {
     case_with(2, &[])
 }
 
 impl Case {
-    fn run(&mut self) -> Result<TableMetadata, KrishivError> {
+    pub(super) fn run(&mut self) -> Result<TableMetadata, KrishivError> {
         let io = self.env.reg.file_io();
         let cx = CommitContext {
             io: &io,
@@ -611,7 +652,28 @@ impl Case {
         ))
     }
 
-    fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
+    /// [`Self::run`] through `commit_validated` with `validation`.
+    pub(super) fn run_validated(
+        &mut self,
+        validation: &Validation,
+    ) -> Result<TableMetadata, KrishivError> {
+        let io = self.env.reg.file_io();
+        let cx = CommitContext {
+            io: &io,
+            clock: self.clock.as_ref(),
+            max_metadata_bytes: MAX,
+        };
+        self.env.rt.block_on(commit_validated(
+            &self.cat,
+            cx,
+            &self.base,
+            &mut self.new,
+            ids(OUR_KEY),
+            validation,
+        ))
+    }
+
+    pub(super) fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
         foreign(&self.env, &self.clock, &self.base, name, id, branch)
     }
 
@@ -629,29 +691,29 @@ impl Case {
     }
 
     /// The location of attempt `n`'s manifest list.
-    fn list(&self, n: u32) -> String {
+    pub(super) fn list(&self, n: u32) -> String {
         format!(
             "{}/metadata/snap-{OURS}-{n}-{OUR_UUID}.avro",
             self.base.location()
         )
     }
 
-    fn manifest(&self) -> String {
+    pub(super) fn manifest(&self) -> String {
         self.new.manifests[0].manifest_path.clone()
     }
 
-    fn data(&self) -> String {
+    pub(super) fn data(&self) -> String {
         self.env.at("ours.parquet")
     }
 
-    fn waits(&self) -> Vec<u64> {
+    pub(super) fn waits(&self) -> Vec<u64> {
         self.clock.waits.lock().unwrap().clone()
     }
 
     /// The table's invariants: every live data file listed once, our
     /// snapshot at most once, and the rows `expected` (`id|x|name`, by id)
     /// through SQL and the same files through iceberg-rust's planning.
-    fn check(&self, expected: &[&str]) {
+    pub(super) fn check(&self, expected: &[&str]) {
         let (m, loc) = self.cat.metadata();
         let files = iceberg_rust_files(&self.env, &m, &loc);
         let unique: HashSet<&String> = files.iter().collect();
@@ -667,12 +729,12 @@ impl Case {
     }
 }
 
-fn exists(url: &str) -> bool {
+pub(super) fn exists(url: &str) -> bool {
     std::path::Path::new(url.strip_prefix("file://").unwrap()).exists()
 }
 
-const INIT: &str = "1|1|init.parquet";
-const MINE: &str = "10|2|ours";
+pub(super) const INIT: &str = "1|1|init.parquet";
+pub(super) const MINE: &str = "10|2|ours";
 
 /// The plain path: one request, committed; the list, manifest and data file
 /// kept; no wait.
@@ -1644,12 +1706,20 @@ impl Seeded {
 /// One generated schedule: a fault per request, up to three foreign commits
 /// (on `main` or `dev`) at random points, failing loads, and held requests
 /// landed at a random point or after the run.
-fn sweep_one(seed: u64, version: u8) {
+/// Whether the run committed with statistics of this write.
+fn sweep_one(seed: u64, version: u8) -> bool {
     let mut g = Seeded(seed);
     // One schedule in three merges on the first attempt (from the seed, so
     // the other draws, and the schedules, stay as they were).
     let merging = seed.is_multiple_of(3);
-    let mut c = case_with(version, if merging { MERGE } else { &[] });
+    // Every other schedule carries statistics over a sketched base (PR-54b),
+    // and its foreign appends on `main` with an even id are sketched too.
+    let sketched = seed % 2 == 1;
+    let mut c = case_on(
+        version,
+        if merging { MERGE } else { &[] },
+        sketched.then_some((0..100, 50..120)),
+    );
     let mut faults: Vec<Fault> = (0..5)
         .map(|_| match g.below(11) {
             0 => Fault::LostResponse,
@@ -1677,7 +1747,17 @@ fn sweep_one(seed: u64, version: u8) {
         if branch == "main" {
             main_foreign.push((id, format!("{id}|1|{name}")));
         }
-        c.cat.on(g.when(), c.foreign(&name, id, branch));
+        let foreign = foreign_full(
+            &c.env,
+            &c.clock,
+            &c.base,
+            &name,
+            id,
+            branch,
+            None,
+            (sketched && id % 2 == 0).then_some(0..300),
+        );
+        c.cat.on(g.when(), foreign);
     }
     // One schedule in four fails 4-8 loads, enough to outlast a conflict's
     // refresh (B1's shape: a conflict, then no successful load).
@@ -1706,8 +1786,24 @@ fn sweep_one(seed: u64, version: u8) {
     if rolled && !roll_after {
         c.cat.on(g.when(), rollback(base));
     }
-    let schedule = format!("seed {seed}: {faults:?}, rollback {rolled}, merging {merging}");
+    let schedule = format!(
+        "seed {seed}: {faults:?}, rollback {rolled}, merging {merging}, sketched {sketched}"
+    );
     let out = c.run();
+    // PR-54b: a statistics file of this write survives the run only when the
+    // committed metadata names it, or the write kept its files (unresolved,
+    // or failed after an unknown answer).
+    for p in &c.new.statistics_files {
+        let named = |m: &TableMetadata| m.statistics_iter().any(|f| &f.statistics_path == p);
+        let may_stay = match &out {
+            Ok(m) => named(m),
+            Err(e) => !e.message().contains("removed where possible"),
+        };
+        assert!(
+            may_stay || !exists(p),
+            "{schedule}: an abandoned statistics file {p} was left"
+        );
+    }
     assert_eq!(
         c.new.merged.len(),
         usize::from(merging),
@@ -1799,6 +1895,15 @@ fn sweep_one(seed: u64, version: u8) {
     expected.sort_by_key(|r| r.split('|').next().unwrap().parse::<i64>().unwrap());
     let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
     c.check(&expected);
+    // PR-54b: every statistics file the table names exists.
+    for f in m.statistics_iter() {
+        assert!(
+            exists(&f.statistics_path),
+            "{schedule}: the table names a deleted statistics file {}",
+            f.statistics_path
+        );
+    }
+    m.statistics_for_snapshot(OURS).is_some()
 }
 
 /// R:S3: generated schedules (seeded, on virtual time). After each: the
@@ -1809,16 +1914,20 @@ fn sweep_one(seed: u64, version: u8) {
 /// in the table, read through SQL and iceberg-rust's planning.
 #[test]
 fn generated_schedules_keep_the_invariants() {
-    for seed in 0..300 {
-        sweep_one(seed, 2);
-    }
+    let with_statistics = (0..300).filter(|seed| sweep_one(*seed, 2)).count();
+    assert!(
+        with_statistics > 10,
+        "{with_statistics} runs committed statistics"
+    );
 }
 
 /// The sweep on a v1 table, where no sequence number stops a request settled
 /// as "not applied" from landing after a rollback (review-1 pass 2 P1).
 #[test]
 fn generated_schedules_on_v1_keep_the_invariants() {
-    for seed in 0..200 {
-        sweep_one(seed, 1);
-    }
+    let with_statistics = (0..200).filter(|seed| sweep_one(*seed, 1)).count();
+    assert!(
+        with_statistics > 10,
+        "{with_statistics} runs committed statistics"
+    );
 }

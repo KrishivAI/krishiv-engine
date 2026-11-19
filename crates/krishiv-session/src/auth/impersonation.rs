@@ -312,6 +312,10 @@ impl Denial {
 }
 
 /// The outcome of [`decide`] for a request that asked for someone else.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value per impersonation decision, returned once and never stored"
+)]
 pub(crate) enum Decision {
     /// The request named only the caller: the caller, unchanged, and nothing to audit.
     Itself,

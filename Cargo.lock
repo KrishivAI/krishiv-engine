@@ -3080,6 +3080,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hyper-util",
+ "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
  "krishiv-exec",
@@ -3130,6 +3131,7 @@ dependencies = [
  "chrono",
  "delta_kernel",
  "futures",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
@@ -3154,6 +3156,7 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "codspeed-criterion-compat",
  "datasketches",
  "foldhash",
  "futures",
@@ -3176,6 +3179,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "typetag",
 ]
 
@@ -3237,6 +3241,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "cbc",
+ "datasketches",
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
@@ -3358,6 +3363,7 @@ dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
  "codspeed-criterion-compat",
+ "datasketches",
  "insta",
  "krishiv-common",
  "krishiv-functions",
@@ -3422,6 +3428,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
@@ -3497,6 +3504,7 @@ dependencies = [
  "http",
  "insta",
  "krishiv-common",
+ "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
@@ -3529,6 +3537,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "twox-hash",
+ "url",
 ]
 
 [[package]]
