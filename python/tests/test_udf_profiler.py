@@ -39,6 +39,18 @@ def _plus_one():
     return plus_one
 
 
+def _plus_one_calls(*sessions: SparkSession) -> int:
+    """The calls of the ``plus_one`` function in the ``perf`` profiles of ``sessions`` (no profiler bookkeeping)."""
+    total = 0
+    for session in sessions:
+        for entry in session._profile_registry.perf.values():
+            if entry.perf is None:
+                continue
+            raw = getattr(pstats.Stats(entry.perf), "stats")  # noqa: B009 (typeshed lacks the attribute)
+            total += sum(row[1] for (_, _, name), row in raw.items() if name == "plus_one")
+    return total
+
+
 def test_off_by_default_collects_nothing(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
     plus_one = _plus_one()
     assert [r[0] for r in spark.range(3).select(plus_one("id")).collect()] == [1, 2, 3]
@@ -95,19 +107,20 @@ def test_dump_and_clear(spark: SparkSession, tmp_path: Path, capsys: pytest.Capt
     spark.profile.dump(str(tmp_path))
     assert sorted(os.listdir(tmp_path)) == [f"udf_{udf_id}_memory.json", f"udf_{udf_id}_perf.pstats"]
     stats = pstats.Stats(str(tmp_path / f"udf_{udf_id}_perf.pstats"))
-    assert getattr(stats, "total_calls") > 0  # noqa: B009 (typeshed lacks the attribute)
+    raw = getattr(stats, "stats")  # noqa: B009 (typeshed lacks the attribute)
+    assert [row[1] for (_, _, name), row in raw.items() if name == "plus_one"] == [3]
     spark.profile.clear(udf_id, type="perf")
     spark.profile.show(type="perf")
     assert capsys.readouterr().out == ""
     spark.profile.show(type="memory")
-    assert "call(s)" in capsys.readouterr().out
+    assert "Memory of plus_one: 3 call(s)" in capsys.readouterr().out
     spark.profile.clear()
     spark.profile.show()
     assert capsys.readouterr().out == ""
     # The profiler keeps collecting after a clear.
     spark.range(2).select(plus_one("id")).collect()
     spark.profile.show()
-    assert "call(s)" in capsys.readouterr().out
+    assert "Memory of plus_one: 2 call(s)" in capsys.readouterr().out
 
 
 def test_turning_it_off_stops_collecting(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
@@ -137,6 +150,7 @@ def test_profiled_calls_from_many_threads_do_not_clash(spark: SparkSession) -> N
     for t in threads:
         t.join()
     assert errors == []
+    assert _plus_one_calls(spark) == 4 * 20
 
 
 def test_two_sessions_profiling_at_once_do_not_raise(spark: SparkSession) -> None:
@@ -160,4 +174,6 @@ def test_two_sessions_profiling_at_once_do_not_raise(spark: SparkSession) -> Non
     for t in threads:
         t.join()
     assert errors == []
+    # Every call is profiled once, in the registry of one of the two sessions (today the active one's).
+    assert _plus_one_calls(spark, other) == 4 * 30
     other.profile.clear()
