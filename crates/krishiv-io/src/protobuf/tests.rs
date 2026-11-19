@@ -104,6 +104,32 @@ fn a_recursive_message_needs_a_depth_and_is_cut_at_it() {
 }
 
 #[test]
+fn an_empty_wrapper_element_of_a_repeated_unwrapped_field_stays_a_null() {
+    // Wkt.i32vs = [{value: 5}, {}, {value: 7}] under unwrap.primitive.wrapper.types: Spark gives [5, NULL, 7].
+    let bytes = [
+        0x82, 0x01, 0x02, 0x08, 0x05, 0x82, 0x01, 0x00, 0x82, 0x01, 0x02, 0x08, 0x07,
+    ];
+    let opts = [("unwrap.primitive.wrapper.types", "true")];
+    let set = DescriptorSet::parse(TYPES).unwrap();
+    let d = super::Decoder::new(&set, "Wkt", opts.iter().copied()).unwrap();
+    // Spark says `array<int NOT NULL>`; Krishiv admits the NULL element rather than drop it (README divergence).
+    assert!(d.spark_type().simple_string().contains("i32vs:array<int>"));
+    let out = d.decode(&[Some(&bytes)]).unwrap();
+    let list = out
+        .as_struct()
+        .column_by_name("i32vs")
+        .unwrap()
+        .as_list::<i32>()
+        .value(0);
+    let ints = list.as_primitive::<Int32Type>();
+    assert_eq!(ints.len(), 3);
+    assert_eq!(
+        (ints.value(0), ints.is_null(1), ints.value(2)),
+        (5, true, 7)
+    );
+}
+
+#[test]
 fn upcast_unsigned_widens_uint32_and_uint64() {
     let set = DescriptorSet::parse(GOLDEN).unwrap();
     let d = super::Decoder::new(&set, "Scalars", [("upcast.unsigned.ints", "true")]).unwrap();

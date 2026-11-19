@@ -206,11 +206,7 @@ fn field_cell(
             if let Some(Slot::Many(raws)) = slot {
                 for raw in raws {
                     let cell = value(ctx, c, *raw, depth)?;
-                    // The element type is `NOT NULL` (as Spark declares it): an empty wrapper element (`0A00`), which Spark
-                    // keeps as a NULL, cannot be held by it and is left out rather than failing the batch (known divergence).
-                    if !matches!(cell, Cell::Null) {
-                        items.push(cell);
-                    }
+                    items.push(cell);
                 }
             }
             Ok(Cell::List(items))

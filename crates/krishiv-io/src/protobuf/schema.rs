@@ -184,9 +184,16 @@ fn field(
         return Ok(None);
     };
     if fd.is_list() {
-        // Spark declares `array<T NOT NULL>` here (its goldens, 3.5.7 to 4.3.0), also for wrapper elements.
+        // Spark declares `array<T NOT NULL>` here (its goldens, 3.5.7 to 4.3.0). An unwrapped wrapper element can still
+        // be NULL (an empty wrapper message), so those arrays say `containsNull = true` rather than lose the element
+        // (known nullability divergence, recorded in the golden README).
+        let contains_null = matches!(conv.out, Out::Unwrap(_));
         return Ok(Some((
-            StructField::new(fd.name(), DataType::from(ArrayType::new(dt, false)), true),
+            StructField::new(
+                fd.name(),
+                DataType::from(ArrayType::new(dt, contains_null)),
+                true,
+            ),
             PlanField {
                 fd: fd.clone(),
                 shape: Shape::List(conv),

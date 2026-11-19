@@ -92,3 +92,30 @@ fn a_descriptor_path_outside_the_roots_is_denied_whether_or_not_it_exists() {
     let sql = format!("SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', X'{hex}')");
     assert_eq!(run(&s, &sql).unwrap(), 1);
 }
+
+/// A descriptor path that is foldable but not a literal (`concat(..)`) passes the argument check and is refused when the
+/// call is built, where Spark would read the file: `KRISHIV_UNSUPPORTED_FEATURE` (recorded in the golden README).
+#[test]
+fn a_foldable_non_literal_descriptor_path_is_unsupported_not_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let allowed = tmp.path().join("allowed");
+    std::fs::create_dir(&allowed).unwrap();
+    std::fs::write(allowed.join("g.desc"), golden_desc()).unwrap();
+    let s = session(&allowed);
+    let dir = allowed.to_str().unwrap();
+    for sql in [
+        format!(
+            "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'))"
+        ),
+        format!(
+            "SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', concat('{dir}/', 'g.desc'), map())"
+        ),
+    ] {
+        let e = run(&s, &sql).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{sql}: {e}"
+        );
+    }
+}

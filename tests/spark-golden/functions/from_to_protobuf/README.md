@@ -143,6 +143,12 @@ ANSI on/off and the session time zone never change the bytes either function rea
 10. Enum numbers outside the proto3 enum render as `UNKNOWN_ENUM_VALUE_<Enum>_<n>` (Java `findValueByNumberCreatingIfUnknown` naming).
 11. Wrapper `UInt32Value` with `unwrap` and no upcast returns INT (wraps negative); `UInt64Value` BIGINT wraps.
 
+## Krishiv divergences (recorded, deliberate)
+
+12. Nullability of unwrapped wrapper lists: under `unwrap.primitive.wrapper.types=true` a `repeated Int32Value` is `array<int NOT NULL>` in Spark, yet an empty wrapper element (`0A00`) reads as a NULL element (`[5, NULL, 7]`). Krishiv gives the same values and declares `array<int>` (`containsNull = true`) for these arrays only, so no element is dropped. Test: `krishiv-io` `an_empty_wrapper_element_of_a_repeated_unwrapped_field_stays_a_null`.
+13. A descriptor path that is foldable but not a literal (`concat('/d/', 'x.desc')`) passes the argument check and is then refused with `KRISHIV_UNSUPPORTED_FEATURE` (reading a protobuf descriptor file by path); Spark folds it and reads the file. Test: `krishiv-session` `protobuf_access::a_foldable_non_literal_descriptor_path_is_unsupported_not_read`.
+14. A malformed map entry (no key or value field) in the descriptor set is `CANNOT_PARSE_PROTOBUF_DESCRIPTOR` here; Spark's protobuf-java builds the descriptor and fails with its own exception text. Test: `krishiv-io` `a_map_entry_without_its_key_and_value_fields_does_not_parse`.
+
 ## Not covered / open
 
 - Java-class mode (`messageClassName`): needs a JVM, listed as `unsupported`.
