@@ -36,6 +36,9 @@ impl Session {
         )
         .await?;
         let properties = options_of(&t.tblproperties, original);
+        #[cfg(feature = "delta")]
+        let located =
+            t.location.is_some() || options.keys().any(|k| k.eq_ignore_ascii_case("path"));
         let (external, location) = new_table_location(t, &mut options, &warehouse, &name)?;
         let mut table = CatalogTable {
             namespace: name.namespace.clone(),
@@ -57,6 +60,16 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
+        #[cfg(feature = "delta")]
+        if is_delta_table(&table) {
+            // delta-spark compares the whole declared schema, typed partition columns and
+            // `NOT NULL` included, with the log's.
+            let mut declared = self.declared_columns(t, original, &typed_partitions)?;
+            super::delta::keep_not_null(&mut declared, t, &typed_partitions);
+            self.create_delta_table(table, t, &declared, &name, &partition_names, mode, located)
+                .await?;
+            return self.empty_frame().await;
+        }
         let layout = LayoutRequest {
             partition_by: &partition_names,
             bucket: t.bucket.as_ref(),
@@ -258,7 +271,7 @@ impl Session {
                 .unwrap_or_else(|| "parquet".to_owned())
         });
         let lower = provider.to_lowercase();
-        if PROVIDERS.contains(&lower.as_str()) {
+        if PROVIDERS.contains(&lower.as_str()) || crate::delta::handles(&lower) {
             Ok(lower)
         } else {
             Err(DataSourceNotFound { provider }.into())
@@ -406,6 +419,13 @@ impl Session {
         layout: &LayoutRequest<'_>,
         pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
+        #[cfg(feature = "delta")]
+        if is_delta_table(&table) {
+            return Err(delta_write_refused(
+                quoted(&table.namespace, &table.name),
+                "CREATE TABLE AS SELECT",
+            ));
+        }
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
         crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -615,6 +635,10 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
+        #[cfg(feature = "delta")]
+        if is_delta_table(&table) {
+            return Err(delta_write_refused(name.quoted(), "CREATE TABLE LIKE"));
+        }
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
         } else {
@@ -721,7 +745,7 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.table, &env)?;
-        let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
+        let table = self.table_for_read_command(&name, "ANALYZE TABLE", &env)?;
         if let Some(spec) = &a.partition {
             if !matches!(a.columns, AnalyzeColumns::All) {
                 return Err(unsupported("ANALYZE TABLE ... PARTITION ... FOR COLUMNS"));

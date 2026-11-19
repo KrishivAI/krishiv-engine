@@ -15,6 +15,9 @@
   `window_iter/goldens.json` holds PySpark 4.2.0's answers from a real local run (`window_iter/gen_goldens.py`,
   its docstring has the command); `KNOWN_GAPS` lists the cases the embedded facade does not match yet (all of
   them until PR-48); `crates/krishiv-udf-pool/tests/window_iter_goldens.rs` replays the same goldens on the worker pool.
+- `udtf/` and `test_udtf_goldens.py`: PySpark 4.2.0 goldens for Python UDTFs (eval types 300, 301, 302; rows, `TABLE`
+  arguments, `analyze`, mistyped results, the `UDTF_*` errors), the same layout as `window_iter/`; every case is in
+  `KNOWN_GAPS` ("PR-26c-4: UDTF planning"). `udtf/README.md` lists what the run showed.
 - Run: `cd python && uv run --group dev --extra pandas pytest tests/pyspark_udf`.
 
 ## Goldens owed
@@ -22,16 +25,9 @@
 Spark-observable Python UDF behaviour the pool runs with no PySpark 4.2.0 golden yet (the spark-semantics flow
 makes them; each lands with or before the change that makes it reachable from a query):
 
-- Python UDTFs (`crates/krishiv-udf-pool/tests/udtf.rs`, `python/tests/test_udf_udtf.py` check the port only),
-  due with the planner half of P3-T014 PR-26c-3 part B: for `@udtf` (300), `@udtf(useArrow=True)` (301) and
-  `@arrow_udtf` (302), the rows of `eval` and `terminate`; a `TABLE` argument with `PARTITION BY` and `ORDER BY`
-  (a `terminate` and a fresh instance per partition) and `WITH SINGLE PARTITION`; each `UDTF_*` error of
-  `read_udtf`; `analyze` (the result schema, `partitionBy`, `orderBy`, `select`, a constant argument of each type
-  as `analyze` sees it, the `withSinglePartition` refusal without a table argument, and a failing `analyze`'s
-  `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` message).
-- A `@udtf` (300) returning values of another type than the declared one, nested rows and `None` rows: Spark's
-  JVM converts them (`EvaluatePython.makeFromJava`), Krishiv converts them to Arrow as for 301
-  (`docs/concepts/known-differences.md`, "Python table functions"); match the golden or record the difference.
+- Python UDTFs: the goldens are in `udtf/` (see above). Still owed: the replay on the worker pool, and the decision on
+  each difference the cases pin (a 300 that converts a mistyped result to NULL, `docs/concepts/known-differences.md`
+  "Python table functions"), each due with PR-26c-4.
 - Grouped-aggregate Python UDFs (202, 252) in SQL `GROUP BY`
   (`crates/krishiv-udf-pool/tests/window_iter_goldens.rs` `grouped_aggregate_udfs_in_sql_group_by` checks the
   results and the classes from the Spark source): the same queries in a PySpark 4.2.0 run, including the
