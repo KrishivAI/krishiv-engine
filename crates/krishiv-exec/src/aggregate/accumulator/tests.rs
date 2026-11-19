@@ -357,3 +357,12 @@ fn count_dense_path_matches_the_row_loop() {
         }
     }
 }
+
+#[test]
+fn pow10_table_equals_the_computed_powers() {
+    for p in 0..=38_u8 {
+        assert_eq!(pow10(p), 10_i128.pow(u32::from(p)), "10^{p}");
+    }
+    assert_eq!(pow10(39), pow10(38));
+    assert_eq!(pow10(u8::MAX), pow10(38));
+}
