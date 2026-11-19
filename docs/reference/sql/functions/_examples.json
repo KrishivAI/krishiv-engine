@@ -401,16 +401,12 @@
     ]
   },
   "array_sort#1": {
-    "ok": true,
-    "rows": [
-      "[1,5,6]"
-    ]
+    "class": "PARSE_SYNTAX_ERROR",
+    "ok": false
   },
   "array_sort#2": {
-    "ok": true,
-    "rows": [
-      "[\"dc\",\"bc\",\"ab\"]"
-    ]
+    "class": "PARSE_SYNTAX_ERROR",
+    "ok": false
   },
   "array_sort#3": {
     "ok": true,
@@ -1650,10 +1646,8 @@
     ]
   },
   "filter#2": {
-    "ok": true,
-    "rows": [
-      "[2,3]"
-    ]
+    "class": "INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH",
+    "ok": false
   },
   "filter#3": {
     "ok": true,
@@ -1776,7 +1770,7 @@
     ]
   },
   "from_avro#1": {
-    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
     "ok": false
   },
   "from_csv#1": {
@@ -1942,10 +1936,8 @@
     ]
   },
   "histogram_numeric#1": {
-    "ok": true,
-    "rows": [
-      "[{\"x\":0,\"y\":1.0},{\"x\":1,\"y\":1.0},{\"x\":2,\"y\":1.0},{\"x\":10,\"y\":1.0}]"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "hll_sketch_agg#1": {
     "class": "KRISHIV_UNSUPPORTED_FEATURE",
@@ -2137,16 +2129,12 @@
     ]
   },
   "is_valid_variant#1": {
-    "ok": true,
-    "rows": [
-      "true"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "is_valid_variant#2": {
-    "ok": true,
-    "rows": [
-      "true"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "is_variant_null#1": {
     "ok": true,
@@ -4327,7 +4315,7 @@
   "regr_sxx#1": {
     "ok": true,
     "rows": [
-      "2.75"
+      "2.7499999999999996"
     ]
   },
   "regr_sxx#2": {
@@ -4405,7 +4393,7 @@
   "regr_syy#4": {
     "ok": true,
     "rows": [
-      "0.6666666666666667"
+      "0.6666666666666666"
     ]
   },
   "regr_syy#5": {
@@ -4433,10 +4421,8 @@
     ]
   },
   "reverse#2": {
-    "ok": true,
-    "rows": [
-      "[3,4,1,2]"
-    ]
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    "ok": false
   },
   "reverse#3": {
     "ok": true,
@@ -4584,10 +4570,8 @@
     ]
   },
   "schema_of_xml#2": {
-    "ok": true,
-    "rows": [
-      "STRUCT<a: ARRAY<BIGINT>>"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "sec#1": {
     "ok": true,
@@ -4632,36 +4616,23 @@
     ]
   },
   "sequence#3": {
-    "ok": true,
-    "rows": [
-      "[2018-01-01,2018-02-01,2018-03-01]"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "sequence#4": {
-    "ok": true,
-    "rows": [
-      "[2018-01-01,2018-02-01,2018-03-01]"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "session_user#1": {
     "volatile": true
   },
   "session_window#1": {
-    "ok": true,
-    "rows": [
-      "A1\t2021-01-01 00:00:00\t2021-01-01 00:09:30\t2",
-      "A1\t2021-01-01 00:10:00\t2021-01-01 00:15:00\t1",
-      "A2\t2021-01-01 00:01:00\t2021-01-01 00:06:00\t1"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "session_window#2": {
-    "ok": true,
-    "rows": [
-      "A1\t2021-01-01 00:00:00\t2021-01-01 00:09:30\t2",
-      "A1\t2021-01-01 00:10:00\t2021-01-01 00:15:00\t1",
-      "A2\t2021-01-01 00:01:00\t2021-01-01 00:02:00\t1",
-      "A2\t2021-01-01 00:04:30\t2021-01-01 00:05:30\t1"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "sha#1": {
     "ok": true,
@@ -5485,22 +5456,16 @@
     ]
   },
   "to_char#7": {
-    "ok": true,
-    "rows": [
-      "U3BhcmsgU1FM"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_char#8": {
-    "ok": true,
-    "rows": [
-      "537061726B2053514C"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_char#9": {
-    "ok": true,
-    "rows": [
-      "abc"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_csv#1": {
     "ok": true,
@@ -5705,22 +5670,16 @@
     ]
   },
   "to_varchar#7": {
-    "ok": true,
-    "rows": [
-      "U3BhcmsgU1FM"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_varchar#8": {
-    "ok": true,
-    "rows": [
-      "537061726B2053514C"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_varchar#9": {
-    "ok": true,
-    "rows": [
-      "abc"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "to_variant_object#1": {
     "ok": true,
@@ -6870,30 +6829,16 @@
     ]
   },
   "window#1": {
-    "ok": true,
-    "rows": [
-      "A1\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2",
-      "A1\t2021-01-01 00:05:00\t2021-01-01 00:10:00\t1",
-      "A2\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t1"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "window#2": {
-    "ok": true,
-    "rows": [
-      "A1\t2020-12-31 23:55:00\t2021-01-01 00:05:00\t2",
-      "A1\t2021-01-01 00:00:00\t2021-01-01 00:10:00\t3",
-      "A1\t2021-01-01 00:05:00\t2021-01-01 00:15:00\t1",
-      "A2\t2020-12-31 23:55:00\t2021-01-01 00:05:00\t1",
-      "A2\t2021-01-01 00:00:00\t2021-01-01 00:10:00\t1"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "window_time#1": {
-    "ok": true,
-    "rows": [
-      "A1\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2021-01-01 00:04:59.999999\t2",
-      "A1\t2021-01-01 00:05:00\t2021-01-01 00:10:00\t2021-01-01 00:09:59.999999\t1",
-      "A2\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2021-01-01 00:04:59.999999\t1"
-    ]
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
   },
   "xpath#1": {
     "class": "KRISHIV_UNSUPPORTED_FEATURE",

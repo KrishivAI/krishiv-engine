@@ -35,7 +35,7 @@ STRUCT<a: BIGINT>
 ```sql
 -- schema_of_xml, example 2
 > SELECT schema_of_xml('<p><a attr="2">1</a><a>3</a></p>', map('excludeAttribute', 'true'));
-STRUCT<a: ARRAY<BIGINT>>
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ## Version history

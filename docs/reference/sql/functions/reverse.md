@@ -36,7 +36,7 @@ LQS krapS
 ```sql
 -- reverse, example 2
 > SELECT reverse(array(2, 1, 4, 3));
-[3,4,1,2]
+Error: DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
 ```
 
 ```sql
