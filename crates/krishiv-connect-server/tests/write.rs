@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
+use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
 use krishiv_connect::proto::v4_3::plan::OpType;
@@ -25,6 +26,7 @@ use krishiv_connect::proto::v4_3::write_operation::{SaveMode, SaveTable, SaveTyp
 use krishiv_connect::proto::v4_3::write_operation_v2::Mode;
 use krishiv_connect_server::{ConnectServer, ConnectServerConfig, SessionLimits, SessionManager};
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -33,6 +35,7 @@ use tonic::transport::Channel;
 const SESSION: &str = "5b1f7c0e-3a52-4f0b-8d6e-1c2a9e4b7d33";
 
 struct Running {
+    manager: Arc<SessionManager>,
     channel: Channel,
     _stop: oneshot::Sender<()>,
 }
@@ -44,7 +47,7 @@ async fn start() -> Running {
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
-    let server = ConnectServer::new(manager, ConnectServerConfig::default());
+    let server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default());
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
@@ -55,6 +58,7 @@ async fn start() -> Running {
         .await
         .expect("connect");
     Running {
+        manager,
         channel,
         _stop: stop,
     }
@@ -250,6 +254,74 @@ async fn save_without_a_path_takes_the_path_option() {
         ids(&run, &format!("SELECT id FROM parquet.`{target}`")).await,
         [1, 2, 3]
     );
+}
+
+/// The write is a one-shot statement of its operation: the request's operation id and tags reach
+/// the engine query (so does its credential: `QueryOptions::inbound_credential`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_writes_query_carries_the_requests_operation_id_and_tags() {
+    let run = start().await;
+    let dir = tmp();
+    let target = dir.path().join("tagged").display().to_string();
+    let request = pb::ExecutePlanRequest {
+        session_id: SESSION.to_owned(),
+        operation_id: Some("7d2f4c1a-9b3e-4a60-8c15-2e6f0a1b3c44".to_owned()),
+        tags: vec!["etl".to_owned()],
+        plan: Some(command(pb::command::CommandType::WriteOperation(Box::new(
+            write_op(Some(SaveType::Path(target)), SaveMode::ErrorIfExists),
+        )))),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    let mut stream = grpc
+        .server_streaming(
+            tonic::Request::new(request),
+            tonic::codegen::http::uri::PathAndQuery::from_static(
+                "/spark.connect.SparkConnectService/ExecutePlan",
+            ),
+            tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(),
+        )
+        .await
+        .expect("the call")
+        .into_inner();
+    while stream.message().await.expect("message").is_some() {}
+    let entry = run
+        .manager
+        .get_or_create(
+            &Authenticated::new(Principal::local_user(), None, Method::None),
+            SESSION,
+            None,
+            "u",
+        )
+        .expect("session");
+    let batches = entry
+        .session()
+        .sql("select count(*) from system.queries where tags['etl'] is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    assert!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0)
+            >= 1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn save_with_a_path_and_a_path_option_is_spark_legacy_1307() {
+    let run = start().await;
+    let dir = tmp();
+    let a = dir.path().join("a").display().to_string();
+    let b = dir.path().join("b").display().to_string();
+    let mut op = write_op(Some(SaveType::Path(b)), SaveMode::ErrorIfExists);
+    op.options.insert("Path".to_owned(), a);
+    let status = write(&run, op).await.expect_err("both forms");
+    assert_eq!(error_class(&status), "_LEGACY_ERROR_TEMP_1307");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

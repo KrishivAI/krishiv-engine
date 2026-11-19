@@ -196,7 +196,7 @@ pub fn write_spec(w: &pb::WriteOperation) -> Result<WriteSpec> {
 ///
 /// # Errors
 /// `INVALID_ENUM` for an unspecified or unknown mode; `KRISHIV_UNSUPPORTED_FEATURE` for
-/// `with_schema_evolution` and for a partitioning expression that is not a column.
+/// `with_schema_evolution`, a set `overwrite_condition` and for a partitioning expression that is not a column.
 pub fn write_v2_spec(w: &pb::WriteOperationV2) -> Result<WriteV2Spec> {
     const MODE: &str = "spark.connect.WriteOperationV2.Mode";
     if w.with_schema_evolution {
@@ -204,6 +204,14 @@ pub fn write_v2_spec(w: &pb::WriteOperationV2) -> Result<WriteV2Spec> {
             "WriteOperationV2",
             "with_schema_evolution",
             "writes with schema evolution",
+        ));
+    }
+    // Spark reads the condition for `MODE_OVERWRITE`; carrying none would overwrite every row.
+    if w.overwrite_condition.is_some() {
+        return Err(unsupported_field(
+            "WriteOperationV2",
+            "overwrite_condition",
+            "overwriting by a condition",
         ));
     }
     let (mode, reads_provider) = match Mode::try_from(w.mode) {

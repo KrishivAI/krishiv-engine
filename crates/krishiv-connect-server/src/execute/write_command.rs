@@ -5,7 +5,7 @@
 //! (`DataFrame::write_to_with`, `write_table_with`, `write_to_table_with`), so a Connect write and
 //! an embedded one share every check and error. The command answers no rows: the stream ends.
 
-use krishiv_common::error::{KrishivError, LegacyErrorTemp2050};
+use krishiv_common::error::{KrishivError, LegacyErrorTemp1307, LegacyErrorTemp2050};
 use krishiv_connect::translate::{WriteSpec, WriteTarget, WriteV2Spec};
 use krishiv_session::DataFrame;
 
@@ -17,8 +17,11 @@ use krishiv_session::DataFrame;
 /// ("Expected exactly one path to be specified, but got: ."), which this answers before reading
 /// the relation.
 ///
+/// `save(path)` with a `path` option is `_LEGACY_ERROR_TEMP_1307` (Spark's
+/// `pathOptionNotSetCorrectlyWhenWritingError`) unless `spark.sql.legacy.pathOptionBehavior.enabled`.
+///
 /// # Errors
-/// The session writer's errors; `_LEGACY_ERROR_TEMP_2050` for a path-less `save()` with no
+/// The session writer's errors; `_LEGACY_ERROR_TEMP_1307`; `_LEGACY_ERROR_TEMP_2050` for a path-less `save()` with no
 /// `path` option.
 pub(super) async fn write(
     session: &krishiv_session::Session,
@@ -39,7 +42,21 @@ pub(super) async fn write(
     match target {
         WriteTarget::Path(path) => {
             let path = match path {
-                Some(path) => path,
+                Some(path) => {
+                    // Spark (`pathOptionBehavior.enabled=false`) refuses both forms at once.
+                    if options.iter().any(|(k, _)| k.eq_ignore_ascii_case("path"))
+                        && !session
+                            .conf()
+                            .get("spark.sql.legacy.pathOptionBehavior.enabled")
+                            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                    {
+                        return Err(LegacyErrorTemp1307 {
+                            config: "spark.sql.legacy.pathOptionBehavior.enabled".to_owned(),
+                        }
+                        .into());
+                    }
+                    path
+                }
                 None => {
                     let at = options
                         .iter()

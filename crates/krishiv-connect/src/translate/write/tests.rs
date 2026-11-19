@@ -142,6 +142,18 @@ fn cluster_by_and_schema_evolution_are_refused_by_name() {
 }
 
 #[test]
+fn a_v2_write_with_an_overwrite_condition_is_refused() {
+    let w = pb::WriteOperationV2 {
+        table_name: "t".to_owned(),
+        mode: Mode::Overwrite as i32,
+        overwrite_condition: Some(attribute("d")),
+        ..Default::default()
+    };
+    let e = write_v2_spec(&w).expect_err("a condition");
+    assert!(e.to_string().contains("overwrite_condition"), "{e}");
+}
+
+#[test]
 fn a_v2_write_carries_its_mode_and_reads_the_provider_only_where_spark_does() {
     for (mode, name, provider) in [
         (Mode::Create, "create", true),

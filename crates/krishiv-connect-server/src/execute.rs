@@ -376,7 +376,7 @@ pub async fn execute_plan(
                 return Ok(Prepared::Command(answer));
             }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
-            match execution_plan(entry, plan, limits).await? {
+            match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
                     let df = requested.frame(session, query_options).await?;
                     let schema = df.schema().await?;
@@ -625,6 +625,7 @@ async fn execution_plan(
     entry: &SessionEntry,
     plan: &pb::Plan,
     limits: &ExecuteLimits,
+    query_options: &QueryOptions,
 ) -> Result<Executed, KrishivError> {
     let session = entry.session();
     let decompressed = decompressed(plan, limits).await?;
@@ -653,7 +654,8 @@ async fn execution_plan(
                 RunCommand::Checkpoint(spec) => {
                     // No operation id or tags on the source: the result is held by the session
                     // for good, and its frame would hold them with it.
-                    let source = command_source(entry, input, udfs, &cached).await?;
+                    let source =
+                        command_source(entry, input, udfs, &cached, QueryOptions::new()).await?;
                     let id = cache_command::checkpoint(entry, &source, spec).await?;
                     return Ok(Executed::Checkpointed(id));
                 }
@@ -661,11 +663,15 @@ async fn execution_plan(
                     entry.remove_cached_frame(&relation_id);
                 }
                 RunCommand::Write(spec) => {
-                    let source = command_source(entry, input, udfs, &cached).await?;
+                    // A one-shot statement of this operation: its operation id, tags, trace and
+                    // credential, never the session's latest token.
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
                     Box::pin(write_command::write(session, &source, spec)).await?;
                 }
                 RunCommand::WriteV2(spec) => {
-                    let source = command_source(entry, input, udfs, &cached).await?;
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
                     Box::pin(write_command::write_v2(&source, spec)).await?;
                 }
             }
@@ -676,7 +682,8 @@ async fn execution_plan(
 
 /// The frame of a command's relation (`checkpoint_command`, the writes), once the command's class
 /// is checked: a relation with a Python UDF needs `Usage` on `System("udf")` before its UDFs are
-/// registered (ADR 0046 §3b, N1), as for a ROOT relation.
+/// registered (ADR 0046 §3b, N1), as for a ROOT relation. `options` are the frame's: the request's
+/// for a write, empty for a checkpoint.
 ///
 /// # Errors
 /// The relation's translation errors, the privilege refusal, and binding errors.
@@ -685,6 +692,7 @@ async fn command_source(
     input: Option<Result<krishiv_plan::Plan, KrishivError>>,
     udfs: InlineUdfs<'_>,
     cached: &[String],
+    options: QueryOptions,
 ) -> Result<DataFrame, KrishivError> {
     let session = entry.session();
     let Some(input) = input else {
@@ -699,7 +707,7 @@ async fn command_source(
         udfs.grant(session)?;
     }
     Requested::bind(entry, input, cached)?
-        .frame(session, QueryOptions::new())
+        .frame(session, options)
         .await
 }
 
