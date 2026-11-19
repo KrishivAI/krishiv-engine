@@ -345,14 +345,14 @@ fn parse_with_unit(s: &str, units: &[(&str, u64)], default_unit: &str) -> Option
 pub enum ConfigValue {
     /// A [`ValueType::Bool`] value.
     Bool(bool),
-    /// A [`ValueType::Int`], [`ValueType::PositiveInt`] or
-    /// [`ValueType::SignedSize`] value (bytes).
+    /// A [`ValueType::Int`], [`ValueType::PositiveInt`],
+    /// [`ValueType::NonNegativeInt`] or [`ValueType::SignedSize`] value (bytes).
     Int(i64),
     /// A [`ValueType::Size`] value, in bytes.
     Size(u64),
     /// A [`ValueType::Duration`] value.
     Duration(Duration),
-    /// A [`ValueType::String`] or [`ValueType::Enum`] value.
+    /// A [`ValueType::String`], [`ValueType::Enum`] or [`ValueType::ExactEnum`] value.
     String(Cow<'static, str>),
 }
 
