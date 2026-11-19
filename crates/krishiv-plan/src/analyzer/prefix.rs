@@ -54,6 +54,46 @@ pub(super) struct PrefixEntry {
     observed: Vec<(String, u128)>,
     /// A `Hint` relation was resolved under the root.
     saw_hint: bool,
+    /// What the passes over the final plan found fine, for the next analysis that starts from this one.
+    pub(super) verified: Option<Verified>,
+}
+
+/// How many results' nodes one [`Verified`] pins before it starts over.
+const VERIFIED_CHAIN: usize = 32;
+
+/// The nodes of final plans that the post passes (`unexecutable::check`, the depth check) have passed, by
+/// address. Those passes are functions of a node and what is under it, so a later analysis whose result
+/// shares such a node (the resolver hands the prefix's resolved nodes back as the same `Arc`s) does not
+/// walk it again. An address is only trusted while its node is alive, so `keep` holds the roots the
+/// addresses came from; a chain that grows past [`VERIFIED_CHAIN`] results starts over.
+#[derive(Clone)]
+pub(super) struct Verified {
+    keep: Vec<Arc<LogicalPlan>>,
+    /// The `time_type` conf the checks ran under (not every conf is in the context fingerprint).
+    time_type: bool,
+    pub(super) unexecutable: crate::walk::PtrSet<usize>,
+    pub(super) heights: crate::walk::PtrMap<usize, usize>,
+}
+
+impl Verified {
+    /// The state for an analysis that started from `prior` (nothing when it did not, or the checks ran
+    /// under another `time_type`).
+    pub(super) fn start(prior: Option<&Self>, time_type: bool) -> Self {
+        match prior {
+            Some(p) if p.time_type == time_type && p.keep.len() < VERIFIED_CHAIN => p.clone(),
+            _ => Self {
+                keep: Vec::new(),
+                time_type,
+                unexecutable: Default::default(),
+                heights: Default::default(),
+            },
+        }
+    }
+
+    /// Pins the result root whose nodes the sets now hold.
+    pub(super) fn keep(&mut self, root: Arc<LogicalPlan>) {
+        self.keep.push(root);
+    }
 }
 
 impl Resolver<'_> {
@@ -109,6 +149,7 @@ impl Resolver<'_> {
             tables,
             sql_calls: self.sql_calls,
             saw_hint: self.saw_hint,
+            verified: None,
             observed: self
                 .observed
                 .iter()
