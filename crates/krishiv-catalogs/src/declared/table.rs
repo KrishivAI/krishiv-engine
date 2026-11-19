@@ -44,6 +44,8 @@ use krishiv_session::catalog_registry::{
 };
 
 use super::{quoted, rest_caller};
+use crate::iceberg_rest::{LoadedTable, RestClient, RestError, RestLimits};
+use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy};
 
 /// Iceberg's metadata table names (`MetadataTableType` at apache-iceberg-1.12.0), lower case.
 const METADATA_TABLES: [&str; 16] = [
@@ -64,8 +66,6 @@ const METADATA_TABLES: [&str; 16] = [
     "all_entries",
     "position_deletes",
 ];
-use crate::iceberg_rest::{LoadedTable, RestClient, RestError, RestLimits};
-use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy};
 
 /// How long a `loadTable` answer is kept (design P3-T067 §3.5, LH §2.3 `ttl(30s)`).
 pub(crate) const METADATA_TTL: Duration = Duration::from_secs(30);
@@ -132,7 +132,10 @@ impl RestCatalog {
     /// as its bounds would show values a masked column hides and reading it reads manifests. The
     /// name is refused when its last part is a metadata table name (Iceberg 1.12.0
     /// `MetadataTableType`, any letter case) and its prefix is a table this caller can load;
-    /// otherwise it is an ordinary table name in a nested namespace.
+    /// otherwise it is an ordinary table name in a nested namespace. The prefix is asked first, so
+    /// this is more conservative than Iceberg's own order (the full name, then the metadata
+    /// table): a real table `files` in namespace `db.t` beside a table `db.t` is refused, and a
+    /// caller who may not load the prefix gets the prefix's error.
     async fn refuse_metadata_table(
         &self,
         caller: &CatalogCaller,
