@@ -259,6 +259,13 @@ mod tests {
             vec![("cache".to_owned(), "metadata".to_owned())],
             || Some(4),
         )?;
+        for name in [
+            "krishiv.delta.log_pool.wait_ms",
+            "krishiv.delta.snapshot_cache.hits",
+            "krishiv.delta.snapshot_cache.misses",
+        ] {
+            registry.add_gauge(name, Vec::new(), || Some(0))?;
+        }
         registry.add_gauge(
             "krishiv.build.info",
             vec![

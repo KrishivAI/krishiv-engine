@@ -169,6 +169,29 @@ pub trait Statistics: Send + Sync + fmt::Debug {
     /// known.
     fn table(&self, scan: &Scan) -> Option<TableStats>;
 
+    /// Sets of column names, each unique among the rows of the table `scan`
+    /// reads at its pinned version whose columns of the set are all non-NULL
+    /// (two such rows never agree, under the engine's `=` for the columns'
+    /// types, on every column of a set; a floating-point column, where `0.0`
+    /// and `-0.0` agree, is never used as a key). Names are the scan's output
+    /// column names (`Scan::output`), as `table` keys its columns. A fact,
+    /// never an estimate: a rewrite that returns other rows when it is false
+    /// reads it (`payload_above`, design P2b A5). None by default.
+    fn unique_keys(&self, scan: &Scan) -> Vec<Vec<String>> {
+        let _ = scan;
+        Vec::new()
+    }
+
+    /// A request, never a fact: a rewrite that needs `columns` (names of
+    /// `scan`'s output columns, sorted) unique in the table `scan` reads,
+    /// where no fact says so yet ([`Self::unique_keys`]). The session may
+    /// count the columns before it optimizes again (design P2b A5, (d):
+    /// `krishiv.optimizer.discoverKeys`); a request never changes a plan.
+    /// Ignored by default.
+    fn want_unique(&self, scan: &Scan, columns: &[String]) {
+        let _ = (scan, columns);
+    }
+
     /// Whether the table `scan` reads can be read with no column at all and
     /// still return its rows: its reader takes each batch's row count from
     /// the files' own metadata (Parquet row groups), so a `COUNT(*)` reads
