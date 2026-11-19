@@ -13,7 +13,7 @@ use crate::{
     ColumnRef, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, Origin, Plan, PlanId, PlanNode,
 };
 
-use super::dsl::{add, count_star, int};
+use super::dsl::{add, count_star, gt, int};
 
 fn table(cols: &[&str]) -> MemoryCatalog {
     let cols = cols
@@ -334,11 +334,33 @@ fn hint(input: LogicalPlan, name: &str, params: Vec<Expr>, id: i64) -> LogicalPl
 /// select list).
 fn generator_filter(input: LogicalPlan, id: i64) -> LogicalPlan {
     input
-        .filter(Expr::function(
-            "gt",
-            vec![Expr::function("explode", vec![col("a", 0)]), int(0)],
-        ))
+        .filter(gt(Expr::function("explode", vec![col("a", 0)]), int(0)))
         .with_origin(Origin::plan(PlanId(id)))
+}
+
+/// Like `ctx(..)`, plus a table `w` whose one column is a `TIME`: a scan of it passes the binder and is
+/// refused only by the post pass (`unexecutable::check`) while the TIME type is off.
+fn ctx_with_time_table() -> AnalysisContext {
+    let cat = table(&["a", "b", "c"]).with_table(
+        &["default"],
+        "w",
+        vec![TableColumn::new(
+            "x".to_owned(),
+            krishiv_types::DataType::Time { precision: 3 },
+            true,
+        )],
+        None,
+    );
+    context(cat, ResolutionConf::default())
+}
+
+/// `same(..)`, and the cold analysis of `plan` must be refused with the error class `class` (so a test
+/// cannot drift to another refusal, such as the binder's).
+fn refused(cache: &CachingAnalyzer, plan: LogicalPlan, c: &AnalysisContext, class: &str) {
+    let p = Plan::try_new(plan.clone()).unwrap();
+    let cold = block_on(DefaultAnalyzer.analyze(&p, c)).unwrap_err();
+    assert_eq!(cold.error.error_class().name(), class);
+    assert!(!same(cache, plan, c), "a refused analysis is no warm start");
 }
 
 /// A hint inside the prefix (a partitioning hint, then a join hint) is still resolved when the steps
@@ -373,25 +395,26 @@ fn a_hint_in_the_prefix_is_resolved_warm_like_cold() {
 }
 
 /// A prefix that passed the post-pass checks does not let a refused step through: a generator in a
-/// filter, and a TIME cast while the TIME type is off, error warm exactly as cold.
+/// filter, and a scan of a `TIME` column while the TIME type is off, are refused warm exactly as cold
+/// (the post pass, not the binder, refuses both).
 #[test]
 fn a_refused_step_over_a_verified_prefix_errors_like_cold() {
-    let c = ctx(&["a", "b", "c"]);
+    let c = ctx_with_time_table();
     let cache = CachingAnalyzer::new();
     assert!(!same(&cache, chain(6), &c));
     assert!(same(&cache, chain(7), &c));
-    // Errors: the warm analysis starts from the kept prefix but the step is refused (`same` compares the
-    // error with the cold one; a failed analysis leaves the slot as it was).
-    for refused in [
+    refused(
+        &cache,
         generator_filter(chain(7), 8),
-        step(chain(7), 8).project(vec![
-            Expr::new(ExprNode::Column(ColumnRef::new(vec!["a".to_owned()])))
-                .cast(krishiv_types::DataType::time(6).unwrap()),
-        ]),
-    ] {
-        // A refused analysis never counts as a warm start, so only equality with cold is checked.
-        let _ = same(&cache, refused, &c);
-    }
+        &c,
+        "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+    );
+    let time_scan = chain(7).join(
+        LogicalPlan::table(["w"]),
+        JoinKind::Inner,
+        JoinCondition::None,
+    );
+    refused(&cache, time_scan, &c, "UNSUPPORTED_TIME_TYPE");
     // The slot still holds chain(7): a valid step goes on from it.
     assert!(same(&cache, chain(8), &c));
 }
@@ -406,7 +429,12 @@ fn a_chain_past_the_verified_limit_then_a_refused_step() {
     for depth in 2..=40 {
         assert!(same(&cache, chain(depth), &c), "depth {depth}");
     }
-    let _ = same(&cache, generator_filter(chain(40), 41), &c);
+    refused(
+        &cache,
+        generator_filter(chain(40), 41),
+        &c,
+        "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+    );
     assert!(same(&cache, chain(41), &c));
 }
 
@@ -418,12 +446,13 @@ fn a_warm_chain_at_the_depth_cap_matches_cold() {
     let cache = CachingAnalyzer::new();
     assert!(!same(&cache, chain(400), &c));
     // The deepest chain the input check lets through; the resolved plan is deeper than its input, so
-    // the analysis may refuse it, and warm must then refuse as cold does.
+    // the analysis refuses it (the depth check over the inherited heights), warm as cold.
     let top = (400..=999_i64)
         .rev()
         .find(|d| Plan::try_new(chain(*d)).is_ok())
         .unwrap();
-    for depth in [top - 40, top - 20, top] {
-        let _ = same(&cache, chain(depth), &c);
+    for depth in [top - 40, top - 20] {
+        assert!(same(&cache, chain(depth), &c), "depth {depth} starts warm");
     }
+    refused(&cache, chain(top), &c, "FAILED_TO_PARSE_TOO_COMPLEX");
 }
