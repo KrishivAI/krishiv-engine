@@ -26,6 +26,7 @@ Paths are relative to this crate.
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan` (`lower/pipe.rs`: pipe operators; `DISTRIBUTE BY`/`CLUSTER BY` lower to `PlanNode::Repartition`, `CLUSTER BY` adds a local ascending sort); `src/redact.rs` `redact_sql` to `RedactedSql`
 - `src/lower/identified.rs` `lower_identified`: the session's substituted `IDENTIFIER(..)` names (by span) mark their columns `ColumnRef::by_identifier`, so a select item of one is named as Spark names the clause
 - `src/summary.rs` `sanitize_query_text` (every literal `?`, comments dropped) and `query_summary` (`SELECT orders customers`): the telemetry forms of query text, from lexer tokens
+- `src/parser/access.rs` (P3-T062 G1, a Krishiv extension: open Spark has no such grammar) `GRANT`, `REVOKE [GRANT OPTION FOR]`, `SHOW GRANTS [ON ..] [TO ..]`, `CREATE ROLE`, `DROP ROLE`, `GRANT ROLE .. TO`, `REVOKE ROLE .. FROM` into `Statement::AccessControl` holding `krishiv_plan::analyzer::access_control::AccessCommand`; taken only at a statement start no Spark statement has (`SHOW GRANTS` only before the end, `ON` or `TO`), never under `EXPLAIN`; classified `ADMIN`, `SHOW GRANTS` `READ`; `tests/access_control.rs`
 - `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
 
 ## Extension points

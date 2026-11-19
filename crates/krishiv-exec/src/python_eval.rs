@@ -113,6 +113,27 @@ pub trait UdfRuntime: Send + Sync + fmt::Debug {
         }
         .into())
     }
+
+    /// Runs a Python table function's static `analyze` for one call
+    /// (design P3-T085 §3.3 "UDTF analyze"; [`crate::python_udtf`]), off the
+    /// caller: the analyzer awaits the result. The default runs none.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` when this runtime has no such
+    /// `(name, version)` or runs no `analyze`;
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` when `analyze`
+    /// fails or returns something Spark refuses.
+    fn analyze_udtf(
+        &self,
+        spec: &crate::python_udtf::UdtfAnalyzeSpec,
+    ) -> BoxFuture<'static, Result<crate::python_udtf::UdtfAnalysis>> {
+        let err: KrishivError = KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into();
+        Box::pin(std::future::ready(Err(err)))
+    }
 }
 
 /// One prepared call site.
@@ -250,6 +271,14 @@ impl InFlight {
         done
     }
 
+    /// The calls of this slice still running.
+    fn running(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| matches!(s, Slot::Pending(_)))
+            .count()
+    }
+
     /// The error of a call of this slice that failed, if any.
     fn failed(&self) -> Option<&KrishivError> {
         self.slots.iter().find_map(|s| match s {
@@ -307,11 +336,6 @@ struct Pending {
 }
 
 impl Pending {
-    /// Polls the oldest slice; whether it is done (or there is none).
-    fn head_ready(&mut self, cx: &mut Context<'_>) -> bool {
-        self.slices.front_mut().is_none_or(|h| h.poll_all(cx))
-    }
-
     /// The first failure among the slices in flight, polling each of them
     /// (so `cx` is woken by any one): a failure behind a slice still
     /// running must not wait for it (design P2-T059 §6.3).
@@ -320,6 +344,25 @@ impl Pending {
             s.poll_all(cx);
             s.failed().cloned()
         })
+    }
+
+    /// Whether a driver blocked on a full window may go on: one slice failed
+    /// or the oldest is done. Every slice is polled once, so each call still
+    /// running holds `cx`'s waker, and the answer comes from the state they
+    /// are in afterwards. The check used to poll the oldest slice, then every
+    /// slice again: a call whose pool thread finished during the second poll
+    /// skipped its wake (the receiver held its waker slot) and was found done
+    /// there, so the driver stayed blocked with every slice done and nothing
+    /// left to wake it (PY-055). A call that finishes during its one poll here
+    /// is ready in that poll; one that finishes after it wakes `cx`.
+    fn unblocked(&mut self, cx: &mut Context<'_>) -> bool {
+        for slice in &mut self.slices {
+            slice.poll_all(cx);
+            if slice.failed().is_some() {
+                return true;
+            }
+        }
+        self.slices.front().is_none_or(|h| h.running() == 0)
     }
 
     /// The oldest slice if every call of it is done, without waiting.
@@ -527,10 +570,9 @@ impl Sink for PythonEvalSink {
         if lock(&l.pending).slices.len() >= self.window {
             let pending = Arc::clone(&l.pending);
             return Ok(SinkStatus::Blocked(Box::pin(poll_fn(move |cx| {
-                let mut p = lock(&pending);
-                // Free once the oldest slice is done, or any slice failed:
-                // the next `sink` call then returns the failure.
-                if p.head_ready(cx) || p.failure(cx).is_some() {
+                // Free once the oldest slice is done, or any slice failed (the
+                // next `sink` call then returns the failure).
+                if lock(&pending).unblocked(cx) {
                     Poll::Ready(())
                 } else {
                     Poll::Pending

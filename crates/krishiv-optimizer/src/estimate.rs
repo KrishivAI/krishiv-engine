@@ -128,10 +128,15 @@ fn derived(e: &Expr, input: &RelStats, rows: f64) -> Option<AttrStats> {
                     };
                     let from = input.cols.get(&c.id)?;
                     (s.min, s.max) = (from.min, from.max);
+                    s.range_estimated = from.range_estimated;
                     // A group of NULLs yields NULL: the input's fraction bounds it.
                     s.null_frac = from.null_frac;
                 }
-                ("count", _) => (s.min, s.max) = (Some(0.0), Some(input.rows)),
+                // The input's rows are an estimate: the range guides costs only.
+                ("count", _) => {
+                    (s.min, s.max) = (Some(0.0), Some(input.rows));
+                    s.range_estimated = true;
+                }
                 _ => return None,
             }
             Some(s)
@@ -417,6 +422,8 @@ impl<'a> Estimator<'a> {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
+            // Rows pass through unchanged.
+            | PlanNode::CollectMetrics { input, .. }
             // A window adds columns (without statistics), never rows.
             | PlanNode::Window { input, .. }
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
@@ -715,6 +722,7 @@ impl<'a> Estimator<'a> {
                     null_frac: s.nulls.map_or(0.0, |n| (to_f64(n) / rows).min(1.0)),
                     min: s.min.as_ref().and_then(number),
                     max: s.max.as_ref().and_then(number),
+                    range_estimated: false,
                     source: if s.distinct.is_some() {
                         s.source
                     } else {
@@ -753,6 +761,7 @@ fn union(
                 null_frac: 0.0,
                 min: Some(f64::INFINITY),
                 max: Some(f64::NEG_INFINITY),
+                range_estimated: false,
                 source: StatSource::Provided,
             };
             let mut nulls = 0.0;
@@ -763,6 +772,7 @@ fn union(
                         nulls += a.null_frac * est.rows;
                         c.min = c.min.zip(a.min).map(|(x, y)| x.min(y));
                         c.max = c.max.zip(a.max).map(|(x, y)| x.max(y));
+                        c.range_estimated |= a.range_estimated;
                         c.source = c.source.min(a.source);
                     }
                     None => {
@@ -892,6 +902,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
                 null_frac: nulls,
                 min: bounds.and_then(|c| c.min),
                 max: bounds.and_then(|c| c.max),
+                range_estimated: bounds.is_some_and(|c| c.range_estimated),
                 source: if known && !other {
                     source
                 } else {

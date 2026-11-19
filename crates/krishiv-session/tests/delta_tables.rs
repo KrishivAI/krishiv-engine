@@ -145,6 +145,11 @@ fn error(s: &Session, sql: &str) -> KrishivError {
     }
 }
 
+/// The `operation` text of a refused Delta write (`table_commands/delta.rs` `refused_operation`).
+fn refused(operation: &str) -> String {
+    format!("{operation} on a Delta table (Delta writes and DDL are not supported yet)")
+}
+
 fn param(e: &KrishivError, key: &str) -> String {
     e.message_parameters()
         .iter()
@@ -325,18 +330,26 @@ fn writes_run_and_ddl_is_refused_by_name() {
     let s = Session::new().unwrap();
     let path = t.path();
     block_on(s.sql(&format!("CREATE TABLE d USING delta LOCATION '{path}'"))).unwrap();
-    for (probe, sql) in [
+    let missing = tempfile::tempdir().unwrap();
+    let gone = missing.path().join("gone").to_string_lossy().into_owned();
+    for (probe, sql, table, operation) in [
         (
             "alter_add_columns",
             "ALTER TABLE d ADD COLUMNS (extra INT)".to_owned(),
+            "d",
+            "ALTER TABLE",
         ),
         (
             "alter_set_properties",
             "ALTER TABLE d SET TBLPROPERTIES ('k' = 'v')".to_owned(),
+            "d",
+            "ALTER TABLE",
         ),
         (
             "create_missing_location",
-            "CREATE TABLE gone USING delta LOCATION '/nonexistent/krishiv-gone'".to_owned(),
+            format!("CREATE TABLE gone USING delta LOCATION '{gone}'"),
+            "gone",
+            "CREATE TABLE without columns where there is no Delta table",
         ),
     ] {
         // Spark + delta-spark runs each of them: DDL Krishiv does not make yet (a table of no
@@ -348,9 +361,14 @@ fn writes_run_and_ddl_is_refused_by_name() {
             ErrorClass::UnsupportedFeatureTableOperation,
             "{probe}: {e}"
         );
-        assert!(param(&e, "operation").contains("Delta"), "{probe}: {e}");
+        assert_eq!(param(&e, "operation"), refused(operation), "{probe}: {e}");
+        assert_eq!(
+            param(&e, "tableName"),
+            format!("`spark_catalog`.`default`.`{table}`"),
+            "{probe}: {e}"
+        );
     }
-    let missing = tempfile::tempdir().unwrap();
+    assert!(!Path::new(&gone).exists());
     let gone2 = missing.path().join("gone2").to_string_lossy().into_owned();
     for (probe, sql) in [
         (
@@ -388,9 +406,15 @@ fn table_properties_on_a_delta_create_are_refused_by_name() {
     let t = Table::copy("session-table");
     let s = Session::new().unwrap();
     let path = t.path();
-    for sql in [
-        format!("CREATE TABLE p USING delta LOCATION '{path}' TBLPROPERTIES ('k' = 'v')"),
-        format!("CREATE TABLE p USING delta OPTIONS (mergeSchema 'true') LOCATION '{path}'"),
+    for (sql, operation) in [
+        (
+            format!("CREATE TABLE p USING delta LOCATION '{path}' TBLPROPERTIES ('k' = 'v')"),
+            "CREATE TABLE ... TBLPROPERTIES over an existing Delta table",
+        ),
+        (
+            format!("CREATE TABLE p USING delta OPTIONS (mergeSchema 'true') LOCATION '{path}'"),
+            "CREATE TABLE ... OPTIONS over an existing Delta table",
+        ),
     ] {
         let e = error(&s, &sql);
         assert_eq!(
@@ -398,7 +422,12 @@ fn table_properties_on_a_delta_create_are_refused_by_name() {
             ErrorClass::UnsupportedFeatureTableOperation,
             "{sql}: {e}"
         );
-        assert!(param(&e, "operation").contains("Delta"), "{sql}: {e}");
+        assert_eq!(param(&e, "operation"), refused(operation), "{sql}: {e}");
+        assert_eq!(
+            param(&e, "tableName"),
+            "`spark_catalog`.`default`.`p`",
+            "{sql}: {e}"
+        );
     }
     assert_eq!(
         error(&s, "SELECT * FROM p").error_class(),
@@ -421,6 +450,12 @@ fn a_refused_table_is_named_as_delta_spark_names_it() {
         "CREATE TABLE refused USING delta LOCATION '{path}'"
     )))
     .unwrap();
+    for view in ["`a.b`", "`plain`"] {
+        block_on(s.sql(&format!(
+            "CREATE TEMPORARY VIEW {view} USING delta OPTIONS (path '{path}')"
+        )))
+        .unwrap();
+    }
     // A new commit adds the unknown feature, as the probe's did.
     std::fs::write(
         t.last("json"),
@@ -452,6 +487,17 @@ fn a_refused_table_is_named_as_delta_spark_names_it() {
         &path,
         &skip,
     );
+    // A temporary view is named by its path, as a path read is, even when its back-quoted
+    // name holds a `.` (review finding 10: decided by the entry's kind, never the key's spelling).
+    for view in ["`a.b`", "`plain`"] {
+        let e = error(&s, &format!("SELECT * FROM {view}"));
+        assert_oracle_error(
+            &e,
+            &session_record("refused_path_sql")["error"],
+            &path,
+            &skip,
+        );
+    }
 }
 
 #[test]
@@ -538,5 +584,6 @@ fn the_declared_schema_compares_exact_names_nullability_and_typed_partitions() {
         "CREATE TABLE c3 (id BIGINT, {all}) USING delta PARTITIONED BY (p STRING) LOCATION '{path}'"
     )))
     .unwrap();
-    assert_eq!(query(&s, "SELECT count(*) FROM c3").len(), 1);
+    // The fixture's two rows (ids 1 and 2), read through the typed registration.
+    assert_eq!(query(&s, "SELECT count(*) FROM c3"), [[Value::from(2)]]);
 }

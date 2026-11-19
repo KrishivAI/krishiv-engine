@@ -53,6 +53,7 @@ impl Session {
         &self,
         e: &Explain,
         env: crate::session::QueryEnv,
+        text: &str,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         // Krishiv's `EXPLAIN FORMAT JSON` (P3-T063 N2): the explained
@@ -60,7 +61,7 @@ impl Session {
         // reads are checked as a run checks them.
         if e.mode == krishiv_sql::ast::ExplainMode::Json {
             let json = self
-                .analyze_statement((*e.statement).clone(), redacted)
+                .analyze_statement((*e.statement).clone(), text, redacted)
                 .await?
                 .to_json();
             return self.one_row(&json).await;
@@ -79,6 +80,17 @@ impl Session {
             &env.identifier_spans,
         )
         .map_err(|e| e.error)?;
+        // The per-query store check (`check_store_options`: `MANAGE` on the cluster while the
+        // session changed a server-scoped store setting) is asked by every analysis: the explained
+        // query's (its trial, then a withheld fallback, which folds a refusal into the text) and
+        // the result frame's. Asked once here, after lowering (a query that does not lower gets
+        // its lowering error) and before either, so one statement gives one refusal report: one
+        // `denied`, one audit record, one count. The same refusal the result frame gave, so the
+        // caller sees the same error.
+        let r = self
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
+            .await;
+        crate::access::audit_read(self, &env, r)?;
         let explained = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let text = match e.mode {
             // Krishiv's extensions (ADR 0023): a query that fails to
@@ -406,12 +418,19 @@ impl DataFrame {
             Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
             Err(e) => return Err(e),
         };
-        let (optimized, physical) = match self
+        let (optimized, physical, scanned) = match self
             .session
             .physical_inspected(&analysis.analyzed, &analysis.env)
             .await
         {
-            Ok((optimized, physical)) => (optimized, physical.explain_all()),
+            Ok((optimized, physical)) => {
+                let scanned: Vec<String> =
+                    krishiv_exec::profile::profile_scans(&physical, &|_| None)
+                        .into_iter()
+                        .map(|s| s.table)
+                        .collect();
+                (optimized, physical.explain_all(), scanned)
+            }
             Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
             Err(e) => return Err(e),
         };
@@ -438,6 +457,11 @@ impl DataFrame {
         // Only when the cache is on for the query, so the plan text stays Spark's by default.
         if let Some(note) = self.session.result_cache_note(&planned.analysis) {
             let _ = write!(text, "\n== Result Cache ==\n{note}\n");
+        }
+        // Only with a history that has advice for a table the query reads (P3-T025); read here, after
+        // planning, so no query's planning pays for it.
+        if let Some(section) = self.session.partition_advice_section(&scanned).await {
+            let _ = write!(text, "\n{section}");
         }
         Ok(text)
     }

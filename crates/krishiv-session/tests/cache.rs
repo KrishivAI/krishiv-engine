@@ -265,7 +265,17 @@ fn a_refused_reservation_runs_uncached_not_failed() {
         .unwrap();
     register(&s, "t", (0..4096).collect());
     let df = s.table("t").cache();
-    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    // Drained, not counted: `count()` is an aggregate (as `SELECT count(*)`),
+    // whose own memory a one-byte pool refuses.
+    let rows = block_on(async {
+        let mut stream = df.execute_stream().await.unwrap();
+        let mut rows = 0;
+        while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+            rows += batch.unwrap().num_rows();
+        }
+        rows
+    });
+    assert_eq!(rows, 4096);
     assert!(block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
 }

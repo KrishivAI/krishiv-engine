@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::builder::make_view;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
+    ArrayRef, BinaryViewArray, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray,
     StructArray, TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
@@ -60,11 +60,15 @@ use krishiv_io::split::{
 use krishiv_io::{
     ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
     IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
-    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest, TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
+use object_store::path::Path;
 
+use super::partition_prune::{
+    dropping_filter, reads_partition_column, static_partition_filters, statically_dropped,
+};
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
@@ -92,6 +96,65 @@ enum Partitions {
     Given(Arc<[FilePartition]>),
 }
 
+/// The roots Spark prints a read's files under in `_metadata.file_path`: per read path (its
+/// store and key), the scheme and authority it was written with (`s3a://bucket` for a store
+/// whose id is `s3://bucket`; `s3://` and `s3a://` paths share a store, and Spark prints each
+/// file under the spelling of the path that listed it). A file without a root prints under its
+/// store id.
+///
+/// Kept beside the scan, not in the plan (plans stay pure data): a worker that builds the scan
+/// from plan data must list the read's paths and derive the roots from them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathRoots(Arc<[PathRoot]>);
+
+/// One read path's root (see [`PathRoots`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathRoot {
+    store: StoreId,
+    /// The read path's key (a glob's directory).
+    key: Path,
+    /// Its number of segments.
+    depth: usize,
+    /// `<scheme>://<authority>` as written.
+    root: Arc<str>,
+}
+
+impl PathRoots {
+    /// Roots of read paths: `(store, key of the path or a glob's directory, root)`.
+    #[must_use]
+    pub fn new(roots: impl IntoIterator<Item = (StoreId, Path, String)>) -> Self {
+        Self(
+            roots
+                .into_iter()
+                .map(|(store, key, root)| PathRoot {
+                    depth: key.parts().count(),
+                    store,
+                    key,
+                    root: Arc::from(root),
+                })
+                .collect(),
+        )
+    }
+
+    /// The root of the file `path` in `store`: that of the read path nearest above it (the
+    /// longest key it is under; of equal keys the first path's). A file listed under one key
+    /// through two spellings is read once (the listing keeps one entry per store and path),
+    /// where Spark, reading two file systems, reads it twice.
+    #[must_use]
+    pub fn root(&self, store: &StoreId, path: &Path) -> Option<&str> {
+        let mut best: Option<(usize, &str)> = None;
+        for r in self.0.iter() {
+            if r.store != *store || path.prefix_match(&r.key).is_none() {
+                continue;
+            }
+            if best.is_none_or(|(d, _)| r.depth > d) {
+                best = Some((r.depth, &r.root));
+            }
+        }
+        best.map(|(_, root)| root)
+    }
+}
+
 /// A scan of listed files of one format, before pushdown (see the module
 /// docs). [`ScanPushdown::build`] makes its [`FileScanSource`].
 #[derive(Clone)]
@@ -113,6 +176,11 @@ pub struct FileScan {
     constants: Option<Arc<FileConstants>>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
+    /// `spark.sql.caseSensitive`: table columns find file columns by exact
+    /// name (Spark's Parquet reader), unless the pushdown maps otherwise.
+    case_sensitive: bool,
+    /// The roots `_metadata.file_path` prints files under.
+    roots: PathRoots,
 }
 
 impl std::fmt::Debug for FileScan {
@@ -148,7 +216,25 @@ impl FileScan {
             partition_columns: Arc::from([]),
             constants: None,
             min_morsel_bytes: splits.open_cost_in_bytes,
+            case_sensitive: false,
+            roots: PathRoots::default(),
         }
+    }
+
+    /// The same scan with table columns matched to file columns by exact
+    /// name (`spark.sql.caseSensitive=true`); the default folds case.
+    #[must_use]
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+
+    /// The same scan printing its files' `_metadata.file_path` under `roots` (the scheme and
+    /// authority the read's paths were written with).
+    #[must_use]
+    pub fn with_path_roots(mut self, roots: PathRoots) -> Self {
+        self.roots = roots;
+        self
     }
 
     /// The same scan with `columns` as its partition columns: the last
@@ -254,8 +340,21 @@ impl ScanPushdown for FileScan {
         Arc::clone(&self.table)
     }
 
+    /// Spark's `QUERY_ONLY_CORRUPT_RECORD_COLUMN` rule: a JSON or CSV read whose referenced data
+    /// columns (partition columns left out; `_metadata` and the row index are not columns of the
+    /// table) are exactly the corrupt-record column.
+    fn only_reads_corrupt_record(&self, referenced: &[&str]) -> bool {
+        let Some(corrupt) = self.format.corrupt_record_column(&self.format_options) else {
+            return false;
+        };
+        let mut data = referenced
+            .iter()
+            .filter(|n| !self.partition_columns.iter().any(|p| p.name() == **n));
+        data.next().is_some_and(|n| *n == corrupt) && data.next().is_none()
+    }
+
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
-        if reads_partition_column(self, filter) {
+        if reads_partition_column(&self.partition_columns, filter) {
             return FilterPushdown::Unsupported;
         }
         // Pruning keeps a superset of the matching rows; the row evaluator
@@ -385,14 +484,15 @@ pub struct FileScanMetrics {
 }
 
 impl FileScanMetrics {
-    /// The `EXPLAIN ANALYZE` counters, once a split was read: units
+    /// The `EXPLAIN ANALYZE` counters, once a split was read or a unit pruned: units
     /// (row groups) decoded and skipped, rows and bytes decoded, and how
     /// the row filter ran (`row_filter_*` only where it did); the page
     /// index and stored Bloom filters' work where either pruned or was
     /// rejected; the decode over-commit when there was any.
     pub(super) fn extra(&self) -> crate::metrics::ExtraMetrics {
         let mut out = Vec::new();
-        if self.splits > 0 {
+        // Also when every file was pruned unopened (no split read).
+        if self.splits > 0 || self.units_pruned > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
                 ("scan_files", self.files),
@@ -498,11 +598,16 @@ pub struct FileScanSource {
     /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
     /// (of one split, or of splits that do not start at byte 0) are read.
     opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
+    /// The pushed filters that read a partition column, as the typed trees they are: a file whose partition
+    /// values none of them can match is never opened (static partition pruning, P3-T025).
+    static_partition: Vec<PushdownExpr>,
     /// Whether the row id ends the output.
     row_id: bool,
     /// One morsel per partition, its batches tagged with the partition's
     /// index ([`ScanPushdowns::partition_order`]).
     partition_order: bool,
+    /// The roots `_metadata.file_path` prints files under.
+    roots: PathRoots,
 }
 
 impl std::fmt::Debug for FileScanSource {
@@ -617,31 +722,6 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
     Ok(())
 }
 
-/// Whether the typed tree of `filter` reads a partition column of `scan`
-/// (a filter without one prunes nothing).
-fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
-    if scan.partition_columns.is_empty() {
-        return false;
-    }
-    filter.expr.as_ref().is_some_and(|e| {
-        e.columns()
-            .iter()
-            .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
-    })
-}
-
-/// The runtime filter that no row of a file with these partition values
-/// passes, if any.
-fn dropping_filter<'a>(
-    filters: &'a [(usize, ScanFilter)],
-    values: &[ArrayRef],
-) -> Option<&'a ScanFilter> {
-    filters.iter().find_map(|(k, filter)| {
-        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
-        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
-    })
-}
-
 /// Where a column of a partitioned scan's output comes from.
 #[derive(Clone, Copy, Debug)]
 enum Slot {
@@ -683,9 +763,18 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
         .partition_columns
         .iter()
         .map(|f| {
-            scan.table
-                .field_with_name(f.name())
-                .map_or_else(|_| Arc::clone(f), |t| Arc::new(t.clone()))
+            scan.table.field_with_name(f.name()).map_or_else(
+                |_| Arc::clone(f),
+                |t| {
+                    // The listing's mark of a column a user schema typed
+                    // (how its values read) stays on the table's field.
+                    let mut metadata = t.metadata().clone();
+                    if let Some(mark) = f.metadata().get(krishiv_io::PARTITION_VALUE_KEY) {
+                        metadata.insert(krishiv_io::PARTITION_VALUE_KEY.to_owned(), mark.clone());
+                    }
+                    Arc::new(t.clone().with_metadata(metadata))
+                },
+            )
         })
         .collect();
     let partition_of = |c: &ColumnPath| {
@@ -716,7 +805,7 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     let usable: Vec<PushedFilter> = p
         .filters
         .iter()
-        .take_while(|f| !reads_partition_column(scan, f))
+        .take_while(|f| !reads_partition_column(&scan.partition_columns, f))
         .cloned()
         .collect();
     let exprs: Vec<PushdownExpr> = usable.iter().filter_map(|f| f.expr.clone()).collect();
@@ -730,7 +819,15 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     request.limit = p.limit.filter(|_| p.filters.is_empty());
     request.metadata_cols = p.metadata;
     request.metadata_cols.row_index |= p.row_id;
-    request.mapping = p.mapping.clone();
+    request.mapping = match &p.mapping {
+        // A pushdown that names no mapping takes the session's case rule.
+        krishiv_io::FieldMapping::ByName {
+            case_sensitive: false,
+        } if scan.case_sensitive => krishiv_io::FieldMapping::ByName {
+            case_sensitive: true,
+        },
+        other => other.clone(),
+    };
     let decoded = Arc::clone(SchemaMapper::new(&request, data_table, "")?.output_schema());
     let (mapped, layout) = if partition_fields.is_empty() {
         (decoded, Vec::new())
@@ -838,6 +935,7 @@ impl FileScanSource {
             partition_fields,
             layout,
         } = table_request(scan, &p)?;
+        let static_partition = static_partition_filters(&scan.partition_columns, &p.filters);
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -856,8 +954,10 @@ impl FileScanSource {
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             opened_files: Arc::default(),
+            static_partition,
             row_id: p.row_id,
             partition_order: p.partition_order,
+            roots: scan.roots.clone(),
         })
     }
 
@@ -1000,10 +1100,7 @@ impl FileScanSource {
                     return None;
                 }
                 let file = self.files.get(s.file)?;
-                let dropped = !partition_filters.is_empty()
-                    && self
-                        .partition_values(file)
-                        .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+                let dropped = self.drops_file(partition_filters, file);
                 if dropped {
                     splits.push(Vec::new());
                     continue;
@@ -1065,11 +1162,7 @@ impl FileScanSource {
         if let Some(file) = self.files.get(wanted) {
             // A file its partition's filter drops is never opened. (An error
             // reading its path is reported by the open.)
-            let dropped = !partition_filters.is_empty()
-                && self
-                    .partition_values(file)
-                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
-            if dropped {
+            if self.drops_file(partition_filters, file) {
                 return;
             }
             let fut = self.io.prefetch_metadata(
@@ -1100,6 +1193,18 @@ impl FileScanSource {
         // Dynamic partition pruning: no row of the file passes.
         if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
             filter.filter().stats().add_split(range.len());
+            return Ok(());
+        }
+        // Static partition pruning: the filters on partition columns rule the file out.
+        if statically_dropped(
+            &self.static_partition,
+            &self.partition_fields,
+            &partition_values,
+        ) {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .units_pruned += 1;
             return Ok(());
         }
         if let Some((f, _)) = &local.ahead
@@ -1246,6 +1351,15 @@ impl FileScanSource {
             .collect()
     }
 
+    /// Whether a runtime filter or a filter on a partition column rules out the file: it is never opened.
+    fn drops_file(&self, partition_filters: &[(usize, ScanFilter)], file: &FileRef) -> bool {
+        (!partition_filters.is_empty() || !self.static_partition.is_empty())
+            && self.partition_values(file).is_ok_and(|v| {
+                dropping_filter(partition_filters, &v).is_some()
+                    || statically_dropped(&self.static_partition, &self.partition_fields, &v)
+            })
+    }
+
     /// The values of `file`'s partition columns, one row each.
     fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
         if self.layout.is_empty() {
@@ -1361,8 +1475,8 @@ impl FileScanSource {
         let mut children = Vec::with_capacity(fields.len());
         for f in &fields {
             children.push(match f.name().as_str() {
-                "file_path" => constant_string(&spark_file_path(file), rows)?,
-                "file_name" => constant_string(file.path.filename().unwrap_or(""), rows)?,
+                "file_path" => constant_string(&spark_file_path(file, &self.roots), rows)?,
+                "file_name" => constant_string(&spark_file_name(file), rows)?,
                 "file_size" => long(file.size)?,
                 "file_block_start" => long(range.start)?,
                 "file_block_length" => long(range.len())?,
@@ -1485,11 +1599,14 @@ fn constant_string(value: &str, rows: usize) -> Result<ArrayRef> {
 }
 
 /// The file's URI as Spark prints `_metadata.file_path`: `file:/dir/f` for
-/// local files, `<scheme>://<authority>/key` otherwise, the path quoted as
+/// local files, `<scheme>://<authority>/key` otherwise (under the root the
+/// read's path was written with, else the store id), the path quoted as
 /// `java.net.URI` quotes it (Spark 4.2: `file:/tmp/données%20x/é%2541/...`
 /// for `/tmp/données x/é%41/...`).
-fn spark_file_path(file: &FileRef) -> String {
-    let store = file.store.to_string();
+fn spark_file_path(file: &FileRef, roots: &PathRoots) -> String {
+    let store = roots
+        .root(&file.store, &file.path)
+        .map_or_else(|| file.store.to_string(), str::to_owned);
     let path = uri_path(&decode_store_path(file.path.as_ref()));
     // A local store names itself `file://` or, for a session's tables, `file`.
     match store
@@ -1499,6 +1616,13 @@ fn spark_file_path(file: &FileRef) -> String {
         Some(rest) => format!("file:{}/{path}", rest.trim_end_matches('/')),
         None => format!("{}/{path}", store.trim_end_matches('/')),
     }
+}
+
+/// `_metadata.file_name`: the last segment of the file's URI path, still quoted (Spark 4.2.0
+/// `FileFormat`: `filePath.toUri.getRawPath` split on `/`; a run prints `with%20space%25.parquet`
+/// for the key `with space%.parquet`).
+fn spark_file_name(file: &FileRef) -> String {
+    uri_path(&decode_store_path(file.path.filename().unwrap_or("")))
 }
 
 /// The text of an `object_store` path, whose segments percent-encode the
@@ -1776,21 +1900,75 @@ mod tests {
             version: krishiv_io::VersionToken::Immutable,
             modified_micros: Some(5),
         };
-        assert_eq!(spark_file_path(&file), "file:/tmp/pq/a%20b.parquet");
+        let none = PathRoots::default();
+        assert_eq!(spark_file_path(&file, &none), "file:/tmp/pq/a%20b.parquet");
+        assert_eq!(spark_file_name(&file), "a%20b.parquet");
         // Spark 4.2 keeps non-ASCII text and quotes spaces and `%`.
         let odd = FileRef {
             path: object_store::path::Path::from("tmp/données x/é%41/f.parquet"),
             ..file.clone()
         };
         assert_eq!(
-            spark_file_path(&odd),
+            spark_file_path(&odd, &none),
             "file:/tmp/données%20x/é%2541/f.parquet"
         );
         let s3 = FileRef {
             store: krishiv_io::StoreId::new("s3://bucket"),
             ..file
         };
-        assert_eq!(spark_file_path(&s3), "s3://bucket/tmp/pq/a%20b.parquet");
+        assert_eq!(
+            spark_file_path(&s3, &none),
+            "s3://bucket/tmp/pq/a%20b.parquet"
+        );
+        // Under the root of the read path nearest above the file (Spark 4.2.0 run: an `s3a://`
+        // read prints `s3a://`); of two paths with one key the first; no root keeps the store id.
+        let bucket = krishiv_io::StoreId::new("s3://bucket");
+        let key = |k: &str| object_store::path::Path::from(k);
+        let roots = PathRoots::new([
+            (
+                krishiv_io::StoreId::new("s3://other"),
+                key(""),
+                "s3a://other".to_owned(),
+            ),
+            (bucket.clone(), key("tmp"), "s3a://bucket".to_owned()),
+            (bucket.clone(), key("tmp"), "s3://bucket".to_owned()),
+            (bucket.clone(), key("dir"), "s3://bucket".to_owned()),
+            (bucket, key(""), "s3n://bucket".to_owned()),
+        ]);
+        assert_eq!(
+            spark_file_path(&s3, &roots),
+            "s3a://bucket/tmp/pq/a%20b.parquet"
+        );
+        assert_eq!(
+            spark_file_path(&odd, &roots),
+            "file:/tmp/données%20x/é%2541/f.parquet"
+        );
+        let elsewhere = FileRef {
+            path: key("tmpx/f.parquet"),
+            ..s3.clone()
+        };
+        assert_eq!(
+            spark_file_path(&elsewhere, &roots),
+            "s3n://bucket/tmpx/f.parquet"
+        );
+        // The name is the last segment of the quoted path (Spark 4.2.0 run:
+        // `with%20space%25.parquet`, `we+ird%23.parquet`).
+        let named = |name: &str| FileRef {
+            path: object_store::path::Path::from_iter(["dir", name]),
+            ..s3.clone()
+        };
+        assert_eq!(
+            spark_file_name(&named("with space%.parquet")),
+            "with%20space%25.parquet"
+        );
+        assert_eq!(
+            spark_file_name(&named("we+ird#.parquet")),
+            "we+ird%23.parquet"
+        );
+        assert_eq!(
+            spark_file_path(&named("we+ird#.parquet"), &roots),
+            "s3://bucket/dir/we+ird%23.parquet"
+        );
         for s in ["short", "a value longer than twelve bytes"] {
             let a = constant_string(s, 3).unwrap_or_else(|e| unreachable!("{e}"));
             let a = a
@@ -1803,52 +1981,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod row_level_tests {
-    use arrow_array::BooleanArray;
-
-    use super::*;
-    use crate::operators::expr::FnPredicate;
-
-    fn filter(rows: RowLevel) -> PushedFilter {
-        let predicate: Arc<dyn super::super::expr::Predicate> =
-            Arc::new(FnPredicate(|b: &RecordBatch| {
-                Ok(BooleanArray::from(vec![true; b.num_rows()]))
-            }));
-        PushedFilter {
-            predicate,
-            expr: Some(PushdownExpr::Constant(true)),
-            rows,
-        }
-    }
-
-    #[test]
-    fn a_filter_left_out_that_may_raise_keeps_runtime_filters_off() {
-        let safe = filter(RowLevel::Full);
-        let raising = filter(RowLevel::Prefix(None));
-        // Nothing left out: as `row_level`.
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&safe), 1),
-            RowLevel::Full
-        ));
-        // A safe filter left out changes nothing.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe.clone()], 1),
-            RowLevel::Full
-        ));
-        // A raising filter left out: only the usable prefix may drop rows.
-        let level = scan_row_level(&[safe.clone(), raising.clone()], 1);
-        assert!(
-            matches!(&level, RowLevel::Prefix(Some(PushdownExpr::Constant(true)))),
-            "{level:?}"
-        );
-        assert!(matches!(
-            scan_row_level(std::slice::from_ref(&raising), 0),
-            RowLevel::Prefix(None)
-        ));
-        // A later raising filter counts too.
-        assert!(matches!(
-            scan_row_level(&[safe.clone(), safe, raising], 1),
-            RowLevel::Prefix(Some(_))
-        ));
-    }
-}
+mod row_level_tests;

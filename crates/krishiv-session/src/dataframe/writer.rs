@@ -325,7 +325,22 @@ impl DataFrameWriter {
         let df = self.df;
         let session = df.session.clone();
         session
-            .on_executor(async move { df.session.exec_save_as_table(&df, spec, mode).await })
+            .on_executor(async move {
+                let s = &df.session;
+                let env = s.query_env();
+                match s.created_table(&spec.table, &env) {
+                    // A table it creates gets its creator as owner (review m5).
+                    Some(change) => {
+                        Box::pin(s.with_owner_change(
+                            change,
+                            &env,
+                            Box::pin(s.exec_save_as_table(&df, spec, mode)),
+                        ))
+                        .await
+                    }
+                    None => Box::pin(s.exec_save_as_table(&df, spec, mode)).await,
+                }
+            })
             .await
     }
 
@@ -563,7 +578,27 @@ impl DataFrameWriterV2 {
         let df = self.df;
         let session = df.session.clone();
         session
-            .on_executor(async move { df.session.exec_write_v2(&df, spec, mode, &mut None).await })
+            .on_executor(async move {
+                let s = &df.session;
+                let env = s.query_env();
+                let creates = matches!(
+                    mode,
+                    crate::table_commands::V2Mode::Create
+                        | crate::table_commands::V2Mode::CreateOrReplace
+                );
+                match s.created_table(&spec.table, &env).filter(|_| creates) {
+                    // A table it creates gets its creator as owner (review m5).
+                    Some(change) => {
+                        Box::pin(s.with_owner_change(
+                            change,
+                            &env,
+                            Box::pin(s.exec_write_v2(&df, spec, mode, &mut None)),
+                        ))
+                        .await
+                    }
+                    None => Box::pin(s.exec_write_v2(&df, spec, mode, &mut None)).await,
+                }
+            })
             .await
     }
 

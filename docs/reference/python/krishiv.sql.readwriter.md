@@ -64,11 +64,13 @@ def parquet(self, *paths: str) -> DataFrame
 ### `schema`
 
 ```python
-def schema(self, schema: object) -> DataFrameReader
+def schema(self, schema: StructType | str) -> DataFrameReader
 ```
 
-Refused with `KRISHIV_UNSUPPORTED_FEATURE`: reads do not carry a
-user schema yet, and dropping it would read every column as text.
+The input schema: a `StructType` or a DDL string (`"a INT,
+b STRING"`). The files are read as its columns, never inferred; as in
+Spark, partition columns found under the path come last (one the schema
+names takes its type) and every column reads as nullable.
 
 ## `DataFrameWriter`
 

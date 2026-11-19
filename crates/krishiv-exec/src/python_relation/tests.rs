@@ -89,6 +89,15 @@ enum Yield {
     /// As `Count`, the values of this many groups yielded together (a
     /// runtime batching its results across groups); the rest at the end.
     Coalesce(usize),
+    /// One value per row, the frame's `v` (an aligned kind), as each frame
+    /// comes.
+    Values,
+    /// As `Values`, a group's values held until its end (or the input's),
+    /// then yielded in one batch (a window aggregate over a partition).
+    GroupValues,
+    /// As `Values`, every value held until the end, then one short (or
+    /// one too many).
+    ValuesOff(bool),
 }
 
 struct Fake {
@@ -97,7 +106,7 @@ struct Fake {
 }
 
 impl PreparedRelationUdf for Fake {
-    fn open(&self) -> crate::error::Result<Box<dyn UdfTask>> {
+    fn open(&self, _slot: Option<super::RelationSlot>) -> crate::error::Result<Box<dyn UdfTask>> {
         self.shared.opened.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(Task {
             shared: Arc::clone(&self.shared),
@@ -142,6 +151,17 @@ fn counts(n: Vec<i64>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(n)) as ArrayRef]).unwrap()
 }
 
+/// The `v` values of a frame of `k, v`.
+fn values_of(batch: &RecordBatch) -> Vec<i64> {
+    batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .values()
+        .to_vec()
+}
+
 impl UdfTask for Task {
     fn send(&self, frame: Frame) -> BoxFuture<'_, crate::error::Result<()>> {
         Box::pin(async move {
@@ -181,10 +201,23 @@ impl UdfTask for Task {
             match frame {
                 Frame::Batch { batch, .. } => {
                     s.rows += i64::try_from(batch.num_rows()).unwrap();
+                    match self.yields {
+                        Yield::Values => s.out.push_back(counts(values_of(&batch))),
+                        Yield::GroupValues | Yield::ValuesOff(_) => {
+                            s.held.extend(values_of(&batch));
+                        }
+                        _ => {}
+                    }
                     let copies = match self.yields {
                         Yield::Twice => 2,
                         Yield::Burst(n) => n,
-                        Yield::Nothing | Yield::Count | Yield::CountTwice | Yield::Coalesce(_) => 0,
+                        Yield::Nothing
+                        | Yield::Count
+                        | Yield::CountTwice
+                        | Yield::Coalesce(_)
+                        | Yield::Values
+                        | Yield::GroupValues
+                        | Yield::ValuesOff(_) => 0,
                     };
                     for _ in 0..copies {
                         s.out.push_back(batch.clone());
@@ -205,10 +238,21 @@ impl UdfTask for Task {
                                 s.out.push_back(counts(values));
                             }
                         }
+                        Yield::GroupValues => {
+                            let values = std::mem::take(&mut s.held);
+                            s.out.push_back(counts(values));
+                        }
                         _ => {}
                     }
                 }
                 Frame::End => {
+                    if let Yield::ValuesOff(more) = self.yields {
+                        if more {
+                            s.held.push(-1);
+                        } else {
+                            s.held.pop();
+                        }
+                    }
                     if !s.held.is_empty() {
                         let values = std::mem::take(&mut s.held);
                         s.out.push_back(counts(values));
@@ -362,6 +406,14 @@ fn rig_in(
     let names = || vec!["k".to_owned(), "v".to_owned()];
     let sides = if cogroup { 2 } else { 1 };
     let (client, output) = match yields {
+        Yield::Values | Yield::GroupValues | Yield::ValuesOff(_) => (
+            vec![ArrowType::Int64],
+            vec![
+                Field::new("k", ArrowType::Int32, true),
+                Field::new("v", ArrowType::Int64, true),
+                Field::new("n", ArrowType::Int64, true),
+            ],
+        ),
         Yield::Count | Yield::CountTwice | Yield::Coalesce(_) => (
             vec![ArrowType::Int64],
             match shape {
@@ -457,6 +509,34 @@ async fn drive(r: &Rig, batches: Vec<Batch>) -> crate::error::Result<()> {
     }
     r.sink.combine(l, &g)?;
     r.sink.finalize(&g, &r.ctx).await
+}
+
+/// As [`drive`]; the stored rows, `(k, v, n)` per row.
+async fn drive_rows(r: &Rig, batches: Vec<Batch>) -> crate::error::Result<Vec<(i32, i64, i64)>> {
+    let g = r.sink.global_state(&r.ctx)?;
+    let mut l = r.sink.local_state(&r.ctx, &g)?;
+    for b in batches {
+        match r.sink.sink(b, &mut l, &g)? {
+            SinkStatus::Blocked(wait) => wait.await,
+            SinkStatus::NeedMemory { bytes } => panic!("no memory for {bytes}"),
+            SinkStatus::NeedMoreInput | SinkStatus::Finished => {}
+        }
+    }
+    r.sink.combine(l, &g)?;
+    r.sink.finalize(&g, &r.ctx).await?;
+    let store = super::sink::store_state(&g).unwrap();
+    let mut out = Vec::new();
+    for b in crate::shared::memory_batches(&store).unwrap() {
+        let b = b.data();
+        let col = |i: usize| b.column(i);
+        let k = col(0).as_any().downcast_ref::<Int32Array>().unwrap();
+        let v = col(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        let n = col(2).as_any().downcast_ref::<Int64Array>().unwrap();
+        for i in 0..b.num_rows() {
+            out.push((k.value(i), v.value(i), n.value(i)));
+        }
+    }
+    Ok(out)
 }
 
 fn done(r: Rig) {
@@ -832,6 +912,7 @@ fn a_runtime_without_relation_kinds_refuses_them_as_not_available() {
         output_types: vec![krishiv_types::DataType::Long],
         output_arrow: Arc::new(Schema::new(vec![Field::new("n", ArrowType::Int64, true)])),
         conf: super::RunnerConf::default(),
+        udtf: None,
     };
     let err = crate::python_eval::UdfRuntime::prepare_relation(&ScalarOnly, &spec)
         .err()
@@ -1561,11 +1642,13 @@ async fn a_result_refused_in_finalize_spills_instead_of_waiting() {
         "a result refused"
     );
     r.sink.combine(l, &g).unwrap();
-    // Faster than the pool's spill wait: the refused results are written
-    // out, not waited for.
-    tokio::time::timeout(Duration::from_secs(4), r.sink.finalize(&g, &r.ctx))
+    // The refused results are written out, not waited for: nothing else
+    // frees the pool, so a wait for memory fails `finalize` with the pool's
+    // error after its spill wait (5 s), which `unwrap` catches. The deadline
+    // only catches a hang, so it is far above any run's time, under any load.
+    tokio::time::timeout(Duration::from_secs(120), r.sink.finalize(&g, &r.ctx))
         .await
-        .unwrap()
+        .expect("finalize hung")
         .unwrap();
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), 64);
     drop(g);
@@ -1675,12 +1758,17 @@ async fn finalize_drains_results_before_waiting_for_frame_copies() {
         }
         drop(hog);
     };
+    // The order is what is checked, not the speed: waiting for the copies
+    // before the results are written out is a wait for memory only the
+    // results hold, which fails `finalize` with the pool's error (its spill
+    // wait) or never ends. The deadline only catches the latter, so it is
+    // far above any run's time, under any load.
     let (finalized, ()) = tokio::time::timeout(
-        Duration::from_secs(4),
+        Duration::from_secs(120),
         futures::future::join(r.sink.finalize(&g, &r.ctx), release),
     )
     .await
-    .unwrap();
+    .expect("finalize hung waiting for the frame's copies");
     finalized.unwrap();
     assert_eq!(quiet.log(), ["B0:100", "B0:50", "E"]);
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), 4000);
@@ -1867,3 +1955,7 @@ async fn a_blocked_future_waits_while_the_task_takes_nothing() {
     drop(g);
     done(r);
 }
+
+/// The aligned shape (PR-26c-3): a window aggregate, a scalar iterator.
+#[path = "aligned_tests.rs"]
+mod aligned;

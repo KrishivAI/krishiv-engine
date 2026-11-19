@@ -51,7 +51,7 @@ fn schema(view: bool) -> SchemaRef {
 
 /// A batch of `keys` (the value is the key, padded to [`VALUE`] bytes;
 /// `o` numbers the rows from `first`, for `first` and `last`).
-fn batch(view: bool, first: i64, keys: impl Iterator<Item = i64>) -> Batch {
+pub(super) fn batch(view: bool, first: i64, keys: impl Iterator<Item = i64>) -> Batch {
     let keys: Vec<i64> = keys.collect();
     let values: Vec<String> = keys.iter().map(|k| format!("{k:0>VALUE$}")).collect();
     let values: ArrayRef = if view {
@@ -64,7 +64,7 @@ fn batch(view: bool, first: i64, keys: impl Iterator<Item = i64>) -> Batch {
     Batch::new(RecordBatch::try_new(schema(view), cols).unwrap())
 }
 
-fn spec(view: bool) -> AggregateSpec {
+pub(super) fn spec(view: bool) -> AggregateSpec {
     let s = schema(view);
     let pick = |f| AggregateExpr::new(f, 2, DataType::Int64, "p");
     AggregateSpec {

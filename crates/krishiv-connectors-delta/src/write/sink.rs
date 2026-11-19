@@ -37,7 +37,7 @@ use super::{PREDICATE_TEXT_OPTION, READS_TARGET_OPTION};
 use crate::commit::{CommitOperation, ReadSet, RetryLimits, StagedCommit, StagedRemoves, commit};
 use crate::engine::{DeltaEngine, KrishivEngineData};
 use crate::error::from_kernel;
-use crate::features::{WriteProtocol, check_write};
+use crate::features::{WriteProtocol, check_create, check_write};
 use crate::table::{DeltaTable, hadoop_path, partition_scalar};
 
 /// The default `delta.checkpointInterval`.
@@ -839,6 +839,7 @@ pub(super) fn plan_create(
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
+    check_create(name, &new.properties, &new.schema)?;
     let kernel = |err: &delta_kernel::KernelError| from_kernel(err, name);
     let mut builder = create_table(
         e.table_root().as_str(),
@@ -1051,6 +1052,15 @@ impl DeltaWriteSink {
             // a partition filter copies no rows and writes no change files.
             metrics.push(("numCopiedRows".to_owned(), Some("0".to_owned())));
             metrics.push(("numAddedChangeFiles".to_owned(), Some("0".to_owned())));
+        }
+        // An append or a dynamic overwrite that wrote no file commits nothing: delta-spark 4.4.1
+        // writes no version for them (an empty `INSERT INTO`, one reading its own target, a
+        // DataFrame append, a dynamic `INSERT OVERWRITE`; probe
+        // `ops/reports/2026-11-18-o2-empty-append.md` in krishiv-internal), and the kernel refuses
+        // a blind append without files. A truncate or `replaceWhere` still commits its removes.
+        if matches!(self.mode, Mode::Append | Mode::Dynamic) && written.adds.is_empty() {
+            g.release_writers();
+            return Ok(());
         }
         let staged = StagedCommit {
             table: name.clone(),
@@ -1377,7 +1387,18 @@ pub(super) fn check_filter(
                     .column_by_name(p)
                     .ok_or_else(|| internal(&format!("the partition column {p} is not written")))?;
                 crate::engine::relabel::relabel(c, f.data_type())
-                    .or_else(|_| arrow_cast::cast(c, f.data_type()))
+                    .or_else(|_| {
+                        // Not the default safe cast: a value that does not fit fails, never
+                        // turns into NULL (the session casts first; this catches a gap).
+                        arrow_cast::cast_with_options(
+                            c,
+                            f.data_type(),
+                            &arrow_cast::CastOptions {
+                                safe: false,
+                                ..arrow_cast::CastOptions::default()
+                            },
+                        )
+                    })
                     .map_err(|err| internal(&format!("the partition column {p}: {err}")))
             })
             .collect::<Result<Vec<_>, _>>()?;

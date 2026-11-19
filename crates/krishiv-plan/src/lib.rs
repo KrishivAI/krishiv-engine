@@ -80,6 +80,7 @@
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
+//! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -142,6 +143,7 @@ mod raises;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
+pub mod udtf;
 mod walk;
 
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
@@ -152,8 +154,8 @@ pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
     FunctionCall, NullOrdering, PipeClause, ResolvedExpr, ResolvedFunction, SortDirection,
-    SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
-    WindowSpecRef,
+    SortOrder, Star, SubqueryKind, TableArgSpec, TypedLiteralKind, WindowExpr, WindowFrame,
+    WindowSpec, WindowSpecRef,
 };
 pub use function::{
     Builtin, FunctionId, FunctionKind, PythonEvalType, PythonUdfKind, PythonUdfRef, QuantifiedLike,
@@ -185,7 +187,7 @@ pub use plan::{
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,
-    python_relation_is_deterministic,
+    plan_is_deterministic, python_relation_is_deterministic,
 };
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

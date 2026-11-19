@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/derived_keys.rs
+expression: "format!(\"{}\\n{}\\n{}\", r.plan.root(), r.text(), r.notes.join(\"\\n\"))"
+---
+Aggregate [c#0, d#6, e#7], [c#0, d#6, e#7, count(1) AS n#8]
++- SubqueryAlias __auto_generated_subquery_name
+   +- Project [c#0, (c#0 - 1) AS d#6, (c#0 + 5) AS e#7, v#4]
+      +- Scan spark_catalog.default.h [c#0, k#1, s#2, sl#3, v#4, w#5]
+
+Aggregate [c#0], [c#0, (c#0 - 1) AS d#6, (c#0 + 5) AS e#7, count(1) AS n#8]
++- Scan spark_catalog.default.h [c#0]
+
+moved group key d = (c#0 - 1) above the aggregate
+moved group key e = (c#0 + 5) above the aggregate

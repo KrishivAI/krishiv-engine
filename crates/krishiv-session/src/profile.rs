@@ -469,6 +469,21 @@ impl DataFrame {
                 diff: String::new(),
             })
             .collect();
+        // The key counts taken before the last optimization (design P2b A5
+        // (d)): one step per count, with no plan change.
+        steps.extend(
+            a.env
+                .catalog
+                .key_notes(true)
+                .into_iter()
+                .map(|note| OptimizerStep {
+                    batch: "Statistics".to_owned(),
+                    round: 1,
+                    rule: format!("discoverKeys: {note}"),
+                    plan: analyzed_text.clone(),
+                    diff: String::new(),
+                }),
+        );
         for r in rules {
             let plan = r.plan.to_string();
             if plan == before && r.note.is_empty() {

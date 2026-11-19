@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -19,6 +19,32 @@
       "properties": {
         "trace_id": { "type": "string", "description": "The session's traceparent trace id (32 hex digits), when it has one." },
         "session_id": { "type": "string" }
+      }
+    },
+    "scans": {
+      "type": "array",
+      "description": "The named tables the query scanned and the columns it compared with a value (added in minor 6; the partition advisor's input). Absent when the query scanned no named table; a table read twice is one entry.",
+      "items": {
+        "type": "object",
+        "required": ["table", "equality"],
+        "additionalProperties": false,
+        "properties": {
+          "table": { "type": "string", "description": "The table, as `catalog.schema.name`, each component backquoted (backquotes doubled) unless it is letters, digits and `_` (not all digits)." },
+          "rows": { "$ref": "#/$defs/u64", "description": "The table's row count when the query was planned, if known." },
+          "equality": {
+            "type": "array",
+            "description": "Columns a filter compared with values by `=` or `IN`, by name.",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "distinct": { "$ref": "#/$defs/u64", "description": "The column's distinct non-null values when the query was planned, if known." }
+              }
+            }
+          }
+        }
       }
     },
     "environment": {

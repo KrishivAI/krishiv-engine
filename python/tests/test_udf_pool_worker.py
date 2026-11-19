@@ -28,7 +28,7 @@ pa = pytest.importorskip("pyarrow")
 import krishiv.errors as kerrors  # noqa: E402
 from krishiv._udf import _host, pool_worker  # noqa: E402
 from krishiv._udf import types as udf_types  # noqa: E402
-from krishiv.sql.types import LongType  # noqa: E402
+from krishiv.sql.types import LongType, StructField, StructType  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "memfd_create"), reason="memfds are Linux only")
 
@@ -219,6 +219,7 @@ def test_a_huge_error_message_is_cut_to_the_message_budget(pair: tuple[socket.so
         (json.dumps({"t": "what"}).encode(), 1, "unexpected message 'what' with 1 descriptors"),
         (json.dumps({"t": "batch"}).encode(), 0, "unexpected message 'batch' with 0 descriptors"),
         (json.dumps({"t": "batch"}).encode(), 2, "unexpected message 'batch' with 2 descriptors"),
+        (json.dumps({"t": "task"}).encode(), 1, "unexpected message 'task' with 1 descriptors"),
         (b"x" * (pool_worker.MAX_MESSAGE + 1), 0, "truncated"),
         (json.dumps({"t": "batch"}).encode(), 5, "truncated"),
     ],
@@ -354,3 +355,545 @@ def test_an_unknown_eval_type_is_not_implemented() -> None:
     with pytest.raises(kerrors.PySparkNotImplementedError) as err:
         make_wrapper(_plus_one, 999, LongType())
     assert err.value.getMessageParameters() == {"feature": "Python UDFs of eval type 999"}
+
+
+# --- relation tasks (design ``P3-T085-embedded-python-udf-kinds.md`` §3.2) ---
+MAP_ARROW = 207
+GROUPED_AGG_PANDAS = 202
+GROUPED_MAP_PANDAS = 201
+V = StructType([StructField("v", LongType())])
+
+
+def _double(batches: Any) -> Any:
+    for b in batches:
+        yield pa.record_batch([pa.compute.multiply(b.column(0), 2)], names=["v"])
+
+
+def _first_batch_only(batches: Any) -> Any:
+    yield next(batches)
+
+
+def _explode(batches: Any) -> Any:
+    raise ValueError("kaboom")
+
+
+def _total(values: Any) -> int:
+    return int(values.sum())
+
+
+def _identity_group(df: Any) -> Any:
+    return df
+
+
+@pytest.fixture
+def relation_conf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_host, "runner_conf", lambda: {"spark.sql.session.timeZone": "UTC"})
+
+
+def _relation_udf(func: Any, eval_type: int) -> tuple[dict[str, Any], bytes]:
+    command = pickle.dumps((func, V if eval_type != GROUPED_AGG_PANDAS else LongType()))
+    return {"t": "udf", "id": 7, "eval_type": eval_type, "python_ver": PYTHON_VER, "len": len(command)}, command
+
+
+def _task(key_count: int = 0, arity: int = 0, max_rows: int = 0, udf: int = 7) -> dict[str, Any]:
+    return {"t": "task", "udf": udf, "key_count": key_count, "arity": arity, "max_rows": max_rows, "conf": {}}
+
+
+def _frame(sock: socket.socket, values: list[int | None], side: int = 0) -> None:
+    header, data = _batch(values)
+    _send(sock, {"t": "frame", "side": side, "len": header["len"]}, data)
+
+
+def _collect(sock: socket.socket) -> list[tuple[dict[str, Any], list[Any]]]:
+    """Every message the worker sent, up to EOF, with the rows of each ``result``."""
+    sock.setblocking(False)
+    out: list[tuple[dict[str, Any], list[Any]]] = []
+    while True:
+        try:
+            data, fds, _flags, _addr = socket.recv_fds(sock, 1 << 20, 4)
+        except BlockingIOError:
+            return out
+        if not data:
+            return out
+        msg = json.loads(data)
+        rows: list[Any] = []
+        for fd in fds:
+            try:
+                data = os.pread(fd, msg["len"], 0)
+                # An `analyzed` answer's memfd holds JSON; every other one an Arrow stream.
+                rows = (
+                    json.loads(data)
+                    if msg["t"] == "analyzed"
+                    else pa.ipc.open_stream(data).read_all().column(0).to_pylist()
+                )
+            finally:
+                os.close(fd)
+        out.append((msg, rows))
+
+
+def _serve(worker: socket.socket, server: socket.socket) -> list[tuple[dict[str, Any], list[Any]]]:
+    server.shutdown(socket.SHUT_WR)
+    pool_worker._Worker(worker).serve()
+    return _collect(server)
+
+
+def test_a_map_task_streams_its_results_as_frames_arrive(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_double, MAP_ARROW))
+    _send(server, _task())
+    _frame(server, [1, 2])
+    _frame(server, [3])
+    _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    kinds = [m["t"] for m, _ in sent]
+    assert kinds == ["ready", "want", "result", "want", "result", "want", "done"]
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[2, 4], [6]]
+
+
+def test_a_task_whose_udf_stops_reading_is_done_before_the_end(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_first_batch_only, MAP_ARROW))
+    _send(server, _task())
+    _frame(server, [1, 2])
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "want", "result", "done"]
+    assert sent[2][1] == [1, 2]
+
+
+def test_an_aggregate_task_sends_a_group_value_per_want(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    _send(server, _task(arity=1))
+    _frame(server, [1, 2])
+    _send(server, {"t": "end_group"})
+    _frame(server, [10])
+    _send(server, {"t": "end_group"})
+    _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[3], [10]]
+    assert sent[-1][0] == {"t": "done"}
+
+
+def test_an_aggregate_task_with_a_row_cap_sends_each_value_at_once(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    _send(server, _task(arity=1, max_rows=1))
+    _frame(server, [4])
+    _send(server, {"t": "end_group"})
+    _send(server, {"t": "end"})
+    kinds = [m["t"] for m, _ in _serve(worker, server)]
+    # the cap flushes the value as soon as the runner yields it, before the next want
+    assert kinds == ["ready", "want", "want", "result", "want", "done"]
+
+
+def test_results_wait_to_be_sent_together_up_to_the_row_cap(pair: tuple[socket.socket, socket.socket]) -> None:
+    server, worker = pair
+    results = pool_worker._Results(worker, 0, aggregate=True)
+    assert results.max_rows == pool_worker.DEFAULT_MAX_ROWS
+    results.flush()  # nothing pending: nothing sent
+    results.add(pa.record_batch([pa.array([1])], names=["_0"]))
+    results.add(pa.record_batch([pa.array([2, 3])], names=["_0"]))
+    server.setblocking(False)
+    with pytest.raises(BlockingIOError):
+        server.recv(1)
+    results.flush()
+    assert [rows for _m, rows in _collect(server)] == [[1, 2, 3]]
+    assert (results.pending, results.rows) == ([], 0)
+
+
+def test_a_udf_error_in_a_task_keeps_the_worker(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_explode, MAP_ARROW))
+    _send(server, _task())
+    _send(server, _task(udf=99))  # an id never loaded
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error", "error"]
+    assert sent[1][0]["kind"] == "python"
+    assert "ValueError: kaboom" in sent[1][0]["message"]
+    assert "KeyError: 99" in sent[2][0]["message"]
+
+
+def test_a_task_for_a_scalar_udf_and_a_batch_for_a_relation_are_refused(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_udf(_plus_one))
+    _send(server, _task())
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert sent[1][0]["kind"] == "protocol"
+    assert "a task for a scalar UDF" in sent[1][0]["message"]
+
+    server2, worker2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        _send(server2, *_relation_udf(_double, MAP_ARROW))
+        _send(server2, *_batch([1]))
+        sent = _serve(worker2, server2)
+    finally:
+        server2.close()
+        worker2.close()
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert sent[1][0]["kind"] == "python"
+    assert "a batch for a relation UDF" in sent[1][0]["message"]
+
+
+def test_a_frame_error_ends_the_worker_as_a_protocol_error(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_identity_group, GROUPED_MAP_PANDAS))
+    _send(server, _task(key_count=1))
+    _send(server, {"t": "end_group"})  # a group must start with a batch
+    _send(server, *_udf(_plus_one))  # never read
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "want", "error"]
+    assert sent[2][0]["kind"] == "protocol"
+    assert "a group starts with 'end_group'" in sent[2][0]["message"]
+
+
+@pytest.mark.parametrize(
+    ("replies", "text"),
+    [
+        ([b"{not json"], "unreadable frame"),
+        ([json.dumps({"no": "kind"}).encode()], "unreadable frame"),
+        ([json.dumps({"t": "frame", "side": 0, "len": 1}).encode()], "unexpected frame 'frame' with 0 descriptors"),
+        ([json.dumps({"t": "nonsense"}).encode()], "unexpected frame 'nonsense' with 0 descriptors"),
+        ([b""], "the server closed the socket inside a task"),
+        ([b"x" * (pool_worker.MAX_MESSAGE + 1)], "truncated"),
+    ],
+)
+def test_frames_the_worker_cannot_read_are_protocol_errors(
+    pair: tuple[socket.socket, socket.socket], replies: list[bytes], text: str
+) -> None:
+    server, worker = pair
+    results = pool_worker._Results(worker, 0, aggregate=False)
+    frames = pool_worker._Frames(worker, results)
+    if replies == [b""]:
+        server.shutdown(socket.SHUT_WR)
+    else:
+        server.send(replies[0])
+    with pytest.raises(pool_worker._ProtocolError, match=text):
+        frames.next()
+    assert json.loads(server.recv(100)) == {"t": "want"}
+
+
+def test_a_frame_is_read_once_and_nothing_follows_the_end(pair: tuple[socket.socket, socket.socket]) -> None:
+    server, worker = pair
+    frames = pool_worker._Frames(worker, pool_worker._Results(worker, 0, aggregate=False))
+    _frame(server, [5], side=1)
+    _send(server, {"t": "end_group"})
+    _send(server, {"t": "end"})
+    kind, side, batch = frames.next()
+    assert (kind, side, batch.column(0).to_pylist()) == ("batch", 1, [5])
+    assert frames.next() == ("end_group",)
+    assert frames.next() == ("end",)
+    with pytest.raises(pool_worker._ProtocolError, match="asked for after the end"):
+        frames.next()
+
+
+# --- window aggregates, scalar iterators and artifact paths (PR-26c-3) ---
+WINDOW_AGG_PANDAS = 203
+SCALAR_PANDAS_ITER = 204
+
+
+def _plus_one_each(series: Any) -> Any:
+    for s in series:
+        yield s + 1
+
+
+def test_a_grouped_aggregate_udf_runs_as_the_window_kind_its_task_names(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    monkeypatch.setattr(
+        _host, "runner_conf", lambda: {"spark.sql.session.timeZone": "UTC", "window_bound_types": "unbounded"}
+    )
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    for _ in range(2):  # the second task reuses the window runner
+        _send(server, {**_task(arity=1), "eval_type": WINDOW_AGG_PANDAS})
+        _frame(server, [1, 2])
+        _send(server, {"t": "end_group"})
+        _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    # One value per row of the partition, sent together.
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[3, 3], [3, 3]]
+    assert [m["t"] for m, _ in sent].count("done") == 2
+
+
+def test_a_task_of_another_kind_than_the_udf_s_window_kind_is_a_protocol_error(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_total, GROUPED_AGG_PANDAS))
+    _send(server, {**_task(arity=1), "eval_type": SCALAR_PANDAS_ITER})
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert sent[1][0]["kind"] == "protocol"
+    assert "a task of eval type 204 for a UDF of eval type 202" in sent[1][0]["message"]
+
+
+def test_a_scalar_iterator_task_yields_a_value_per_row(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    command = pickle.dumps((_plus_one_each, LongType()))
+    udf = {"t": "udf", "id": 7, "eval_type": SCALAR_PANDAS_ITER, "python_ver": PYTHON_VER, "len": len(command)}
+    _send(server, udf, command)
+    _send(server, _task(arity=1))
+    _frame(server, [1, 2])
+    _frame(server, [3])
+    _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    assert [rows for m, rows in sent if m["t"] == "result"] == [[2, 3], [4]]
+    assert sent[-1][0] == {"t": "done"}
+
+
+def test_artifact_paths_go_on_sys_path_once_after_the_first_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "path", ["/worker", "/stdlib"])
+    pool_worker._add_paths(["/a/py.zip", "/a/archives/x"])
+    assert sys.path == ["/worker", "/a/archives/x", "/a/py.zip", "/stdlib"]
+    pool_worker._add_paths(["/a/py.zip"])
+    assert sys.path == ["/worker", "/a/archives/x", "/a/py.zip", "/stdlib"]
+
+
+def test_main_adds_the_artifact_paths_before_it_greets(
+    fake_pyspark: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    pair: tuple[socket.socket, socket.socket],
+    tmp_path: Any,
+) -> None:
+    (tmp_path / "krishiv_test_artifact_mod.py").write_text("VALUE = 41\n")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "krishiv_test_artifact_mod", raising=False)
+    server, worker = pair
+    server.shutdown(socket.SHUT_WR)
+    pool_worker.main(worker, paths=[str(tmp_path)])
+    assert sys.path[1] == str(tmp_path)
+    import krishiv_test_artifact_mod  # ty: ignore[unresolved-import]  # the artifact written above
+
+    assert krishiv_test_artifact_mod.VALUE == 41
+    assert _recv(server)[0]["t"] == "hello"
+
+
+# --- UDTFs (eval types 300-302, P3-T014 PR-26c-3 part B) ---
+TABLE_UDF = 300
+AB = StructType([StructField("a", LongType()), StructField("b", LongType())])
+
+
+class _Pairs:
+    """A UDTF: ``(x, 10 * x)`` per row, then the row count."""
+
+    def __init__(self) -> None:
+        self.n = 0
+
+    def eval(self, x: int) -> Iterator[tuple[int, int]]:
+        self.n += 1
+        yield x, x * 10
+
+    def terminate(self) -> Iterator[tuple[int, int]]:
+        yield -1, self.n
+
+
+class _WithAnalyze:
+    @staticmethod
+    def analyze(x: Any) -> Any:
+        return "not an AnalyzeResult"
+
+    def eval(self, x: int) -> Iterator[tuple[int, int]]:
+        yield x, x
+
+
+def _udtf(handler: Any, eval_type: int = TABLE_UDF) -> tuple[dict[str, Any], bytes]:
+    command = pickle.dumps(handler)
+    return {"t": "udf", "id": 9, "eval_type": eval_type, "python_ver": PYTHON_VER, "len": len(command)}, command
+
+
+def _udtf_task(eval_type: int = TABLE_UDF, udtf: Any = None) -> tuple[dict[str, Any], bytes]:
+    """A UDTF's ``task`` and the memfd bytes of its call (``udtf_len``)."""
+    task = _task(udf=9)
+    task["eval_type"] = eval_type
+    call = (
+        {"name": "pairs", "return_type": AB.json(), "args": [[0, None]], "partition_child_indexes": []}
+        if udtf is None
+        else udtf
+    )
+    data = json.dumps(call).encode()
+    task["udtf_len"] = len(data)
+    return task, data
+
+
+def _analyze(
+    udf: int, args: list[dict[str, Any]], values: Any = None, name: str = "w", limit: int = 0
+) -> tuple[dict[str, Any], bytes]:
+    """An ``analyze`` and its memfd bytes: ``values`` (a one-row batch) with the call in its metadata."""
+    batch = values if values is not None else pa.RecordBatch.from_struct_array(pa.array([{}], pa.struct([])))
+    meta = {b"krishiv.udtf.analyze": json.dumps({"name": name, "args": args}).encode()}
+    batch = batch.replace_schema_metadata(meta)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+    data = sink.getvalue().to_pybytes()
+    return {"t": "analyze", "udf": udf, "len": len(data), "max": limit}, data
+
+
+def _result_rows(sock_messages: list[tuple[dict[str, Any], list[Any]]]) -> list[Any]:
+    return [rows for m, rows in sock_messages if m["t"] == "result"]
+
+
+def test_a_udtf_task_runs_eval_per_row_and_terminate(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_udtf(_Pairs))
+    _send(server, *_udtf_task())
+    _frame(server, [1, 2])
+    _send(server, {"t": "end"})
+    sent = _serve(worker, server)
+    assert sent[0][0]["t"] == "ready"
+    assert sent[-1][0]["t"] == "done"
+    # `_collect` reads each result's first column.
+    assert [v for rows in _result_rows(sent) for v in rows] == [1, 2, -1]
+
+
+def test_a_udtf_task_of_another_kind_or_without_its_call_is_a_protocol_error(
+    fake_pyspark: types.ModuleType, relation_conf: None
+) -> None:
+    bare = {**_task(udf=9), "eval_type": TABLE_UDF}
+    for task in (
+        _udtf_task(eval_type=301),
+        (bare, None),
+        _udtf_task(udtf=[1]),
+        ({**bare, "udtf_len": 3}, b"{x}"),
+    ):
+        server, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        try:
+            _send(server, *_udtf(_Pairs))
+            _send(server, *task)
+            sent = _serve(worker, server)
+        finally:
+            server.close()
+            worker.close()
+        assert [m["t"] for m, _ in sent] == ["ready", "error"]
+        assert sent[1][0]["kind"] == "protocol"
+
+
+def test_analyze_answers_or_reports_the_python_error(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    from krishiv._udf import udtf
+
+    class Result:
+        def __init__(self, **fields: Any) -> None:
+            self.__dict__.update(fields)
+
+    server, worker = pair
+    _send(server, *_udtf(_WithAnalyze))
+    # `analyze` returned a string: a Python error, and the worker stays.
+    monkeypatch.setattr(udtf, "_analyze_api", lambda: (Result, Result, Result, Result, Result))
+    _send(server, *_analyze(9, [{"type": '"long"', "is_table": False}]))
+    _send(server, *_udf(_plus_one))
+    _send(server, *_analyze(7, []))
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error", "ready", "error"]
+    assert sent[1][0]["kind"] == "python"
+    assert "expects a result of type" in sent[1][0]["message"]
+    assert sent[3][0]["kind"] == "protocol"
+
+
+def test_analyze_sends_the_result(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    from krishiv._udf import udtf
+
+    monkeypatch.setattr(
+        udtf, "analyze_udtf", lambda handler, name, args, values: {"schema": name, "args": len(args), "x": "y" * 64}
+    )
+    server, worker = pair
+    _send(server, *_udtf(_WithAnalyze))
+    _send(server, *_analyze(9, [{}, {}]))
+    # Over the server's limit: a Python error (the server's analyze class), and the worker stays.
+    _send(server, *_analyze(9, [{}, {}], limit=32))
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "analyzed", "error"]
+    assert sent[1][1] == {"schema": "w", "args": 2, "x": "y" * 64}
+    assert sent[2][0]["kind"] == "python"
+    assert "over the limit of 32 bytes" in sent[2][0]["message"]
+
+
+def test_analyze_reports_every_exception_and_an_unpicklable_udtf(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    from krishiv._udf import udtf
+
+    def exits(handler: Any, name: str, args: Any, values: Any) -> Any:
+        raise SystemExit(3)
+
+    monkeypatch.setattr(udtf, "analyze_udtf", exits)
+    server, worker = pair
+    _send(server, *_udtf(_WithAnalyze))
+    _send(server, *_analyze(9, []))
+    # A command that does not unpickle is ready, and fails its analyze (and its tasks) as a Python error.
+    _send(server, {"t": "udf", "id": 8, "eval_type": TABLE_UDF, "python_ver": PYTHON_VER, "len": 3}, b"bad")
+    _send(server, *_analyze(8, []))
+    task, data = _udtf_task()
+    _send(server, {**task, "udf": 8}, data)
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error", "ready", "error", "error"]
+    assert "SystemExit: 3" in sent[1][0]["message"]
+    assert [sent[i][0]["kind"] for i in (3, 4)] == ["python", "python"]
+
+
+def test_an_unreadable_analyze_call_is_a_protocol_error(
+    fake_pyspark: types.ModuleType, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_udtf(_WithAnalyze))
+    header, data = _batch([1])
+    _send(server, {"t": "analyze", "udf": 9, "len": header["len"]}, data)
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert sent[1][0]["kind"] == "protocol"
+    assert "an unreadable analyze call" in sent[1][0]["message"]
+
+
+def test_a_batch_for_a_udtf_is_refused(
+    fake_pyspark: types.ModuleType, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_udtf(_Pairs))
+    header, data = _batch([1])
+    _send(server, {**header, "udf": 9}, data)
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert "a batch for a relation UDF" in sent[1][0]["message"]
+
+
+def test_a_udtf_call_for_another_kind_is_a_protocol_error(
+    fake_pyspark: types.ModuleType, relation_conf: None, pair: tuple[socket.socket, socket.socket]
+) -> None:
+    server, worker = pair
+    _send(server, *_relation_udf(_double, MAP_ARROW))
+    task, data = _udtf_task()
+    _send(server, {**task, "udf": 7, "eval_type": MAP_ARROW}, data)
+    sent = _serve(worker, server)
+    assert [m["t"] for m, _ in sent] == ["ready", "error"]
+    assert "not a table function" in sent[1][0]["message"]
+
+
+def test_an_analyze_result_is_cloudpickled_in_a_worker(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from krishiv._udf import udtf
+
+    monkeypatch.setattr(udtf, "IN_WORKER", True)
+    assert pickle.loads(udtf._dumps({"a": 1})) == {"a": 1}

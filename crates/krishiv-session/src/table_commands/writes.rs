@@ -4,29 +4,54 @@
 use super::*;
 
 impl Session {
-    /// The permanent table `name` for a command that writes it.
+    /// The permanent table `name` for a command that writes it. A Delta table is refused by name
+    /// until PR-37a.
     pub(crate) fn table_for_write(
         &self,
         name: &TableName,
         operation: &str,
         env: &QueryEnv,
     ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Write)
+    }
+
+    /// The permanent table `name` for a command that only reads it (`ANALYZE TABLE`): refused as
+    /// [`Self::table_for_write`] refuses, except that a Delta table is returned.
+    pub(crate) fn table_for_read_command(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Read)
+    }
+
+    fn stored_table_for(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+        access: Access,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
         if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name)
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // Reading a Delta table to analyze it is no write; INSERT writes through the Delta
-                // writer (`delta_writes.rs`), DELETE and UPDATE through its row-level table
-                // (`row_level.rs`); the other commands are refused by name.
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE and UPDATE
+                // through its row-level table (`row_level.rs`); the other writes are refused by
+                // name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
-                if is_delta_table(&table)
+                if access == Access::Write
+                    && is_delta_table(&table)
                     && !matches!(
                         operation,
-                        "ANALYZE TABLE" | "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                        "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
                     )
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }
+                #[cfg(not(feature = "delta"))]
+                let _ = access;
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
@@ -297,8 +322,18 @@ impl Session {
                 .collect::<Vec<_>>(),
         );
         let mut select = Vec::with_capacity(values.len());
+        // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
+        // A Delta table's writer checks NOT NULL itself, as delta-spark does
+        // (`DELTA_NOT_NULL_CONSTRAINT_VIOLATED`, `WRITE-EDGES.json` `not_null`).
+        let null_checks = !delta
+            && !env
+                .config
+                .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+                .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
-            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
+            let checked =
+                crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);
@@ -789,4 +824,13 @@ impl Session {
             .check_save(&table.location.display().to_string())
             .await
     }
+}
+
+/// What a table command does to the stored table it names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Only reads it (`ANALYZE TABLE`).
+    Read,
+    /// Writes or changes it.
+    Write,
 }

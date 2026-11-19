@@ -42,6 +42,15 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         None
     }
 
+    /// Whether a scan of the table can read no column at all and still
+    /// return its rows: the reader takes each batch's row count from the
+    /// files' own metadata, so a `COUNT(*)` reads only footers. The default
+    /// says no, and the optimizer keeps one column; a table whose rows on
+    /// disk are not its rows (deletion files) must keep the default.
+    fn reads_rows_without_columns(&self) -> bool {
+        false
+    }
+
     /// The write modes the table declared (Spark's `TableCapability`). The
     /// session checks them before planning a write; the default declares
     /// none, so a read-only table is never offered one.
@@ -73,6 +82,25 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         let _ = op;
         None
     }
+
+    /// Sets of column names, each unique among the table's rows whose
+    /// columns of the set are all non-NULL (a fact, never an estimate:
+    /// [`Statistics::unique_keys`]). None by default; a [`FileTable`]
+    /// reports the sets a key count proved (design P2b A5 (d)).
+    ///
+    /// [`FileTable`]: super::FileTable
+    fn unique_keys(&self) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+
+    /// The optimizer wants `columns` (sorted names) proven unique
+    /// ([`Statistics::want_unique`]): a request the session may answer with
+    /// a key count. Ignored by default; a [`FileTable`] keeps it.
+    ///
+    /// [`FileTable`]: super::FileTable
+    fn want_unique(&self, columns: &[String]) {
+        let _ = columns;
+    }
 }
 
 /// Finds the provider of the table a resolved scan reads, at the version
@@ -93,6 +121,25 @@ pub struct ProviderStatistics(pub Arc<dyn TableProviderResolver>);
 impl Statistics for ProviderStatistics {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
         self.0.provider(scan).ok()?.statistics()
+    }
+
+    fn unique_keys(&self, scan: &Scan) -> Vec<Vec<String>> {
+        self.0
+            .provider(scan)
+            .map(|p| p.unique_keys())
+            .unwrap_or_default()
+    }
+
+    fn want_unique(&self, scan: &Scan, columns: &[String]) {
+        if let Ok(p) = self.0.provider(scan) {
+            p.want_unique(columns);
+        }
+    }
+
+    fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
+        self.0
+            .provider(scan)
+            .is_ok_and(|p| p.reads_rows_without_columns())
     }
 }
 

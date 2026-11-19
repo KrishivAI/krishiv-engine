@@ -823,7 +823,7 @@ fn the_read_options_take_precedence_over_the_session() {
     // Given (any case of the name and value): the read decides, either way.
     let (o, _) = parse(
         &[
-            v("IGNORECORRUPTFILES", " False "),
+            v("IGNORECORRUPTFILES", "False"),
             v("ignoreMissingFiles", "false"),
         ],
         &on,
@@ -837,15 +837,21 @@ fn the_read_options_take_precedence_over_the_session() {
     // The flags key the read: two reads that differ only in them differ.
     let (off, _) = parse(&[v("ignoreCorruptFiles", "false")], &Config::new()).unwrap();
     assert!(!o.same_read(&off) && o.same_read(&o.clone()));
-    // Not a boolean.
+    // Not a boolean; nor one with spaces around it (Spark 4.2.0's
+    // `toBoolean`: `For input string: " true "`), though the conf is trimmed.
     for k in ["ignoreCorruptFiles", "ignoreMissingFiles"] {
-        let e = parse(&[v(k, "yes")], &Config::new()).unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_INVALID_FORMAT_OPTION_VALUE",
-            "{k}"
-        );
+        for bad in ["yes", " true ", "false "] {
+            let e = parse(&[v(k, bad)], &Config::new()).unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_INVALID_FORMAT_OPTION_VALUE",
+                "{k} {bad:?}"
+            );
+        }
     }
+    let (padded, _) =
+        Config::from_pairs([("spark.sql.files.ignoreCorruptFiles", " true ")]).unwrap();
+    assert!(ScanOptions::from_config(&padded).ignore_corrupt_files);
 }
 
 #[test]

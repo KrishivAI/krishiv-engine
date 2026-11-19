@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Per-query spill scopes and the target of a write.
+//! Per-query spill scopes, the column check of a write's schema, the target of a write and its job id
+//! (the worker context a query's plans run with is `session/env.rs`).
 
 use super::*;
 

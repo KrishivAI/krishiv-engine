@@ -882,6 +882,104 @@ def write_modes(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+def write_edges(spark: SparkSession, out: str) -> None:
+    """``WRITE-EDGES.json``: write edge cases next to ``WRITES.json`` (review of PR-37a part 2):
+    an empty-string partition value (stored as null) under a dynamic overwrite, an append and
+    ``replaceWhere``; a NULL written into a ``NOT NULL`` column (top level and nested) through
+    the DataFrame writer and SQL; ``maxRecordsPerFile`` (a number, and a value that is not one)."""
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+    }
+    empty = os.path.join(out, "write-empty-partition")
+    t = f"delta.`{empty}`"
+    spark.sql(f"CREATE TABLE {t} (id BIGINT, v STRING, p STRING) USING delta PARTITIONED BY (p)")
+    spark.sql(f"INSERT INTO {t} VALUES (1, 'a', NULL), (2, 'b', 'x')")
+
+    def dynamic(s: SparkSession) -> None:
+        s.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        try:
+            s.sql(f"INSERT OVERWRITE {t} VALUES (3, 'c', '')").collect()
+        finally:
+            s.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+    def replace_where(where: str, rows: str):
+        def step(s: SparkSession) -> None:
+            s.sql(f"SELECT * FROM VALUES {rows} AS v(id, v, p)").selectExpr(
+                "CAST(id AS BIGINT) AS id", "v", "p"
+            ).write.format("delta").mode("overwrite").option("replaceWhere", where).save(empty)
+
+        return step
+
+    record["empty_partition"] = run_steps(
+        spark,
+        empty,
+        [
+            ("dynamic_overwrite_empty", dynamic),
+            ("append_empty", f"INSERT INTO {t} VALUES (4, 'd', ''), (5, 'e', NULL)"),
+            ("replace_where_empty", replace_where("p = ''", "(6, 'f', '')")),
+            ("replace_where_null_with_empty", replace_where("p IS NULL", "(7, 'g', '')")),
+        ],
+    )
+    nn = os.path.join(out, "write-not-null")
+    n = f"delta.`{nn}`"
+    spark.sql(f"CREATE TABLE {n} (id BIGINT, a INT NOT NULL, s STRUCT<x: INT NOT NULL, y: INT>) USING delta")
+    spark.sql(f"INSERT INTO {n} VALUES (1, 1, named_struct('x', 1, 'y', 1))")
+
+    def append_df(select: str):
+        def step(s: SparkSession) -> None:
+            s.sql(select).write.format("delta").mode("append").save(nn)
+
+        return step
+
+    record["not_null"] = run_steps(
+        spark,
+        nn,
+        [
+            (
+                "dataframe_null_top_level",
+                append_df("SELECT CAST(2 AS BIGINT) AS id, CAST(NULL AS INT) AS a, named_struct('x', 2, 'y', 2) AS s"),
+            ),
+            (
+                "dataframe_null_nested",
+                append_df("SELECT CAST(3 AS BIGINT) AS id, 3 AS a, named_struct('x', CAST(NULL AS INT), 'y', 3) AS s"),
+            ),
+            (
+                "dataframe_null_struct",
+                append_df("SELECT CAST(4 AS BIGINT) AS id, 4 AS a, CAST(NULL AS STRUCT<x: INT, y: INT>) AS s"),
+            ),
+            ("sql_null_top_level", f"INSERT INTO {n} VALUES (5, NULL, named_struct('x', 5, 'y', 5))"),
+        ],
+    )
+    mr = os.path.join(out, "write-max-records")
+
+    def max_records(value: str, mode: str):
+        def step(s: SparkSession) -> None:
+            s.sql("SELECT CAST(id AS BIGINT) AS id FROM range(5)").repartition(1).write.format("delta").mode(
+                mode
+            ).option("maxRecordsPerFile", value).save(mr)
+
+        return step
+
+    record["max_records"] = run_steps(
+        spark,
+        mr,
+        [
+            ("create_two", max_records("2", "errorifexists")),
+            ("append_one", max_records("1", "append")),
+            ("append_not_a_number", max_records("abc", "append")),
+            ("append_zero", max_records("0", "append")),
+        ],
+    )
+    for d in (empty, nn, mr):
+        shutil.rmtree(d, ignore_errors=True)
+    with open(os.path.join(out, "WRITE-EDGES.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 #: Tables for the writer allow-list (design section 4.2): each created by delta-spark with one
 #: row. ``refused`` rows are features Krishiv does not write; the others it appends to.
 WRITE_FEATURE_TABLES: list[tuple[str, bool, list[str]]] = [
@@ -1328,6 +1426,10 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
         write_modes(spark, out)
         write_feature_tables(spark, out)
         drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "edges":
+        write_edges(spark, out)
         spark.stop()
         return
     if which == "session":

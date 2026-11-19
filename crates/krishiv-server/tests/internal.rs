@@ -162,7 +162,7 @@ async fn every_internal_endpoint_needs_the_token() {
     }
     // The token also works as a cookie and as a query parameter (an EventSource cannot set headers).
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(format!("GET /api/internal/queries?token={TOKEN} HTTP/1.1\r\nHost: l\r\nConnection: close\r\n\r\n").as_bytes())
+    s.write_all(format!("GET /api/internal/queries?token={TOKEN} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
         .await
         .unwrap();
     let mut out = String::new();
@@ -176,7 +176,7 @@ async fn every_internal_endpoint_needs_the_token() {
     ] {
         let mut s = TcpStream::connect(addr).await.unwrap();
         s.write_all(
-            format!("GET /api/internal/queries HTTP/1.1\r\nHost: l\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n").as_bytes(),
+            format!("GET /api/internal/queries HTTP/1.1\r\nHost: localhost\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n").as_bytes(),
         )
         .await
         .unwrap();
@@ -384,7 +384,7 @@ async fn the_event_stream_sends_the_live_list_about_once_a_second() {
     let mut s = TcpStream::connect(addr).await.unwrap();
     s.write_all(
         format!(
-            "GET /api/internal/events HTTP/1.1\r\nHost: l\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            "GET /api/internal/events HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
         )
         .as_bytes(),
     )
@@ -432,7 +432,7 @@ async fn nothing_that_changes_state_accepts_a_token_in_the_address_or_a_cookie()
         ),
     ] {
         let mut s = TcpStream::connect(addr).await.unwrap();
-        s.write_all(format!("POST {path} HTTP/1.1\r\nHost: l\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        s.write_all(format!("POST {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).await.unwrap();
         assert!(out.starts_with("HTTP/1.1 401"), "{name}: {out}");
@@ -447,7 +447,7 @@ async fn open_stream(addr: std::net::SocketAddr) -> TcpStream {
     let mut s = TcpStream::connect(addr).await.unwrap();
     s.write_all(
         format!(
-            "GET /api/internal/events HTTP/1.1\r\nHost: l\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            "GET /api/internal/events HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
         )
         .as_bytes(),
     )

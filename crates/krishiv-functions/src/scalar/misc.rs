@@ -12,14 +12,17 @@
 //! build). The database and catalog are the engine's single namespace:
 //! `default` in `spark_catalog` (see `krishiv-session`'s catalog), so they
 //! bind as constants, with no session state. `input_file_name` and the
-//! block functions read the file being scanned; the evaluator has no file
-//! context yet, so they return what Spark returns with no file being read
-//! (the empty string, `-1`).
+//! block functions read the file being scanned: the analyzer
+//! (`krishiv-plan` `analyzer/input_file.rs`) rewrites each call in a file
+//! scan's pipeline into a read of the scan's `_metadata` column, so the
+//! calls bound here are the ones with no file being read, and return what
+//! Spark returns then (the empty string, `-1`; goldens
+//! `tests/fixtures/spark-4.2.0/input-file-goldens.json`).
 //!
-//! No golden pins the `version`, `input_file_*` or `uuid` values (no such
-//! value queries in any `.out` file: `string-functions.sql` only pins
-//! `length(uuid())` and that distinct calls differ), so those stand on the
-//! documented behavior, unverified against a golden run.
+//! No golden pins the `version` or `uuid` values (no such value queries in
+//! any `.out` file: `string-functions.sql` only pins `length(uuid())` and
+//! that distinct calls differ), so those stand on the documented behavior,
+//! unverified against a golden run.
 //!
 //! `monotonically_increasing_id` is `(partition << 33) + row_in_partition`
 //! and `spark_partition_id` is the partition index, both from the
@@ -90,15 +93,16 @@ fn catalog(name: &'static str) -> Result<Binding, KrishivError> {
     }))
 }
 
-/// `input_file_name()`: the empty string (no file is being read).
+/// `input_file_name()` where no file is being read: the empty string (a call
+/// in a file scan's pipeline never reaches here, see the module docs).
 fn input_file_name() -> Binding {
     Binding::new(DataType::Utf8, |x: &Inputs<'_>| {
         Ok(Arc::new(StringArray::from(vec![""; x.rows()])) as ArrayRef)
     })
 }
 
-/// `input_file_block_start()` / `input_file_block_length()`: -1 (no file
-/// is being read).
+/// `input_file_block_start()` / `input_file_block_length()` where no file is
+/// being read: -1.
 fn input_file_block() -> Binding {
     Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
         Ok(Arc::new(Int64Array::from(vec![-1; x.rows()])) as ArrayRef)

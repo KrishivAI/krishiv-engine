@@ -20,6 +20,23 @@
   const hotId = $derived(q.data?.hot_operator?.operator_id);
   const share = (o: Operator) => Math.round(((o.compute_ns ?? 0) / maxCompute) * 100);
 
+  type Metric = { key: string; label: string; value: (o: Operator) => number | null; show: (n: number) => string };
+  const sum = (...v: (number | null | undefined)[]) => (v.every((x) => x == null) ? null : v.reduce<number>((a, x) => a + (x ?? 0), 0));
+  const metrics: Metric[] = [
+    { key: "compute", label: "Compute time", value: (o) => o.compute_ns ?? null, show: nanos },
+    { key: "rows", label: "Rows out", value: (o) => o.rows_out ?? null, show: count },
+    { key: "wait", label: "Waiting time", value: (o) => sum(o.blocked_io_ns, o.blocked_memory_ns, o.blocked_sink_ns), show: nanos },
+    { key: "spill", label: "Spilled bytes", value: (o) => o.spilled_bytes ?? null, show: bytes },
+  ];
+  let metricKey = $state("compute");
+  const metric = $derived(metrics.find((m) => m.key === metricKey) ?? metrics[0]);
+  const heatMax = $derived(Math.max(1, ...(q.data?.operators ?? []).map((o) => metric.value(o) ?? 0)));
+  // An operator that did not report the metric is "not reported", never a zero.
+  const heat = (o: Operator) => {
+    const v = metric.value(o);
+    return v == null ? null : Math.round((v / heatMax) * 100);
+  };
+
   const columns: Column[] = [
     { key: "operator", label: "Operator", title: true },
     { key: "rows_in", label: "Rows in", num: true },
@@ -64,6 +81,24 @@
         <Alert variant={w.kind === "skew" ? "warning" : "error"} icon={w.kind === "skew" ? "▲" : "✕"} title={`${w.operator} · ${w.kind}`}>{w.hint}</Alert>
       {/each}
     </div>
+  {/if}
+
+  {#if d.operators.length}
+    <h2 class="mt-6 mb-1">Plan heatmap</h2>
+    <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Heatmap metric">
+      {#each metrics as m}
+        <button type="button" class="min-h-11 rounded-md border border-border px-3 py-2 {m.key === metricKey ? 'bg-primary text-primary-foreground' : 'bg-card'}" aria-pressed={m.key === metricKey} onclick={() => (metricKey = m.key)}>{m.label}</button>
+      {/each}
+    </div>
+    <ol class="mb-2 grid list-none gap-1 p-0" aria-label={`Operators shaded by ${metric.label.toLowerCase()}`}>
+      {#each d.operators as o (o.operator_id)}
+        {@const h = heat(o)}
+        <li class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2" style:background={h == null ? "transparent" : `color-mix(in srgb, var(--primary) ${Math.max(4, Math.round(h * 0.5))}%, transparent)`}>
+          <span><span class="mono text-muted-foreground">{o.operator_id}</span> {o.name}</span>
+          <span class="mono">{h == null ? "not reported" : metric.show(metric.value(o) ?? 0)}</span>
+        </li>
+      {/each}
+    </ol>
   {/if}
 
   <h2 class="mt-6 mb-1">Operators</h2>
