@@ -345,6 +345,25 @@ pub enum SubqueryKind {
     Exists,
     /// `(values) IN (subquery)`.
     In(Vec<Arc<Expr>>),
+    /// A `TABLE(...)` argument of a table-function call (Spark's
+    /// `FunctionTableSubqueryArgumentExpression`), with its partitioning
+    /// over the subquery's columns. Unresolved plans only: the analyzer
+    /// turns a Python table function's call into a
+    /// [`PlanNode::PythonTableFunction`](crate::PlanNode) whose
+    /// [`TableArg`](crate::TableArg) holds it, and refuses it anywhere else.
+    Table(TableArgSpec),
+}
+
+/// The partitioning a `TABLE(...)` argument is written with
+/// ([`SubqueryKind::Table`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableArgSpec {
+    /// `PARTITION BY` expressions.
+    pub partition_by: Vec<Arc<Expr>>,
+    /// `ORDER BY` within a partition.
+    pub order_by: Vec<SortOrder>,
+    /// `WITH SINGLE PARTITION`.
+    pub single_partition: bool,
 }
 
 /// A sort key.
@@ -814,6 +833,10 @@ impl Expr {
             ExprNode::UpdateFields { .. } => self.update_fields_children(f),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter().for_each(f),
+                SubqueryKind::Table(t) => {
+                    t.partition_by.iter().for_each(&mut *f);
+                    t.order_by.iter().for_each(|o| f(&o.expr));
+                }
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
             },
             ExprNode::Window(w) => {
@@ -881,6 +904,10 @@ impl Expr {
             ExprNode::UpdateFields { .. } => update_fields_children_mut(&mut self.node, f),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter_mut().for_each(f),
+                SubqueryKind::Table(t) => {
+                    t.partition_by.iter_mut().for_each(&mut *f);
+                    t.order_by.iter_mut().for_each(|o| f(&mut o.expr));
+                }
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
             },
             ExprNode::Window(w) => {
