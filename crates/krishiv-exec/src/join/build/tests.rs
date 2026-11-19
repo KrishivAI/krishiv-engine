@@ -908,6 +908,27 @@ fn an_unused_reservation_is_freed_at_publish() {
     );
 }
 
+/// An early reservation the pool refuses is tried again: once memory is
+/// freed, the next batch reserves the filter (review nit of 59e0f89df).
+#[test]
+fn a_refused_reservation_is_tried_again_on_the_next_batch() {
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let limit = 1 << 20;
+    let mut p = owned_partial(&f, &lost, &spilled, limit);
+    // Room for 2,000 keys' hashes, not for the 64 KiB filter.
+    let mut hog = p.memory[0].split(0);
+    assert!(hog.try_grow(limit - (48 << 10)).is_ok());
+    p.add_keys(std::slice::from_ref(&f), &[spread(0, 2_000)], None);
+    assert!(p.hash_bytes() > 0, "the hashes did not fit");
+    assert_eq!(spilled[0].outcome().0, 0, "reserved without room");
+    drop(hog);
+    p.add_keys(std::slice::from_ref(&f), &[spread(10_000, 10)], None);
+    assert_eq!(spilled[0].outcome().0, events::RESERVED, "not tried again");
+    assert!(!spilled[0].active(), "made before any partial needed it");
+}
+
 /// Review F2 of f574c368f: a filter made from the hashes' reservation and
 /// filled by the same drain (capacity below the partial's keys, full
 /// pool) gives its bytes back, so the net is every hash byte freed.

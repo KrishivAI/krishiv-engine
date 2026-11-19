@@ -67,9 +67,11 @@
 //! wrong guess costs only the hashing until then. Except for such a guessed
 //! build while `bloom.memoryTier` is on: it gets a fixed
 //! Bloom (`KeyFilterOptions::bloom_spill_bytes`) sized for a quarter of the
-//! scan's rows within the tier, which its partials create once one passes
-//! the cap, or the build's keys reach a sixteenth of it as hashes when it
-//! spills, and then drain their hashes into. Once the keys drained pass
+//! scan's rows within the tier. Its memory is reserved once the build's
+//! keys reach a sixteenth of it as hashes, spill or not (early, while the
+//! pool has room; freed at publish if unused), and the partials make the
+//! filter on it once one passes the cap or is asked to spill, then drain
+//! their hashes into it. Once the keys drained pass
 //! what it holds within `bloom_max_fpp` it is freed and hashing stops, so
 //! a wrong guess costs at most the filter's keys; else it is published
 //! (TPC-H q09 at SF1000: `p_name LIKE '%green%'`, a lineitem-side build of

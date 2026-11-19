@@ -148,7 +148,8 @@
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`;
 //! with a fixed Bloom planned, `fixed_bloom` (what it did: `planned`,
-//! `active`, `refused`, `full`, `lost`, then `bloom` or `no-bloom`) and
+//! `reserved`, `active`, `refused`, `full`, `lost`, then `bloom` or
+//! `no-bloom`) and
 //! `fixed_bloom_keys`. Probe:
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
 //! `grace_partitions` (spilled partitions joined), `repartitions`,
