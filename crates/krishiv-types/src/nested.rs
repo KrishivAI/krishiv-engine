@@ -18,6 +18,77 @@ use serde_json::{Map, Value};
 
 use crate::DataType;
 
+/// Spark's `UserDefinedType` (P3-T079): a value stored as its underlying SQL type, with the names of the classes
+/// that turn it into and out of that storage. The engine never runs the hooks itself: a Python client
+/// serializes before and deserializes after, so a UDT column is, inside the engine, its `sql_type`.
+///
+/// Spark compares UDTs by class (`UserDefinedType.equals`), so two UDTs are equal when their classes are.
+#[derive(Debug, Clone)]
+pub struct UdtType {
+    sql_type: DataType,
+    python_class: Option<String>,
+    jvm_class: Option<String>,
+    serialized_python_class: Option<String>,
+}
+
+impl UdtType {
+    /// A UDT over `sql_type`, named by its Python class and/or JVM class (`serialized_python_class` is the
+    /// pickled class a PySpark client sends).
+    pub fn new(
+        sql_type: DataType,
+        python_class: Option<String>,
+        jvm_class: Option<String>,
+        serialized_python_class: Option<String>,
+    ) -> Self {
+        Self {
+            sql_type,
+            python_class,
+            jvm_class,
+            serialized_python_class,
+        }
+    }
+
+    /// The type the values are stored as.
+    pub fn sql_type(&self) -> &DataType {
+        &self.sql_type
+    }
+
+    /// The Python class (`module.Class`), if the type has one.
+    pub fn python_class(&self) -> Option<&str> {
+        self.python_class.as_deref()
+    }
+
+    /// The JVM class, if the type has one.
+    pub fn jvm_class(&self) -> Option<&str> {
+        self.jvm_class.as_deref()
+    }
+
+    /// The pickled Python class a PySpark client sent, if any.
+    pub fn serialized_python_class(&self) -> Option<&str> {
+        self.serialized_python_class.as_deref()
+    }
+
+    /// The class that names this type for equality: the Python class, else the JVM class.
+    fn identity(&self) -> Option<&str> {
+        self.python_class().or_else(|| self.jvm_class())
+    }
+}
+
+impl PartialEq for UdtType {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity() && self.sql_type == other.sql_type
+    }
+}
+
+impl Eq for UdtType {}
+
+impl std::hash::Hash for UdtType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity().hash(state);
+        self.sql_type.hash(state);
+    }
+}
+
 /// Spark's `ArrayType(elementType, containsNull)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArrayType {
