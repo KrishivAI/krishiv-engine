@@ -300,7 +300,8 @@ struct Adapt {
     rows: usize,
     /// Rows whose hash differs from the row before (run starts): the
     /// lookups an input clustered by the key takes (the probe reuses a run's
-    /// row). Equals `rows` for an input without runs.
+    /// row). Equals `rows` for an input without runs, and for batches on the
+    /// direct path (one key per batch-local id; its append pushes every row).
     runs: usize,
     /// Rows pushed (groups created) so far.
     pushed: usize,
@@ -1152,8 +1153,16 @@ impl RowTable {
         self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
             a.rows += n;
-            a.runs += run_starts(p.keys.hashes(), a.last);
-            a.last = p.keys.hashes().last().copied();
+            // The direct path's keys are one per batch-local id, not per
+            // row (and its append pushes every row): every row counts.
+            let hashes = p.keys.hashes();
+            if hashes.len() == n {
+                a.runs += run_starts(hashes, a.last);
+                a.last = hashes.last().copied();
+            } else {
+                a.runs += n;
+                a.last = None;
+            }
             for &h in p.keys.hashes().iter().filter(|&&h| h & 7 == 0) {
                 a.sketch.add(h);
             }

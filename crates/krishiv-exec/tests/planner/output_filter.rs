@@ -97,3 +97,43 @@ fn having_results_do_not_depend_on_the_output_filter() {
         }
     }
 }
+
+/// A `HAVING` that may raise (ANSI division) is left to the `Filter`
+/// alone, so a raising query fails with the same error with the key on and
+/// off (review NIT-1, NIT-2).
+#[test]
+fn a_raising_having_fails_alike_with_the_output_filter_on_and_off() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 37;
+    write(dir.path(), "t.parquet", &table(&mut rng, 2_000, 400, 5));
+    let sources = [("t", vec!["t.parquet".to_owned()])];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    configured(&mut t, &[]);
+    let q = "SELECT k64 FROM t GROUP BY k64 HAVING sum(v) / (count(*) - count(*)) > 1";
+    let mut off = krishiv_common::config::Config::new();
+    off.set("krishiv.exec.agg.outputFilter", "false").unwrap();
+    let off = Arc::new(off);
+    let root = || {
+        TreePool::new(&MemoryConfig {
+            limit: Some(1 << 30),
+            ..MemoryConfig::default()
+        })
+    };
+    let plan = t.plan_sql(q).unwrap();
+    let on = super::run_in(&plan, &root())
+        .0
+        .expect_err("division by zero");
+    let plan_off = t
+        .plan_sql(q)
+        .unwrap()
+        .with_worker(|w| w.with_config(Arc::clone(&off)));
+    let off_err = super::run_in(&plan_off, &root())
+        .0
+        .expect_err("division by zero");
+    assert_eq!(on.error_class(), off_err.error_class(), "{on}\n{off_err}");
+    assert_eq!(on.to_string(), off_err.to_string());
+}

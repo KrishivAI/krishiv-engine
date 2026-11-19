@@ -70,12 +70,14 @@ pub(super) struct PendingFilter {
 /// The aggregate (by node address) that a `Filter` over `input` with
 /// `predicate` over `layout` may hand its predicate, and what it hands: a
 /// final grouped aggregate without `DISTINCT` aggregates below plain column
-/// projections only, the predicate deterministic and reading value columns
-/// only.
+/// projections only, the predicate deterministic, unable to raise under
+/// `ansi` (the disk phase evaluates it on every group, which a `LIMIT` above
+/// may not read: review NIT-1) and reading value columns only.
 pub(super) fn having_target(
     input: &PhysNode,
     layout: &[AttrId],
     predicate: &Arc<Expr>,
+    ansi: bool,
 ) -> Option<(usize, PendingFilter)> {
     // Each Filter input column's position in the node reached so far.
     let mut at: Vec<Option<usize>> = (0..layout.len()).map(Some).collect();
@@ -104,6 +106,7 @@ pub(super) fn having_target(
         || aggregate.group_by.is_empty()
         || aggregate.distinct.iter().any(|d| *d)
         || !krishiv_plan::is_deterministic(predicate)
+        || krishiv_plan::may_raise(predicate, ansi)
     {
         return None;
     }
@@ -171,7 +174,7 @@ impl Instantiation<'_> {
         if !subqueries.is_empty() || !self.worker.agg_output_filter() {
             return;
         }
-        if let Some((addr, pending)) = having_target(input, layout, predicate) {
+        if let Some((addr, pending)) = having_target(input, layout, predicate, self.env.ansi) {
             self.output_filters.insert(addr, pending);
         }
     }
