@@ -10,8 +10,22 @@ impl RowTable {
         match self.mode {
             Mode::Append => {
                 self.unique &= keys.is_empty();
+                // A row equal to the one before takes its row: a run of
+                // one key makes one row (the batch's first row always
+                // pushes; a run across batches makes two, merged later).
+                let mut prev: Option<(u64, &[u8], u32)> = None;
                 for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.push(keys.row(k), heap, h)?);
+                    let key = keys.row(k);
+                    if let Some((ph, pkey, pr)) = prev
+                        && ph == h
+                        && pkey == key
+                    {
+                        refs.push(pr);
+                        continue;
+                    }
+                    let r = self.push(key, heap, h)?;
+                    prev = Some((h, key, r));
+                    refs.push(r);
                 }
             }
             Mode::Fixed { limit } => {
@@ -69,13 +83,21 @@ impl RowTable {
     ) -> Result<()> {
         let (hashes, heap) = (keys.hashes(), keys.heap());
         let mut gs = [0_u64; PREFETCH_ROWS];
+        // The previous row's hash, key and row: a row equal to it takes its
+        // row without a lookup (input clustered by the key).
+        let mut prev: Option<(u64, &[u8], u32)> = None;
         for (c, chunk) in hashes.chunks(PREFETCH_ROWS).enumerate() {
             for (g, &h) in gs.iter_mut().zip(chunk) {
                 *g = fin(h, self.gseed);
             }
             let gs = &gs[..chunk.len()];
             if self.index.len() > PREFETCH_ROWS {
-                for &g in gs {
+                let mut last = prev.map(|(h, ..)| h);
+                for (&h, &g) in chunk.iter().zip(gs) {
+                    if last == Some(h) {
+                        continue;
+                    }
+                    last = Some(h);
                     if let Some(&r) = self.index.find(g, |_| true) {
                         prefetch_read(row_at(&self.parts, self.stride, self.refs, r), 0);
                     }
@@ -83,13 +105,17 @@ impl RowTable {
             }
             for (i, (&h, &g)) in chunk.iter().zip(gs).enumerate() {
                 let k = c * PREFETCH_ROWS + i;
-                refs.push(self.find_or_insert::<VIEWS, COUNT>(
-                    keys.row(k),
-                    heap,
-                    (h, g),
-                    limit,
-                    count,
-                )?);
+                let key = keys.row(k);
+                if let Some((ph, pkey, pr)) = prev
+                    && ph == h
+                    && pkey == key
+                {
+                    refs.push(pr);
+                    continue;
+                }
+                let r = self.find_or_insert::<VIEWS, COUNT>(key, heap, (h, g), limit, count)?;
+                prev = Some((h, key, r));
+                refs.push(r);
             }
         }
         Ok(())

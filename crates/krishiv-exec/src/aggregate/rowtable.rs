@@ -245,6 +245,13 @@ impl Mode {
     }
 }
 
+/// Rows of `hashes` whose hash differs from the one before (`last` before
+/// the first): the run starts an input clustered by the key looks up.
+fn run_starts(hashes: &[u64], last: Option<u64>) -> usize {
+    let first = hashes.first().map_or(0, |&h| usize::from(last != Some(h)));
+    first + hashes.windows(2).filter(|w| w[0] != w[1]).count()
+}
+
 /// `g = fin(h ^ seed)` (P2-T157 Appendix C), shared with the join.
 #[inline]
 fn fin(h: u64, seed: u64) -> u64 {
@@ -291,6 +298,10 @@ const ADAPT_HLL_BITS: u32 = 12;
 struct Adapt {
     sketch: Hll,
     rows: usize,
+    /// Rows whose hash differs from the row before (run starts): the
+    /// lookups an input clustered by the key takes (the probe reuses a run's
+    /// row). Equals `rows` for an input without runs.
+    runs: usize,
     /// Rows pushed (groups created) so far.
     pushed: usize,
     next: usize,
@@ -302,6 +313,8 @@ struct Adapt {
     early: bool,
     /// The index was cleared since the last apply decided its mode.
     filled: bool,
+    /// The last hash of the previous batch (a run may cross batches).
+    last: Option<u64>,
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -473,11 +486,13 @@ impl RowTable {
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
                 sketch: Hll::new(ADAPT_HLL_BITS),
                 rows: 0,
+                runs: 0,
                 pushed: 0,
                 next: FIRST_ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
                 filled: false,
+                last: None,
             }),
             groups: 0,
             rows_in: 0,
@@ -824,8 +839,11 @@ impl RowTable {
             return self.mode;
         };
         if a.rows >= a.next {
+            // Over the run starts: an input clustered by the key whose
+            // runs are nearly all new keys (TPC-H q18's `l_orderkey`, four
+            // rows a key) is appended a row per run, without an index.
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
-            let rows = a.rows as f64;
+            let rows = a.runs.max(1) as f64;
             if Self::distinct(a) / rows > 0.95 {
                 return Mode::Append;
             }
@@ -1134,6 +1152,8 @@ impl RowTable {
         self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
             a.rows += n;
+            a.runs += run_starts(p.keys.hashes(), a.last);
+            a.last = p.keys.hashes().last().copied();
             for &h in p.keys.hashes().iter().filter(|&&h| h & 7 == 0) {
                 a.sketch.add(h);
             }
