@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use arrow_array::types::Int64Type;
-use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
+use arrow_array::{Array, ArrayRef, Int32Array, ListArray, StringArray};
 use arrow_schema::DataType;
 use krishiv_kernels::KernelError;
 use krishiv_kernels::Operand;
@@ -317,15 +317,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
 fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
     enum Part {
         Text(StringArray),
-        List(ArrayRef, StringArray),
+        List(ListArray, StringArray),
     }
     let seps = x.strings(0)?;
     let mut parts = Vec::with_capacity(count);
     for i in 1..count {
         let c = x.column(i)?;
         parts.push(if matches!(c.data_type(), DataType::List(_)) {
-            let values = to_utf8(list_of(&c, "concat_ws")?.values().as_ref())?;
-            Part::List(c, values)
+            let list = list_of(&c, "concat_ws")?.clone();
+            let values = to_utf8(list.values().as_ref())?;
+            Part::List(list, values)
         } else {
             Part::Text(to_utf8(c.as_ref())?)
         });
@@ -354,8 +355,7 @@ fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivErr
                         push(a.value(row));
                     }
                 }
-                Part::List(c, values) => {
-                    let list = list_of(c, "concat_ws")?;
+                Part::List(list, values) => {
                     if list.is_valid(row) {
                         let (start, len) = span(list, row);
                         for at in start..start + len {

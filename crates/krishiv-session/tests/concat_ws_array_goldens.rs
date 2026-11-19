@@ -37,7 +37,6 @@ fn fixture() -> Value {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
     bytes.iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02X}");
         s
