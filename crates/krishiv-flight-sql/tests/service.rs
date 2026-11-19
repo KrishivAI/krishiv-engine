@@ -33,6 +33,9 @@ use tonic::service::Routes;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
 
+#[path = "service/updates.rs"]
+mod updates;
+
 const OPS: &str = "flight-operator-token-0123456789abcdef";
 const OTHER: &str = "flight-other-token-0123456789abcdefgh";
 
@@ -913,15 +916,16 @@ async fn unsupported_rpcs_unimplemented_before_decoding() {
         .await
         .expect_err("GetCatalogs is 65b");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
+    let ingest = arrow_flight::sql::CommandStatementIngest::default();
     let e = h
         .client
         .do_put(authed(
-            futures::stream::empty::<arrow_flight::FlightData>(),
+            futures::stream::iter([updates::put_of(&ingest)]),
             OPS,
             None,
         ))
         .await
-        .expect_err("DoPut is 65b");
+        .expect_err("ingest is not served");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
     let e = h
         .client

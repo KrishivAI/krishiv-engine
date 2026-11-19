@@ -48,10 +48,14 @@ Paths are relative to this crate.
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
   `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
   (operation, fetch, response budget, call; §16 M3)
+- `src/update.rs` `DoPut(CommandStatementUpdate)` (design §4.3, §16 M2): classified with `sql_query_with` (a query
+  is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, nothing runs), run once under an `Operation`; `record_count` from a
+  `num_affected_rows` column, else -1; a cookie-less update that marks nothing changed runs in a transient session
+  (no `set-cookie`, released at the end of the call)
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
-  65a does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
-  session work, counted `unsupported`; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
+  the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
+  session work, counted `unsupported`; `DoPut` is dispatched here (first message peeked), not by arrow-rs; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)

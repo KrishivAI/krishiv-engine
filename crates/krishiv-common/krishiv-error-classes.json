@@ -116,6 +116,12 @@
     ],
     "sqlState" : "55000"
   },
+  "KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE" : {
+    "message" : [
+      "An Arrow Flight SQL update (DoPut) needs a statement that returns no rows, but this statement is a query. Nothing was run. Send it with GetFlightInfo and fetch its rows with DoGet."
+    ],
+    "sqlState" : "42000"
+  },
   "KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED" : {
     "message" : [
       "The statement ran; its result (<size>) was not stored: <reason>. Do not run it again to see its effect; send a query to read the state it changed."

@@ -10,7 +10,8 @@ use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
     ActionCancelQueryRequest, ActionCancelQueryResult, Any, Command as FlightCommand,
-    CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, TicketStatementQuery,
+    CommandGetSqlInfo, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightDescriptor,
@@ -28,6 +29,7 @@ use crate::metrics::Command;
 use crate::server::FlightSqlServer;
 use crate::statement::{DoGetStream, internal};
 use crate::status::flight_status;
+use crate::update::DoPutStream;
 
 /// `ActionCancelQueryResult.CancelResult.CANCEL_RESULT_CANCELLED` (Flight SQL's proto; arrow-rs
 /// does not export the enum).
@@ -58,6 +60,17 @@ impl FlightSqlServer {
         };
         self.inner.requests.record(command, code);
         result
+    }
+
+    /// `DoPut(CommandStatementUpdate)` after the gate (design §4.3).
+    pub(crate) async fn do_put_update(
+        &self,
+        update: CommandStatementUpdate,
+        request: &Request<()>,
+    ) -> Result<Response<DoPutStream>, Status> {
+        let caller = self.admit(request)?;
+        self.statement_update(update, request.metadata(), &caller)
+            .await
     }
 
     /// Cancels the statement whose ticket is `info`'s first endpoint's (design §4.5): a missing
