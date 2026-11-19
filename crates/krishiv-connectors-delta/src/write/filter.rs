@@ -161,3 +161,199 @@ impl Translate<'_> {
         s.map(KExpr::literal).ok_or_else(refuse)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use delta_kernel::schema::StructField;
+
+    use super::*;
+
+    fn schema() -> StructType {
+        StructType::try_new([
+            StructField::nullable("b", DataType::BYTE),
+            StructField::nullable("s", DataType::SHORT),
+            StructField::nullable("i", DataType::INTEGER),
+            StructField::nullable("l", DataType::LONG),
+            StructField::nullable("flag", DataType::BOOLEAN),
+            StructField::nullable("d", DataType::DATE),
+            StructField::nullable("ts", DataType::TIMESTAMP),
+            StructField::nullable("ntz", DataType::TIMESTAMP_NTZ),
+            StructField::nullable("str", DataType::STRING),
+            StructField::nullable("x", DataType::DOUBLE),
+            StructField::nullable("data", DataType::LONG),
+        ])
+        .unwrap()
+    }
+
+    fn translate(filter: &Expr) -> Result<Pred, FilterRefusal> {
+        let partitions =
+            ["b", "s", "i", "l", "flag", "d", "ts", "ntz", "str", "x"].map(str::to_owned);
+        partition_predicate(filter, &schema(), &partitions)
+    }
+
+    fn col(n: &str) -> Expr {
+        Expr::column([n])
+    }
+
+    fn lit(v: Literal) -> Expr {
+        Expr::literal(v)
+    }
+
+    fn call(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::function(name, args)
+    }
+
+    fn kcol(n: &str) -> KExpr {
+        KExpr::column([n])
+    }
+
+    fn eq(c: &str, v: Literal) -> Expr {
+        call("=", vec![col(c), lit(v)])
+    }
+
+    fn keq(c: &str, s: Scalar) -> Pred {
+        Pred::eq(kcol(c), KExpr::literal(s))
+    }
+
+    #[test]
+    fn connectives_and_null_tests_translate() {
+        let and = call(
+            "AND",
+            vec![eq("i", Literal::Integer(1)), eq("l", Literal::Long(2))],
+        );
+        assert_eq!(
+            translate(&and).unwrap(),
+            Pred::and(keq("i", Scalar::Integer(1)), keq("l", Scalar::Long(2)))
+        );
+        let or = call(
+            "or",
+            vec![eq("i", Literal::Integer(1)), lit(Literal::Boolean(false))],
+        );
+        assert_eq!(
+            translate(&or).unwrap(),
+            Pred::or(keq("i", Scalar::Integer(1)), Pred::literal(false))
+        );
+        for not in ["not", "!"] {
+            assert_eq!(
+                translate(&call(not, vec![eq("i", Literal::Integer(1))])).unwrap(),
+                Pred::not(keq("i", Scalar::Integer(1)))
+            );
+        }
+        assert_eq!(
+            translate(&call("isnull", vec![col("S")])).unwrap(),
+            Pred::is_null(kcol("s"))
+        );
+        assert_eq!(
+            translate(&call("isNotNull", vec![col("d")])).unwrap(),
+            Pred::is_not_null(kcol("d"))
+        );
+        let inl = call(
+            "in",
+            vec![col("b"), lit(Literal::Integer(1)), lit(Literal::Long(-2))],
+        );
+        assert_eq!(
+            translate(&inl).unwrap(),
+            Pred::or_from([keq("b", Scalar::Byte(1)), keq("b", Scalar::Byte(-2))])
+        );
+    }
+
+    #[test]
+    fn literals_take_the_column_type() {
+        let cases = [
+            ("b", Literal::Byte(3), Scalar::Byte(3)),
+            ("s", Literal::Short(-4), Scalar::Short(-4)),
+            ("s", Literal::Integer(300), Scalar::Short(300)),
+            ("i", Literal::Long(7), Scalar::Integer(7)),
+            ("l", Literal::Byte(5), Scalar::Long(5)),
+            ("l", Literal::Short(6), Scalar::Long(6)),
+            ("i", Literal::Null(None), Scalar::Null(DataType::INTEGER)),
+            ("flag", Literal::Boolean(true), Scalar::Boolean(true)),
+            ("d", Literal::Date(19_000), Scalar::Date(19_000)),
+            ("ts", Literal::Timestamp(1_000), Scalar::Timestamp(1_000)),
+            (
+                "ntz",
+                Literal::TimestampNtz(2_000),
+                Scalar::TimestampNtz(2_000),
+            ),
+            (
+                "str",
+                Literal::String("a".into()),
+                Scalar::String("a".into()),
+            ),
+            ("i", Literal::String("42".into()), Scalar::Integer(42)),
+        ];
+        for (c, v, want) in cases {
+            assert_eq!(translate(&eq(c, v)).unwrap(), keq(c, want), "column {c}");
+        }
+    }
+
+    #[test]
+    fn comparisons_and_flipped_operands() {
+        let one = || KExpr::literal(Scalar::Integer(1));
+        let cases: [(&str, Pred); 8] = [
+            ("==", Pred::eq(kcol("i"), one())),
+            ("<=>", Pred::not(Pred::distinct(kcol("i"), one()))),
+            ("!=", Pred::ne(kcol("i"), one())),
+            ("<>", Pred::ne(kcol("i"), one())),
+            ("<", Pred::lt(kcol("i"), one())),
+            ("<=", Pred::le(kcol("i"), one())),
+            (">", Pred::gt(kcol("i"), one())),
+            (">=", Pred::ge(kcol("i"), one())),
+        ];
+        for (op, want) in cases {
+            let e = call(op, vec![col("i"), lit(Literal::Integer(1))]);
+            assert_eq!(translate(&e).unwrap(), want, "operator {op}");
+        }
+        let flipped = call("<", vec![lit(Literal::Integer(1)), col("i")]);
+        assert_eq!(translate(&flipped).unwrap(), Pred::lt(one(), kcol("i")));
+    }
+
+    #[test]
+    fn refusals() {
+        let unsupported = |e: &Expr| matches!(translate(e), Err(FilterRefusal::Unsupported(_)));
+        // Out of range for the column type, wrong literal type, a non-primitive-mapped literal.
+        assert!(unsupported(&eq("b", Literal::Integer(1_000))));
+        assert!(unsupported(&eq("i", Literal::Long(i64::MAX))));
+        assert!(unsupported(&eq("flag", Literal::Integer(1))));
+        assert!(unsupported(&eq("d", Literal::Boolean(true))));
+        assert!(unsupported(&eq("x", Literal::Double(1.0))));
+        assert!(unsupported(&eq("i", Literal::String("nope".into()))));
+        // Non-literal and non-column operands, an unknown operator or function, a bare column.
+        assert!(unsupported(&call("=", vec![col("i"), col("l")])));
+        assert!(unsupported(&call(
+            "=",
+            vec![lit(Literal::Integer(1)), lit(Literal::Integer(2))]
+        )));
+        assert!(unsupported(&call(
+            "like",
+            vec![col("str"), lit(Literal::String("a%".into()))]
+        )));
+        assert!(unsupported(&call("coalesce", vec![col("i")])));
+        assert!(unsupported(&col("i")));
+        assert!(unsupported(&Expr::column(Vec::<String>::new())));
+        assert!(unsupported(&call(
+            "isnull",
+            vec![Expr::column(Vec::<String>::new())]
+        )));
+        // A data column, on either side and inside a connective.
+        assert_eq!(
+            translate(&eq("data", Literal::Long(1))),
+            Err(FilterRefusal::DataColumn("data".to_owned()))
+        );
+        assert_eq!(
+            translate(&call("<", vec![lit(Literal::Long(1)), col("data")])),
+            Err(FilterRefusal::DataColumn("data".to_owned()))
+        );
+        assert_eq!(
+            translate(&call("in", vec![col("data"), lit(Literal::Long(1))])),
+            Err(FilterRefusal::DataColumn("data".to_owned()))
+        );
+        // A partition name missing from the schema reads as a data column.
+        let missing = partition_predicate(
+            &eq("gone", Literal::Long(1)),
+            &schema(),
+            &["gone".to_owned()],
+        );
+        assert_eq!(missing, Err(FilterRefusal::DataColumn("gone".to_owned())));
+    }
+}
