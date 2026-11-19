@@ -155,6 +155,59 @@ fn a_large_merge_table_takes_the_salted_index() {
     }
 }
 
+/// Row pages and accumulators presized for each partition's groups take
+/// every merged group without growing, within their projection, and give
+/// the same groups and states as an unpresized merge; a one-partition table
+/// takes the sum.
+#[test]
+fn presized_pages_merge_without_growing() {
+    let core = core();
+    let seed = HashSeed::new(Some(5));
+    let input = |keys: Range<i64>| {
+        let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+        for s in keys.clone().step_by(4096) {
+            apply(&mut t, &batch(&core, s..(s + 4096).min(keys.end)));
+        }
+        t
+    };
+    let inputs = [input(0..30_000), input(20_000..40_000)];
+    let plain = merged(&core, &seed, &inputs, 40_000);
+    let groups: Vec<usize> = (0..PARTS).map(|p| plain.part_len(p)).collect();
+    assert_eq!(groups.iter().sum::<usize>(), 40_000);
+
+    let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    let want = out.projected_presize(40_000) + out.projected_parts(&groups, 1024);
+    out.presize(40_000).unwrap();
+    out.presize_parts(0, &groups, 1024);
+    assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
+    let caps: Vec<usize> = out.parts.iter().map(|p| p.rows.capacity()).collect();
+    for t in &inputs {
+        for p in 0..PARTS {
+            for start in (0..t.part_len(p)).step_by(1024) {
+                let end = (start + 1024).min(t.part_len(p));
+                let c = t.merge_chunk(p, start..end).unwrap();
+                out.apply_merge(t, &c).unwrap();
+            }
+        }
+    }
+    let after: Vec<usize> = out.parts.iter().map(|p| p.rows.capacity()).collect();
+    assert_eq!(after, caps, "a presized row page grew");
+    assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
+    let want_rows = plain.output_batch(&plain.ids(0..plain.len())).unwrap();
+    assert_eq!(out.output_batch(&out.ids(0..out.len())).unwrap(), want_rows);
+
+    // One partition: the sum, whatever the start.
+    let mut one = RowTable::new(&core, &seed, Mode::Grow, false, 0).unwrap();
+    let (before, add) = (one.memory_size(), one.projected_parts(&[10, 20], 1024));
+    one.presize_parts(3, &[10, 20], 1024);
+    assert!(one.parts[0].rows.capacity() >= 60 * one.stride);
+    assert!(
+        one.memory_size() <= before + add,
+        "{} > {before} + {add}",
+        one.memory_size()
+    );
+}
+
 /// A detailed profile counts the salted merge's lookups and key compares.
 #[test]
 fn a_salted_merge_counts_its_probes() {
@@ -355,7 +408,7 @@ fn modes_and_partial_duplicates() {
     assert!(e.to_string().contains("not growing"), "{e}");
 }
 
-/// After `ADAPT_ROWS` rows, unique keys switch a fixed index to
+/// By `ADAPT_ROWS` rows, unique keys switch a fixed index to
 /// append-only; keys that repeat beyond its capacity grow it to their
 /// count as soon as it has filled with enough partial duplicates, long
 /// before `ADAPT_ROWS`.
@@ -393,6 +446,47 @@ fn fixed_index_adapts() {
     let groups = repeat.groups;
     apply(&mut repeat, &batch(&core, (0..8192).map(|i| i % 10_000)));
     assert_eq!(repeat.groups, groups);
+}
+
+/// The first append decision comes after `FIRST_ADAPT_ROWS` input rows,
+/// not `ADAPT_ROWS`; keys that repeat by then keep the index, and a table
+/// that turned append-only still counts every key once the final phase
+/// merges its rows (append is permanent, so later repeats become rows).
+#[test]
+fn the_first_append_decision_comes_early() {
+    let core = core();
+    let seed = HashSeed::new(Some(2));
+    let fixed =
+        || RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let (mut unique, mut repeat) = (fixed(), fixed());
+    let step = 8192;
+    let mut decided_at = None;
+    for start in (0..FIRST_ADAPT_ROWS + step).step_by(step) {
+        let s = i64::try_from(start).unwrap();
+        apply(&mut unique, &batch(&core, s..s + 8192));
+        apply(
+            &mut repeat,
+            &batch(&core, (s..s + 8192).map(|i| i % 50_000)),
+        );
+        if decided_at.is_none() && unique.mode == Mode::Append {
+            decided_at = Some(start + step);
+        }
+    }
+    assert_eq!(decided_at, Some(FIRST_ADAPT_ROWS + step));
+    assert_ne!(repeat.mode, Mode::Append);
+    // Unique for the first rows, then the same keys again: the final
+    // phase's merge still makes one group per key.
+    let n = i64::try_from(FIRST_ADAPT_ROWS + step).unwrap();
+    for s in (0..n).step_by(step) {
+        apply(&mut unique, &batch(&core, s..s + 8192));
+    }
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    let parts = unique.parts.len();
+    for p in 0..parts {
+        let c = unique.merge_chunk(p, 0..unique.part_len(p)).unwrap();
+        merged.apply_merge(&unique, &c).unwrap();
+    }
+    assert_eq!(merged.groups, FIRST_ADAPT_ROWS + step);
 }
 
 /// A full fixed index grows (DuckDB 2.0's rule) only once its partial

@@ -8,12 +8,14 @@
 //! krishiv.catalog.<name>.type            = iceberg-rest | hive | unity | glue | sqlite | memory
 //! krishiv.catalog.<name>.uri             = https://catalog.example.com/api/catalog
 //! krishiv.catalog.<name>.warehouse       = analytics
-//! krishiv.catalog.<name>.auth            = none | token | client-credentials   (default none)
+//! krishiv.catalog.<name>.auth            = none | token | client-credentials | delegated (default none)
 //! krishiv.catalog.<name>.token           = env:NAME | file:/path               (auth=token)
 //! krishiv.catalog.<name>.clientId        = krishiv                              (client-credentials)
 //! krishiv.catalog.<name>.clientSecret    = env:NAME | file:/path
 //! krishiv.catalog.<name>.tokenEndpoint   = https://idp.example.com/oauth2/token (required)
 //! krishiv.catalog.<name>.scope / .audience
+//! krishiv.catalog.<name>.delegation      = exchange | forward                    (delegated; default exchange)
+//! krishiv.catalog.<name>.actorToken      = client-credentials | none             (exchange; default client-credentials)
 //! krishiv.catalog.<name>.storage         = vended | allowed-prefixes
 //! krishiv.catalog.<name>.tenants         = acme, globex                         (absent: every tenant)
 //! krishiv.catalog.<name>.allowConfigKeys = s3.endpoint
@@ -22,8 +24,11 @@
 //! krishiv.catalog.default                = <name>
 //! ```
 //!
-//! `auth = delegated` (and `.delegation`, `.actorToken`) is PR-58b's: refused here as not in this
-//! build, never accepted and ignored.
+//! `auth = delegated` (P3-T067 §3.3) needs `.audience`; `exchange` needs `.tokenEndpoint`, and
+//! with `actorToken = client-credentials` also `.clientId` and `.clientSecret` (the server's own
+//! client, the exchange's actor). `forward` takes no token endpoint, client or actor setting. The
+//! names `delegation` and `vended` are reserved: `krishiv.catalog.delegation.*` and
+//! `krishiv.catalog.vended.*` are engine settings, never a catalog.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -135,8 +140,47 @@ impl CatalogType {
     }
 }
 
-/// How the server authenticates to the catalog (§3.1; `delegated` is PR-58b's). `Debug` shows
-/// the token endpoint without its userinfo.
+/// How a delegated catalog receives the end user's identity (§3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delegation {
+    /// RFC 8693 token exchange at the declared token endpoint.
+    Exchange,
+    /// The user's own token, when its audience names the catalog.
+    Forward,
+}
+
+impl Delegation {
+    /// The mode name (`system.catalogs.delegation`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::Forward => "forward",
+        }
+    }
+}
+
+/// The actor token of a token exchange: the server's own client credentials at the declared
+/// token endpoint.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ActorClient {
+    /// `clientId`.
+    pub client_id: String,
+    /// `clientSecret`.
+    pub client_secret: SecretRef,
+}
+
+impl std::fmt::Debug for ActorClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorClient")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret)
+            .finish()
+    }
+}
+
+/// How the server authenticates to the catalog (§3.1). `Debug` shows the token endpoint without
+/// its userinfo.
 #[derive(Clone, PartialEq, Eq)]
 pub enum CatalogAuth {
     /// Anonymous.
@@ -155,6 +199,19 @@ pub enum CatalogAuth {
         scope: Option<String>,
         /// `audience`.
         audience: Option<String>,
+    },
+    /// The end user's identity (§3.3): never the server's.
+    Delegated {
+        /// `delegation`.
+        delegation: Delegation,
+        /// `audience` (required): the catalog's audience.
+        audience: String,
+        /// `tokenEndpoint` (required for `exchange`).
+        token_endpoint: Option<String>,
+        /// `scope`.
+        scope: Option<String>,
+        /// The actor of an exchange (`actorToken = client-credentials`); `None` sends none.
+        actor: Option<ActorClient>,
     },
 }
 
@@ -177,6 +234,20 @@ impl std::fmt::Debug for CatalogAuth {
                 .field("scope", scope)
                 .field("audience", audience)
                 .finish(),
+            Self::Delegated {
+                delegation,
+                audience,
+                token_endpoint,
+                scope,
+                actor,
+            } => f
+                .debug_struct("Delegated")
+                .field("delegation", delegation)
+                .field("audience", audience)
+                .field("token_endpoint", &token_endpoint.as_deref().map(shown_uri))
+                .field("scope", scope)
+                .field("actor", actor)
+                .finish(),
         }
     }
 }
@@ -189,6 +260,26 @@ impl CatalogAuth {
             Self::None => "none",
             Self::Token(_) => "token",
             Self::ClientCredentials { .. } => "client-credentials",
+            Self::Delegated { .. } => "delegated",
+        }
+    }
+
+    /// The delegation form of a `delegated` catalog.
+    #[must_use]
+    pub fn delegation(&self) -> Option<Delegation> {
+        match self {
+            Self::Delegated { delegation, .. } => Some(*delegation),
+            _ => None,
+        }
+    }
+
+    /// The declared token endpoint, if any.
+    #[must_use]
+    pub fn token_endpoint(&self) -> Option<&str> {
+        match self {
+            Self::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
+            Self::Delegated { token_endpoint, .. } => token_endpoint.as_deref(),
+            _ => None,
         }
     }
 }
@@ -295,11 +386,9 @@ impl CatalogDecl {
         let mut hosts: Vec<String> = self
             .uri
             .iter()
-            .chain(match &self.auth {
-                CatalogAuth::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
-                _ => None,
-            })
-            .filter_map(|u| krishiv_io::egress::host_of(u))
+            .map(String::as_str)
+            .chain(self.auth.token_endpoint())
+            .filter_map(krishiv_io::egress::host_of)
             .collect();
         if self.kind == CatalogType::Glue
             && let Some(endpoint) = self.options.get("endpoint")
@@ -476,15 +565,12 @@ impl CatalogDeclarations {
 /// link-local and special-purpose addresses never do, in any spelling).
 fn check_endpoints(decl: &CatalogDecl, policy: &Arc<EgressPolicy>) -> Result<(), KrishivError> {
     let scope = policy.scope(decl.declared_hosts());
-    let token_endpoint = match &decl.auth {
-        CatalogAuth::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
-        _ => None,
-    };
+    let token_endpoint = decl.auth.token_endpoint();
     let glue_endpoint = (decl.kind == CatalogType::Glue)
-        .then(|| decl.options.get("endpoint"))
+        .then(|| decl.options.get("endpoint").map(String::as_str))
         .flatten();
     for (field, endpoint) in [
-        ("uri", decl.uri.as_ref()),
+        ("uri", decl.uri.as_deref()),
         ("tokenEndpoint", token_endpoint),
         ("option.endpoint", glue_endpoint),
     ] {
@@ -684,7 +770,9 @@ fn decl(
         .chain(entry.spark_class.iter().map(|(k, _)| k.clone()))
         .next()
         .unwrap_or_default();
-    if name == "spark_catalog" || name == "system" {
+    // `delegation` and `vended` are the engine settings `krishiv.catalog.delegation.*` and
+    // `krishiv.catalog.vended.*`: a mistyped one must not declare a catalog.
+    if matches!(name, "spark_catalog" | "system" | "delegation" | "vended") {
         return Err(invalid(&first_key, name, "the catalog name is reserved"));
     }
     if !valid_name(name) {
@@ -718,7 +806,7 @@ fn decl(
             kind.name()
         )));
     }
-    const KNOWN: [&str; 15] = [
+    const KNOWN: [&str; 17] = [
         "type",
         "uri",
         "warehouse",
@@ -734,6 +822,8 @@ fn decl(
         "tenants",
         "allowConfigKeys",
         "allowInsecure",
+        "delegation",
+        "actorToken",
     ];
     let mut options = BTreeMap::new();
     for (field, (key, value)) in &fields {
@@ -746,10 +836,6 @@ fn decl(
                 ));
             }
             options.insert(opt.to_owned(), value.trim().to_owned());
-        } else if matches!(field.as_str(), "delegation" | "actorToken") {
-            return Err(unsupported(format!(
-                "delegated catalog authentication (catalog `{name}`, {key}) in this build"
-            )));
         } else if !KNOWN.contains(&field.as_str()) {
             return Err(invalid(
                 key,
@@ -869,13 +955,26 @@ fn decl(
                 audience: get("audience").map(|(_, v)| v.to_owned()),
             }
         }
-        Some((_, v)) if v == "delegated" => {
-            return Err(unsupported(format!(
-                "delegated catalog authentication (catalog `{name}`) in this build"
-            )));
+        Some((_, v)) if v == "delegated" => delegated(&fields, &key_of, allow_insecure, &secret)?,
+        Some((k, v)) => {
+            return Err(invalid(
+                k,
+                &v,
+                "expected none, token, client-credentials or delegated",
+            ));
         }
-        Some((k, v)) => return Err(invalid(k, &v, "expected none, token or client-credentials")),
     };
+    if auth.delegation().is_none() {
+        for f in ["delegation", "actorToken"] {
+            if let Some((k, _)) = get(f) {
+                return Err(invalid(
+                    k,
+                    "",
+                    "this setting applies to auth = delegated only",
+                ));
+            }
+        }
+    }
     let storage = match get("storage") {
         None if matches!(kind, CatalogType::IcebergRest | CatalogType::Unity) => {
             CatalogStorage::Vended
@@ -924,6 +1023,89 @@ fn decl(
             .unwrap_or_default(),
         allow_insecure,
         options,
+    })
+}
+
+/// The `auth = delegated` fields (§3.3).
+fn delegated(
+    fields: &BTreeMap<String, (String, String)>,
+    key_of: &dyn Fn(&str) -> String,
+    allow_insecure: bool,
+    secret: &dyn Fn(&str) -> Result<Option<SecretRef>, KrishivError>,
+) -> Result<CatalogAuth, KrishivError> {
+    let get = |f: &str| fields.get(f).map(|(k, v)| (k.as_str(), v.trim()));
+    let need = |f: &str, why: &str| {
+        get(f)
+            .map(|(_, v)| v.to_owned())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| invalid(&key_of(f), "", why))
+    };
+    let delegation = match get("delegation") {
+        None | Some((_, "exchange")) => Delegation::Exchange,
+        Some((_, "forward")) => Delegation::Forward,
+        Some((k, v)) => return Err(invalid(k, v, "expected exchange or forward")),
+    };
+    let audience = need("audience", "auth = delegated needs the catalog's audience")?;
+    let scope = get("scope").map(|(_, v)| v.to_owned());
+    if delegation == Delegation::Forward {
+        // Nothing of an exchange applies: a forwarded token is the user's own.
+        for f in ["tokenEndpoint", "actorToken", "clientId", "clientSecret"] {
+            if let Some((k, _)) = get(f) {
+                return Err(invalid(
+                    k,
+                    "",
+                    "delegation = forward sends the user's own token; this setting applies to \
+                     delegation = exchange",
+                ));
+            }
+        }
+        return Ok(CatalogAuth::Delegated {
+            delegation,
+            audience,
+            token_endpoint: None,
+            scope,
+            actor: None,
+        });
+    }
+    let token_endpoint = need(
+        "tokenEndpoint",
+        "delegation = exchange needs the token endpoint",
+    )?;
+    let te = token_endpoint.to_ascii_lowercase();
+    if !(te.starts_with("https://") || (te.starts_with("http://") && allow_insecure)) {
+        return Err(invalid(
+            &key_of("tokenEndpoint"),
+            &shown_uri(&token_endpoint),
+            "the token endpoint must be https (or http with allowInsecure)",
+        ));
+    }
+    let actor = match get("actorToken") {
+        None | Some((_, "client-credentials")) => Some(ActorClient {
+            client_id: need("clientId", "actorToken = client-credentials needs clientId")?,
+            client_secret: secret("clientSecret")?.ok_or_else(|| {
+                invalid(
+                    &key_of("clientSecret"),
+                    "",
+                    "actorToken = client-credentials needs clientSecret",
+                )
+            })?,
+        }),
+        Some((_, "none")) => {
+            for f in ["clientId", "clientSecret"] {
+                if let Some((k, _)) = get(f) {
+                    return Err(invalid(k, "", "actorToken = none sends no client"));
+                }
+            }
+            None
+        }
+        Some((k, v)) => return Err(invalid(k, v, "expected client-credentials or none")),
+    };
+    Ok(CatalogAuth::Delegated {
+        delegation,
+        audience,
+        token_endpoint: Some(token_endpoint),
+        scope,
+        actor,
     })
 }
 

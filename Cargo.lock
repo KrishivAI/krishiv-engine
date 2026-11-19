@@ -3080,6 +3080,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hyper-util",
+ "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
  "krishiv-exec",
@@ -3130,6 +3131,7 @@ dependencies = [
  "chrono",
  "delta_kernel",
  "futures",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
@@ -3422,6 +3424,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
@@ -3497,6 +3500,7 @@ dependencies = [
  "http",
  "insta",
  "krishiv-common",
+ "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
@@ -3529,6 +3533,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "twox-hash",
+ "url",
 ]
 
 [[package]]
