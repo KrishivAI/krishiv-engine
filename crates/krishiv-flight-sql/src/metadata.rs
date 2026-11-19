@@ -16,7 +16,14 @@
 //!   The namespaces and tables of a declared catalog are not answered through the catalog API
 //!   yet (design P3-T067 PR-58a), so a declared catalog lists none.
 //! - Temporary views: listed once with the empty catalog, the Flight SQL "without a catalog".
-//!   Local ones have the empty schema, global ones `global_temp`.
+//!   Local ones have the empty schema, global ones `global_temp`. `GetDbSchemas` lists those two
+//!   schemas under the empty catalog too (`global_temp` always, the empty one while the session
+//!   has local temporary views), so a client that walks schemas, then tables, reaches them.
+//! - A namespace a pattern selects (or no pattern) but whose `SHOW TABLES IN` the caller may not
+//!   run is absent from `GetTables`, as a hidden object is; an exactly named one (a pattern with
+//!   no `%` or `_`) is refused as `SHOW TABLES IN` refuses it.
+//! - With `include_schema`, each table's schema comes from the metadata analysis
+//!   (`DataFrame::schema_for_metadata`), which asks `Browse` as `DESCRIBE` does (ADR 0046 §3b).
 //! - Table types: `TABLE`, `VIEW` and `TEMPORARY VIEW`.
 //!
 //! Patterns are Flight SQL's: `%` matches any run of characters, `_` matches one, `\` escapes the
@@ -24,7 +31,10 @@
 //! (ignoring case), and the empty catalog selects the rows without one.
 //!
 //! The key commands answer empty results with the schemas FlightSql.proto specifies. Krishiv has
-//! no primary or foreign keys. The named table is still checked as `DESCRIBE TABLE` checks it.
+//! no primary or foreign keys. The named table is looked up with `spark.catalog.tableExists`
+//! (its access check included), so a refused lookup is refused; a missing table is an empty
+//! result too, as a table with no keys is. A catalog named without a schema means the session's
+//! current database in it.
 
 use std::sync::Arc;
 
@@ -40,10 +50,11 @@ use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use krishiv_common::error::{
-    KrishivError, KrishivFlightSqlMetadataTimeout, KrishivFlightSqlSchemaTablesLimit,
+    ErrorClass, KrishivError, KrishivFlightSqlMetadataTimeout, KrishivFlightSqlSchemaTablesLimit,
 };
 use krishiv_session::Session;
 use krishiv_session::auth::Authenticated;
+use krishiv_session::spark_catalog::Table;
 use prost::Message;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
@@ -271,6 +282,36 @@ fn selects(filter: Option<&str>, catalog: &str) -> bool {
     filter.is_none_or(|f| f.to_lowercase() == catalog.to_lowercase())
 }
 
+/// Whether the optional pattern names one value exactly (no `%` or `_` outside an escape).
+fn is_exact(pattern: Option<&str>) -> bool {
+    pattern.is_some_and(|p| pieces(p).iter().all(|x| matches!(x, Piece::Char(_))))
+}
+
+/// Whether `e` is an access refusal (`KRISHIV_INSUFFICIENT_PERMISSIONS`).
+fn is_refusal(e: &KrishivError) -> bool {
+    e.error_class() == ErrorClass::KrishivInsufficientPermissions
+}
+
+/// The temporary views `SHOW TABLES IN global_temp` lists: the global ones and the session's
+/// local ones.
+async fn temporary_views(session: &Session) -> Result<Vec<Table>, KrishivError> {
+    Ok(session
+        .catalog()
+        .list_tables(Some(GLOBAL_TEMP), None)
+        .await?
+        .into_iter()
+        .filter(|t| t.is_temporary)
+        .collect())
+}
+
+/// A temporary view's schema: `global_temp` or the empty one.
+fn temporary_schema(t: &Table) -> String {
+    t.namespace
+        .as_ref()
+        .and_then(|n| n.first().cloned())
+        .unwrap_or_default()
+}
+
 /// One part of a name, backquoted for the catalog API's parser.
 fn quote(part: &str) -> String {
     format!("`{}`", part.replace('`', "``"))
@@ -316,7 +357,13 @@ async fn table_rows(
     let mut rows = Vec::new();
     for db in embedded_schemas(session, catalog, schema_pattern).await? {
         let in_db = format!("{}.{}", quote(EMBEDDED), quote(&db));
-        for t in api.list_tables(Some(&in_db), None).await? {
+        let listed = match api.list_tables(Some(&in_db), None).await {
+            Ok(listed) => listed,
+            // A namespace the caller may not browse is absent, unless it was named exactly.
+            Err(e) if is_refusal(&e) && !is_exact(schema_pattern) => continue,
+            Err(e) => return Err(e),
+        };
+        for t in listed {
             if t.is_temporary || !kept(name_pattern, &t.name) {
                 continue;
             }
@@ -330,16 +377,8 @@ async fn table_rows(
         }
     }
     if selects(catalog, "") {
-        // `SHOW TABLES IN global_temp` lists the global views and the session's local ones.
-        for t in api.list_tables(Some(GLOBAL_TEMP), None).await? {
-            if !t.is_temporary {
-                continue;
-            }
-            let schema = t
-                .namespace
-                .as_ref()
-                .and_then(|n| n.first().cloned())
-                .unwrap_or_default();
+        for t in temporary_views(session).await? {
+            let schema = temporary_schema(&t);
             if !kept(schema_pattern, &schema) || !kept(name_pattern, &t.name) {
                 continue;
             }
@@ -395,7 +434,7 @@ async fn tables(
     let empty = Schema::empty();
     for row in rows {
         let schema = if command.include_schema {
-            let loaded = match session.table(&row.qualified).schema().await {
+            let loaded = match session.table(&row.qualified).schema_for_metadata().await {
                 Ok(s) => spark_schema(&s, tz.as_ref()),
                 Err(e) => Err(e),
             };
@@ -445,8 +484,14 @@ fn arrow_internal(what: &str, e: &dyn std::fmt::Display) -> KrishivError {
     .into()
 }
 
-/// The table a key command names, as the catalog API takes it.
-fn key_table(catalog: Option<&str>, schema: Option<&str>, table: &str) -> String {
+/// The table a key command names, as the catalog API takes it. A catalog without a schema
+/// means `current` (the session's current database), so the catalog is not read as a schema.
+fn key_table(catalog: Option<&str>, schema: Option<&str>, table: &str, current: &str) -> String {
+    let catalog = catalog.filter(|c| !c.is_empty());
+    let schema = match schema.filter(|s| !s.is_empty()) {
+        None if catalog.is_some() => Some(current),
+        schema => schema,
+    };
     [catalog, schema, Some(table)]
         .into_iter()
         .flatten()
@@ -465,6 +510,7 @@ async fn run_listing(
     let api = session.catalog();
     let check = |name: String| async move { api.table_exists(&name).await.map(|_| ()) };
     let empty = || RecordBatch::new_empty(listing.schema());
+    let current = api.current_database();
     match listing {
         Listing::Catalogs(c) => {
             let mut builder = (*c).into_builder();
@@ -486,6 +532,19 @@ async fn run_listing(
             for name in names {
                 builder.append(EMBEDDED, name);
             }
+            if selects(c.catalog.as_deref(), "") {
+                let pattern = c.db_schema_filter_pattern.as_deref();
+                let local = temporary_views(session)
+                    .await?
+                    .iter()
+                    .any(|t| temporary_schema(t).is_empty());
+                if local && kept(pattern, "") {
+                    builder.append("", "");
+                }
+                if kept(pattern, GLOBAL_TEMP) {
+                    builder.append("", GLOBAL_TEMP);
+                }
+            }
             builder
                 .build()
                 .map_err(|e| arrow_internal("the GetDbSchemas result", &e))
@@ -505,6 +564,7 @@ async fn run_listing(
                 c.catalog.as_deref(),
                 c.db_schema.as_deref(),
                 &c.table,
+                &current,
             ))
             .await?;
             Ok(empty())
@@ -514,6 +574,7 @@ async fn run_listing(
                 c.catalog.as_deref(),
                 c.db_schema.as_deref(),
                 &c.table,
+                &current,
             ))
             .await?;
             Ok(empty())
@@ -523,6 +584,7 @@ async fn run_listing(
                 c.catalog.as_deref(),
                 c.db_schema.as_deref(),
                 &c.table,
+                &current,
             ))
             .await?;
             Ok(empty())
@@ -532,12 +594,14 @@ async fn run_listing(
                 c.pk_catalog.as_deref(),
                 c.pk_db_schema.as_deref(),
                 &c.pk_table,
+                &current,
             ))
             .await?;
             check(key_table(
                 c.fk_catalog.as_deref(),
                 c.fk_db_schema.as_deref(),
                 &c.fk_table,
+                &current,
             ))
             .await?;
             Ok(empty())
@@ -568,8 +632,13 @@ impl FlightSqlServer {
         let entry = Arc::clone(&call.entry);
         let config = &self.inner.config;
         let limit = config.metadata_timeout;
-        let gate = entry.shared().await;
-        let run = run_listing(entry.session(), &listing, config.max_schema_tables);
+        // The wait for the session's statement gate counts toward the limit too (§5).
+        let run = async {
+            let gate = entry.shared().await;
+            let result = run_listing(entry.session(), &listing, config.max_schema_tables).await;
+            drop(gate);
+            result
+        };
         let batch = match tokio::time::timeout(limit, run).await {
             Ok(result) => result.map_err(|e| flight_status(&e))?,
             Err(_) => {
@@ -582,7 +651,6 @@ impl FlightSqlServer {
                 ));
             }
         };
-        drop(gate);
         let mut response = Response::new(batch_stream(batch));
         if !cookieless {
             call.cookie_on(&mut response);
@@ -641,12 +709,31 @@ mod tests {
 
     #[test]
     fn key_tables_quote_each_part() {
-        assert_eq!(key_table(None, None, "t"), "`t`");
+        assert_eq!(key_table(None, None, "t", "cur"), "`t`");
+        assert_eq!(key_table(None, Some("d"), "t", "cur"), "`d`.`t`");
         assert_eq!(
-            key_table(Some("spark_catalog"), Some("d.b"), "t`x"),
+            key_table(Some("spark_catalog"), Some("d.b"), "t`x", "cur"),
             "`spark_catalog`.`d.b`.`t``x`"
         );
-        assert_eq!(key_table(Some(""), Some(""), "t"), "`t`");
+        assert_eq!(key_table(Some(""), Some(""), "t", "cur"), "`t`");
+        // A catalog alone is not read as a schema: the current database is named.
+        assert_eq!(
+            key_table(Some("spark_catalog"), None, "t", "cur"),
+            "`spark_catalog`.`cur`.`t`"
+        );
+        assert_eq!(
+            key_table(Some("spark_catalog"), Some(""), "t", "cur"),
+            "`spark_catalog`.`cur`.`t`"
+        );
+    }
+
+    #[test]
+    fn exact_patterns_have_no_wildcard() {
+        assert!(!is_exact(None));
+        assert!(is_exact(Some("hr")));
+        assert!(is_exact(Some(r"my\_db")));
+        assert!(!is_exact(Some("h%")));
+        assert!(!is_exact(Some("h_")));
     }
 
     #[test]

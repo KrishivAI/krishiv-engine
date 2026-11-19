@@ -65,9 +65,13 @@ Paths are relative to this crate.
   in the call's session (cookie-less: transient, no `set-cookie`) under `metadataTimeout`
   (`KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT`, `DEADLINE_EXCEEDED`); reads `Session::catalog()` (`list_embedded_databases`,
   `list_tables`: the `SHOW` checks); schemas and tables of `spark_catalog` only (declared catalogs list none yet),
-  temporary views once with the empty catalog; Flight SQL patterns (`%`, `_`, `\`) ignoring case; `include_schema`
-  over `maxSchemaTables` is `KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT` (54000), a table whose schema fails is skipped and
-  logged; key commands empty with FlightSql.proto's schemas after a `DESCRIBE TABLE` check
+  temporary views once with the empty catalog (`GetDbSchemas` lists `("", "global_temp")`, and `("", "")` while local
+  temp views exist); a namespace a pattern matched whose `SHOW TABLES IN` is refused is absent (an exact name is
+  refused); Flight SQL patterns (`%`, `_`, `\`) ignoring case; `include_schema` reads each schema through
+  `schema_for_metadata` (`Browse`, as `DESCRIBE`), over `maxSchemaTables` is `KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT`
+  (54000), a table whose schema fails is skipped and logged; the statement-gate wait is inside the timeout; key
+  commands empty with FlightSql.proto's schemas after a `tableExists` check (a catalog alone means its current
+  database)
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
@@ -83,8 +87,8 @@ Paths are relative to this crate.
   under the statement gate), `GetSessionOptions` (`conf().entries()` minus `is_redacted`, plus `catalog`/`schema`;
   cookie-less: transient session), `CloseSession` (close then release; always `CLOSED`)
 - `src/xdbc_info.rs` `xdbc_type_info_data()` (design §5): the `GetXdbcTypeInfo` table, built once in `Inner`, one row
-  per Spark type a column can have (Spark SQL names; complex, variant, geo and `VOID` types have no XDBC code and are
-  not listed); served without a session, counted `xdbc_type_info`
+  per Spark type a column can have (Spark SQL names; all 13 interval field ranges, each with its subcode; complex,
+  variant, geo and `VOID` types have no XDBC code and are not listed); served without a session, counted `xdbc_type_info`
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
   name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
   backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller

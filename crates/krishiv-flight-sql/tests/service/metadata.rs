@@ -11,6 +11,11 @@ use arrow_flight::sql::{
 };
 use arrow_schema::{DataType, Schema};
 
+use krishiv_common::error::KrishivError;
+use krishiv_session::{
+    AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
+};
+
 use super::*;
 
 /// The class a refusal names.
@@ -171,8 +176,20 @@ async fn listings_show_the_catalog() {
     let l = listing(&mut h, OPS, c, &schemas(None, None))
         .await
         .expect("schemas");
-    assert_eq!(column(&l.batches, "db_schema_name"), ["db1", "default"]);
-    assert_eq!(column(&l.batches, "catalog_name"), ["spark_catalog"; 2]);
+    // The temporary views' schemas come under the empty catalog: the local views' empty one (the
+    // session has `tv`) and `global_temp`, so a schemas-then-tables walk reaches them.
+    assert_eq!(
+        column(&l.batches, "db_schema_name"),
+        ["", "global_temp", "db1", "default"]
+    );
+    assert_eq!(
+        column(&l.batches, "catalog_name"),
+        ["", "", "spark_catalog", "spark_catalog"]
+    );
+    let l = listing(&mut h, OPS, c, &schemas(Some(""), Some("global%")))
+        .await
+        .expect("temporary schemas");
+    assert_eq!(column(&l.batches, "db_schema_name"), ["global_temp"]);
     for (pattern, want) in [
         ("D%", vec!["db1", "default"]),
         ("db_", vec!["db1"]),
@@ -504,4 +521,184 @@ async fn xdbc_type_info_lists_the_spark_types() {
     .expect("filtered type info");
     assert_eq!(column(&ints.batches, "type_name"), ["INT"]);
     wait_sessions(&h, 0).await;
+}
+
+/// A policy for the metadata access tests: `ops` may do anything; `other` may only browse
+/// (a viewer), and not namespace `hr` or what is in it.
+struct BrowseButHr;
+
+impl AccessPolicy for BrowseButHr {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let shown = securable.to_string();
+        let in_hr = shown.split('.').any(|p| p.trim_matches('`') == "hr");
+        let allowed = principal.name == "ops" || (privilege == Privilege::Browse && !in_hr);
+        Box::pin(std::future::ready(Ok(if allowed {
+            AccessDecision::Allow
+        } else {
+            AccessDecision::Deny {
+                reason: "test policy".to_owned(),
+            }
+        })))
+    }
+}
+
+/// Sessions over one runtime under [`BrowseButHr`].
+fn browse_sessions(dir: &Path) -> Box<krishiv_connect_server::manager::SessionFactory> {
+    let rt = krishiv_session::EngineRuntime::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.join("wh").to_str().expect("utf-8 path"),
+        )
+        .build()
+        .expect("runtime");
+    Box::new(move |caller, _transport| {
+        Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(caller.principal.clone())
+            .access_policy(Arc::new(BrowseButHr) as Arc<dyn AccessPolicy>)
+            .build()
+    })
+}
+
+/// A viewer's `GetTables` with schemas (JDBC `getColumns`) answers each table's schema: it is
+/// metadata, asked as `DESCRIBE` asks it (`Browse`), not a read (review finding 1).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_gets_table_schemas() {
+    let wh = tempfile::tempdir().expect("tempdir");
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        Setup {
+            factory: Some(browse_sessions(wh.path())),
+            ..Setup::default()
+        },
+    )
+    .await;
+    setup(
+        &mut h,
+        OPS,
+        &["CREATE TABLE default.t (a INT, b STRING) USING parquet"],
+    )
+    .await;
+    let e = match info(&mut h, OTHER, None, "SELECT a FROM default.t").await {
+        Ok((i, cookie)) => fetch(&mut h, OTHER, cookie.as_deref(), ticket(&i))
+            .await
+            .map(|b| rows(&b)),
+        Err(e) => Err(e),
+    }
+    .expect_err("a viewer cannot read the table");
+    assert_eq!(e.code(), Code::PermissionDenied, "{e:?}");
+    let l = listing(
+        &mut h,
+        OTHER,
+        None,
+        &tables(Some("spark_catalog"), Some("default"), Some("t"), &[], true),
+    )
+    .await
+    .expect("a viewer lists schemas");
+    assert_eq!(table_rows(&l.batches), ["spark_catalog.default.t:TABLE"]);
+    let bytes = l.batches[0]
+        .column_by_name("table_schema")
+        .expect("table_schema")
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("binary")
+        .value(0)
+        .to_vec();
+    let message = arrow_flight::IpcMessage(prost::bytes::Bytes::from(bytes));
+    let schema = Schema::try_from(message).expect("an IPC schema");
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["a", "b"]);
+}
+
+/// A namespace an unfiltered or pattern listing reaches but the caller may not browse is absent,
+/// as `SHOW` hides it; naming it exactly is still refused (review finding 2).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hidden_namespace_is_absent_from_table_listings() {
+    let wh = tempfile::tempdir().expect("tempdir");
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        Setup {
+            factory: Some(browse_sessions(wh.path())),
+            ..Setup::default()
+        },
+    )
+    .await;
+    setup(
+        &mut h,
+        OPS,
+        &[
+            "CREATE DATABASE hr",
+            "CREATE TABLE hr.salaries (s INT) USING parquet",
+            "CREATE DATABASE sales",
+            "CREATE TABLE sales.orders (o INT) USING parquet",
+        ],
+    )
+    .await;
+    for pattern in [None, Some("%"), Some("h%")] {
+        let l = listing(
+            &mut h,
+            OTHER,
+            None,
+            &tables(None, pattern, None, &[], false),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{pattern:?}: {e:?}"));
+        let rows = table_rows(&l.batches);
+        assert!(
+            rows.iter().all(|r| !r.contains(".hr.")),
+            "{pattern:?}: {rows:?}"
+        );
+        if pattern != Some("h%") {
+            assert!(
+                rows.contains(&"spark_catalog.sales.orders:TABLE".to_owned()),
+                "{pattern:?}: {rows:?}"
+            );
+        }
+    }
+    let e = listing(
+        &mut h,
+        OTHER,
+        None,
+        &tables(None, Some("hr"), None, &[], false),
+    )
+    .await
+    .err()
+    .expect("an exact name is refused as SHOW TABLES IN hr is");
+    assert_eq!(e.code(), Code::PermissionDenied, "{e:?}");
+    assert_eq!(class_of(&e), Some("KRISHIV_INSUFFICIENT_PERMISSIONS"));
+}
+
+/// A listing past `metadataTimeout` is `DEADLINE_EXCEEDED` with its class (design §6).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_listing_times_out() {
+    let mut h = start(FlightSqlConfig {
+        metadata_timeout: std::time::Duration::from_nanos(1),
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let sqls: Vec<String> = (0..20)
+        .map(|i| format!("CREATE TEMPORARY VIEW v{i} AS SELECT {i} AS a"))
+        .collect();
+    let refs: Vec<&str> = sqls.iter().map(String::as_str).collect();
+    let cookie = setup(&mut h, OPS, &refs).await;
+    let e = listing(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        &tables(None, None, None, &[], true),
+    )
+    .await
+    .err()
+    .expect("timed out");
+    assert_eq!(e.code(), Code::DeadlineExceeded, "{e:?}");
+    assert_eq!(class_of(&e), Some("KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT"));
 }

@@ -15,7 +15,10 @@
 //   UPDATE <count after a CREATE TABLE, an INSERT of two rows by Statement.executeUpdate and an
 //     INSERT of one by PreparedStatement.executeUpdate> (3 when each runs once);
 //   TABLES <rows of getTables for the table>;
-//   TYPES <the type names of getTypeInfo, comma-separated>.
+//   TYPES <the type names of getTypeInfo, comma-separated>;
+//   CATALOGS, SCHEMAS <TABLE_CAT of getCatalogs, TABLE_SCHEM of getSchemas, comma-separated>;
+//   COLUMNS <COLUMN_NAME:TYPE_NAME of getColumns for the table, comma-separated> (GetTables with
+//     include_schema underneath).
 // Exits 1 with a message on the first failure.
 
 import java.math.BigDecimal;
@@ -32,6 +35,17 @@ import java.util.List;
 
 public final class FlightSqlJdbc {
     private FlightSqlJdbc() {}
+
+    /** The values of one column of a metadata result, which is closed. */
+    private static List<String> strings(ResultSet rs, String column) throws SQLException {
+        List<String> out = new ArrayList<>();
+        try (rs) {
+            while (rs.next()) {
+                out.add(rs.getString(column));
+            }
+        }
+        return out;
+    }
 
     private static void print(String name, ResultSet rs) throws SQLException {
         System.out.println("QUERY " + name);
@@ -109,6 +123,15 @@ public final class FlightSqlJdbc {
                 }
             }
             System.out.println("TYPES " + String.join(",", types));
+            System.out.println("CATALOGS " + String.join(",", strings(meta.getCatalogs(), "TABLE_CAT")));
+            System.out.println("SCHEMAS " + String.join(",", strings(meta.getSchemas(), "TABLE_SCHEM")));
+            List<String> columns = new ArrayList<>();
+            try (ResultSet rs = meta.getColumns(null, null, "jdbc_t", null)) {
+                while (rs.next()) {
+                    columns.add(rs.getString("COLUMN_NAME") + ":" + rs.getString("TYPE_NAME"));
+                }
+            }
+            System.out.println("COLUMNS " + String.join(",", columns));
         } catch (SQLException e) {
             System.err.println("JDBC failed: " + e);
             e.printStackTrace();

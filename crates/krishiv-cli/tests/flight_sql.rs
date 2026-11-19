@@ -305,6 +305,9 @@ struct JdbcRun {
     update: Option<u64>,
     tables: Option<u64>,
     types: Vec<String>,
+    catalogs: Vec<String>,
+    schemas: Vec<String>,
+    columns: Vec<String>,
 }
 
 fn parse_jdbc(stdout: &str) -> JdbcRun {
@@ -338,6 +341,12 @@ fn parse_jdbc(stdout: &str) -> JdbcRun {
             run.tables = n.parse().ok();
         } else if let Some(t) = line.strip_prefix("TYPES ") {
             run.types = t.split(',').map(str::to_owned).collect();
+        } else if let Some(t) = line.strip_prefix("CATALOGS ") {
+            run.catalogs = t.split(',').map(str::to_owned).collect();
+        } else if let Some(t) = line.strip_prefix("SCHEMAS ") {
+            run.schemas = t.split(',').map(str::to_owned).collect();
+        } else if let Some(t) = line.strip_prefix("COLUMNS ") {
+            run.columns = t.split(',').map(str::to_owned).collect();
         }
     }
     run
@@ -404,6 +413,22 @@ fn jdbc_flight_sql_tpch_q1() {
             run.types
         );
     }
+    assert!(
+        run.catalogs.iter().any(|c| c == "spark_catalog"),
+        "getCatalogs: {:?}",
+        run.catalogs
+    );
+    assert!(
+        run.schemas.iter().any(|s| s == "default"),
+        "getSchemas: {:?}",
+        run.schemas
+    );
+    assert_eq!(run.columns.len(), 1, "getColumns: {:?}", run.columns);
+    assert!(
+        run.columns[0].starts_with("n:"),
+        "getColumns: {:?}",
+        run.columns
+    );
     eprintln!(
         "JDBC q1: {} rows, {} columns, equal to the Rust client",
         expected.rows.len(),
@@ -415,10 +440,14 @@ fn jdbc_flight_sql_tpch_q1() {
 fn jdbc_output_parses() {
     let run = parse_jdbc(
         "QUERY statement\nCOL a|12|0|0\nROW x\nQUERY prepared\nCOL a|12|0|0\nROW x\n\
-         UPDATE 3\nTABLES 1\nTYPES INT,STRING\n",
+         UPDATE 3\nTABLES 1\nTYPES INT,STRING\nCATALOGS spark_catalog\nSCHEMAS default,db\n\
+         COLUMNS n:INTEGER\n",
     );
     assert_eq!(run.statement, run.prepared);
     assert_eq!(run.statement.rows, ["x"]);
     assert_eq!((run.update, run.tables), (Some(3), Some(1)));
     assert_eq!(run.types, ["INT", "STRING"]);
+    assert_eq!(run.catalogs, ["spark_catalog"]);
+    assert_eq!(run.schemas, ["default", "db"]);
+    assert_eq!(run.columns, ["n:INTEGER"]);
 }

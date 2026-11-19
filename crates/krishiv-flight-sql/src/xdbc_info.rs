@@ -92,7 +92,7 @@ fn interval(fields: &str, subcode: XdbcDatetimeSubcode, scale: i32) -> XdbcTypeI
 pub(crate) fn xdbc_type_rows() -> Vec<XdbcTypeInfo> {
     use XdbcDataType as X;
     use XdbcDatetimeSubcode as S;
-    vec![
+    [
         XdbcTypeInfo {
             column_size: Some(1),
             ..base("BOOLEAN", X::XdbcBit)
@@ -147,14 +147,59 @@ pub(crate) fn xdbc_type_rows() -> Vec<XdbcTypeInfo> {
             TIMESTAMP_COLUMN_SIZE,
             TIMESTAMP_SCALE,
         ),
-        interval("YEAR TO MONTH", S::XdbcSubcodeIntervalYearToMonth, 0),
-        interval(
-            "DAY TO SECOND",
-            S::XdbcSubcodeIntervalDayToSecond,
-            TIMESTAMP_SCALE,
-        ),
     ]
+    .into_iter()
+    .chain(INTERVALS.iter().map(|(fields, subcode)| {
+        // Seconds carry microseconds; an interval ending in another field has no fraction.
+        let scale = if fields.ends_with("SECOND") {
+            TIMESTAMP_SCALE
+        } else {
+            0
+        };
+        interval(fields, *subcode, scale)
+    }))
+    .collect()
 }
+
+/// Every field range of Spark's `YearMonthIntervalType` and `DayTimeIntervalType` (a result
+/// column can have any of them, `INTERVAL '1' HOUR` is `INTERVAL HOUR`), each with its XDBC
+/// interval subcode.
+const INTERVALS: [(&str, XdbcDatetimeSubcode); 13] = [
+    ("YEAR", XdbcDatetimeSubcode::XdbcSubcodeIntervalYear),
+    ("MONTH", XdbcDatetimeSubcode::XdbcSubcodeIntervalMonth),
+    (
+        "YEAR TO MONTH",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalYearToMonth,
+    ),
+    ("DAY", XdbcDatetimeSubcode::XdbcSubcodeIntervalDay),
+    (
+        "DAY TO HOUR",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToHour,
+    ),
+    (
+        "DAY TO MINUTE",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToMinute,
+    ),
+    (
+        "DAY TO SECOND",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalDayToSecond,
+    ),
+    ("HOUR", XdbcDatetimeSubcode::XdbcSubcodeIntervalHour),
+    (
+        "HOUR TO MINUTE",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToMinute,
+    ),
+    (
+        "HOUR TO SECOND",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalHourToSecond,
+    ),
+    ("MINUTE", XdbcDatetimeSubcode::XdbcSubcodeIntervalMinute),
+    (
+        "MINUTE TO SECOND",
+        XdbcDatetimeSubcode::XdbcSubcodeIntervalMinuteToSecond,
+    ),
+    ("SECOND", XdbcDatetimeSubcode::XdbcSubcodeIntervalSecond),
+];
 
 /// The `GetXdbcTypeInfo` table (built once, at server start).
 ///
@@ -228,5 +273,20 @@ mod tests {
             .expect("row");
         assert_eq!(day.literal_prefix.as_deref(), Some("INTERVAL '"));
         assert_eq!(day.literal_suffix.as_deref(), Some("' DAY TO SECOND"));
+        assert_eq!(day.maximum_scale, Some(TIMESTAMP_SCALE));
+        let hour = rows
+            .iter()
+            .find(|r| r.type_name == "INTERVAL HOUR")
+            .expect("single-field intervals are listed");
+        assert_eq!(
+            hour.datetime_subcode,
+            Some(XdbcDatetimeSubcode::XdbcSubcodeIntervalHour)
+        );
+        assert_eq!(hour.maximum_scale, Some(0));
+        let listed = rows
+            .iter()
+            .filter(|r| r.data_type == XdbcDataType::XdbcInterval)
+            .count();
+        assert_eq!(listed, 13);
     }
 }
