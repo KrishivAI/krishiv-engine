@@ -634,11 +634,13 @@ async fn row_merge_presizes_pages_when_granted() {
 /// every key distinct (TPC-H q16's pairs) a limit that fits the merge but
 /// not every input beside the outputs must not presize: before, tasks
 /// presized at the smallest limit the merge fits, and q16 spilled where it
-/// fitted (SF1000: 53 s -> 100 s, 6.6 GB spilled). At every limit: the same
-/// groups; a run that presized neither flushed nor spilled; none presized
-/// below 1.5 times the smallest limit at which the merge fits in memory
-/// (the inputs are about half of what that limit holds); ample memory
-/// still presizes.
+/// fitted (SF1000: 53 s -> 100 s, 6.6 GB spilled). The smallest fitting
+/// limit is found on a 4 MB grid; there and at 1.25 times it nothing
+/// presizes (the inputs are about half of what that limit holds, so the
+/// gate needs about twice it); 1 GB still presizes. At every limit: the
+/// same groups, and a run that presized neither flushed nor spilled.
+/// On main before the gate it failed with tasks presized at the fitting
+/// limit: `presized at 16 MB, fits at 16 MB`.
 #[tokio::test]
 async fn row_merge_presizes_only_beside_its_inputs() {
     let (s, b) = grouped_input(120_000, 120_000);
@@ -646,48 +648,57 @@ async fn row_merge_presizes_only_beside_its_inputs() {
     let (_m, scope) = spill_dir();
     let mut sp = spec(&s, vec![0], grouped_aggs(&s));
     sp.spill = Some(scope);
-    let mut seen = Vec::new();
-    for limit in (6..=40).step_by(2).map(|mb| mb << 20) {
+    // (MB, tasks, presized, flushes, spills) of each run.
+    let mut seen: Vec<(usize, u64, u64, u64, u64)> = Vec::new();
+    let run = async |mb: usize, seen: &mut Vec<(usize, u64, u64, u64, u64)>| {
         let agg = HashAggregate::with_row_mode(sp.clone(), rowtable::Mode::Append).unwrap();
         let o = Opts {
-            limit,
+            limit: mb << 20,
             both_layouts: false,
             ..Opts::default()
         };
         let r = exec_with(AggregateNode::new(scan(&s, b.clone()), agg), o, true).await;
-        let (out, m) = r.unwrap_or_else(|e| panic!("limit {limit}: {e}"));
-        assert_eq!(rows(&out), expected, "limit {limit}");
+        let (out, m) = r.unwrap_or_else(|e| panic!("{mb} MB: {e}"));
+        assert_eq!(rows(&out), expected, "{mb} MB");
         let get = |n| extra(&m, "HashAggregate", n);
-        let (presized, flushes, spills) = (
+        let run = (
+            mb,
+            get("row_final_tasks"),
             get("row_final_presized"),
             get("row_final_flushes"),
             get("row_final_spills"),
         );
-        seen.push((
-            limit >> 20,
-            get("row_final_tasks"),
-            presized,
-            flushes,
-            spills,
-        ));
+        seen.push(run);
+        let (_, _, presized, flushes, spills) = run;
         if presized > 0 {
-            assert_eq!((flushes, spills), (0, 0), "limit {limit}: {seen:?}");
+            assert_eq!((flushes, spills), (0, 0), "{mb} MB: {seen:?}");
+        }
+        run
+    };
+    let mut fits = None;
+    for mb in (8..=40).step_by(4) {
+        let (_, tasks, presized, flushes, spills) = run(mb, &mut seen).await;
+        if tasks > 0 && flushes == 0 && spills == 0 {
+            fits = Some((mb, presized));
+            break;
         }
     }
-    let fits = seen
-        .iter()
-        .find(|&&(_, tasks, _, flushes, spills)| tasks > 0 && flushes == 0 && spills == 0)
-        .map(|&(mb, ..)| mb)
-        .unwrap_or_else(|| panic!("the merge never fits: {seen:?}"));
-    for &(mb, _, presized, _, _) in &seen {
-        if mb * 2 < fits * 3 {
-            assert_eq!(
-                presized, 0,
-                "presized at {mb} MB, fits at {fits} MB: {seen:?}"
-            );
-        }
-    }
-    assert!(seen.iter().any(|&(_, _, p, _, _)| p > 0), "{seen:?}");
+    let (fits, presized) = fits.unwrap_or_else(|| panic!("the merge never fits: {seen:?}"));
+    assert_eq!(
+        presized, 0,
+        "presized at {fits} MB, fits at {fits} MB: {seen:?}"
+    );
+    let above = fits * 5 / 4;
+    let (_, _, presized, _, _) = run(above, &mut seen).await;
+    assert_eq!(
+        presized, 0,
+        "presized at {above} MB, fits at {fits} MB: {seen:?}"
+    );
+    let (_, tasks, presized, _, _) = run(1 << 10, &mut seen).await;
+    assert!(
+        tasks > 1 && presized == tasks,
+        "1 GB presizes every task: {seen:?}"
+    );
 }
 
 /// The final phase frees each driver partition once merged: with every key

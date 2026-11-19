@@ -275,8 +275,10 @@ impl HashAggregate {
                     // (every pair new) still spilled 2.3x the bytes at a
                     // limit the merge fits (SF1000: 53 s -> 100 s). Checked,
                     // then reserved, without a lock (as the spill writers'
-                    // optional memory): a race only makes `try_grow` fail,
-                    // and only `want` is ever reserved.
+                    // optional memory): only `want` is ever reserved, and a
+                    // race either makes `try_grow` fail or, when another
+                    // consumer grows in between, grants the pages with less
+                    // than `inputs_held` free beside them; both are harmless.
                     let pages = std::mem::take(&mut task.pages);
                     let want = task.need + pages;
                     let room = ctx
