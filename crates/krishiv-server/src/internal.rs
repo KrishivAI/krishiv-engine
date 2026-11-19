@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -181,14 +181,41 @@ pub fn random_token() -> Result<String, UiError> {
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
-async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
+/// Whether `req` asks for the embedded view of the SPA (`?embed=1` on a page, never on the API).
+fn is_embed_page(req: &axum::extract::Request) -> bool {
+    !req.uri().path().starts_with("/api")
+        && req.uri().query().is_some_and(|q| {
+            q.split('&')
+                .any(|kv| kv == format!("{}=1", crate::embed::EMBED_PARAM))
+        })
+}
+
+async fn security_headers(
+    State(policy): State<Arc<crate::pages::UiPolicy>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    // Only the embeddable view may be framed, and only by the listed origins (T071); the default is `'none'`.
+    let framable = is_embed_page(&req) && !policy.embed().origins().is_empty();
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    let csp = if framable {
+        CSP.replace(
+            "frame-ancestors 'none'",
+            &format!("frame-ancestors {}", policy.embed().frame_ancestors()),
+        )
+    } else {
+        CSP.to_owned()
+    };
+    if let Ok(v) = HeaderValue::from_str(&csp) {
+        h.insert(header::CONTENT_SECURITY_POLICY, v);
+    }
+    if framable {
+        // X-Frame-Options cannot name several origins; frame-ancestors decides.
+        h.remove(header::X_FRAME_OPTIONS);
+    } else {
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -257,12 +284,25 @@ pub fn router_with_ui_policy(
         .route("/api/internal/sql/{run}/cancel", post(pages::sql_cancel))
         .route("/api/internal/session", post(pages::create_session))
         .route("/api/internal/openapi.json", get(pages::openapi_json))
+        .route("/api/internal/queries/{id}/embed-link", get(embed_link))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            pages::host_guard,
+        ));
+    let policy = Arc::clone(&state.policy);
+    // The embedded view's own routes: no token (the signed link is the credential, one query, read-only), but the
+    // same host check.
+    let embed_open = Router::new()
+        .route("/api/internal/embed/config", get(embed_config))
+        .route("/api/internal/embed/queries/{id}", get(embed_query))
+        .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, pages::host_guard));
     crate::router()
         .merge(internal)
-        .layer(middleware::from_fn(security_headers))
+        .merge(embed_open)
+        .layer(middleware::from_fn_with_state(policy, security_headers))
 }
 
 pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
@@ -790,6 +830,113 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
             "warnings": warnings(&ops),
         }),
     )
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The value of `name` in a query string, percent-decoded.
+fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
+    raw?.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name)
+            .then(|| crate::embed::percent_decode(v))
+            .flatten()
+    })
+}
+
+/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json]`: a signed read-only link to one query's
+/// profile for an embedding console (T071). The life is the asked one, at most `krishiv.ui.embed.linkTtl`.
+async fn embed_link(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let embed = s.policy.embed();
+    let max = embed.ttl().as_secs();
+    let ttl = match query_param(raw.as_deref(), "ttl") {
+        None => max,
+        Some(t) => match t.parse::<u64>() {
+            Ok(n) if n > 0 => n.min(max),
+            _ => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "ttl is a whole number of seconds",
+                );
+            }
+        },
+    };
+    let theme = match query_param(raw.as_deref(), "theme") {
+        None => None,
+        Some(t) if t.len() > crate::embed::MAX_THEME_BYTES => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bad_theme",
+                "the theme is too long",
+            );
+        }
+        Some(t) => match serde_json::from_str::<Value>(&t)
+            .map_err(|e| e.to_string())
+            .and_then(|v| crate::embed::validate_theme(&v))
+        {
+            Ok(theme) => Some(theme.to_json().to_string()),
+            Err(m) => return error(StatusCode::BAD_REQUEST, "bad_theme", &m),
+        },
+    };
+    let expires = now_secs().saturating_add(ttl);
+    let Some(sig) = embed.sign(&id, expires) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "the server has no signing key",
+        );
+    };
+    let mut url = format!(
+        "/queries/{}/profile?{}=1&exp={expires}&sig={sig}",
+        crate::embed::percent_encode(&id),
+        crate::embed::EMBED_PARAM
+    );
+    if let Some(t) = theme {
+        url.push_str("&theme=");
+        url.push_str(&crate::embed::percent_encode(&t));
+    }
+    json_response(
+        StatusCode::OK,
+        &json!({"url": url, "expires_at": expires, "query_id": id}),
+    )
+}
+
+/// `GET /api/internal/embed/config`: what the embedded page needs before it can trust a theme message.
+async fn embed_config(State(s): State<UiState>) -> Response {
+    let e = s.policy.embed();
+    json_response(
+        StatusCode::OK,
+        &json!({"allowed_origins": e.origins(), "hide_attribution": e.hide_attribution()}),
+    )
+}
+
+/// `GET /api/internal/embed/queries/{id}?exp=&sig=`: the query detail for a valid signed link, nothing else.
+async fn embed_query(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let exp = query_param(raw.as_deref(), "exp").and_then(|e| e.parse::<u64>().ok());
+    let sig = query_param(raw.as_deref(), "sig");
+    match (exp, sig) {
+        (Some(exp), Some(sig)) if s.policy.embed().verify(&id, exp, &sig, now_secs()) => {
+            query_detail(State(s), Path(id)).await
+        }
+        _ => error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "the link is not valid, or has expired",
+        ),
+    }
 }
 
 async fn cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {

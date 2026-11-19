@@ -109,6 +109,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &UI_ALLOWED_HOSTS,
+    &UI_ALLOWED_ORIGINS,
+    &UI_EMBED_HIDE_ATTRIBUTION,
+    &UI_EMBED_LINK_TTL,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -747,6 +750,50 @@ pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
           `[::1]`. A server bound to another address checks the `Host` header only when this is \
           set (it already requires authentication, and TLS for bearer methods). The \
           environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The origins that may frame the web UI's embeddable views (P3-T071).
+pub static UI_ALLOWED_ORIGINS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedOrigins",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated origins (`https://console.example.com`, scheme and host, an optional \
+          port) that may put the UI's embeddable views (`?embed=1`) in a frame: they become the \
+          `frame-ancestors` of those pages, and the same origins may send the embed theme with \
+          `postMessage`. Unset, the default, is `'none'`: no page can be framed. Every other \
+          page of the UI is never framable. An entry that is not an origin (a path, a wildcard, \
+          a quote or a space inside it) makes the server refuse to start.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether an embedded UI view drops the "Powered by Krishiv" mark (P3-T071).
+pub static UI_EMBED_HIDE_ATTRIBUTION: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.embed.hideAttribution",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, an embedded view (`?embed=1`) does not show the small \"Powered by Krishiv\" \
+          mark. The embedded view never shows the Krishiv header either way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The longest life of a signed embed link (P3-T071).
+pub static UI_EMBED_LINK_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.embed.linkTtl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(900))),
+    doc: "How long a signed embed link stays valid, at most. A link grants read-only access to \
+          one query's profile and nothing else; a request for a longer life gets this one. The \
+          signing key is made at start-up, so every link also ends when the server restarts.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",
