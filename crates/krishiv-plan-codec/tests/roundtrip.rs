@@ -661,6 +661,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "write_files_column_types"
             | "aggregate_percentiles"
             | "aggregate_histogram_numeric"
+            | "aggregate_bitmaps"
+            | "aggregate_hll_sketches"
             | "options_map_literal"
             | "nested_literals"
             | "file_source_schema"

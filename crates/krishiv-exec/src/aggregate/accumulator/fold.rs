@@ -58,6 +58,8 @@ impl Accumulator {
                     | Kind::Approx(_)
                     | Kind::Hist(_)
                     | Kind::Hll(_)
+                    | Kind::Bitmap(_)
+                    | Kind::HllSketch(_)
             ))
             && !is_unit(w)
         {
@@ -100,6 +102,8 @@ impl Accumulator {
                     | Kind::Approx(_)
                     | Kind::Hist(_)
                     | Kind::Hll(_)
+                    | Kind::Bitmap(_)
+                    | Kind::HllSketch(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -894,6 +898,34 @@ impl Accumulator {
                     ));
                 };
                 h.merge(groups, states)?;
+            }
+            (Kind::HllSketch(h), false) => h.update(groups, args[0], valid)?,
+            (Kind::HllSketch(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "an HLL sketch state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "an HLL sketch state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
+            (Kind::Bitmap(b), false) => b.update(groups, args[0], valid)?,
+            (Kind::Bitmap(b), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a bitmap state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a bitmap state of another type than binary".to_owned(),
+                    ));
+                };
+                b.merge(groups, states)?;
             }
             (Kind::Hll(h), true) => {
                 let [states] = args else {

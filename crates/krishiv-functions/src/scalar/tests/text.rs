@@ -277,6 +277,30 @@ fn concat_ws_skips_nulls() {
 }
 
 #[test]
+fn concat_ws_joins_array_elements() {
+    use arrow_array::builder::{ListBuilder, StringBuilder};
+    let mut b = ListBuilder::new(StringBuilder::new());
+    for row in [Some(vec![Some("a"), None, Some("b")]), None, Some(vec![])] {
+        match row {
+            Some(items) => {
+                for i in items {
+                    b.values().append_option(i);
+                }
+                b.append(true);
+            }
+            None => b.append(false),
+        }
+    }
+    let list: ArrayRef = Arc::new(b.finish());
+    let sep = strs(&[Some(","), Some(","), None]);
+    let tail = strs(&[Some("z"), Some("z"), Some("z")]);
+    assert_eq!(
+        text(&run("concat_ws", &[&sep, &list, &tail])),
+        owned(&[Some("a,b,z"), Some("z"), None])
+    );
+}
+
+#[test]
 fn storage_carriers_are_read() {
     let view: ArrayRef = Arc::new(StringViewArray::from(vec![Some("abc"), None]));
     let large: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("abc"), None]));
