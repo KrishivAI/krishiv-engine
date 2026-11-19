@@ -83,7 +83,9 @@ pub fn code_of(class: &str, sql_state: Option<&str>) -> Code {
         "KRISHIV_SESSION_LIMIT" | "KRISHIV_OPERATION_LIMIT" | "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" => {
             return Code::ResourceExhausted;
         }
-        "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" => return Code::FailedPrecondition,
+        "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" | "KRISHIV_SERVER_DRAINING" => {
+            return Code::FailedPrecondition;
+        }
         "TABLE_OR_VIEW_NOT_FOUND" | "SCHEMA_NOT_FOUND" | "UNRESOLVED_ROUTINE" => {
             return Code::NotFound;
         }

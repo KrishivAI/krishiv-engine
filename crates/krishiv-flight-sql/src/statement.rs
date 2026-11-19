@@ -19,7 +19,7 @@ use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::SchemaRef;
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
-    InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
+    ErrorClass, InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
     KrishivFlightSqlFetchIdle, KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
     KrishivFlightSqlStatementTooLarge, OperationCanceled,
 };
@@ -452,7 +452,11 @@ impl FlightSqlServer {
                 // The command ran: any failure from here says so (§15 m3).
                 let stored = self.store_command(session, df).await;
                 drop(gate);
-                if stored.is_err() && self.draining() {
+                if stored
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.error_class() == ErrorClass::InvalidHandleSessionClosed)
+                {
                     return Err(Status::unavailable(
                         "server shutting down; the statement ran, its result was not stored",
                     ));

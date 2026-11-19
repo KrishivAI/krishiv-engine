@@ -594,24 +594,43 @@ async fn open_fetch(
 
 const LONG: &str = "SELECT id, id * 2 AS d FROM range(0, 50000000)";
 
+/// Design P3-T066 §5.1, Flight SQL row: while draining, new statements and handshakes are refused
+/// with `KRISHIV_SERVER_DRAINING` (not retryable, not `UNAVAILABLE`); a ticket issued before the
+/// drain is still fetched, `ListActions` and cancel are served; after a resume, statements work.
 #[tokio::test(flavor = "multi_thread")]
-async fn flight_sql_refused_while_draining() {
+async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
+    use std::sync::atomic::Ordering::Release;
     let mut h = start(FlightSqlConfig::default()).await;
-    h.draining.store(true, std::sync::atomic::Ordering::Release);
-    let e = info(&mut h, OPS, None, "SELECT 1")
+    let (held, cookie) = info(&mut h, OPS, None, "SELECT 1 AS x")
+        .await
+        .expect("info before the drain");
+    h.draining.store(true, Release);
+    let e = info(&mut h, OPS, cookie.as_deref(), "SELECT 2")
         .await
         .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(e.message(), "server shutting down");
-    // ListActions needs no session, but drains too (§2 "Drain": every Flight RPC).
-    let e = h
-        .client
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata().get("x-krishiv-error-class").unwrap(),
+        "KRISHIV_SERVER_DRAINING"
+    );
+    let e = info(&mut h, OPS, Some("stale-session"), "SELECT 2")
+        .await
+        .expect_err("draining");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    // The held ticket still fetches, and ListActions needs no session.
+    let batches = fetch(&mut h, OPS, cookie.as_deref(), ticket(&held))
+        .await
+        .expect("a held ticket is fetched while draining");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    h.client
         .list_actions(authed(arrow_flight::Empty {}, OPS, None))
         .await
-        .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(e.message(), "server shutting down");
-    assert_eq!(h.flight.session_count(), 0);
+        .expect("ListActions while draining");
+    // Resumed: new statements work again.
+    h.draining.store(false, Release);
+    info(&mut h, OPS, cookie.as_deref(), "SELECT 3")
+        .await
+        .expect("a statement after the resume");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1080,20 +1099,6 @@ async fn ticket_expires() {
         .await
         .expect_err("expired");
     assert_eq!(e.code(), Code::NotFound, "{e:?}");
-}
-
-/// While the server drains, a call with a stale cookie is `UNAVAILABLE` and creates no session
-/// (§3.2, §2 "Drain").
-#[tokio::test(flavor = "multi_thread")]
-async fn reset_during_shutdown_is_unavailable() {
-    let mut h = start(FlightSqlConfig::default()).await;
-    h.draining.store(true, std::sync::atomic::Ordering::Release);
-    let e = info(&mut h, OPS, Some("stale-session"), "SELECT 1")
-        .await
-        .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(h.flight.session_count(), 0);
-    assert_eq!(h.manager.counts().live, 0);
 }
 
 /// A listener whose shutdown grace is long enough that only the running fetch decides when

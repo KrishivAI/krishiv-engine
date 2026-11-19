@@ -22,7 +22,7 @@ use krishiv_session::auth::Authenticated;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::call::shutting_down;
+use crate::call::draining;
 use crate::gate::CANCEL_FLIGHT_INFO;
 use crate::metrics::Command;
 use crate::server::FlightSqlServer;
@@ -38,12 +38,20 @@ type ActionStream =
 type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>;
 
 impl FlightSqlServer {
-    /// The drain check and the caller (design §2 "Drain", §3.1).
+    /// The caller of a call that works on something that already exists: a fetch of a ticket
+    /// issued before a drain, a cancel (design P3-T066 §5.1: these are allowed while draining).
     fn admit<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
-        if self.draining() {
-            return Err(shutting_down());
-        }
         self.inner.auth.caller(request)
+    }
+
+    /// The caller of a call that starts new work (handshake, statement, metadata command): refused
+    /// with `KRISHIV_SERVER_DRAINING` while the server drains (design P3-T066 §5.1), a
+    /// non-retryable `FAILED_PRECONDITION` and not `UNAVAILABLE`.
+    fn admit_new<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
+        if self.draining() {
+            return Err(draining());
+        }
+        self.admit(request)
     }
 
     /// Counts `result` under `command` (`krishiv_flight_sql_requests_total`).
@@ -97,7 +105,7 @@ impl FlightSqlService for FlightSqlServer {
         &self,
         request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<HandshakeStream>, Status> {
-        let result = self.admit(&request).map(|_| {
+        let result = self.admit_new(&request).map(|_| {
             let bearer = request
                 .metadata()
                 .get("authorization")
@@ -125,7 +133,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = match self.admit(&request) {
+        let result = match self.admit_new(&request) {
             Ok(caller) => {
                 let descriptor = request.get_ref().clone();
                 self.statement_info(query, request.metadata(), descriptor, &caller)
@@ -157,7 +165,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandGetSqlInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = self.admit(&request).and_then(|_| {
+        let result = self.admit_new(&request).and_then(|_| {
             let schema = query.clone().into_builder(&self.inner.sql_info).schema();
             let ticket = Ticket::new(query.as_any().encode_to_vec());
             FlightInfo::new()

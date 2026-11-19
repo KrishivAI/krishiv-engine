@@ -52,7 +52,7 @@ Paths are relative to this crate.
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   65a does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
   session work, counted `unsupported`; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
-- `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
+- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, `GetSqlInfo` info) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held tickets and cancels still served, T066 §5.1); Handshake echoes the bearer;
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)
 - `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,

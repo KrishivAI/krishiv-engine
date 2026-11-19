@@ -426,7 +426,8 @@ impl FlightSqlServer {
         n
     }
 
-    /// Whether the server is shutting down (`ConnectServer::draining`).
+    /// Whether the server refuses new work: the drain controller's flag (`ConnectServer::draining`,
+    /// design P3-T066 §5.1). Fetches of existing tickets and cancels are still served.
     pub(crate) fn draining(&self) -> bool {
         self.inner.draining.load(Ordering::Acquire)
     }
