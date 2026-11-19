@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A literal query vector is read once, not copied once per row (P3-T077 section 8.4): the heap a distance
 //! query adds on top of its table stays far below one broadcast of the query (`rows * dim * 4` bytes).
-#![cfg(test)]
 
 use std::alloc::System;
 use std::sync::Arc;

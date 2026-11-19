@@ -22,7 +22,8 @@ use crate::DataType;
 /// that turn it into and out of that storage. The engine never runs the hooks itself: a Python client
 /// serializes before and deserializes after, so a UDT column is, inside the engine, its `sql_type`.
 ///
-/// Spark compares UDTs by class (`UserDefinedType.equals`), so two UDTs are equal when their classes are.
+/// Spark compares UDTs by class (`UserDefinedType.equals`), so two UDTs are equal when their classes are. Only the two
+/// shapes Spark's JSON has can be built: [`UdtType::jvm`] and [`UdtType::python`].
 #[derive(Debug, Clone)]
 pub struct UdtType {
     sql_type: DataType,
@@ -32,19 +33,29 @@ pub struct UdtType {
 }
 
 impl UdtType {
-    /// A UDT over `sql_type`, named by its Python class and/or JVM class (`serialized_python_class` is the
-    /// pickled class a PySpark client sends).
-    pub fn new(
-        sql_type: DataType,
-        python_class: Option<String>,
-        jvm_class: Option<String>,
-        serialized_python_class: Option<String>,
-    ) -> Self {
+    /// A JVM UDT (Spark's `UserDefinedType`): named by its JVM class, with the Python class a PySpark client
+    /// pairs with it, if any (`"pyClass":null` in Spark's JSON when there is none).
+    pub fn jvm(sql_type: DataType, jvm_class: String, python_class: Option<String>) -> Self {
         Self {
             sql_type,
             python_class,
-            jvm_class,
-            serialized_python_class,
+            jvm_class: Some(jvm_class),
+            serialized_python_class: None,
+        }
+    }
+
+    /// A Python-only UDT (Spark's `PythonUserDefinedType`): its Python class and the pickled class a PySpark
+    /// client sends. Spark's JSON has no form for one without both.
+    pub fn python(
+        sql_type: DataType,
+        python_class: String,
+        serialized_python_class: String,
+    ) -> Self {
+        Self {
+            sql_type,
+            python_class: Some(python_class),
+            jvm_class: None,
+            serialized_python_class: Some(serialized_python_class),
         }
     }
 
@@ -89,9 +100,10 @@ impl UdtType {
         }
     }
 
-    /// The class that names this type for equality: the Python class, else the JVM class.
+    /// The class that names this type for equality: the JVM class (Spark's `UserDefinedType.equals` compares
+    /// classes), else the Python class of a Python-only type.
     fn identity(&self) -> Option<&str> {
-        self.python_class().or_else(|| self.jvm_class())
+        self.jvm_class().or_else(|| self.python_class())
     }
 }
 

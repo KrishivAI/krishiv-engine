@@ -264,8 +264,8 @@ fn top_k_brute_force_at_100k_by_768() {
     brute_force(100_000, 768, &[1, 10, 1000]);
 }
 
-/// query still runs (design 8.1; golden: tests/spark-golden/v4.2.0/inputs/vector-distance.sql:59).
-/// query still runs (design 8.1).
+/// A NULL query vector gives NULL distances and the query still runs (design 8.1; golden:
+/// tests/spark-golden/v4.2.0/inputs/vector-distance.sql:59).
 #[test]
 fn a_null_query_vector_gives_null_distances() {
     let s = session_with(table(50, 8, None));

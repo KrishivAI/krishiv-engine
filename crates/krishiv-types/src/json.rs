@@ -86,27 +86,22 @@ impl DataType {
             }
             Self::Udt(u) => {
                 // Spark's `UserDefinedType.jsonValue` and `PythonUserDefinedType.jsonValue`, in their key order and with
-                // their exact key sets (Spark 4.2.0 `DataType.fromJson` refuses any other): a JVM UDT is
-                // `class`, `pyClass` (null when it has no Python class); a Python-only one is `pyClass`,
-                // `serializedClass`. A key whose value is unknown is left out of the Python-only form.
+                // their exact key sets (a real 4.2.0 `DataType.fromJson` refuses any other): a JVM UDT is `class`,
+                // `pyClass` (null when it has no Python class); a Python-only one is `pyClass`, `serializedClass`.
                 out.push_str(r#"{"type":"udt""#);
-                let text =
-                    |key: &str, value: Option<&str>, null: bool, out: &mut String| match value {
-                        Some(v) => {
-                            let _ = write!(out, r#","{key}":"#);
-                            write_string(v, out);
-                        }
-                        None if null => {
-                            let _ = write!(out, r#","{key}":null"#);
-                        }
-                        None => {}
-                    };
+                let key = |name: &str, value: Option<&str>, out: &mut String| {
+                    let _ = write!(out, r#","{name}":"#);
+                    match value {
+                        Some(v) => write_string(v, out),
+                        None => out.push_str("null"),
+                    }
+                };
                 if u.jvm_class().is_some() {
-                    text("class", u.jvm_class(), false, out);
-                    text("pyClass", u.python_class(), true, out);
+                    key("class", u.jvm_class(), out);
+                    key("pyClass", u.python_class(), out);
                 } else {
-                    text("pyClass", u.python_class(), false, out);
-                    text("serializedClass", u.serialized_python_class(), false, out);
+                    key("pyClass", u.python_class(), out);
+                    key("serializedClass", u.serialized_python_class(), out);
                 }
                 out.push_str(r#","sqlType":"#);
                 u.sql_type().write_json_in(out, in_field);
@@ -188,27 +183,32 @@ impl DataType {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(StructType::new(fields).into())
             }
+            // Spark's `fromJson` takes exactly `{type, class, pyClass, sqlType}` (a JVM UDT; `pyClass` may be null) or
+            // `{type, pyClass, serializedClass, sqlType}` (a Python-only one).
             Some("udt") if obj.contains_key("sqlType") => {
-                let text = |key: &str| -> Result<Option<String>> {
+                let text = |key: &str| -> Result<String> {
                     match obj.get(key) {
-                        // Spark writes `"pyClass":null` for a JVM UDT with no Python class.
-                        None | Some(Value::Null) => Ok(None),
-                        Some(Value::String(t)) => Ok(Some(t.clone())),
-                        Some(_) => Err(invalid()),
+                        Some(Value::String(t)) => Ok(t.clone()),
+                        _ => Err(invalid()),
                     }
                 };
-                if obj.keys().any(|k| {
-                    !["type", "class", "pyClass", "serializedClass", "sqlType"]
-                        .contains(&k.as_str())
-                }) {
+                let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+                keys.sort_unstable();
+                let udt = if keys == ["class", "pyClass", "sqlType", "type"] {
+                    let py = match obj.get("pyClass") {
+                        Some(Value::Null) => None,
+                        _ => Some(text("pyClass")?),
+                    };
+                    UdtType::jvm(child("sqlType")?, text("class")?, py)
+                } else if keys == ["pyClass", "serializedClass", "sqlType", "type"] {
+                    UdtType::python(
+                        child("sqlType")?,
+                        text("pyClass")?,
+                        text("serializedClass")?,
+                    )
+                } else {
                     return Err(invalid());
-                }
-                let udt = UdtType::new(
-                    child("sqlType")?,
-                    text("pyClass")?,
-                    text("class")?,
-                    text("serializedClass")?,
-                );
+                };
                 Ok(Self::Udt(Arc::new(udt)))
             }
             _ => Err(invalid()),

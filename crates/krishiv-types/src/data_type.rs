@@ -381,6 +381,7 @@ impl DataType {
                 .fields()
                 .iter()
                 .any(|f| f.data_type().contains_collation()),
+            Self::Udt(u) => u.sql_type().contains_collation(),
             _ => false,
         }
     }

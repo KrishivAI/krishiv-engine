@@ -215,11 +215,10 @@ mod tests {
     /// P3-T079: a UDT goes out as Spark's `DataType.UDT` with its classes and storage type.
     #[test]
     fn a_udt_is_written_with_its_classes_and_storage_type() {
-        let udt = DataType::Udt(Arc::new(UdtType::new(
+        let udt = DataType::Udt(Arc::new(UdtType::jvm(
             DataType::Integer,
+            "org.example.PointUDT".to_owned(),
             Some("pkg.PointUDT".to_owned()),
-            Some("org.example.PointUDT".to_owned()),
-            None,
         )));
         let proto = proto_type(&udt).unwrap();
         let Some(Kind::Udt(u)) = proto.kind else {

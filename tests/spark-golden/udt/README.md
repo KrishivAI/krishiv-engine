@@ -11,11 +11,14 @@ over `array<double>`). Results, 2026-11-19:
 
 Tested in `crates/krishiv-types/src/tests.rs` `a_udt_renders_as_spark_does`.
 
-## Python-only UDTs and the JSON key sets (2026-11-19, pyspark 4.2.0)
+## Python-only UDTs and the JSON key sets (2026-11-19)
 
-`probe_python_only.py` (`uv run --no-project --python 3.12 --with pyspark==4.2.0 python probe_python_only.python_only.py`), output
-in `spark-4.2.0-probe.txt`. A UDT with no `scalaUDT` is `PythonUserDefinedType`: `typeName`/`simpleString`
+`probe_python_only.py` (`uv run --no-project --python 3.12 --with pyspark==<ver> python -I probe_python_only.py`), output
+in `spark-<ver>-probe.txt`. A UDT with no `scalaUDT` is `PythonUserDefinedType`: `typeName`/`simpleString`
 `pythonuserdefined`, JSON `{type, pyClass, serializedClass, sqlType}`. `DataType.fromJson` takes exactly
-`{type, class, pyClass (null allowed), sqlType}` or `{type, pyClass, serializedClass, sqlType}`; Krishiv writes those
-and reads `"pyClass":null`. Not probed: the 3.5/4.0/4.1/4.3 profiles (the UDT JSON is unchanged in Spark's source
-since 2.x as far as the 4.2.0 run shows; a 4.3.0 run is a follow-up for the profile pass).
+`{type, class, pyClass (null allowed), sqlType}` or `{type, pyClass, serializedClass, sqlType}`; Krishiv writes and
+reads exactly those (`UdtType::jvm`, `UdtType::python`).
+
+The probe gives identical results on pyspark 4.2.0, 4.2.1 and 4.3.0 (`spark-4.2.0-probe.txt`, `spark-4.2.1-probe.txt`,
+`spark-4.3.0-probe.txt`). Not run: 3.5, 4.0 and 4.1 (the plan names 4.3.0 with 4.2.1 as the second profile; the older
+profiles are not probed, so the task box stays open for them).

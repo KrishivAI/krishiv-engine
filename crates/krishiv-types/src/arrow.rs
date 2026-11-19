@@ -509,10 +509,12 @@ impl DataType {
         let field = Field::new(name, storage, nullable);
         let mut metadata = HashMap::new();
         if needs_tag {
-            // A UDT's tag is its JSON: the class names are not in a DDL string.
-            let tag = match self {
-                Self::Udt(_) => self.json(),
-                _ => self.catalog_string(),
+            // A type that is or holds a UDT is tagged with its JSON, at any depth: the class names are not in a
+            // DDL string (`catalog_string` shows a UDT as its storage type).
+            let tag = if self.any_type(&|t| matches!(t, Self::Udt(_))) {
+                self.json()
+            } else {
+                self.catalog_string()
             };
             metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), tag);
         }

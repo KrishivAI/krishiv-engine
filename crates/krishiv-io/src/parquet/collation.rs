@@ -252,11 +252,10 @@ mod tests {
     #[test]
     fn spark_row_metadata_restores_a_udt() {
         let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
-        let udt = DataType::Udt(Arc::new(UdtType::new(
+        let udt = DataType::Udt(Arc::new(UdtType::jvm(
             storage.clone(),
+            "org.example.PointUDT".to_owned(),
             Some("pkg.PointUDT".to_owned()),
-            Some("org.example.PointUDT".to_owned()),
-            None,
         )));
         let footer = DataType::Struct(krishiv_types::StructType::new(vec![
             krishiv_types::StructField::new("p", udt.clone(), true),
@@ -268,5 +267,29 @@ mod tests {
         // A column of another storage type is left alone.
         let other = Schema::new(vec![DataType::Integer.to_arrow_field("p", true)]);
         assert!(restore(&other, Some(&kv(&footer))).is_none());
+    }
+
+    /// Spark writes `"pyClass":null` for a JVM UDT with no Python class, and a Python-only UDT as `pyClass`,
+    /// `serializedClass` (a real 4.2.0 run, `tests/spark-golden/udt`); both footers restore the UDT.
+    #[test]
+    fn spark_row_metadata_restores_a_udt_with_a_null_py_class_and_a_python_only_one() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let sql = r#"{"type":"array","elementType":"double","containsNull":false}"#;
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        for udt in [
+            format!(
+                r#"{{"type":"udt","class":"org.example.PointUDT","pyClass":null,"sqlType":{sql}}}"#
+            ),
+            format!(
+                r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+            ),
+        ] {
+            let footer = format!(
+                r#"{{"type":"struct","fields":[{{"name":"p","type":{udt},"nullable":true,"metadata":{{}}}}]}}"#
+            );
+            let restored = restore(&schema, Some(&kv(&footer))).expect("tagged");
+            let got = DataType::from_arrow_field(restored.field(0)).unwrap();
+            assert!(matches!(got, DataType::Udt(_)), "{footer}");
+        }
     }
 }

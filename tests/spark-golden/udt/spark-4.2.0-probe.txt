@@ -1,4 +1,4 @@
-# Captured 2026-11-19 from pyspark==4.2.0 (local[1]) running probe.py (below); the long serializedClass is elided.
+# Captured 2026-11-19 from pyspark==4.2.0 (local[1]) running probe_python_only.py (below); the long serializedClass is elided.
 PYONLY jvm class: org.apache.spark.sql.types.PythonUserDefinedType
 PYONLY jvm json: {"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV...","sqlType":{"type":"array","elementType":"double","containsNull":false}}
 PYONLY simple/typeName/catalog/sql: pythonuserdefined pythonuserdefined array<double> ARRAY<DOUBLE>

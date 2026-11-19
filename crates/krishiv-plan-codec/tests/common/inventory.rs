@@ -2565,11 +2565,10 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     udts.scan.output = vec![column(
         3,
         "p",
-        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::new(
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
             point_storage,
+            "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
             Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
-            Some("org.apache.spark.sql.test.ExamplePointUDT".to_owned()),
-            None,
         ))),
         true,
     )];

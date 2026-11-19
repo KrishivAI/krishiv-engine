@@ -1190,10 +1190,9 @@ fn a_user_defined_type_needs_its_feature() {
         "{:?}",
         plan.features
     );
-    let udt = DataType::Udt(std::sync::Arc::new(UdtType::new(
+    let udt = DataType::Udt(std::sync::Arc::new(UdtType::jvm(
         DataType::Integer,
-        Some("pkg.PointUDT".to_owned()),
-        None,
+        "pkg.PointUDT".to_owned(),
         None,
     )));
     assert_eq!(feature_of(Construct::Type(&udt)), Some(Feature::UdtType));
