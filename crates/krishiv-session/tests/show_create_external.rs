@@ -157,3 +157,17 @@ fn replace_table_is_create_or_replace_table() {
         krishiv_common::error::ErrorClass::UnsupportedFeatureTableOperation
     );
 }
+
+#[test]
+fn comment_on_column_sets_and_clears_the_column_comment() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE cc (a INT, b INT) USING parquet")).unwrap();
+    block_on(s.sql("COMMENT ON COLUMN cc.b IS 'the b'")).unwrap();
+    let shown = show_create(&s, "cc");
+    assert!(shown.contains("b INT COMMENT 'the b'"), "{shown}");
+    block_on(s.sql("COMMENT ON COLUMN cc.b IS NULL")).unwrap();
+    assert!(!show_create(&s, "cc").contains("COMMENT"));
+    assert!(block_on(s.sql("COMMENT ON COLUMN cc.nope IS 'x'")).is_err());
+    // A column name alone is not a table and a column.
+    assert!(block_on(s.sql("COMMENT ON COLUMN b IS 'x'")).is_err());
+}

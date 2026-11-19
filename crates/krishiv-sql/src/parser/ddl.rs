@@ -15,8 +15,8 @@ use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
     AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
-    ChangeColumnAction, CreatePermanentView, DdlName, Delete, Describe, DescribeKind, DescribeMode,
-    DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
+    ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
+    DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
     InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
     MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
     PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
@@ -198,6 +198,32 @@ impl<'s> Parser<'s> {
                     action: AlterNamespaceAction::SetComment(comment),
                     span,
                 }));
+            }
+            if p.eat_kw("COLUMN") {
+                // Spark 4.3: `COMMENT ON COLUMN [catalog.][db.]table.column IS 'comment' | NULL`.
+                let at = p.start();
+                let mut name = p.table_name()?;
+                let Some(last) = name.parts.pop().filter(|_| !name.parts.is_empty()) else {
+                    return p.fail();
+                };
+                name.span = p.span_from(at);
+                p.expect_kw("IS")?;
+                let comment = p.comment_value()?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                let action = match comment {
+                    Some(c) => AlterColumnAction::Comment(c),
+                    None => AlterColumnAction::UnsetComment,
+                };
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table: DdlName::Parts(name),
+                    action: AlterTableAction::AlterColumn {
+                        name: ColumnName::Ident(last),
+                        action,
+                        span,
+                    },
+                    span,
+                })));
             }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;

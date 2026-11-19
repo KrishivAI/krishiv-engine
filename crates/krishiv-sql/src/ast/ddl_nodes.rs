@@ -874,6 +874,8 @@ pub enum ChangeColumnAction {
 pub enum AlterColumnAction {
     /// `COMMENT '...'`.
     Comment(String),
+    /// `COMMENT ON COLUMN ... IS NULL` (Spark 4.3): drops the comment.
+    UnsetComment,
     /// `SET NOT NULL`.
     SetNotNull,
     /// `DROP NOT NULL`.

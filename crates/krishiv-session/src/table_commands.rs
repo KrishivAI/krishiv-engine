@@ -1221,6 +1221,7 @@ impl Session {
             } => {
                 let change = match action {
                     AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    AlterColumnAction::UnsetComment => ColumnChange::UnsetComment,
                     AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
                         ColumnChange::Nullability
                     }
@@ -1353,6 +1354,7 @@ impl Session {
                 return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
             ColumnChange::Comment(c) => current.comment = Some(c),
+            ColumnChange::UnsetComment => current.comment = None,
             ColumnChange::DropDefault => current.default = None,
             _ => {}
         }
@@ -1489,6 +1491,7 @@ enum ColumnChange {
     /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
     Type(DataType, Option<String>),
     Comment(String),
+    UnsetComment,
     Position,
     Nullability,
     DropDefault,
