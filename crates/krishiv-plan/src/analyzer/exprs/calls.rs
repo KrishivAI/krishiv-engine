@@ -22,6 +22,26 @@ pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZ
     }
 }
 
+/// The omitted constant of `hll_sketch_agg(c)` (`lgConfigK` 12), `hll_union_agg(s)` and `hll_union(a, b)` (`allowDifferentLgK`
+/// `false`): Spark's constructors write them, and the column name shows them.
+pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound> {
+    match (name, n) {
+        ("hll_sketch_agg", 1) => Some(default_argument(
+            Literal::Integer(12),
+            DataType::Integer,
+            false,
+            origin,
+        )),
+        ("hll_union_agg", 1) | ("hll_union", 2) => Some(default_argument(
+            Literal::Boolean(false),
+            DataType::Boolean,
+            false,
+            origin,
+        )),
+        _ => None,
+    }
+}
+
 /// The position of the options argument of the CSV and JSON functions.
 pub(super) fn options_index(name: &str) -> Option<usize> {
     match name {
@@ -53,6 +73,28 @@ pub(super) fn literal_map_pairs(e: &Expr) -> Option<Vec<(String, String)>> {
 }
 
 impl Resolver<'_> {
+    /// The origin Spark's `time_bucket` builder writes: 1970-01-01 00:00:00 in the session zone for a `TIMESTAMP` (or anything that
+    /// is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+    pub(super) fn time_bucket_origin(&self, ts: &Bound, origin: Origin) -> Bound {
+        if ts.ty.data_type == Some(DataType::TimestampNtz) {
+            return default_argument(
+                Literal::TimestampNtz(0),
+                DataType::TimestampNtz,
+                false,
+                origin,
+            );
+        }
+        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
+            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
+        });
+        default_argument(
+            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
+            DataType::Timestamp,
+            false,
+            origin,
+        )
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame

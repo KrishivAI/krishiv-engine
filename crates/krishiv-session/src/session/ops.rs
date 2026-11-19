@@ -6,6 +6,18 @@ use super::*;
 impl Session {
     /// [`Self::sql`] and whether the statement was a command (not a query).
     pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
+        self.sql_ran(query, false)
+            .await
+            .and_then(super::Ran::into_frame)
+    }
+
+    /// [`Self::sql_kind`]; with `queries_only` a statement that is not a query is neither
+    /// authorized nor run ([`super::Ran::NotAQuery`]) and records no `system.queries` row.
+    pub(crate) async fn sql_ran(
+        &self,
+        query: &str,
+        queries_only: bool,
+    ) -> Result<super::Ran, KrishivError> {
         self.check_open()?;
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
@@ -17,10 +29,15 @@ impl Session {
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
-                    .sql_here_marked(&text, marker)
+                    .sql_here_marked(&text, marker, queries_only)
                     .instrument(span)
                     .await
-                    .map(|(df, command)| (df.with_trace(trace), command))
+                    .map(|ran| match ran {
+                        super::Ran::Frame(df, command) => {
+                            super::Ran::Frame(df.with_trace(trace), command)
+                        }
+                        refused @ super::Ran::NotAQuery(_) => refused,
+                    })
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a

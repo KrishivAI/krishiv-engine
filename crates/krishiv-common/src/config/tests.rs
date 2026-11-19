@@ -1426,6 +1426,7 @@ fn late_payload_join_defaults_on_and_parses() {
     assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
 }
 
+mod flight_sql;
 mod payload_above;
 
 #[test]
@@ -1975,4 +1976,21 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert_eq!(get(&c), Some(false));
     assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
+}
+
+#[test]
+fn scan_instance_projection_defaults_on_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_SCAN_INSTANCE_PROJECTION)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.scan.instanceProjection", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.scan.instanceProjection", "sometimes")
+            .is_err()
+    );
 }

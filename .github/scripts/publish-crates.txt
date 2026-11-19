@@ -20,6 +20,7 @@ krishiv-session
 krishiv-catalogs
 krishiv-connect
 krishiv-connect-server
+krishiv-flight-sql
 krishiv-ui-assets
 krishiv-server
 krishiv

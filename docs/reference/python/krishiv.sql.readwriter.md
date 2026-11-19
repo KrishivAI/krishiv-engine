@@ -31,6 +31,14 @@ def csv(self, path: str | list[str], **options: object) -> DataFrame
 def format(self, source: str) -> DataFrameReader
 ```
 
+### `jdbc`
+
+```python
+def jdbc(self, *args: object, **kwargs: object) -> DataFrame
+```
+
+Not supported: Krishiv has no JDBC source (`KRISHIV_UNSUPPORTED_FEATURE`).
+
 ### `json`
 
 ```python
@@ -119,6 +127,14 @@ def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
 ```
 
 Inserts the rows into the existing table `tableName` by position.
+
+### `jdbc`
+
+```python
+def jdbc(self, *args: object, **kwargs: object) -> None
+```
+
+Not supported: Krishiv has no JDBC sink (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 

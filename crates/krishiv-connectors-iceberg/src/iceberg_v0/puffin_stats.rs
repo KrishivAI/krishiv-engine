@@ -2,7 +2,7 @@
 //! Puffin statistics files, read side (P3-T024, PR-54a): the NDV of a column from the table
 //! metadata's `statistics` entry for **the snapshot read** (the `ndv` property of its
 //! `apache-datasketches-theta-v1` blob; no Puffin I/O), and the blob itself as a compact Theta sketch
-//! for the unions of a later write (PR-54b).
+//! for the unions of a later write (PR-54b's `statistics_file.rs`).
 //!
 //! As Java's `SparkScan` does, only the statistics file of the exact snapshot counts: another
 //! snapshot's file is ignored, and so is a blob of another type, of several fields or without a
@@ -54,13 +54,6 @@ fn file_ndv(file: &StatisticsFile, snapshot_id: i64) -> HashMap<i32, u64> {
 /// # Errors
 /// The storage's error reading the file, or `INTERNAL_ERROR` for a blob that is not a Theta sketch
 /// of the default seed.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by PR-54b's unions with the parent's sketches"
-    )
-)]
 pub(crate) async fn read_sketch(
     io: &FileIO,
     file: &StatisticsFile,

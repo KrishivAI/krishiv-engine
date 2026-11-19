@@ -40,6 +40,8 @@ roaring = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# Warnings of statistics dropped on write (PR-54b).
+tracing = { workspace = true }
 typetag = { workspace = true }
 # Feature `testing` only: the Parquet files and the local store of `testing::write_table`.
 parquet = { workspace = true, features = ["arrow"], optional = true }
@@ -47,6 +49,7 @@ object_store = { workspace = true, optional = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
+criterion.workspace = true
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 object_store = { workspace = true }
@@ -55,6 +58,10 @@ parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[[bench]]
+name = "theta_update"
+harness = false
 
 [features]
 # Cloud object stores through `krishiv-exec/cloud` (S3, GCS, Azure); the Azurite Iceberg scan test needs it.

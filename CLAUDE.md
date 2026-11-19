@@ -46,7 +46,7 @@ cargo xtask coverage-summary | diff-coverage --base <ref>      # per-crate %; co
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
 cargo xtask file-size [--write-baseline]         # (updates only the lines of files your branch changed; never other files) no src/ file grows past 2,000 lines; xtask/file-size-baseline/<crate>.txt lists the files already over (they may shrink, never grow)
 cargo xtask map <crate> | maps-check [--report]   # per-file module doc, line count and public items; missing //! lines, stale CLAUDE.md layout names, files over 2,000 lines (report-only in precheck)
-cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]...  # q-error (estimated vs actual rows per join/aggregate) over TPC-H/TPC-DS: median, p95; generated data by default
+cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... [--ndv exact|theta]  # q-error (estimated vs actual rows per join/aggregate) over TPC-H/TPC-DS: median, p95; generated data by default
 cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (10,000 counted lines), DCO sign-off, Rust-job path filter
 taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)
 ```

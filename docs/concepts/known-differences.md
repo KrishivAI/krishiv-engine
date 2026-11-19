@@ -363,6 +363,15 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+## `remote("local")` is not supported
+
+In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
+needs the full `pyspark` package; `pyspark-client` cannot do it. Krishiv has no JVM and does not accept
+`remote("local")`. Use `krishiv.start_local()`, which starts an in-process Connect server and returns the
+connection string for a stock `pyspark-client` (see [the guide](../guides/embedded-connect.md)). Like Spark's
+local mode, it protects the port with a token made for each start; unlike it, the URL has the host `localhost`
+and the token in the connection string.
+
 ## A declared schema on a Delta read
 
 `spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
@@ -507,3 +516,13 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   raises.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+
+## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
+
+`hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
+(`HllSketch.toUpdatableByteArray`). Both are the Apache DataSketches `HLL_8` format, and both libraries read
+both forms, so a sketch written by one engine can be estimated or unioned by the other, and
+`hll_sketch_estimate`, `hll_union` and `hll_union_agg` give the same numbers. What differs is the bytes:
+`length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
+`hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
+(`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
