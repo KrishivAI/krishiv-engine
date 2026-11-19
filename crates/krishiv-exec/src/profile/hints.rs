@@ -6,6 +6,7 @@
 //! The codes are stable (`SPILL`, `MISSING_STATISTICS`, `SKEW`, `RUNTIME_FILTER_OPPORTUNITY`,
 //! `MEMORY_WAIT`): messages may change, a new code is additive. Thresholds are `krishiv.advisor.*`.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use krishiv_common::config::{
@@ -219,8 +220,23 @@ fn ratio(a: u64, b: u64) -> f64 {
     }
 }
 
-fn at(plan: &ProfileNode, node: Option<u32>) -> String {
-    match node.and_then(|id| find(plan, id)) {
+/// The plan's nodes by id, built once per `hints` call so each hint's `at` is a lookup, not a tree walk.
+type Index<'a> = HashMap<u32, &'a ProfileNode>;
+
+fn index(plan: &ProfileNode) -> Index<'_> {
+    let mut out = HashMap::new();
+    let mut stack = vec![plan];
+    while let Some(n) = stack.pop() {
+        if let Some(id) = n.id {
+            out.entry(id).or_insert(n);
+        }
+        stack.extend(n.children.iter());
+    }
+    out
+}
+
+fn at(idx: &Index<'_>, node: Option<u32>) -> String {
+    match node.and_then(|id| idx.get(&id)) {
         Some(n) => format!("{} (node {})", n.name, n.id.unwrap_or(0)),
         None => "an operator".to_owned(),
     }
@@ -237,6 +253,7 @@ pub fn hints(plan: &ProfileNode, metrics: &QueryMetrics, settings: &HintSettings
     if !settings.enabled {
         return Vec::new();
     }
+    let idx = index(plan);
     let mut out = Vec::new();
     let peak = metrics.memory.peak_reserved;
     for (id, e) in &metrics.operators {
@@ -248,23 +265,23 @@ pub fn hints(plan: &ProfileNode, metrics: &QueryMetrics, settings: &HintSettings
                 > u128::from(settings.spill_min_percent) * u128::from(peak)
         {
             let pct = ratio(m.spill_write_bytes.saturating_mul(100), peak);
-            out.push(Hint {
-                code: HintCode::Spill,
-                node: e.node,
-                operator: Some(*id),
-                message: format!(
-                    "{} spilled {} to disk ({pct:.0}% of the query's {} peak memory). Raise \
-                     krishiv.memory.limit, or reduce the rows it holds at once (filter or aggregate earlier).",
-                    at(plan, e.node),
-                    bytes(m.spill_write_bytes),
-                    bytes(peak)
-                ),
-                evidence: ev(&[
-                    ("spill_write_bytes", m.spill_write_bytes),
-                    ("spilled_bytes", m.spilled_bytes),
-                    ("peak_reserved_bytes", peak),
-                ]),
-            });
+            let idx = &idx;
+            out.push(Cand::lazy(HintCode::Spill, e.node, *id, move || {
+                (
+                    format!(
+                        "{} spilled {} to disk ({pct:.0}% of the query's {} peak memory). Raise \
+                         krishiv.memory.limit, or reduce the rows it holds at once (filter or aggregate earlier).",
+                        at(idx, e.node),
+                        bytes(m.spill_write_bytes),
+                        bytes(peak)
+                    ),
+                    ev(&[
+                        ("spill_write_bytes", m.spill_write_bytes),
+                        ("spilled_bytes", m.spilled_bytes),
+                        ("peak_reserved_bytes", peak),
+                    ]),
+                )
+            }));
         }
         // MEMORY_WAIT.
         if m.blocked_on_memory >= settings.memory_wait_min_time
@@ -272,42 +289,90 @@ pub fn hints(plan: &ProfileNode, metrics: &QueryMetrics, settings: &HintSettings
                 > m.compute_time
                     .saturating_mul(u32::try_from(settings.memory_wait_factor).unwrap_or(u32::MAX))
         {
-            out.push(Hint {
-                code: HintCode::MemoryWait,
-                node: e.node,
-                operator: Some(*id),
-                message: format!(
-                    "{} waited {} ms for memory and computed for {} ms. Raise krishiv.memory.limit or run fewer queries at once.",
-                    at(plan, e.node),
-                    m.blocked_on_memory.as_millis(),
-                    m.compute_time.as_millis()
-                ),
-                evidence: ev(&[
-                    ("blocked_on_memory_ns", nanos(m.blocked_on_memory)),
-                    ("compute_time_ns", nanos(m.compute_time)),
-                ]),
-            });
+            let idx = &idx;
+            out.push(Cand::lazy(HintCode::MemoryWait, e.node, *id, move || {
+                (
+                    format!(
+                        "{} waited {} ms for memory and computed for {} ms. Raise krishiv.memory.limit or run fewer queries at once.",
+                        at(idx, e.node),
+                        m.blocked_on_memory.as_millis(),
+                        m.compute_time.as_millis()
+                    ),
+                    ev(&[
+                        ("blocked_on_memory_ns", nanos(m.blocked_on_memory)),
+                        ("compute_time_ns", nanos(m.compute_time)),
+                    ]),
+                )
+            }));
         }
-        skew(plan, *id, e, settings, &mut out);
+        skew(&idx, *id, e, settings, &mut out);
     }
-    joins(plan, metrics, settings, &mut out);
-    out.sort_by(|a, b| {
-        (a.code, a.node, a.operator.map(|o| o.0)).cmp(&(b.code, b.node, b.operator.map(|o| o.0)))
-    });
+    let mut eager = Vec::new();
+    joins(plan, &idx, &ops_index(metrics), settings, &mut eager);
+    out.extend(eager.into_iter().map(Cand::ready));
+    out.sort_by_key(|c| (c.code, c.node, c.operator.map(|o| o.0)));
     out.truncate(settings.max_hints);
-    out
+    // Messages are built only for the hints that survive the cut.
+    out.into_iter().map(Cand::render).collect()
+}
+
+type Rendered = (String, Vec<(String, u64)>);
+
+/// A hint whose message and evidence are built when it is kept, not when it is found: a query with
+/// hundreds of spilling operators formats `max_hints` messages, not hundreds.
+struct Cand<'a> {
+    code: HintCode,
+    node: Option<u32>,
+    operator: Option<OperatorId>,
+    render: Box<dyn FnOnce() -> Rendered + 'a>,
+}
+
+impl<'a> Cand<'a> {
+    fn lazy(
+        code: HintCode,
+        node: Option<u32>,
+        operator: OperatorId,
+        render: impl FnOnce() -> Rendered + 'a,
+    ) -> Self {
+        Self {
+            code,
+            node,
+            operator: Some(operator),
+            render: Box::new(render),
+        }
+    }
+
+    fn ready(h: Hint) -> Self {
+        Self {
+            code: h.code,
+            node: h.node,
+            operator: h.operator,
+            render: Box::new(move || (h.message, h.evidence)),
+        }
+    }
+
+    fn render(self) -> Hint {
+        let (message, evidence) = (self.render)();
+        Hint {
+            code: self.code,
+            node: self.node,
+            operator: self.operator,
+            message,
+            evidence,
+        }
+    }
 }
 
 fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
-fn skew(
-    plan: &ProfileNode,
+fn skew<'a>(
+    plan: &'a Index<'_>,
     id: OperatorId,
-    e: &OperatorEntry,
+    e: &'a OperatorEntry,
     s: &HintSettings,
-    out: &mut Vec<Hint>,
+    out: &mut Vec<Cand<'a>>,
 ) {
     let m = &e.metrics;
     if !KEY_PARTITIONED.contains(&e.name.as_ref())
@@ -336,37 +401,51 @@ fn skew(
     } else {
         ratio(m.max_driver_rows_out.saturating_mul(100), m.rows_out)
     };
-    out.push(Hint {
-        code: HintCode::Skew,
-        node: e.node,
-        operator: Some(id),
-        message: format!(
-            "One of {drivers} drivers of {} did {share:.0}% of the work. Salting the key or filtering the hot values may help.",
-            at(plan, e.node),
-        ),
-        evidence: ev(&[
-            ("drivers", drivers),
-            ("max_driver_compute_time_ns", nanos(m.max_driver_compute_time)),
-            ("compute_time_ns", nanos(m.compute_time)),
-            ("max_driver_rows_out", m.max_driver_rows_out),
-            ("rows_out", m.rows_out),
-        ]),
-    });
+    out.push(Cand::lazy(HintCode::Skew, e.node, id, move || {
+        (
+            format!(
+                "One of {drivers} drivers of {} did {share:.0}% of the work. Salting the key or filtering the hot values may help.",
+                at(plan, e.node),
+            ),
+            ev(&[
+                ("drivers", drivers),
+                ("max_driver_compute_time_ns", nanos(m.max_driver_compute_time)),
+                ("compute_time_ns", nanos(m.compute_time)),
+                ("max_driver_rows_out", m.max_driver_rows_out),
+                ("rows_out", m.rows_out),
+            ]),
+        )
+    }));
+}
+
+/// The operators of a query by (plan node, operator name), the first of each, built once per `hints` call.
+type Ops<'a> = HashMap<(u32, &'a str), (OperatorId, &'a OperatorEntry)>;
+
+fn ops_index(metrics: &QueryMetrics) -> Ops<'_> {
+    let mut out = HashMap::new();
+    for (id, e) in &metrics.operators {
+        if let Some(node) = e.node {
+            out.entry((node, e.name.as_ref())).or_insert((*id, e));
+        }
+    }
+    out
 }
 
 fn operator_at<'a>(
-    metrics: &'a QueryMetrics,
+    ops: &Ops<'a>,
     node: u32,
     name: &str,
 ) -> Option<(OperatorId, &'a OperatorEntry)> {
-    metrics
-        .operators
-        .iter()
-        .find(|(_, e)| e.node == Some(node) && e.name == name)
-        .map(|(id, e)| (*id, e))
+    ops.get(&(node, name)).copied()
 }
 
-fn joins(plan: &ProfileNode, metrics: &QueryMetrics, s: &HintSettings, out: &mut Vec<Hint>) {
+fn joins(
+    plan: &ProfileNode,
+    idx: &Index<'_>,
+    ops: &Ops<'_>,
+    s: &HintSettings,
+    out: &mut Vec<Hint>,
+) {
     let mut stats: Vec<(String, f64, Hint)> = Vec::new();
     let mut stack = vec![plan];
     while let Some(n) = stack.pop() {
@@ -375,8 +454,8 @@ fn joins(plan: &ProfileNode, metrics: &QueryMetrics, s: &HintSettings, out: &mut
             continue;
         };
         if n.name == "HashJoin" {
-            missing_stats(plan, id, facts, metrics, s, &mut stats);
-            runtime_filters(plan, id, facts, metrics, s, out);
+            missing_stats(idx, id, facts, ops, s, &mut stats);
+            runtime_filters(idx, id, facts, ops, s, out);
         }
     }
     // One hint per table: the node where the estimate missed most.
@@ -386,15 +465,15 @@ fn joins(plan: &ProfileNode, metrics: &QueryMetrics, s: &HintSettings, out: &mut
 }
 
 fn missing_stats(
-    plan: &ProfileNode,
+    plan: &Index<'_>,
     node: u32,
     facts: &NodeFacts,
-    metrics: &QueryMetrics,
+    ops: &Ops<'_>,
     s: &HintSettings,
     out: &mut Vec<(String, f64, Hint)>,
 ) {
-    let probe = operator_at(metrics, node, "HashJoinProbe");
-    let build = operator_at(metrics, node, "HashJoinBuild");
+    let probe = operator_at(ops, node, "HashJoinProbe");
+    let build = operator_at(ops, node, "HashJoinBuild");
     let actual = [
         probe.map(|(_, e)| e.metrics.rows_in),
         build.map(|(_, e)| e.metrics.rows_in),
@@ -452,17 +531,17 @@ fn missing_stats(
 }
 
 fn runtime_filters(
-    plan: &ProfileNode,
+    plan: &Index<'_>,
     node: u32,
     facts: &NodeFacts,
-    metrics: &QueryMetrics,
+    ops: &Ops<'_>,
     s: &HintSettings,
     out: &mut Vec<Hint>,
 ) {
     if facts.filter_gaps.is_empty() {
         return;
     }
-    let Some((id, probe)) = operator_at(metrics, node, "HashJoinProbe") else {
+    let Some((id, probe)) = operator_at(ops, node, "HashJoinProbe") else {
         return;
     };
     let m = &probe.metrics;

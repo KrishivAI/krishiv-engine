@@ -1298,7 +1298,7 @@ impl<'a> Planner<'a> {
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
                 scan,
-                provider.statistics().is_some(),
+                self.has_statistics(plan),
                 self.estimated_rows(plan),
             )),
             sites,
