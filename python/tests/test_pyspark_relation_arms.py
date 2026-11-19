@@ -67,10 +67,6 @@ def test_repartition_by_column_keeps_the_rows(spark: Any) -> None:
 def test_unpivot_equals_the_sql_form(spark: Any) -> None:
     df = spark.sql(_VALUES)
     got = _rows(df.unpivot("id", ["a", "b"], "k", "v"))
-    want = _rows(
-        spark.sql(
-            "SELECT * FROM (" + _VALUES + ") UNPIVOT INCLUDE NULLS (v FOR k IN (a, b))"
-        )
-    )
+    want = _rows(spark.sql("SELECT * FROM (" + _VALUES + ") UNPIVOT INCLUDE NULLS (v FOR k IN (a, b))"))
     assert got == want
     assert (2, "b", None) in got
