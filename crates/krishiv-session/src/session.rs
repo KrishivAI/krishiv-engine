@@ -1459,6 +1459,7 @@ impl Session {
             },
             quiet: QuietDenials::default(),
             udtfs,
+            spill_failure: Arc::default(),
         }
     }
 
@@ -1659,6 +1660,26 @@ impl Session {
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((crate::run_site::resolve_sites(stream, env), query))
+    }
+
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as
@@ -1923,6 +1944,7 @@ impl Session {
         };
         match submitted {
             Err(error) => {
+                let error = Self::name_spill_failure(error, &env.spill_failure);
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
@@ -1930,7 +1952,11 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let (inner, fold) = (stream, pending.0.take());
+                let failure = Arc::clone(&env.spill_failure);
+                let inner = Box::pin(
+                    stream.map(move |r| r.map_err(|e| Self::name_spill_failure(e, &failure))),
+                );
+                let fold = pending.0.take();
                 let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
