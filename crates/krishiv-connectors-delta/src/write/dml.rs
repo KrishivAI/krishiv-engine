@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Copy-on-write `DELETE` and `UPDATE` on a Delta table (design note P3-T021 sections 2.3, 6.1 and
 //! 6.2; PR-37b part 2): [`DeltaRowLevel`], the table's
-//! [`RowLevelTable`](krishiv_exec::planner::RowLevelTable).
+//! [`RowLevelTable`].
 //!
 //! The session plans the statement (krishiv-session `table_commands/row_level.rs`): a find query
 //! over [`scan`](DeltaRowLevel) (the live rows, deletion vectors applied, with
