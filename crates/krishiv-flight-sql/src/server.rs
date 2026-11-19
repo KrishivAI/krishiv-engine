@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
 use arrow_flight::flight_service_server::FlightServiceServer;
-use arrow_flight::sql::metadata::SqlInfoData;
+use arrow_flight::sql::metadata::{SqlInfoData, XdbcTypeInfoData};
 use arrow_schema::SchemaRef;
 use krishiv_common::config::{
     CONNECT_MAX_INBOUND_MESSAGE_SIZE, Config, ConfigEntry, ConfigValue,
@@ -33,6 +33,7 @@ use crate::metrics::Requests;
 use crate::sessions::{Holds, Release, Sessions};
 use crate::sql_info::{ServerInfo, sql_info_data};
 use crate::statement::FetchCell;
+use crate::xdbc_info::xdbc_type_info_data;
 
 /// The limits of a [`FlightSqlServer`], from the `krishiv.flightSql.*` keys (all Startup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +252,7 @@ pub(crate) struct Inner {
     pub(crate) handles: Handles<SessionOwner, Payload>,
     pub(crate) requests: Requests,
     pub(crate) sql_info: SqlInfoData,
+    pub(crate) xdbc_type_info: XdbcTypeInfoData,
     pub(crate) config: FlightSqlConfig,
     /// The live `DoGet` streams' idle cells, for the sweep (design §4.2).
     pub(crate) fetches: Mutex<Vec<Weak<FetchCell>>>,
@@ -278,7 +280,7 @@ impl FlightSqlServer {
     /// `info` for `GetSqlInfo`.
     ///
     /// # Errors
-    /// What building the `GetSqlInfo` table fails with (`INTERNAL_ERROR`).
+    /// What building the `GetSqlInfo` or `GetXdbcTypeInfo` table fails with (`INTERNAL_ERROR`).
     pub fn new(
         manager: Arc<SessionManager>,
         auth: Arc<ConnectAuth>,
@@ -297,6 +299,7 @@ impl FlightSqlServer {
                 handles: Handles::new(config.handles),
                 requests: Requests::default(),
                 sql_info: sql_info_data(info)?,
+                xdbc_type_info: xdbc_type_info_data()?,
                 config,
                 fetches: Mutex::new(Vec::new()),
             }),

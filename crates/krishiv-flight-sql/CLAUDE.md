@@ -71,12 +71,20 @@ Paths are relative to this crate.
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
-  session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, the actions it lets through; counted `list_actions`, no session)
+  session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; the session-option actions too; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, `SetSessionOptions`, `GetSessionOptions`, `CloseSession`, the actions it lets through; counted `list_actions`, no session)
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)
 - `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,
   commands once, re-fetch clock, owner binding, cancel, limits, auth)
+- `src/session_options.rs` Flight's session options (design §3.2; Flight.proto messages declared here with prost,
+  arrow-flight 60 has none): `SetSessionOptions` (`catalog`/`schema` set the current catalog/database, other keys
+  `check_static` -> `authorize_set_key` -> `conf.set`, valueless = unset; marks the session changed, sets the cookie,
+  under the statement gate), `GetSessionOptions` (`conf().entries()` minus `is_redacted`, plus `catalog`/`schema`;
+  cookie-less: transient session), `CloseSession` (close then release; always `CLOSED`)
+- `src/xdbc_info.rs` `xdbc_type_info_data()` (design §5): the `GetXdbcTypeInfo` table, built once in `Inner`, one row
+  per Spark type a column can have (Spark SQL names; complex, variant, geo and `VOID` types have no XDBC code and are
+  not listed); served without a session, counted `xdbc_type_info`
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
   name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
   backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller

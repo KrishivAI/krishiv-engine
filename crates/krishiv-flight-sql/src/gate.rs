@@ -10,8 +10,9 @@ use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest, Any,
     CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
     CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
-    CommandGetTables, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
+    CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+    CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -48,6 +49,8 @@ pub(crate) enum FlightRpc {
     Fetch,
     /// `GetFlightInfo` or `DoGet` of `CommandGetSqlInfo`.
     SqlInfo,
+    /// `GetFlightInfo` or `DoGet` of `CommandGetXdbcTypeInfo`.
+    XdbcTypeInfo,
     /// `GetFlightInfo` or `DoGet` of a catalog listing or a key command (design §5).
     Metadata,
     /// The `CancelFlightInfo` action.
@@ -99,6 +102,7 @@ impl FlightRpc {
         match Any::decode(descriptor.cmd.as_ref()) {
             Ok(any) if any.type_url == CommandStatementQuery::type_url() => Self::StatementInfo,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if any.type_url == CommandGetXdbcTypeInfo::type_url() => Self::XdbcTypeInfo,
             Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) if any.type_url == CommandPreparedStatementQuery::type_url() => {
                 Self::PreparedInfo
@@ -113,6 +117,7 @@ impl FlightRpc {
         match Any::decode(ticket.ticket.as_ref()) {
             Ok(any) if any.type_url == TicketStatementQuery::type_url() => Self::Fetch,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if any.type_url == CommandGetXdbcTypeInfo::type_url() => Self::XdbcTypeInfo,
             Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) => Self::Unsupported(format!("DoGet of {:?}", any.type_url)),
             Err(_) => Self::Malformed("a ticket"),
@@ -160,6 +165,7 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::StatementInfo
         | FlightRpc::Fetch
         | FlightRpc::SqlInfo
+        | FlightRpc::XdbcTypeInfo
         | FlightRpc::Metadata
         | FlightRpc::CancelFlightInfo
         | FlightRpc::CancelQuery
@@ -476,11 +482,20 @@ mod tests {
         assert_eq!(FlightRpc::of_descriptor(&info), FlightRpc::SqlInfo);
         let fetch = Ticket::new(any_of(&TicketStatementQuery::default()));
         assert_eq!(FlightRpc::of_ticket(&fetch), FlightRpc::Fetch);
+        let types = CommandGetXdbcTypeInfo::default();
+        let types_info = FlightDescriptor::new_cmd(any_of(&types));
+        assert_eq!(
+            FlightRpc::of_descriptor(&types_info),
+            FlightRpc::XdbcTypeInfo
+        );
+        let types_ticket = Ticket::new(any_of(&types));
+        assert_eq!(FlightRpc::of_ticket(&types_ticket), FlightRpc::XdbcTypeInfo);
         for rpc in [
             FlightRpc::Handshake,
             FlightRpc::StatementInfo,
             FlightRpc::Fetch,
             FlightRpc::SqlInfo,
+            FlightRpc::XdbcTypeInfo,
             FlightRpc::CancelFlightInfo,
             FlightRpc::CancelQuery,
         ] {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The arrow-rs `FlightSqlService` implementation (design P3-T101 §2, §4, §5): Handshake,
-//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, the metadata listings (§5), `CancelFlightInfo`, `CancelQuery`. Every RPC
+//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `GetXdbcTypeInfo`, the metadata listings (§5), `CancelFlightInfo`, `CancelQuery`. Every RPC
 //! starts with the drain check and the caller `AuthLayer` attached (fail closed); what 65a does
 //! not serve never reaches it: [`crate::gate`] answers `UNIMPLEMENTED` first (§16 m5).
 
@@ -12,8 +12,8 @@ use arrow_flight::sql::{
     ActionCreatePreparedStatementRequest, Any, Command as FlightCommand, CommandGetCatalogs,
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightData,
@@ -310,6 +310,34 @@ impl FlightSqlService for FlightSqlServer {
                 .map_err(|e| internal(format!("the GetSqlInfo table: {e}")))
         });
         self.counted(Command::SqlInfo, result)
+    }
+
+    /// `GetXdbcTypeInfo` (design §5) reads no session state either: no session.
+    async fn get_flight_info_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let result = self.admit(&request).and_then(|_| {
+            let schema = query.into_builder(&self.inner.xdbc_type_info).schema();
+            fixed_info(&schema, &query.as_any(), request.get_ref().clone()).map(Response::new)
+        });
+        self.counted(Command::XdbcTypeInfo, result)
+    }
+
+    async fn do_get_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        let result = self.admit(&request).and_then(|_| {
+            query
+                .into_builder(&self.inner.xdbc_type_info)
+                .build()
+                .map(|batch| Response::new(batch_stream(batch)))
+                .map_err(|e| internal(format!("the GetXdbcTypeInfo table: {e}")))
+        });
+        self.counted(Command::XdbcTypeInfo, result)
     }
 
     async fn get_flight_info_catalogs(
