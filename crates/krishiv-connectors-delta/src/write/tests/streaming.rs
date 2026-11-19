@@ -5,6 +5,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use arrow_array::{ArrayRef, Date32Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
@@ -15,6 +17,7 @@ use krishiv_plan::{Expr, Literal};
 
 use super::super::NewDeltaTable;
 use super::super::sink::{Planned, commit_create, plan_create, select_removes, take_create};
+use super::super::test_hooks::{self, Act, Point};
 use super::{Env, adds, ids, modes_schema};
 use crate::write::files::FileLimits;
 
@@ -121,23 +124,29 @@ fn a_write_larger_than_the_pool_streams_into_rolled_files() {
 }
 
 /// A spill request that reaches a driver while its batch is being written (its writer locked,
-/// so the spill frees nothing) is not lost: the driver's seat holds, so the asking round waits,
-/// and the write flushes when it ends. Every batch's write stalls a little while it holds the
-/// writer, which keeps that window open; the write finishes within the pool.
+/// so the spill frees nothing) is not lost: the write flushes when it ends. The hook asks the
+/// driver to spill at the `Sunk` point, where the writer is still locked, and stalls a little,
+/// so the driver services the request while the batch's future is pending; the wanted flushes
+/// are counted and freed bytes.
 #[test]
 fn a_spill_request_during_a_batch_write_waits_for_it() {
     const LIMIT: usize = 12 << 20;
     let env = Env::with_limit(LIMIT);
     let table = new_table(&env, &modes_schema(), &["p"]);
     let write_id = "spill-during-a-batch-write";
-    super::super::test_hooks::set(
+    test_hooks::set(
         write_id,
-        Arc::new(|at, _| {
-            (at == super::super::test_hooks::Point::Sunk)
-                .then_some(std::time::Duration::from_millis(20))
+        Arc::new(|site, _| {
+            if site.point != Point::Sunk {
+                return Act::NONE;
+            }
+            Act {
+                ask_spill: true,
+                stall: Some(Duration::from_millis(5)),
+            }
         }),
     );
-    let batches: Vec<RecordBatch> = (0..96).map(|b| wide_rows(b * 8192, 8192)).collect();
+    let batches: Vec<RecordBatch> = (0..24).map(|b| wide_rows(b * 8192, 8192)).collect();
     let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
     env.write_as(
         &table,
@@ -147,6 +156,80 @@ fn a_spill_request_during_a_batch_write_waits_for_it() {
         write_id,
     )
     .unwrap();
+    let wanted = test_hooks::noted(write_id, test_hooks::Path::WantedFlush);
+    assert!(wanted.times > 0, "no spill request met a busy writer");
+    assert!(wanted.freed > 0, "{wanted:?}");
+    let back = env.read(&env.open().unwrap());
+    assert_eq!(ids(&back).len(), rows);
+}
+
+/// A driver that runs out of input ships its buffered row groups in the background
+/// (`release_combined`) under a holding seat, while another driver still writes: every driver
+/// but the first stalls on each batch, so one ends before the others, and its release stalls
+/// too, holding the seat while the others' rounds need the bytes. The write finishes within
+/// the pool, and batches were written after a driver ended.
+#[test]
+fn an_ended_driver_ships_its_row_groups_while_another_writes() {
+    const LIMIT: usize = 12 << 20;
+    let env = Env::with_limit(LIMIT);
+    let table = new_table(&env, &modes_schema(), &["p"]);
+    let write_id = "ended-driver-releases";
+    let first = Arc::new(std::sync::Mutex::new(None::<usize>));
+    let ended = Arc::new(AtomicBool::new(false));
+    let after_end = Arc::new(AtomicUsize::new(0));
+    let (f, e, a) = (
+        Arc::clone(&first),
+        Arc::clone(&ended),
+        Arc::clone(&after_end),
+    );
+    test_hooks::set(
+        write_id,
+        Arc::new(move |site, _| match site.point {
+            Point::Sunk => {
+                if e.load(Ordering::Acquire) {
+                    a.fetch_add(1, Ordering::AcqRel);
+                }
+                let fast = *f.lock().unwrap().get_or_insert(site.driver) == site.driver;
+                if fast {
+                    Act::NONE
+                } else {
+                    Act::stall(Duration::from_millis(4))
+                }
+            }
+            Point::Combined => {
+                e.store(true, Ordering::Release);
+                Act::stall(Duration::from_millis(30))
+            }
+            Point::Finished => Act::NONE,
+        }),
+    );
+    let batches: Vec<RecordBatch> = (0..120).map(|b| wide_rows(b * 8192, 8192)).collect();
+    let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+    env.write_as(
+        &table,
+        WriteMode::Append,
+        batches,
+        &[("maxRecordsPerFile", "100000")],
+        write_id,
+    )
+    .unwrap();
+    let released = test_hooks::noted(write_id, test_hooks::Path::CombinedRelease);
+    assert!(released.times > 0 && released.freed > 0, "{released:?}");
+    assert!(
+        after_end.load(Ordering::Acquire) > 0,
+        "no batch was written after a driver ended"
+    );
+    let metrics = env.metrics.lock().unwrap().clone().unwrap();
+    let sink = metrics
+        .operators
+        .values()
+        .find(|e| e.name.contains("DeltaWrite"))
+        .unwrap();
+    assert!(
+        sink.metrics.peak_reserved <= LIMIT as u64,
+        "{}",
+        sink.metrics.peak_reserved
+    );
     let back = env.read(&env.open().unwrap());
     assert_eq!(ids(&back).len(), rows);
 }

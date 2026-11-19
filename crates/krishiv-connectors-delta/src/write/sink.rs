@@ -425,7 +425,11 @@ struct WriteLocal {
     signal: Arc<SpillSignal>,
     /// The driver's seat in [`WRITE_COHORT`], holding while a batch is written: the writer is
     /// locked then, so a spill request cannot reach it, and another driver's round waits for
-    /// the write to end instead of failing.
+    /// the write to end instead of failing. The round counts the driver's whole use as about to
+    /// be released, but the write gives all of it back only when a spill request set
+    /// [`flush_wanted`](Self::flush_wanted); otherwise only the batch's copy. A round that
+    /// waited and is still short re-plans in the abort phase, which asks for no spills, so it
+    /// then fails as it did before (bounded by `abortReleaseTimeout`).
     seat: Arc<Mutex<Option<Seat>>>,
     /// A spill request found the writer busy: the batch's write flushes when it ends.
     flush_wanted: Arc<AtomicBool>,
@@ -548,6 +552,8 @@ impl Sink for DeltaWriteSink {
         let global = Arc::clone(global);
         let signal = Arc::clone(&l.signal);
         let flush_wanted = Arc::clone(&l.flush_wanted);
+        #[cfg(test)]
+        let driver = Arc::as_ptr(&l.writer) as usize;
         let holding = Holding::new(&l.seat);
         Ok(SinkStatus::Blocked(Box::pin(async move {
             let Ok(g) = global_of(&global) else {
@@ -568,11 +574,27 @@ impl Sink for DeltaWriteSink {
             drop(batch);
             #[cfg(test)]
             if out.is_ok() {
-                super::test_hooks::at(&g.write_id, super::test_hooks::Point::Sunk, &g.query).await;
+                let site = super::test_hooks::Site {
+                    point: super::test_hooks::Point::Sunk,
+                    driver,
+                };
+                super::test_hooks::at(&g.write_id, site, &g.query, Some(&signal)).await;
             }
             // A round asked this driver to spill while the batch was written.
             if out.is_ok() && flush_wanted.swap(false, Ordering::AcqRel) {
-                out = w.flush().await.map(drop);
+                let flushed = w.flush().await;
+                // A request that came during this flush is met by it (the writer was still
+                // locked, so it set the flag again).
+                flush_wanted.store(false, Ordering::Release);
+                #[cfg(test)]
+                if let Ok(freed) = &flushed {
+                    super::test_hooks::note(
+                        &g.write_id,
+                        super::test_hooks::Path::WantedFlush,
+                        *freed,
+                    );
+                }
+                out = flushed.map(drop);
             }
             if let Err(e) = out {
                 // Clean up before failing the query: its cancellation drops this future.
@@ -601,7 +623,7 @@ impl Sink for DeltaWriteSink {
             abandon(&g.engine, writer);
             return Ok(());
         }
-        release_combined(&g.engine, &writer, &l.seat);
+        release_combined(g, &writer, &l.seat);
         g.writers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -688,7 +710,13 @@ impl Sink for DeltaWriteSink {
                 return Err(e);
             }
             #[cfg(test)]
-            super::test_hooks::at(&g.write_id, super::test_hooks::Point::Finished, &g.query).await;
+            {
+                let site = super::test_hooks::Site {
+                    point: super::test_hooks::Point::Finished,
+                    driver: 0,
+                };
+                super::test_hooks::at(&g.write_id, site, &g.query, None).await;
+            }
             let paths = written.paths.clone();
             let out = match &self.target {
                 Target::Existing(table) => self.commit_existing(g, table, written).await,
@@ -737,16 +765,34 @@ impl Sink for DeltaWriteSink {
 /// reservation after it are reserved or left as the deficit, as after a batch. `finalize`
 /// waits on the writer's lock; a failure here fails the write.
 fn release_combined(
-    engine: &DeltaEngine,
+    g: &WriteGlobal,
     writer: &Arc<AsyncMutex<DriverWriter>>,
     seat: &Arc<Mutex<Option<Seat>>>,
 ) {
     let holding = Holding::new(seat);
     let writer = Arc::clone(writer);
-    drop(engine.handle().spawn(async move {
+    #[cfg(test)]
+    let (write_id, query) = (g.write_id.clone(), Arc::clone(&g.query));
+    drop(g.engine.handle().spawn(async move {
         let mut w = writer.lock().await;
+        #[cfg(test)]
+        {
+            let site = super::test_hooks::Site {
+                point: super::test_hooks::Point::Combined,
+                driver: Arc::as_ptr(&writer) as usize,
+            };
+            super::test_hooks::at(&write_id, site, &query, None).await;
+        }
         let out = match w.flush().await {
-            Ok(_) => w.settle().await,
+            #[cfg_attr(
+                not(test),
+                expect(unused_variables, reason = "counted by the test hooks")
+            )]
+            Ok(freed) => {
+                #[cfg(test)]
+                super::test_hooks::note(&write_id, super::test_hooks::Path::CombinedRelease, freed);
+                w.settle().await
+            }
             Err(e) => Err(e),
         };
         if let Err(e) = out {
