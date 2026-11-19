@@ -531,3 +531,28 @@ fn a_column_of_another_type_is_left_out() {
         None
     );
 }
+
+/// A copy-on-write rewrite (DELETE, UPDATE, MERGE) sketches nothing even with the switch on: unioning the
+/// parent's blob with the rewritten rows would keep counting the deleted keys (review of 2026-11-19).
+#[test]
+fn a_copy_on_write_rewrite_sketches_nothing() {
+    use super::filter::Removals;
+    use super::sink::{IcebergWriteSink, Overwrite};
+    use super::validate::Validation;
+
+    let env = env();
+    let t = create(&env, ixn_schema(), true, &[]);
+    let catalog = Catalog::new(&t);
+    let p = provider_with(&env, &catalog.location(), &catalog, &on());
+    let target = Arc::clone(p.write_target().unwrap());
+    let append = IcebergWriteSink::try_new(Arc::clone(&target), &request(None)).unwrap();
+    assert!(append.sketches_columns());
+    let overwrite = Overwrite {
+        removals: Removals::default(),
+        validation: Validation::none(),
+        lineage: false,
+    };
+    let rewrite =
+        IcebergWriteSink::try_rewrite(target, &input_schema(), "db.t", None, overwrite).unwrap();
+    assert!(!rewrite.sketches_columns());
+}

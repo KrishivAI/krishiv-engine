@@ -314,6 +314,12 @@ impl IcebergWriteSink {
         Self::build(target, input_schema, table_name, write_id, Some(overwrite))
     }
 
+    /// Whether this write sketches its columns (appends only).
+    #[cfg(test)]
+    pub(super) fn sketches_columns(&self) -> bool {
+        self.sketch_columns.is_some()
+    }
+
     fn build(
         target: Arc<WriteTarget>,
         input_schema: &SchemaRef,
@@ -341,8 +347,9 @@ impl IcebergWriteSink {
             })?;
         let has_required = table.fields().iter().any(|f| has_required(f));
         let write_id = write_id.unwrap_or_else(random_uuid);
-        let sketch_columns = target
-            .statistics
+        // Statistics are for appends only: a copy-on-write rewrite would union the parent's
+        // blob with the rewritten rows and keep counting deleted keys.
+        let sketch_columns = (target.statistics && overwrite.is_none())
             .then(|| sketch_columns(target.base.current_schema()).into());
         Ok(Self {
             target,
