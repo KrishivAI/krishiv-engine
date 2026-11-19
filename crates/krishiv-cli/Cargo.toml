@@ -44,6 +44,7 @@ mimalloc = { workspace = true, optional = true }
 [dev-dependencies]
 arrow-array.workspace = true
 arrow-flight = { workspace = true, features = ["flight-sql"] }
+arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 tonic = { workspace = true, features = ["channel"] }
 rustls = { workspace = true, features = ["aws_lc_rs", "std", "tls12"] }

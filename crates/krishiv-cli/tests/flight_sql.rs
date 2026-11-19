@@ -200,3 +200,225 @@ fn adbc_flight_sql_tpch_q1() {
 fn adbc_flight_sql_tpch_q1_tls() {
     adbc_q1(true);
 }
+
+/// TPC-H q1 over a `lineitem` of SF 0.01's row count, generated in a CTE (seeded by row id, so
+/// no file and no session state): `{cutoff}` is the shipdate bound, a literal or `?`.
+const JDBC_Q1: &str = "WITH base AS (
+  SELECT id, 1 + pmod(id * 13, 50) AS qty,
+         date_add(DATE '1992-01-02', CAST(pmod(id * 101, 2526) AS INT)) AS ship
+  FROM range(60175)),
+lineitem AS (
+  SELECT CASE WHEN ship <= DATE '1995-06-17' THEN IF(id % 2 = 0, 'R', 'A') ELSE 'N' END
+           AS l_returnflag,
+         IF(ship <= DATE '1995-06-17', 'F', 'O') AS l_linestatus,
+         CAST(qty AS DECIMAL(15,2)) AS l_quantity,
+         CAST(qty * (900 + pmod(id * 7919, 1100)) / 100 AS DECIMAL(15,2)) AS l_extendedprice,
+         CAST(pmod(id * 31, 11) / 100 AS DECIMAL(15,2)) AS l_discount,
+         CAST(pmod(id * 17, 9) / 100 AS DECIMAL(15,2)) AS l_tax,
+         ship AS l_shipdate
+  FROM base)
+SELECT l_returnflag, l_linestatus,
+       sum(l_quantity) AS sum_qty,
+       sum(l_extendedprice) AS sum_base_price,
+       sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,
+       sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+       avg(l_quantity) AS avg_qty,
+       avg(l_extendedprice) AS avg_price,
+       avg(l_discount) AS avg_disc,
+       count(*) AS count_order
+FROM lineitem
+WHERE l_shipdate <= {cutoff}
+GROUP BY l_returnflag, l_linestatus
+ORDER BY l_returnflag, l_linestatus";
+
+/// q1's `DATE '1998-12-01' - INTERVAL '90' DAY`.
+const JDBC_CUTOFF: &str = "1998-09-02";
+
+/// One result as `FlightSqlJdbc.java` prints it: `(label, java.sql.Types code, precision,
+/// scale)` per column (precision and scale 0 but for decimals), and the rows as text.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Printed {
+    columns: Vec<(String, i32, i32, i32)>,
+    rows: Vec<String>,
+}
+
+/// q1 through the Rust Flight SQL client, printed as the Java program prints it.
+async fn q1_by_rust_client(addr: &str, token: &str) -> Printed {
+    use arrow_array::{Decimal128Array, Int64Array, StringArray};
+    use arrow_schema::DataType;
+    let mut c = client(addr).await;
+    c.set_header("authorization", format!("Bearer {token}"));
+    let sql = JDBC_Q1.replace("{cutoff}", &format!("DATE '{JDBC_CUTOFF}'"));
+    let info = c.execute(sql, None).await.expect("q1 info");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    let batches: Vec<arrow_array::RecordBatch> = c
+        .do_get(ticket)
+        .await
+        .expect("q1 do_get")
+        .try_collect()
+        .await
+        .expect("q1 rows");
+    let schema = batches.first().expect("a batch").schema();
+    let mut out = Printed::default();
+    for f in schema.fields() {
+        // java.sql.Types: VARCHAR 12, BIGINT -5, DECIMAL 3.
+        let col = match f.data_type() {
+            DataType::Utf8 => (12, 0, 0),
+            DataType::Int64 => (-5, 0, 0),
+            DataType::Decimal128(p, s) => (3, i32::from(*p), i32::from(*s)),
+            other => panic!("q1 has no {other} column"),
+        };
+        out.columns.push((f.name().clone(), col.0, col.1, col.2));
+    }
+    for b in &batches {
+        for r in 0..b.num_rows() {
+            let cells: Vec<String> = b
+                .columns()
+                .iter()
+                .map(|a| {
+                    if a.is_null(r) {
+                        return "\\N".to_owned();
+                    }
+                    let any = a.as_any();
+                    if let Some(s) = any.downcast_ref::<StringArray>() {
+                        s.value(r).to_owned()
+                    } else if let Some(i) = any.downcast_ref::<Int64Array>() {
+                        i.value(r).to_string()
+                    } else if let Some(d) = any.downcast_ref::<Decimal128Array>() {
+                        d.value_as_string(r)
+                    } else {
+                        panic!("q1 has no {} column", a.data_type())
+                    }
+                })
+                .collect();
+            out.rows.push(cells.join("\t"));
+        }
+    }
+    out
+}
+
+/// The program's output, split into its parts.
+#[derive(Debug, Default)]
+struct JdbcRun {
+    statement: Printed,
+    prepared: Printed,
+    update: Option<u64>,
+    tables: Option<u64>,
+    types: Vec<String>,
+}
+
+fn parse_jdbc(stdout: &str) -> JdbcRun {
+    let mut run = JdbcRun::default();
+    let mut current: Option<&mut Printed> = None;
+    for line in stdout.lines() {
+        if let Some(name) = line.strip_prefix("QUERY ") {
+            current = Some(match name {
+                "statement" => &mut run.statement,
+                "prepared" => &mut run.prepared,
+                other => panic!("unknown query {other}"),
+            });
+        } else if let Some(col) = line.strip_prefix("COL ") {
+            let p: Vec<&str> = col.split('|').collect();
+            let n = |i: usize| p[i].parse::<i32>().expect("number");
+            let printed = current.as_mut().expect("a query first");
+            // Precision and scale are compared for decimals (java.sql.Types 3) only.
+            let (precision, scale) = if n(1) == 3 { (n(2), n(3)) } else { (0, 0) };
+            printed
+                .columns
+                .push((p[0].to_owned(), n(1), precision, scale));
+        } else if let Some(row) = line.strip_prefix("ROW ") {
+            current
+                .as_mut()
+                .expect("a query first")
+                .rows
+                .push(row.to_owned());
+        } else if let Some(n) = line.strip_prefix("UPDATE ") {
+            run.update = n.parse().ok();
+        } else if let Some(n) = line.strip_prefix("TABLES ") {
+            run.tables = n.parse().ok();
+        } else if let Some(t) = line.strip_prefix("TYPES ") {
+            run.types = t.split(',').map(str::to_owned).collect();
+        }
+    }
+    run
+}
+
+/// TPC-H q1 through the Arrow Flight SQL JDBC driver (arrow-java 19) with a bearer token equals
+/// the Rust Flight SQL client's answer, rows and decimal types; the parameterized prepared q1
+/// takes the query path (m11); each `executeUpdate` runs once; `getTables` and `getTypeInfo`
+/// answer (design §0, §4.4, §5, §11; `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or
+/// Docker, and the network the first time (the driver jar is cached), so it is ignored by
+/// default: `cargo nextest run -p krishiv-cli --features flight-sql --test flight_sql
+/// --run-ignored only jdbc`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs Java 21 or Docker, and the network (the JDBC driver): --run-ignored only"]
+fn jdbc_flight_sql_tpch_q1() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mut conf, _) = auth_conf(dir.path(), false);
+    let wh = data_dir(dir.path()).join("wh");
+    std::fs::create_dir_all(&wh).expect("warehouse dir");
+    conf.push(format!("spark.sql.warehouse.dir={}", wh.display()));
+    let conf: Vec<&str> = conf.iter().map(String::as_str).collect();
+    let (server, flight) = start(dir.path(), &conf);
+    assert!(flight);
+    let addr = server
+        .connect
+        .split(';')
+        .next()
+        .expect("address")
+        .trim_end_matches('/')
+        .to_owned();
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let expected = rt.block_on(q1_by_rust_client(&addr, ADMIN_TOKEN));
+    assert!(expected.rows.len() >= 3, "q1 read nothing: {expected:?}");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/scripts/flight_sql_jdbc.sh");
+    let url = format!("jdbc:arrow-flight-sql://{addr}?useEncryption=false&token={ADMIN_TOKEN}");
+    let out = Command::new("sh")
+        .arg(&script)
+        .arg(&url)
+        .arg(JDBC_Q1.replace("{cutoff}", &format!("DATE '{JDBC_CUTOFF}'")))
+        .arg(JDBC_Q1.replace("{cutoff}", "?"))
+        .arg(JDBC_CUTOFF)
+        .output()
+        .expect("the JDBC script runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    let run = parse_jdbc(&stdout);
+    assert_eq!(
+        run.statement, expected,
+        "JDBC Statement q1 vs the Rust client"
+    );
+    assert_eq!(
+        run.prepared, expected,
+        "JDBC prepared q1 (m11) vs the Rust client"
+    );
+    assert_eq!(run.update, Some(3), "each executeUpdate ran once\n{stdout}");
+    assert_eq!(run.tables, Some(1), "getTables lists the table\n{stdout}");
+    for t in ["INT", "DECIMAL", "STRING", "TIMESTAMP"] {
+        assert!(
+            run.types.iter().any(|n| n == t),
+            "getTypeInfo: {t} in {:?}",
+            run.types
+        );
+    }
+    eprintln!(
+        "JDBC q1: {} rows, {} columns, equal to the Rust client",
+        expected.rows.len(),
+        expected.columns.len()
+    );
+}
+
+#[test]
+fn jdbc_output_parses() {
+    let run = parse_jdbc(
+        "QUERY statement\nCOL a|12|0|0\nROW x\nQUERY prepared\nCOL a|12|0|0\nROW x\n\
+         UPDATE 3\nTABLES 1\nTYPES INT,STRING\n",
+    );
+    assert_eq!(run.statement, run.prepared);
+    assert_eq!(run.statement.rows, ["x"]);
+    assert_eq!((run.update, run.tables), (Some(3), Some(1)));
+    assert_eq!(run.types, ["INT", "STRING"]);
+}
