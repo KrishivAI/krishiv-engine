@@ -19,6 +19,7 @@ pub(crate) mod rolling;
 pub(crate) mod row_level;
 pub(crate) mod scan;
 pub(crate) mod sink;
+pub(crate) mod statistics_file;
 pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
@@ -68,6 +69,8 @@ mod rolling_tests;
 mod scan_tests;
 #[cfg(test)]
 mod sink_tests;
+#[cfg(test)]
+mod statistics_tests;
 #[cfg(test)]
 mod table_tests;
 #[cfg(test)]

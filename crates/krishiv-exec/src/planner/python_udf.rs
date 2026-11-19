@@ -273,7 +273,7 @@ impl Planner<'_> {
             Some(rest) => JoinCondition::On(rest),
             None => JoinCondition::None,
         };
-        let joined = self.join(left, right, kind, &condition)?;
+        let joined = self.join(left, right, kind, &condition, None)?;
         let predicate =
             conjoined(udf).ok_or_else(|| internal("a Python UDF join without its conjuncts"))?;
         let (input, exprs) = self.extract_python(joined, std::slice::from_ref(&predicate))?;

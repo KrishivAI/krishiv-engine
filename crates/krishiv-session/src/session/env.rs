@@ -146,6 +146,9 @@ pub(crate) struct QueryEnv {
     /// policy ([`Self::set_quiet_denials`]), so a trial's `Usage` check before a Python UDTF's `analyze`
     /// tells the policy nothing either.
     pub(crate) udtfs: Arc<crate::python_udfs::SessionTableFunctions>,
+    /// Why this query's spill directory could not be set up, if it could not (PY-078): the query
+    /// then reports its memory error as that failure. Shared by the clones of one statement's env.
+    pub(crate) spill_failure: Arc<std::sync::Mutex<Option<KrishivError>>>,
 }
 
 /// Whether a [`QueryEnv`] is a trial analysis; its flag is private to this module, so it is set only
@@ -256,6 +259,7 @@ impl Session {
         .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
+            failure: Arc::clone(&env.spill_failure),
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))

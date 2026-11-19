@@ -31,7 +31,7 @@ scan's source, takes the query's pool in `global_state`, awaits the load, then a
 deletes and DVs reach the file scan as `LazySelections`); charged to a `ConsumerHandle` of the query's pool, so a
 refused reservation is `UNABLE_TO_ACQUIRE_MEMORY` and a dropped load unregisters · `stats.rs` row count (record counts
 less applying position deletes and DVs, each once; equality deletes not subtracted), null counts and min/max from
-bounds (no NaN-able float, no possibly truncated string), distinct counts (`StatSource::Sketch`) from the `ndv` of the pinned snapshot's Theta blob in the table metadata's statistics file (`puffin_stats.rs`: `ndv_by_field`, no Puffin I/O at plan time; `read_sketch` fetches a blob as a `CompactThetaSketch` for PR-54b's unions; Spark's `compute_table_stats` writes them), estimates only · `plan/theta_value.rs` (PR-54a) an Arrow column's values as Theta input: the single-value serialisation of `bounds::encode` hashed as raw bytes (`datasketches`, this crate its only user), empty strings/binaries skipped as Java does, `uuid` not sketched · `manifest_cache.rs` decoded manifests as
+bounds (no NaN-able float, no possibly truncated string), distinct counts (`StatSource::Sketch`) from the `ndv` of the pinned snapshot's Theta blob in the table metadata's statistics file (`puffin_stats.rs`: `ndv_by_field`, no Puffin I/O at plan time; `read_sketch` fetches a blob as a `CompactThetaSketch` for `statistics_file.rs`'s unions; Spark's `compute_table_stats` and Krishiv's appends write them), estimates only · `statistics_file.rs` (PR-54b) statistics on write: `sketch_columns` (top-level primitives but `uuid`, first 100), `TaskSketches` per write task (charged to the driver's consumer, refused → the write has none), `union_tasks` at finalize, `attempt_statistics` per commit attempt (rule 2 of design note `P3-T024-statistics-on-write.md` §2: the write's own sketch when the parent has no live rows, else the union with the parent's blob of the field of the same type, else the column left out; a Puffin file `<metadata dir>/<snapshot id>-<commit uuid>-<attempt>.stats`, blobs uncompressed, `ndv` the truncated estimate; QuickSelect-derived, not Alpha, review B1); never fails a write (`skipped`, a warning and the process counter `statistics_skipped_total`, not yet in the engine's metrics catalogue); switches `krishiv.iceberg.write.statistics.enabled` and the table property `krishiv.write.statistics.enabled`; tests `statistics_tests.rs` (columns, switches, a CTAS and a union through the sink read back by PR-54a's reader and the provider, rule 2, and the commit simulation: rebases, a resend, a refused update, failed Puffin writes, cleanup) · `plan/theta_value.rs` (PR-54a) an Arrow column's values as Theta input: the single-value serialisation of `bounds::encode` hashed as raw bytes (`datasketches`, this crate its only user), empty strings/binaries skipped as Java does, `uuid` not sketched · `manifest_cache.rs` decoded manifests as
 `Arc<[LiveEntry]>` keyed by path, length and the inherited list fields, LRU under `krishiv.iceberg.manifestCache.bytes`
 (0 disables), one per storage registration (`Registered`), in memory only · `data_file.rs` (PR-36a) a written
 file's manifest entry: `DataLocations` (Java's `LocationProviders` through iceberg-rust's generators: `write.data.path`,
@@ -45,7 +45,7 @@ sequence numbers; each path pushed onto the caller's `written` list before its f
 `arrange`: new manifests reset to unassigned, then the base's data manifests, then its delete manifests;
 sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`,
 `manifests-created`/`-kept`/`-replaced`, `engine-name`, `krishiv.write-id`/`krishiv.query-id`; requirements
-`assert-table-uuid`/`assert-ref-snapshot-id`, updates `add-snapshot`/`set-snapshot-ref`); tests `append_tests.rs`
+`assert-table-uuid`/`assert-ref-snapshot-id`, updates `add-snapshot`/`set-snapshot-ref`, then `set-statistics` for the attempt's own statistics file when `NewManifests::statistics` describes the whole snapshot, PR-54b); tests `append_tests.rs`
 (committed as a catalog applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused
 and rebuilt, v3 lineage) · `rolling.rs` (PR-36a, owner 2026-11-15) the new manifests' layout as Java's `writeDataManifests`: groups
 `max(1, min(4, round_half_up(n / 10,000)))` of `ceil(n / groups)` (`manifestWriterCount`, `divide`; Java's pool is
@@ -75,7 +75,7 @@ later) and `CommitClock` (time and jitter, injected): an unknown outcome probed 
 (`commit.status-check.*`), the same attempt resent while the branch stays at its base, "not applied" final only once
 the branch moved; own-key search (snapshot id or `krishiv.write-id`) before every rebase; per-request outcomes;
 rebase across v2 → v3 only (other format changes and a replaced table `KRISHIV_ICEBERG_COMMIT_CONFLICT`); Iceberg's
-`commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup.
+`commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup (statistics files as lists: kept when the committed metadata names them); a known refusal of a request carrying `set-statistics` resent once at once without it (PR-54b).
 No production `CommitTable` yet (PR-17's catalog clients); the production clock is `sink.rs`'s `IoClock`. Tests `commit_tests.rs` (DST: `TestCatalog`
 applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
 on virtual time; the §10 36a cases; merged first attempts committed, rebased, failed and left unknown; the sweep
@@ -107,7 +107,7 @@ from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (g
 directories, a `WrittenDataFile` per file (`file_metrics`, no `split_offsets`); open uploads and the encoders' memory
 charged to one `Reservation`; `finish` failing, `abort` (cancellation-safe: a dropped abort leaves the rest to drop)
 and drop delete the finished files; `TaskIds::attempt_id` must be unique per attempt (Java's `taskAttemptId`), so a
-retry never reuses a failed attempt's names; tests `write_tests.rs`
+retry never reuses a failed attempt's names; `with_sketches`/`take_sketches` (PR-54b) update the task's Theta sketches per batch; tests `write_tests.rs`
 (tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
 an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
 abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
