@@ -122,6 +122,11 @@ pub enum Command {
         /// The id to forget.
         relation_id: String,
     },
+    /// `write_operation`: write the command's relation (translated by the server, which runs the
+    /// command) with a `DataFrameWriter`.
+    Write(super::write::WriteSpec),
+    /// `write_operation_v2`: write the command's relation with a `DataFrameWriterV2`.
+    WriteV2(super::write::WriteV2Spec),
 }
 
 /// What a `checkpoint_command` asks besides its relation.
@@ -138,7 +143,8 @@ pub struct CheckpointSpec {
 /// Translates a command the server runs itself.
 ///
 /// # Errors
-/// [`python_udf`]'s errors for `register_function`; every other command is refused as
+/// [`python_udf`]'s errors for `register_function`, the writer-state errors of the write commands
+/// ([`super::write::write_spec`], [`super::write::write_v2_spec`]); every other command is refused as
 /// [`super::command_not_supported`] refuses it (`INVALID_ONE_OF_FIELD_NOT_SUPPORTED`, or
 /// `INVALID_ONE_OF_FIELD_NOT_SET` for an empty one).
 pub fn translate_command(command: &pb::Command) -> Result<Command> {
@@ -157,6 +163,10 @@ pub fn translate_command(command: &pb::Command) -> Result<Command> {
                     .map(|r| r.relation_id.clone())
                     .unwrap_or_default(),
             })
+        }
+        Some(CommandType::WriteOperation(w)) => super::write::write_spec(w).map(Command::Write),
+        Some(CommandType::WriteOperationV2(w)) => {
+            super::write::write_v2_spec(w).map(Command::WriteV2)
         }
         // No command extension is registered yet: `resolve` names the capability it lacks, or the
         // slot a registered message does sit in.

@@ -3,10 +3,33 @@
 
 from __future__ import annotations
 
+import warnings
+
 from krishiv import _native
 from krishiv.errors import SparkNoSuchElementException, not_expected_type
 
 _UNSET = object()
+
+# Settings that choose a cluster deployment: Krishiv runs in the process (or one `krishiv server`),
+# so they are stored and read back but change nothing. A script written for a cluster must still
+# start, so this warns (naming the key) and does not fail.
+_CLUSTER_MASTER_PREFIXES = ("yarn", "k8s", "mesos", "spark://")
+_CLUSTER_KEY_PREFIXES = ("spark.executor.", "spark.submit.", "spark.driver.", "spark.dynamicAllocation.")
+
+
+def _warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None:
+    """Warns that ``key=value`` has no effect when it chooses a cluster deployment. ``stacklevel`` counts
+    from the caller of this function (1 is the caller), so the warning points at the user's line."""
+    ignored = key.startswith(_CLUSTER_KEY_PREFIXES) or (
+        key == "spark.master" and value.lower().startswith(_CLUSTER_MASTER_PREFIXES)
+    )
+    if ignored:
+        warnings.warn(
+            f"{key}={value} has no effect: Krishiv runs in this process (or in one `krishiv server`), "
+            "not on a cluster manager.",
+            UserWarning,
+            stacklevel=stacklevel + 1,
+        )
 
 
 class RuntimeConfig:
@@ -31,6 +54,10 @@ class RuntimeConfig:
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        _warn_if_cluster_setting(key, text, stacklevel=2)
+        self._set(key, text)
+
+    def _set(self, key: str, text: str) -> None:
         self._session.conf_set(key, text)
 
     def unset(self, key: str) -> None:
