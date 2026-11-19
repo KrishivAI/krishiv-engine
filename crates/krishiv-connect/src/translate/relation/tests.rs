@@ -1064,6 +1064,41 @@ fn sample_is_bernoulli_without_replacement() {
 }
 
 #[test]
+fn sample_bounds_must_span_at_most_the_unit_interval() {
+    let sample = |lower: f64, upper: f64| {
+        relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: lower,
+            upper_bound: upper,
+            with_replacement: None,
+            seed: Some(1),
+            deterministic_order: false,
+        })))
+    };
+    assert!(matches!(node(&sample(0.0, 1.0)), PlanNode::Sample { .. }));
+    assert!(matches!(
+        node(&sample(0.0, 1.0 + 5e-7)),
+        PlanNode::Sample { .. }
+    ));
+    for (lower, upper, shown) in [
+        (0.0, 1.5, "1.5"),
+        (0.0, -0.1, "-0.1"),
+        (0.5, 0.0, "-0.5"),
+        (0.0, f64::NAN, "NaN"),
+    ] {
+        let r = sample(lower, upper);
+        assert_eq!(code(&r), ErrorClass::LegacyErrorTemp0064, "{lower} {upper}");
+        assert!(
+            message(&r).contains(&format!(
+                "Sampling fraction ({shown}) must be on interval [0, 1]"
+            )),
+            "{}",
+            message(&r)
+        );
+    }
+}
+
+#[test]
 fn deduplicate_over_all_columns_is_distinct() {
     let dedup = |all: Option<bool>, names: &[&str], watermark: Option<bool>| {
         relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
@@ -1077,17 +1112,44 @@ fn deduplicate_over_all_columns_is_distinct() {
         node(&dedup(Some(true), &[], None)),
         PlanNode::Distinct { .. }
     ));
-    for bad in [dedup(None, &[], None), dedup(Some(true), &["a"], None)] {
-        let class = code(&bad);
-        assert!(
-            matches!(
-                class,
-                ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
-                    | ErrorClass::ConnectInvalidPlanDeduplicateAllColumnsAndSubset
-            ),
-            "{class:?}"
-        );
-    }
+    assert_eq!(
+        code(&dedup(None, &[], None)),
+        ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
+    );
+    assert_eq!(
+        code(&dedup(Some(true), &["a"], None)),
+        ErrorClass::ConnectInvalidPlanDeduplicateAllColumnsAndSubset
+    );
+    // No input: Spark's first check.
+    let no_input = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: None,
+        column_names: vec![],
+        all_columns_as_keys: Some(true),
+        within_watermark: None,
+    })));
+    assert_eq!(
+        code(&no_input),
+        ErrorClass::ConnectInvalidPlanDeduplicateNeedsInput
+    );
+    // The column-field checks come before the input is translated: an input that cannot be
+    // translated (a sample with replacement) does not hide them.
+    let bad_input = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: boxed(relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: 0.0,
+            upper_bound: 0.5,
+            with_replacement: Some(true),
+            seed: None,
+            deterministic_order: false,
+        })))),
+        column_names: vec![],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    assert_eq!(
+        code(&bad_input),
+        ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
+    );
     for unsupported in [
         dedup(None, &["a"], None),
         dedup(Some(true), &[], Some(true)),
@@ -1176,6 +1238,17 @@ fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
         code(&unpivot(Some(vec![attr("t.id"), attr("b")]))),
         ErrorClass::KrishivUnsupportedFeature
     );
+    // An aliased id is keyed by its output name: `x AS a` collides with the value `a`.
+    let aliased = relation(RelType::Unpivot(Box::new(pb::Unpivot {
+        input: boxed(read_table("t")),
+        ids: vec![expr(ExprType::Alias(Box::new(alias_of(&["a"], None))))],
+        values: Some(pb::unpivot::Values {
+            values: vec![attr("a")],
+        }),
+        variable_column_name: "k".into(),
+        value_column_name: "v".into(),
+    })));
+    assert_eq!(code(&aliased), ErrorClass::KrishivUnsupportedFeature);
     // An empty list is the analyzer's to refuse (UNPIVOT_REQUIRES_VALUE_COLUMNS), as in Spark.
     assert!(matches!(
         node(&unpivot(Some(vec![]))),

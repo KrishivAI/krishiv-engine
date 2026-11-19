@@ -496,7 +496,7 @@ jobs:
       - name: protoc (the client's build script compiles the Connect protos)
         run: sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
       - name: Build the server
-        run: cargo build --locked -p krishiv-cli
+        run: cargo build --locked -p krishiv-cli --features server
       - name: Start the server
         run: |
           target/debug/krishiv server --port 0 --connect-port 15002 > server.log 2>&1 &

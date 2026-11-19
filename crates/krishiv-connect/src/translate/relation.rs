@@ -159,6 +159,17 @@ impl Translator<'_> {
                 "randomSplit's deterministic order",
             ));
         }
+        // Spark's `Sample` requires `upper - lower` in [0 - 1e-6, 1 + 1e-6]; NaN fails it too.
+        let fraction = s.upper_bound - s.lower_bound;
+        if !(-1e-6..=1.0 + 1e-6).contains(&fraction) {
+            return Err(krishiv_common::error::LegacyErrorTemp0064 {
+                msg: format!(
+                    "Sampling fraction ({}) must be on interval [0, 1]",
+                    krishiv_kernels::text::java_double_string(fraction)
+                ),
+            }
+            .into());
+        }
         Ok(PlanNode::Sample {
             input: self.input("Sample", s.input.as_deref())?,
             bounds: SampleBounds {
@@ -178,10 +189,10 @@ impl Translator<'_> {
             ConnectInvalidPlanDeduplicateNeedsInput,
             ConnectInvalidPlanDeduplicateRequiresColumnsOrAll,
         };
-        // Spark checks the input first, then the two column fields.
-        let input = match d.input.as_deref() {
-            Some(rel) => self.relation(rel)?,
-            None => return Err(ConnectInvalidPlanDeduplicateNeedsInput {}.into()),
+        // Spark checks that the input is present, then the two column fields, and only then
+        // transforms the input.
+        let Some(rel) = d.input.as_deref() else {
+            return Err(ConnectInvalidPlanDeduplicateNeedsInput {}.into());
         };
         let all = d.all_columns_as_keys.unwrap_or(false);
         if !all && d.column_names.is_empty() {
@@ -204,7 +215,9 @@ impl Translator<'_> {
                 "deduplicating on a subset of columns",
             ));
         }
-        Ok(PlanNode::Distinct { input })
+        Ok(PlanNode::Distinct {
+            input: self.relation(rel)?,
+        })
     }
 
     /// `RepartitionByExpression` without a partition count is `DISTRIBUTE BY exprs`; a count has
@@ -272,15 +285,20 @@ impl Translator<'_> {
         // (a qualified spelling must not slip past; over-refusing is safe), until the IR can keep a referenced column.
         let mut seen = std::collections::HashSet::new();
         for e in ids.iter().chain(values.iter()) {
-            if let ExprNode::Column(c) = &e.node {
-                let key = c.name.last().map(|p| p.to_lowercase());
-                if !seen.insert(key) {
-                    return Err(unsupported_field(
-                        "Unpivot",
-                        "values",
-                        "unpivot of a column that is also an id or listed twice",
-                    ));
-                }
+            // The output name: an alias, else the last part of a column's name.
+            let key = match &e.node {
+                ExprNode::Alias { name, .. } => Some(name.to_lowercase()),
+                ExprNode::Column(c) => c.name.last().map(|p| p.to_lowercase()),
+                _ => None,
+            };
+            if let Some(key) = key
+                && !seen.insert(key)
+            {
+                return Err(unsupported_field(
+                    "Unpivot",
+                    "values",
+                    "unpivot of a column that is also an id or listed twice",
+                ));
             }
         }
         let projected = Arc::new(

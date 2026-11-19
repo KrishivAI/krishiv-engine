@@ -3,8 +3,6 @@
 //! server (P3-T089, PR-40). The tests are `#[ignore]`d so a plain `cargo test` needs no server;
 //! CI starts `krishiv server` and runs them with `--ignored`. `KRISHIV_CONNECT_URL` overrides the
 //! default `sc://127.0.0.1:15002`. Expected values are Spark 4.x's.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use spark_connect::functions::{col, count, sum};
 use spark_connect::lit;
 use spark_connect::session::SparkSession;

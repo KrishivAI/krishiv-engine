@@ -250,6 +250,19 @@ async fn a_sample_of_everything_or_nothing_is_exact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sample_fraction_above_one_is_refused() {
+    let server = start().await;
+    let status = run(&server, sample(0.0, 1.5)).await.expect_err("refused");
+    assert!(
+        status
+            .message()
+            .contains("Sampling fraction (1.5) must be on interval [0, 1]"),
+        "{}",
+        status.message()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_seeded_sample_repeats() {
     let server = start().await;
     let first = run(&server, sample(0.0, 0.5)).await.expect("runs");
