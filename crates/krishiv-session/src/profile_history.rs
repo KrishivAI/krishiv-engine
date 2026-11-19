@@ -399,7 +399,12 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
     profile.scans = e.scans;
-    profile.hints = e.hints;
+    // `system.queries.hints` shows succeeded queries only; a failed, cancelled or denied one keeps none.
+    profile.hints = if e.state == "finished" {
+        e.hints
+    } else {
+        Vec::new()
+    };
     let mut sql = e.sql;
     if mask {
         // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named

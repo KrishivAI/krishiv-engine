@@ -3,7 +3,6 @@
 //! unchanged" A/B): each query is analyzed, optimized and physically planned `KRISHIV_PLAN_RUNS` times
 //! (default 1000) through `explain`, never executed. Run the same file on two builds and compare the
 //! lines: `cargo nextest run -p krishiv-session --test plan_timing --run-ignored only --no-capture`.
-#![cfg(test)]
 
 use std::time::{Duration, Instant};
 
@@ -13,19 +12,35 @@ use krishiv_session::{ExplainMode, Session};
 #[test]
 #[ignore = "needs TPC-H SF1 files in KRISHIV_TPCH_SF1; prints p50 and p99 planning time per query"]
 fn tpch_sf1_plan_only_timing() {
-    let Ok(dir) = std::env::var("KRISHIV_TPCH_SF1") else {
-        return;
-    };
+    let dir = std::env::var("KRISHIV_TPCH_SF1")
+        .expect("KRISHIV_TPCH_SF1 must name a directory with the TPC-H SF1 parquet files");
     let runs: usize = std::env::var("KRISHIV_PLAN_RUNS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
     let s = Session::new().unwrap();
+    // The tables are read once and registered in memory (first `KRISHIV_PLAN_ROWS` rows, default 50,000), so
+    // the loop measures analysis, optimization and physical planning, not parquet footer reads; the memory
+    // tables carry row counts, so statistics-driven rules and hints still fire.
+    let rows: usize = std::env::var("KRISHIV_PLAN_ROWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50_000);
     for t in [
         "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
     ] {
-        let df = s.read().parquet([format!("{dir}/{t}.parquet")]);
-        block_on(df.create_or_replace_temp_view(t)).unwrap();
+        let batches = block_on(s.read().parquet([format!("{dir}/{t}.parquet")]).collect()).unwrap();
+        let schema = batches[0].schema();
+        let (mut kept, mut left) = (Vec::new(), rows);
+        for b in batches {
+            if left == 0 {
+                break;
+            }
+            let n = b.num_rows().min(left);
+            kept.push(b.slice(0, n));
+            left -= n;
+        }
+        s.register_batches(t, schema, kept).unwrap();
     }
     let (mut sum_p50, mut sum_p99) = (Duration::ZERO, Duration::ZERO);
     for q in 1..=22 {
@@ -60,7 +75,12 @@ fn tpch_sf1_plan_only_timing() {
         let (p50, p99) = (times[runs / 2], times[(runs * 99 / 100).min(runs - 1)]);
         sum_p50 += p50;
         sum_p99 += p99;
-        println!("q{q:02}: p50 {p50:?} p99 {p99:?}");
+        // The minimum and p10 are what a busy machine disturbs least; compare them across builds first.
+        println!(
+            "q{q:02}: min {:?} p10 {:?} p50 {p50:?} p99 {p99:?}",
+            times[0],
+            times[runs / 10]
+        );
     }
     println!("sum of p50 {sum_p50:?}, sum of p99 {sum_p99:?} over {runs} runs per query");
 }

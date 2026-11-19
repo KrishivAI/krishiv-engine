@@ -378,9 +378,8 @@ fn hints_agree_across_surfaces() {
 #[test]
 #[ignore = "needs TPC-H SF1 files in KRISHIV_TPCH_SF1; prints the review list"]
 fn tpch_sf1_hint_review() {
-    let Ok(dir) = std::env::var("KRISHIV_TPCH_SF1") else {
-        return;
-    };
+    let dir = std::env::var("KRISHIV_TPCH_SF1")
+        .expect("KRISHIV_TPCH_SF1 must name a directory with the TPC-H SF1 parquet files");
     let (s, _d) = base(Session::builder());
     for t in [
         "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
