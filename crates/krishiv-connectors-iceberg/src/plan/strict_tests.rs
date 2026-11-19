@@ -525,3 +525,194 @@ fn spark_predicates_are_guarded_for_null() {
         "ref(name=\"x\") == 1"
     );
 }
+
+fn other() -> Collation {
+    Collation::Other("UTF8_LCASE".to_owned())
+}
+
+/// Every comparison operator keeps its Iceberg leaf; a non-binary collation
+/// or a NULL literal has no Iceberg form.
+#[test]
+fn every_comparison_translates() {
+    let cmp = |op, v: S| Pred::from_spark(&PushdownExpr::cmp(col("id"), op, v));
+    assert_eq!(
+        cmp(CmpOp::Eq, S::Int64(1)),
+        leaf("id", Leaf::Eq(S::Int64(1)))
+    );
+    assert_eq!(
+        cmp(CmpOp::Lt, S::Int64(1)),
+        leaf("id", Leaf::Lt(S::Int64(1)))
+    );
+    assert_eq!(
+        cmp(CmpOp::LtEq, S::Int64(1)),
+        leaf("id", Leaf::LtEq(S::Int64(1)))
+    );
+    assert_eq!(
+        cmp(CmpOp::Gt, S::Int64(1)),
+        leaf("id", Leaf::Gt(S::Int64(1)))
+    );
+    assert_eq!(
+        cmp(CmpOp::GtEq, S::Int64(1)),
+        leaf("id", Leaf::GtEq(S::Int64(1)))
+    );
+    assert_eq!(cmp(CmpOp::Eq, S::Null), Pred::Unknown);
+    let nan = S::Float64(f64::NAN);
+    assert_eq!(
+        Pred::from_spark(&PushdownExpr::cmp(col("f"), CmpOp::NotEq, nan)),
+        Pred::And(vec![leaf("f", Leaf::NotNull), leaf("f", Leaf::NotNaN)])
+    );
+    let lcase = PushdownExpr::Cmp {
+        column: col("s"),
+        op: CmpOp::Eq,
+        value: S::Utf8("a".to_owned()),
+        collation: other(),
+    };
+    assert_eq!(Pred::from_spark(&lcase), Pred::Unknown);
+}
+
+#[test]
+fn in_lists_split_out_nan_and_null() {
+    let in_ = |values: Vec<S>, collation| {
+        Pred::from_spark(&PushdownExpr::In {
+            column: col("f"),
+            values,
+            collation,
+        })
+    };
+    let nan = || S::Float64(f64::NAN);
+    let one = || S::Float64(1.0);
+    assert_eq!(
+        in_(vec![one(), S::Null], Collation::Utf8Binary),
+        leaf("f", Leaf::In(vec![one()]))
+    );
+    assert_eq!(
+        in_(vec![nan()], Collation::Utf8Binary),
+        leaf("f", Leaf::IsNaN)
+    );
+    assert_eq!(
+        in_(vec![one(), nan()], Collation::Utf8Binary),
+        Pred::Or(vec![
+            leaf("f", Leaf::In(vec![one()])),
+            leaf("f", Leaf::IsNaN)
+        ])
+    );
+    assert_eq!(
+        in_(vec![S::Null], Collation::Utf8Binary),
+        Pred::Const(false)
+    );
+    assert_eq!(in_(vec![one()], other()), Pred::Unknown);
+}
+
+#[test]
+fn starts_with_and_its_negation() {
+    let sw = |collation| PushdownExpr::StartsWith {
+        column: col("s"),
+        prefix: "ab".to_owned(),
+        collation,
+    };
+    assert_eq!(
+        Pred::from_spark(&sw(Collation::Utf8Binary)),
+        leaf("s", Leaf::StartsWith("ab".to_owned()))
+    );
+    assert_eq!(
+        Pred::from_spark(&PushdownExpr::Not(Box::new(sw(Collation::Utf8Binary)))),
+        Pred::And(vec![
+            leaf("s", Leaf::NotNull),
+            leaf("s", Leaf::NotStartsWith("ab".to_owned()))
+        ])
+    );
+    assert_eq!(Pred::from_spark(&sw(other())), Pred::Unknown);
+    assert_eq!(
+        Pred::from_spark(&PushdownExpr::Not(Box::new(sw(other())))),
+        Pred::Unknown
+    );
+    let and = PushdownExpr::And(vec![
+        PushdownExpr::IsNull(col("id")),
+        PushdownExpr::IsNotNull(col("id")),
+    ]);
+    assert_eq!(
+        Pred::from_spark(&and),
+        Pred::And(vec![leaf("id", Leaf::IsNull), leaf("id", Leaf::NotNull)])
+    );
+    let or = PushdownExpr::Or(vec![
+        PushdownExpr::Constant(false),
+        PushdownExpr::Constant(true),
+    ]);
+    assert_eq!(
+        Pred::from_spark(&or),
+        Pred::Or(vec![Pred::Const(false), Pred::Const(true)])
+    );
+}
+
+/// The Display form of every leaf, combinator and literal type.
+#[test]
+fn display_renders_every_form() {
+    let show = |l: Leaf| leaf("x", l).to_string();
+    assert_eq!(show(Leaf::IsNull), "is_null(ref(name=\"x\"))");
+    assert_eq!(show(Leaf::NotNull), "not_null(ref(name=\"x\"))");
+    assert_eq!(show(Leaf::IsNaN), "is_nan(ref(name=\"x\"))");
+    assert_eq!(show(Leaf::NotNaN), "not_nan(ref(name=\"x\"))");
+    assert_eq!(show(Leaf::Lt(S::Int8(1))), "ref(name=\"x\") < 1");
+    assert_eq!(show(Leaf::LtEq(S::Int16(1))), "ref(name=\"x\") <= 1");
+    assert_eq!(show(Leaf::Gt(S::Int64(1))), "ref(name=\"x\") > 1");
+    assert_eq!(show(Leaf::GtEq(S::Date32(2))), "ref(name=\"x\") >= 2");
+    assert_eq!(
+        show(Leaf::Eq(S::TimestampMicros(3))),
+        "ref(name=\"x\") == 3"
+    );
+    assert_eq!(
+        show(Leaf::NotEq(S::Utf8("a".to_owned()))),
+        "ref(name=\"x\") != \"a\""
+    );
+    assert_eq!(
+        show(Leaf::In(vec![S::Int32(1), S::Int32(2)])),
+        "ref(name=\"x\") in (1, 2)"
+    );
+    assert_eq!(
+        show(Leaf::NotIn(vec![S::Boolean(true), S::Null])),
+        "ref(name=\"x\") not in (true, null)"
+    );
+    assert_eq!(
+        show(Leaf::StartsWith("p".to_owned())),
+        "ref(name=\"x\") startsWith \"p\""
+    );
+    assert_eq!(
+        show(Leaf::NotStartsWith("p".to_owned())),
+        "ref(name=\"x\") notStartsWith \"p\""
+    );
+    assert_eq!(show(Leaf::Eq(S::Float32(1.5))), "ref(name=\"x\") == 1.5");
+    assert_eq!(show(Leaf::Eq(S::Float64(2.5))), "ref(name=\"x\") == 2.5");
+    assert_eq!(
+        show(Leaf::Eq(S::Decimal128 {
+            unscaled: 125,
+            precision: 5,
+            scale: 2
+        })),
+        "ref(name=\"x\") == 125E-2"
+    );
+    assert_eq!(
+        show(Leaf::Eq(S::Binary(vec![1, 255]))),
+        "ref(name=\"x\") == [01, FF]"
+    );
+    let (a, b) = (leaf("x", Leaf::IsNull), leaf("y", Leaf::NotNull));
+    assert_eq!(
+        Pred::And(vec![a.clone(), b.clone()]).to_string(),
+        "(is_null(ref(name=\"x\")) and not_null(ref(name=\"y\")))"
+    );
+    assert_eq!(
+        Pred::Or(vec![a.clone(), b]).to_string(),
+        "(is_null(ref(name=\"x\")) or not_null(ref(name=\"y\")))"
+    );
+    assert_eq!(Pred::And(vec![a]).to_string(), "is_null(ref(name=\"x\"))");
+    assert_eq!(Pred::And(vec![]).to_string(), "true");
+    assert_eq!(Pred::Or(vec![]).to_string(), "false");
+    assert_eq!(Pred::Unknown.to_string(), "unknown");
+    assert_eq!(
+        Pred::Leaf(
+            ColumnPath(vec!["a".to_owned(), "b".to_owned()]),
+            Leaf::IsNull
+        )
+        .to_string(),
+        "is_null(ref(name=\"a.b\"))"
+    );
+}
