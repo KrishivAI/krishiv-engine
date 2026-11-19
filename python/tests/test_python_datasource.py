@@ -655,7 +655,5 @@ def test_a_source_over_the_byte_limit_fails_before_it_is_read_whole(
 def test_no_active_session_message_is_sparks() -> None:
     error = PySparkRuntimeError(errorClass="NO_ACTIVE_SESSION", messageParameters={})
     assert error.getCondition() == "NO_ACTIVE_SESSION"
-    assert (
-        error.getMessage()
-        == "No active Spark session found. Please create a new Spark session before running the code."
-    )
+    text = "No active Spark session found. Please create a new Spark session before running the code."
+    assert error.getMessage() == f"[NO_ACTIVE_SESSION] {text}"
