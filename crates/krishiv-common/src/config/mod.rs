@@ -99,9 +99,6 @@ pub enum ValueType {
     /// A signed 64-bit integer that must be at least 1 (Spark's
     /// `checkValue(_ > 0)` settings such as partition counts).
     PositiveInt,
-    /// A signed 64-bit integer that must be at least 0 (Spark's
-    /// `checkValue(_ >= 0)` settings).
-    NonNegativeInt,
     /// A signed 32-bit integer of at least `min` (Spark's `intConf`,
     /// optionally with `checkValue(_ >= min)`); values outside the range
     /// are refused as Spark's `toInt` does.
@@ -162,12 +159,6 @@ impl ValueType {
                 .filter(|v: &i64| *v > 0)
                 .map(ConfigValue::Int)
                 .ok_or_else(|| "expected a positive integer".to_owned()),
-            ValueType::NonNegativeInt => s
-                .parse()
-                .ok()
-                .filter(|v: &i64| *v >= 0)
-                .map(ConfigValue::Int)
-                .ok_or_else(|| "expected a non-negative integer".to_owned()),
             ValueType::Int32 { min } => s
                 .parse()
                 .ok()
@@ -232,7 +223,7 @@ impl fmt::Display for ValueType {
             ValueType::Bool => f.write_str("bool"),
             ValueType::Int => f.write_str("int"),
             ValueType::PositiveInt => f.write_str("positive int"),
-            ValueType::NonNegativeInt => f.write_str("non-negative int"),
+            ValueType::Int32 { min: i32::MIN } => f.write_str("32-bit int"),
             ValueType::Int32 { min } => write!(f, "32-bit int (min {min})"),
             ValueType::Size => f.write_str("size"),
             ValueType::SignedSize => f.write_str("signed size"),
@@ -359,8 +350,8 @@ fn parse_with_unit(s: &str, units: &[(&str, u64)], default_unit: &str) -> Option
 pub enum ConfigValue {
     /// A [`ValueType::Bool`] value.
     Bool(bool),
-    /// A [`ValueType::Int`], [`ValueType::PositiveInt`],
-    /// [`ValueType::NonNegativeInt`] or [`ValueType::SignedSize`] value (bytes).
+    /// A [`ValueType::Int`], [`ValueType::PositiveInt`], [`ValueType::Int32`]
+    /// or [`ValueType::SignedSize`] value (bytes).
     Int(i64),
     /// A [`ValueType::Size`] value, in bytes.
     Size(u64),

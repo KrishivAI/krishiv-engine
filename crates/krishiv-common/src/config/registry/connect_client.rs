@@ -324,7 +324,11 @@ mod tests {
         let key = "krishiv.sql.execution.pandas.structHandlingMode";
         assert!(c.set(key, "ROW").is_err());
         assert!(c.set(key, "row").is_ok());
-        assert_eq!(ValueType::NonNegativeInt.to_string(), "non-negative int");
+        assert_eq!(
+            ValueType::Int32 { min: 0 }.to_string(),
+            "32-bit int (min 0)"
+        );
+        assert_eq!(ValueType::Int32 { min: i32::MIN }.to_string(), "32-bit int");
         for key in [
             "krishiv.sql.session.localRelationCacheThreshold",
             "krishiv.sql.session.localRelationChunkSizeRows",
