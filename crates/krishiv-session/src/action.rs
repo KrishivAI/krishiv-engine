@@ -410,14 +410,7 @@ pub(crate) fn in_action() -> bool {
 
 /// Resolves when the current action is cancelled (never, outside an action):
 /// for planning-time work that holds a cancellation of its own (the Delta
-/// planning reads, `DeltaReads`).
-#[cfg_attr(
-    not(any(test, feature = "delta")),
-    expect(
-        dead_code,
-        reason = "the Delta planning reads use it (feature `delta`)"
-    )
-)]
+/// planning reads, `DeltaReads`; a Python UDTF's `analyze`).
 pub(crate) fn cancelled() -> impl Future<Output = CancelReason> + Send + 'static {
     let reason = CURRENT.try_with(|a| a.reason.subscribe()).ok();
     async move {
@@ -433,6 +426,13 @@ pub(crate) fn cancelled() -> impl Future<Output = CancelReason> + Send + 'static
             }
         }
     }
+}
+
+/// The error a statement cancelled with `reason` ends with, as [`ActionGuard::run`] gives it (the action's
+/// operation id, else `(not started)`).
+pub(crate) fn cancelled_error(reason: CancelReason) -> KrishivError {
+    let id = CURRENT.try_with(|a| a.operation.clone()).ok().flatten();
+    reason.error(id.as_deref().unwrap_or(NOT_STARTED), None)
 }
 
 #[cfg(test)]

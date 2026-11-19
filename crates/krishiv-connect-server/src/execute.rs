@@ -284,6 +284,12 @@ pub struct InboundTrace {
     pub traceparent: Option<String>,
     /// The `baggage` header value.
     pub baggage: Option<String>,
+    /// How the request authenticated and its user token, for the query's delegated catalogs
+    /// (P3-T067 §3.3).
+    pub credential: Option<(
+        krishiv_session::auth::Method,
+        Option<krishiv_session::auth::InboundCredential>,
+    )>,
 }
 
 /// Starts `request` on the session `entry`; with the id of a live
@@ -311,10 +317,14 @@ pub async fn execute_plan(
     };
     let tags = validate_tags(&request.tags)?;
     // The request's tags and trace go to the engine's queries of this operation, per request.
-    let query_options = QueryOptions::new()
+    let mut query_options = QueryOptions::new()
         .operation_id(id.as_str())
         .tags(tags.iter())
         .inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
+    // This request's own token, not whatever a concurrent request of the session stored.
+    if let Some((method, credential)) = &inbound.credential {
+        query_options = query_options.inbound_credential(*method, credential.clone());
+    }
     let opts = options(request);
     let op = Arc::new(
         Operation::new(

@@ -49,6 +49,7 @@ variants!(
     PythonMap,
     PythonGroupMap,
     PythonCoGroupMap,
+    PythonUdtf,
     PythonAggregate,
     Expand,
     Sort,
@@ -84,6 +85,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::PythonEval { .. } => Variant::PythonEval,
         PhysNode::CollectMetrics { .. } => Variant::CollectMetrics,
         PhysNode::PythonMap { .. } => Variant::PythonMap,
+        PhysNode::PythonUdtf { .. } => Variant::PythonUdtf,
         PhysNode::PythonGroupMap { .. } => Variant::PythonGroupMap,
         PhysNode::PythonCoGroupMap { .. } => Variant::PythonCoGroupMap,
         PhysNode::PythonAggregate { .. } => Variant::PythonAggregate,
@@ -630,6 +632,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "python_aggregate"
             | "python_window"
             | "python_udtf_generate"
+            | "python_udtf"
             | "python_eval_types"
             | "table_write"
             | "table_write_by_filter"

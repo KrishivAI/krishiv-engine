@@ -168,14 +168,18 @@ impl Session {
         config: &krishiv_common::config::Config,
         options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
-        let r = self.check_store_options(config, options).await;
+        let r = self
+            .check_store_options(&*self.state.policy, config, options)
+            .await;
         crate::access::audit(self, class, r)
     }
 
-    /// [`Self::authorize_store_options`] without the audit record, for a caller that logs it
-    /// (an analysis, through [`crate::access::audit_read`], silent in a trial).
+    /// [`Self::authorize_store_options`] without the audit record, asking `policy`, for a caller
+    /// that logs it (an analysis, through [`crate::access::audit_read`], silent in a trial, whose
+    /// policy is quiet too).
     pub(crate) async fn check_store_options<'a>(
         &self,
+        policy: &dyn krishiv_plan::analyzer::AccessPolicy,
         config: &krishiv_common::config::Config,
         mut options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
@@ -185,7 +189,7 @@ impl Session {
             return Ok(());
         }
         authorize(
-            &*self.state.policy,
+            policy,
             &self.state.principal,
             &Securable::System("cluster".to_owned()),
             Privilege::Manage,
