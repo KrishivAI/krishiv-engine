@@ -495,7 +495,7 @@ fn instr_at(s: &str, sub: &str, pos: i32, occurrence: u32) -> i32 {
 }
 
 /// `instr(str, substr, pos, occurrence)` (Spark 4.3; `instr(str, substr, pos)` has `occurrence` 1): see
-/// [`instr_at`]. NULL when any operand is NULL.
+/// `instr_at`. NULL when any operand is NULL.
 ///
 /// # Errors
 /// `INVALID_PARAMETER_VALUE.OCCURRENCE` for an `occurrence` below 1 on a row whose operands are all non-NULL;
