@@ -1216,3 +1216,19 @@ fn a_udt_is_equal_by_class_and_stored_as_its_sql_type() {
         [a, udt("pyspark.ml.linalg.VectorUDT", storage)].into();
     assert_eq!(set.len(), 1);
 }
+
+/// Spark 4.2.0, real run (a PySpark UDT over `array<double>`): `simpleString`/`DESCRIBE` show the type name,
+/// `catalogString` and `sql` the storage type.
+#[test]
+fn a_udt_renders_as_spark_does() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::new(
+        storage,
+        Some("pyspark.sql.tests.ExamplePointUDT".to_owned()),
+        Some("org.apache.spark.sql.test.ExamplePointUDT".to_owned()),
+        None,
+    )));
+    assert_eq!(u.simple_string(), "examplepoint");
+    assert_eq!(u.catalog_string(), "array<double>");
+    assert_eq!(u.sql(), "ARRAY<DOUBLE>");
+}

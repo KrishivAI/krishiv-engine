@@ -643,6 +643,12 @@ impl DataType {
                 });
                 out.push_str(&c.to_string());
             }
+            // Spark 4.2.0 (checked on a real run): `simpleString` is the type name, `catalogString` and `sql` are the
+            // storage type's.
+            Self::Udt(u) => match how {
+                Render::Simple => out.push_str(&u.type_name()),
+                Render::Catalog | Render::Sql => u.sql_type().render_into(how, out),
+            },
             atomic if sql => out.push_str(&atomic.atomic_simple_string().to_ascii_uppercase()),
             atomic => out.push_str(&atomic.atomic_simple_string()),
         }
