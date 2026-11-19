@@ -99,6 +99,18 @@ impl SessionSource {
         })
     }
 
+    /// A source whose editor runs in `session` itself (the console of one embedded session,
+    /// [`crate::embedded::EmbeddedSource`]): the rows are still read by a session of the UI's own on the same
+    /// runtime, so reading them adds nothing to `session`'s history.
+    ///
+    /// # Errors
+    /// Returns an error when the UI's session cannot be built.
+    pub(crate) fn over_session(session: &Session) -> Result<Self, UiError> {
+        let mut source = Self::new(Arc::clone(session.runtime()))?;
+        source.anonymous = session.clone();
+        Ok(source)
+    }
+
     /// The same, running the editor's statements of an identified caller in the session `factory` builds for it
     /// (its principal and its policy: what a Spark Connect session of the caller gets).
     #[must_use]
@@ -374,6 +386,60 @@ pub fn batches_to_rows(batches: &[RecordBatch]) -> Vec<Row> {
     out
 }
 
+/// The catalog objects one level below `path` as `session` sees them ([`UiSource::catalog`]).
+pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<Vec<Row>, UiError> {
+    // The built-in catalog's objects are named without it (`default.t`): the grammar of `SHOW` takes a
+    // schema, and a name with a catalog in front is only needed for another catalog.
+    let scoped = |c: &str, rest: String| {
+        if c == "spark_catalog" {
+            rest
+        } else {
+            format!("{}.{rest}", quote(c))
+        }
+    };
+    let sql = match path {
+        [] => "SHOW CATALOGS".to_owned(),
+        [c] if c == "spark_catalog" => "SHOW SCHEMAS".to_owned(),
+        [c] => format!("SHOW SCHEMAS IN {}", quote(c)),
+        [c, s] => format!("SHOW TABLES IN {}", scoped(c, quote(s))),
+        [c, s, t] => format!(
+            "DESCRIBE TABLE {}",
+            scoped(c, format!("{}.{}", quote(s), quote(t)))
+        ),
+        _ => return Ok(Vec::new()),
+    };
+    let df = session.sql(&sql).await.map_err(ui_error)?;
+    let batches = df.collect().await.map_err(ui_error)?;
+    let mut out = Vec::new();
+    for r in batches_to_rows(&batches) {
+        let first = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|k| r.get(*k).and_then(Value::as_str))
+                .map(str::to_owned)
+        };
+        let Some(name) = first(&["catalog", "tableName", "namespace", "col_name"]) else {
+            continue;
+        };
+        // `DESCRIBE` ends its column list with blank and `# ...` lines about partitions and metadata.
+        if path.len() == 3 && (name.is_empty() || name.starts_with('#')) {
+            break;
+        }
+        let mut row = Row::new();
+        row.insert("name".into(), Value::String(name));
+        if let Some(t) = first(&["data_type"]) {
+            row.insert("data_type".into(), Value::String(t));
+        }
+        if let Some(c) = first(&["comment"]) {
+            row.insert("comment".into(), Value::String(c));
+        }
+        if let Some(Value::Bool(b)) = r.get("isTemporary") {
+            row.insert("is_temporary".into(), Value::Bool(*b));
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
 impl UiSource for SessionSource {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
@@ -399,58 +465,7 @@ impl UiSource for SessionSource {
     }
 
     fn catalog<'a>(&'a self, path: &'a [String]) -> UiFuture<'a, Vec<Row>> {
-        Box::pin(async move {
-            // The built-in catalog's objects are named without it (`default.t`): the grammar of `SHOW` takes a
-            // schema, and a name with a catalog in front is only needed for another catalog.
-            let scoped = |c: &str, rest: String| {
-                if c == "spark_catalog" {
-                    rest
-                } else {
-                    format!("{}.{rest}", quote(c))
-                }
-            };
-            let sql = match path {
-                [] => "SHOW CATALOGS".to_owned(),
-                [c] if c == "spark_catalog" => "SHOW SCHEMAS".to_owned(),
-                [c] => format!("SHOW SCHEMAS IN {}", quote(c)),
-                [c, s] => format!("SHOW TABLES IN {}", scoped(c, quote(s))),
-                [c, s, t] => format!(
-                    "DESCRIBE TABLE {}",
-                    scoped(c, format!("{}.{}", quote(s), quote(t)))
-                ),
-                _ => return Ok(Vec::new()),
-            };
-            let df = self.session.sql(&sql).await.map_err(ui_error)?;
-            let batches = df.collect().await.map_err(ui_error)?;
-            let mut out = Vec::new();
-            for r in batches_to_rows(&batches) {
-                let first = |keys: &[&str]| {
-                    keys.iter()
-                        .find_map(|k| r.get(*k).and_then(Value::as_str))
-                        .map(str::to_owned)
-                };
-                let Some(name) = first(&["catalog", "tableName", "namespace", "col_name"]) else {
-                    continue;
-                };
-                // `DESCRIBE` ends its column list with blank and `# ...` lines about partitions and metadata.
-                if path.len() == 3 && (name.is_empty() || name.starts_with('#')) {
-                    break;
-                }
-                let mut row = Row::new();
-                row.insert("name".into(), Value::String(name));
-                if let Some(t) = first(&["data_type"]) {
-                    row.insert("data_type".into(), Value::String(t));
-                }
-                if let Some(c) = first(&["comment"]) {
-                    row.insert("comment".into(), Value::String(c));
-                }
-                if let Some(Value::Bool(b)) = r.get("isTemporary") {
-                    row.insert("is_temporary".into(), Value::Bool(*b));
-                }
-                out.push(row);
-            }
-            Ok(out)
-        })
+        Box::pin(catalog_rows(&self.session, path))
     }
 
     fn environment(&self) -> UiFuture<'_, Vec<(String, String)>> {
@@ -712,6 +727,10 @@ impl ProfilesSource {
 }
 
 impl UiSource for ProfilesSource {
+    fn mode(&self) -> &'static str {
+        "profiles"
+    }
+
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
             Ok(match table {
@@ -729,6 +748,20 @@ impl UiSource for ProfilesSource {
 
 /// How long a stop waits for open connections before cutting them.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How often a server that follows a session asks whether the session has ended.
+const ENDED_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Answers `true` once what the server shows is gone.
+pub(crate) type Ended = Box<dyn Fn() -> bool + Send>;
+
+/// Resolves when the handle asks for a stop (or is gone) or when `ended` resolves.
+async fn stopped(handle: tokio::sync::oneshot::Receiver<()>, ended: impl Future<Output = ()>) {
+    tokio::select! {
+        _ = handle => {}
+        () = ended => {}
+    }
+}
 
 /// The UI served from a host process's own engine runtime (embedded mode): queries run through `runtime`
 /// show up in the pages. Dropping the handle stops the server and blocks until it has (at most about a second); do not drop it from
@@ -755,9 +788,18 @@ impl EmbeddedUi {
     /// # Errors
     /// Returns an error when the UI session, the token, the runtime or the bind fails.
     pub fn start(runtime: Arc<EngineRuntime>, addr: std::net::SocketAddr) -> Result<Self, UiError> {
-        let source = SessionSource::new(runtime)?;
+        Self::serve(Arc::new(SessionSource::new(runtime)?), addr, None)
+    }
+
+    /// [`EmbeddedUi::start`] over any source. With `ended`, the server also stops by itself soon after `ended`
+    /// first answers `true` (the session it shows was closed).
+    pub(crate) fn serve(
+        source: Arc<dyn UiSource>,
+        addr: std::net::SocketAddr,
+        ended: Option<Ended>,
+    ) -> Result<Self, UiError> {
         let token = crate::internal::random_token()?;
-        let app = crate::internal::router_with_ui(Arc::new(source), &token);
+        let app = crate::internal::router_with_ui(source, &token);
         let listener = std::net::TcpListener::bind(addr)
             .and_then(|l| l.set_nonblocking(true).map(|()| l))
             .map_err(|e| UiError::new(format!("bind {addr}: {e}")))?;
@@ -795,9 +837,19 @@ impl EmbeddedUi {
                         }),
                     );
                     tokio::pin!(serve);
+                    let ended = async {
+                        match ended {
+                            Some(ended) => {
+                                while !ended() {
+                                    tokio::time::sleep(ENDED_POLL).await;
+                                }
+                            }
+                            None => std::future::pending().await,
+                        }
+                    };
                     tokio::select! {
                         r = &mut serve => r.map_err(|e| e.to_string()),
-                        _ = rx => {
+                        () = stopped(rx, ended) => {
                             let _ = stop_tx.send(());
                             // An open event stream never ends: give the others a moment, then cut it.
                             let _ = tokio::time::timeout(SHUTDOWN_GRACE, &mut serve).await;
@@ -833,6 +885,15 @@ impl EmbeddedUi {
     #[must_use]
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// Whether the server has stopped by itself: the session it follows was closed
+    /// ([`EmbeddedUi::for_session`]), or serving failed.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.thread
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
     }
 
     /// The URL to open, with the token.

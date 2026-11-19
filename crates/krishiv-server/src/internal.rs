@@ -114,6 +114,18 @@ pub trait UiSource: Send + Sync + 'static {
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
 
+    /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
+    /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
+    /// engine).
+    fn mode(&self) -> &'static str {
+        "server"
+    }
+
+    /// The id of the one session an `embedded` console shows.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+
     /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
     /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
     /// (`name`, `data_type`, `comment`). A source with no catalog has none.
@@ -678,6 +690,8 @@ async fn health(State(s): State<UiState>) -> Response {
         StatusCode::OK,
         &json!({
             "version": crate::VERSION,
+            "mode": s.source.mode(),
+            "session_id": s.source.session_id(),
             "uptime_seconds": s.started.elapsed().as_secs(),
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
