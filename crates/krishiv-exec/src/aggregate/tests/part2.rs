@@ -629,6 +629,67 @@ async fn row_merge_presizes_pages_when_granted() {
     );
 }
 
+/// Presized pages hold a task's whole output while its inputs are still
+/// held, where the merge without them frees each input as it goes. With
+/// every key distinct (TPC-H q16's pairs) a limit that fits the merge but
+/// not every input beside the outputs must not presize: before, tasks
+/// presized at the smallest limit the merge fits, and q16 spilled where it
+/// fitted (SF1000: 53 s -> 100 s, 6.6 GB spilled). At every limit: the same
+/// groups; a run that presized neither flushed nor spilled; none presized
+/// below 1.5 times the smallest limit at which the merge fits in memory
+/// (the inputs are about half of what that limit holds); ample memory
+/// still presizes.
+#[tokio::test]
+async fn row_merge_presizes_only_beside_its_inputs() {
+    let (s, b) = grouped_input(120_000, 120_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let mut seen = Vec::new();
+    for limit in (6..=40).step_by(2).map(|mb| mb << 20) {
+        let agg = HashAggregate::with_row_mode(sp.clone(), rowtable::Mode::Append).unwrap();
+        let o = Opts {
+            limit,
+            both_layouts: false,
+            ..Opts::default()
+        };
+        let r = exec_with(AggregateNode::new(scan(&s, b.clone()), agg), o, true).await;
+        let (out, m) = r.unwrap_or_else(|e| panic!("limit {limit}: {e}"));
+        assert_eq!(rows(&out), expected, "limit {limit}");
+        let get = |n| extra(&m, "HashAggregate", n);
+        let (presized, flushes, spills) = (
+            get("row_final_presized"),
+            get("row_final_flushes"),
+            get("row_final_spills"),
+        );
+        seen.push((
+            limit >> 20,
+            get("row_final_tasks"),
+            presized,
+            flushes,
+            spills,
+        ));
+        if presized > 0 {
+            assert_eq!((flushes, spills), (0, 0), "limit {limit}: {seen:?}");
+        }
+    }
+    let fits = seen
+        .iter()
+        .find(|&&(_, tasks, _, flushes, spills)| tasks > 0 && flushes == 0 && spills == 0)
+        .map(|&(mb, ..)| mb)
+        .unwrap_or_else(|| panic!("the merge never fits: {seen:?}"));
+    for &(mb, _, presized, _, _) in &seen {
+        if mb * 2 < fits * 3 {
+            assert_eq!(
+                presized, 0,
+                "presized at {mb} MB, fits at {fits} MB: {seen:?}"
+            );
+        }
+    }
+    assert!(seen.iter().any(|&(_, _, p, _, _)| p > 0), "{seen:?}");
+}
+
 /// The final phase frees each driver partition once merged: with every key
 /// distinct (the merged tables are as large as the inputs), the peak stays
 /// well below holding the inputs and the merged tables together.
