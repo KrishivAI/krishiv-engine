@@ -363,6 +363,15 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+## `remote("local")` is not supported
+
+In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
+needs the full `pyspark` package; `pyspark-client` cannot do it. Krishiv has no JVM and does not accept
+`remote("local")`. Use `krishiv.start_local()`, which starts an in-process Connect server and returns the
+connection string for a stock `pyspark-client` (see [the guide](../guides/embedded-connect.md)). Like Spark's
+local mode, it protects the port with a token made for each start; unlike it, the URL has the host `localhost`
+and the token in the connection string.
+
 ## A declared schema on a Delta read
 
 `spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with

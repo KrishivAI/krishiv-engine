@@ -242,7 +242,7 @@ impl ServerAuth {
             && self.oidc.is_some()
             && jose::looks_like_jws(t)
         {
-            return self.finish_oidc(credentials, self.verify_oidc(t, now, false), now);
+            return self.finish_oidc(credentials, t, self.verify_oidc(t, now, false), now);
         }
         self.authenticate_static(credentials, token, now)
     }
@@ -469,7 +469,7 @@ impl ServerAuth {
             Ok(()) => self.verify_assertion(caller, assertion).await,
             Err(denial) => Err(denial),
         };
-        let (act_as, assertion_id) = match checked {
+        let (act_as, assertion_id, subject) = match checked {
             Ok(found) => found,
             Err(denial) => {
                 return Err(self.refuse(caller, surface, peer, denial));
@@ -496,6 +496,14 @@ impl ServerAuth {
             assertion_id.as_deref(),
             decision,
         )?;
+        // The assertion is the end user's subject token for delegated catalogs (P3-T067 §3.3),
+        // marked as an assertion so it is never forwarded. Kept only for someone else: acting
+        // as oneself leaves the caller's own credential.
+        let end_user = if end_user.principal.delegated_by.is_some() {
+            end_user.with_credential(subject)
+        } else {
+            end_user
+        };
         Ok((act_as, end_user))
     }
 
@@ -533,7 +541,7 @@ impl ServerAuth {
         &self,
         caller: &Authenticated,
         assertion: &str,
-    ) -> Result<(ActAs, Option<String>), Denial> {
+    ) -> Result<(ActAs, Option<String>, Option<super::InboundCredential>), Denial> {
         let Some(verifier) = &self.assertions else {
             return Err(Denial::AssertionOff);
         };
@@ -561,9 +569,16 @@ impl ServerAuth {
         if actor.subject.as_deref() != Some(caller.principal.name.as_str()) {
             return Err(Denial::ActorMismatch);
         }
+        let subject = super::InboundCredential::from_exp(
+            super::CredentialKind::SignedAssertion,
+            assertion,
+            identity.claims,
+            identity.exp,
+        );
         Ok((
             ActAs::new(identity.principal).with_groups(identity.groups),
             identity.token_id,
+            Some(subject),
         ))
     }
 
@@ -577,7 +592,7 @@ impl ServerAuth {
         &self,
         _caller: &Authenticated,
         _assertion: &str,
-    ) -> Result<(ActAs, Option<String>), Denial> {
+    ) -> Result<(ActAs, Option<String>, Option<super::InboundCredential>), Denial> {
         Err(Denial::AssertionOff)
     }
 
@@ -670,7 +685,7 @@ impl Authenticator for ServerAuth {
                     }
                     v => v,
                 };
-                return self.finish_oidc(credentials, verdict, Instant::now());
+                return self.finish_oidc(credentials, token, verdict, Instant::now());
             }
             self.authenticate_at(credentials, Instant::now())
         })
@@ -702,6 +717,7 @@ impl ServerAuth {
     fn finish_oidc(
         &self,
         credentials: &Credentials<'_>,
+        token: &str,
         verdict: Result<Option<Identity>, AuthFailure>,
         now: Instant,
     ) -> Result<Authenticated, AuthFailure> {
@@ -713,7 +729,7 @@ impl ServerAuth {
                 self.record_failure(credentials, now);
                 Err(self.fail(credentials, Method::Oidc, AuthFailure::Invalid))
             }
-            Ok(Some(identity)) => Ok(self.oidc_principal(identity)),
+            Ok(Some(identity)) => Ok(self.oidc_principal(identity, token)),
             // Only `authenticate` asks to wait; reaching here without waiting is a refusal.
             Ok(None) => Err(self.fail(credentials, Method::Oidc, AuthFailure::Unavailable)),
             Err(failure) => {
@@ -731,7 +747,7 @@ impl ServerAuth {
     /// An OIDC principal: a user, with its groups; the role is the highest any role-claim value
     /// has in `krishiv.auth.oidc.roles.*` (the lists are disjoint, so this is "the first list,
     /// in order admin, operator, viewer, holding any of the values").
-    fn oidc_principal(&self, identity: Identity) -> Authenticated {
+    fn oidc_principal(&self, identity: Identity, token: &str) -> Authenticated {
         let role = identity
             .groups
             .iter()
@@ -742,7 +758,16 @@ impl ServerAuth {
             krishiv_common::principal::PrincipalKind::User,
         );
         principal.groups = identity.groups;
-        Authenticated::new(principal, role, Method::Oidc).with_token_id(identity.token_id)
+        // The token itself is kept for delegated catalogs (P3-T067 §3.3), secret-typed.
+        let credential = super::InboundCredential::from_exp(
+            super::CredentialKind::Oidc,
+            token,
+            identity.claims,
+            identity.exp,
+        );
+        Authenticated::new(principal, role, Method::Oidc)
+            .with_token_id(identity.token_id)
+            .with_credential(Some(credential))
     }
 
     /// The bearer token of a request that goes to OIDC without a client certificate: the one

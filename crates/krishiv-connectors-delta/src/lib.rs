@@ -9,7 +9,8 @@
 //! `TableConfiguration::{protocol, metadata, column_mapping_mode}`,
 //! `Protocol::{min_reader_version, reader_features, writer_features}`,
 //! `Metadata::{configuration, partition_columns}`, `StructField::physical_name` and the
-//! `TableFeature` and `ColumnMappingMode` types ([`features`], [`table`]); PR-37 adds the
+//! `TableFeature` and `ColumnMappingMode` types ([`features`], [`table`]),
+//! `Protocol::min_writer_version` ([`features::WriteProtocol`]); PR-37 adds the
 //! create-table builder and `update_deletion_vectors`. [`features`] also reads the text of the
 //! kernel's `"Feature '<name>' is not supported"` refusal (pinned by a test).
 //!
@@ -38,9 +39,17 @@
 //! [`table::DeltaTable`] is the `TableProvider` of one table at one version for one query: the
 //! snapshot, Krishiv's reader allow-list ([`features`]), the live files, and the scan that reads
 //! them through krishiv-io (column mapping, partition values, type widening, deletion vectors).
+//!
+//! # Committing
+//! [`commit::commit`] commits what a write staged on the snapshot it read: Krishiv's writer
+//! allow-list ([`features::check_write`]), one kernel transaction per attempt carrying the write's
+//! id, the conflict checker against every winning commit ([`commit::conflict`], a port of
+//! delta-spark's), the rebuild at the last checked version, and the landed check after a lost
+//! answer (design note sections 4.2 and 5).
 
 #![forbid(unsafe_code)]
 
+pub mod commit;
 pub mod engine;
 pub mod error;
 pub mod features;

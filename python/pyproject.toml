@@ -140,6 +140,13 @@ exclude = [
 # (or its stub is), the import is allowed to stay unresolved.
 allowed-unresolved-imports = ["krishiv._native", "pandas"]
 
+# pyspark-client is optional: this test skips without it, so ty may not resolve its imports.
+[[tool.ty.overrides]]
+include = ["tests/test_start_local_pyspark.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
@@ -158,6 +165,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["krishiv._udf.*"]
 ignore_errors = true
+
+# `pyspark-client` is installed beside the wheel for the `start_local()` tests. The vendored
+# `krishiv._udf` code names `pyspark.sql.types`; with the package installed mypy would type them as
+# PySpark's classes, not Krishiv's. They stay untyped, as when it is absent.
+[[tool.mypy.overrides]]
+module = ["pyspark.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
 
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so
