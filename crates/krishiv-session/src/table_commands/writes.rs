@@ -618,6 +618,20 @@ impl Session {
             },
             &env,
         )?;
+        // delta-spark refuses `insertInto` of a frame with more columns than the table as a
+        // metadata mismatch (mergeSchema or not), not as Spark's arity error.
+        #[cfg(feature = "delta")]
+        if !overwrite && is_delta_table(&found) {
+            let width = df
+                .analyzed_in(self.query_env())
+                .await?
+                .analyzed
+                .output
+                .len();
+            if width > found.columns.len() {
+                return Err(krishiv_common::error::DeltaMetadataMismatch {}.into());
+            }
+        }
         let target = InsertTarget {
             listed: &[],
             by_name: false,

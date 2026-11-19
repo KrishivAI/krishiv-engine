@@ -170,6 +170,11 @@ fn parse(json: &str, source: Source) -> Result<Vec<Leaf>, BoxError> {
                 if subs.is_empty() {
                     return Err(format!("{name}: empty subClass").into());
                 }
+                // delta-spark throws some of these bare (`DELTA_METADATA_MISMATCH` for an
+                // `insertInto` with an extra column), so a Delta class keeps its own leaf.
+                if source == Source::Delta {
+                    leaves.push(leaf(name.clone(), sql_state, main.clone())?);
+                }
                 for (sub, sub_info) in subs {
                     check_name(sub)?;
                     let full = format!("{name}.{sub}");
