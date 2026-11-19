@@ -152,7 +152,13 @@ fn result_cell(column: &dyn Array, row: usize) -> Value {
         arrow_cast::display::array_value_to_string(c, row).map_or(Value::Null, Value::String)
     };
     match column.data_type() {
-        DataType::Timestamp(..) | DataType::Date32 | DataType::Date64 => text(column),
+        // Nested values keep the display text an editor always showed; only the system tables render them as JSON.
+        DataType::Timestamp(..)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::Struct(_) => text(column),
         DataType::Int64
             if column
                 .as_primitive::<arrow_array::types::Int64Type>()
@@ -1005,5 +1011,18 @@ mod tests {
         assert_eq!(result_cell(&big, 0), json!("9223372036854775807"));
         assert_eq!(result_cell(&big, 1), json!(42));
         assert_eq!(result_cell(&big, 2), json!("-9007199254740993"));
+    }
+
+    /// A list in an editor result keeps its display text (the system tables render it as an array instead).
+    #[test]
+    fn an_editor_list_cell_is_its_display_text() {
+        use arrow_array::builder::{Int32Builder, ListBuilder};
+        let mut b = ListBuilder::new(Int32Builder::new());
+        b.values().append_value(1);
+        b.values().append_value(2);
+        b.append(true);
+        let list = b.finish();
+        assert_eq!(result_cell(&list, 0), json!("[1, 2]"));
+        assert_eq!(cell(&list, 0), json!([1, 2]));
     }
 }

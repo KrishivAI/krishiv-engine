@@ -41,19 +41,20 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 
 pub(super) fn facts_of(v: &Value) -> Option<NodeFacts> {
     let o = v.as_object()?;
+    // Inputs are positional (probe, build): one malformed element drops them all rather than shifting the rest.
     let inputs = o
         .get("inputs")
         .and_then(Value::as_array)
-        .map(|a| {
+        .and_then(|a| {
             a.iter()
-                .filter_map(|i| {
+                .map(|i| {
                     Some(InputFacts {
                         estimated_rows: i.get("estimated_rows")?.as_f64()?,
                         statistics: i.get("statistics")?.as_bool()?,
                         tables_without_stats: strings(i.get("tables_without_stats")),
                     })
                 })
-                .collect()
+                .collect::<Option<Vec<_>>>()
         })
         .unwrap_or_default();
     let filter_gaps = o
