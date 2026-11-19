@@ -4,7 +4,8 @@
 //!
 //! - `set(pairs, silent)`: per pair, in order; with `silent` a failure is
 //!   the warning `Failed to set <key> to Some(<value>) due to <message>`
-//!   (Spark prints the Scala `Option`) and the next pair is tried. Who may
+//!   (Spark prints the Scala `Option`; Krishiv shows a redacted value, see
+//!   below, as `Some(*********(redacted))`) and the next pair is tried. Who may
 //!   set or unset a key (ADR 0046 §3, §8, threat model T-Z3): a `Startup`
 //!   key is `CANNOT_MODIFY_STATIC_CONFIG` for everyone (`check_static`);
 //!   any other key is the session's policy, asked as SQL `SET` asks it
@@ -46,11 +47,12 @@ use krishiv_session::RuntimeConf;
 use crate::manager::SessionEntry;
 
 /// A `Startup` key cannot change in a running session, for anyone. The key is looked up as
-/// `Session::authorize_set_key` looks it up (its Spark alias or legacy alternative too).
+/// `Session::authorize_set_key` looks it up (its Spark alias or legacy alternative too). Public
+/// so Flight SQL's `SetSessionOptions` refuses the same keys as `Config` (P3-T101 §2 H4, §3.2).
 ///
 /// # Errors
 /// `CANNOT_MODIFY_STATIC_CONFIG` for a `Startup` key.
-pub(crate) fn check_static(key: &str) -> Result<(), KrishivError> {
+pub fn check_static(key: &str) -> Result<(), KrishivError> {
     let entry = lookup(key).or_else(|| lookup(resolve_alternative(key)));
     if entry.is_some_and(|e| e.settable_by == SettableBy::Startup) {
         return Err(CannotModifyStaticConfig {
@@ -193,6 +195,34 @@ pub fn is_redacted(key: &str, value: Option<&str>) -> bool {
         || value.is_some_and(|v| matches_redaction(v) || matches!(redact(v), Cow::Owned(_)))
 }
 
+/// What a redacted value is shown as (Spark's `Utils.REDACTION_REPLACEMENT_TEXT`).
+const REDACTED: &str = "*********(redacted)";
+
+/// A silent `set`'s warning for a pair that failed: Spark's
+/// `Failed to set <key> to <Option> due to <message>` (`ConfigH:92-93`).
+/// A difference toward safety: Spark prints the value as given, Krishiv
+/// replaces it by [`REDACTED`] when [`is_redacted`] holds for the pair, also
+/// where the error message repeats it, so a token sent through a client
+/// builder (`.config("spark.sql.catalog.x.token", ...)`) never comes back in
+/// the response.
+fn failed_to_set(key: &str, value: Option<&str>, message: &str) -> String {
+    match value {
+        None => format!("Failed to set {key} to None due to {message}"),
+        Some(v) if is_redacted(key, Some(v)) => {
+            // Every occurrence goes, even inside other words or the SQLSTATE when the value is
+            // very short (`1`): garbling a warning is the safe side. An empty value is skipped,
+            // since `replace("")` would insert the marker between every character.
+            let message = if v.is_empty() {
+                Cow::Borrowed(message)
+            } else {
+                Cow::Owned(message.replace(v, REDACTED))
+            };
+            format!("Failed to set {key} to Some({REDACTED}) due to {message}")
+        }
+        Some(v) => format!("Failed to set {key} to Some({v}) due to {message}"),
+    }
+}
+
 /// The value `key` was set to, if it was (not a registered default).
 fn explicit(conf: &RuntimeConf, key: &str) -> Option<String> {
     let canonical = lookup(resolve_alternative(key)).map_or(key, |e| e.key);
@@ -247,14 +277,10 @@ pub(crate) async fn config(
                 match set_one(entry, &kv.key, kv.value.as_deref()).await {
                     Ok(()) => out.warnings.extend(warning(&kv.key)),
                     Err(e) if silent => {
-                        let shown = kv
-                            .value
-                            .as_ref()
-                            .map_or_else(|| "None".to_owned(), |v| format!("Some({v})"));
-                        out.warnings.push(format!(
-                            "Failed to set {} to {shown} due to {}",
-                            kv.key,
-                            message(&e)
+                        out.warnings.push(failed_to_set(
+                            &kv.key,
+                            kv.value.as_deref(),
+                            &message(&e),
                         ));
                     }
                     Err(e) => return Err(e),

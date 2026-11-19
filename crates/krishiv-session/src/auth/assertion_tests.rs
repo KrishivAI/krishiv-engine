@@ -420,3 +420,25 @@ fn plain_metadata_beside_an_assertion_must_agree() {
         }
     );
 }
+
+/// P3-T067 §3.3: the end user of a signed assertion keeps the assertion as its subject token,
+/// marked as an assertion (never forwardable); the caller's static token keeps nothing, and
+/// plain act-as metadata carries none.
+#[test]
+fn delegated_signed_assertion_is_subject_token() {
+    let (auth, _) = server();
+    let assertion = signed(&claims("alice", &json!({"sub": "portal"})));
+    let (_, end) = present(&auth, &caller("portal"), &assertion).expect("allowed");
+    let credential = end.credential.clone().expect("the assertion is kept");
+    assert_eq!(credential.kind(), super::CredentialKind::SignedAssertion);
+    assert_eq!(credential.token().expose_secret(), assertion);
+    assert_eq!(credential.claims().audiences, [AUDIENCE]);
+    assert!(!format!("{end:?}").contains(&assertion));
+    assert!(caller("portal").credential.is_none());
+    // Acting as oneself is no impersonation and keeps no assertion.
+    let mut own = claims("portal", &json!({"sub": "portal"}));
+    own["groups"] = json!([]);
+    let own = signed(&own);
+    let (_, same) = present(&auth, &caller("portal"), &own).expect("itself");
+    assert!(same.credential.is_none());
+}

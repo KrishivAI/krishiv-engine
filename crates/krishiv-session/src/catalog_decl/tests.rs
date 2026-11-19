@@ -240,7 +240,7 @@ fn literal_secret_refused_in_server_mode() {
 
 #[test]
 fn reserved_and_malformed_names_fail_startup() {
-    for name in ["spark_catalog", "system"] {
+    for name in ["spark_catalog", "system", "delegation", "vended"] {
         let key = format!("krishiv.catalog.{name}.type");
         let text = err(&[(key.as_str(), "memory")], DeclMode::Embedded);
         assert!(text.contains("reserved"), "{text}");
@@ -338,15 +338,109 @@ fn missing_keys_and_bad_values_fail_startup() {
     assert!(text.contains("krishiv.catalog.default"), "{text}");
 }
 
+const DELEGATED: [(&str, &str); 4] = [
+    ("krishiv.catalog.r.type", "iceberg-rest"),
+    ("krishiv.catalog.r.uri", "https://h"),
+    ("krishiv.catalog.r.auth", "delegated"),
+    ("krishiv.catalog.r.audience", "lake-api"),
+];
+
+fn delegated_with(extra: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
+    let mut v = DELEGATED.to_vec();
+    v.extend_from_slice(extra);
+    v
+}
+
+/// P3-T067 §3.3: `auth = delegated` defaults to exchange with the server's client as actor.
 #[test]
-fn delegated_and_remote_signing_refused_in_this_build() {
-    let pairs = [
-        ("krishiv.catalog.r.type", "iceberg-rest"),
-        ("krishiv.catalog.r.uri", "https://h"),
-        ("krishiv.catalog.r.auth", "delegated"),
-    ];
-    let e = parse(&pairs, DeclMode::Server).unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+fn delegated_exchange_and_forward_parse() {
+    let pairs = delegated_with(&[
+        ("krishiv.catalog.r.tokenEndpoint", "https://idp/token"),
+        ("krishiv.catalog.r.clientId", "krishiv"),
+        ("krishiv.catalog.r.clientSecret", "env:R_SECRET"),
+        ("krishiv.catalog.r.scope", "lake"),
+    ]);
+    let decl = &parse(&pairs, DeclMode::Server).unwrap().catalogs[0];
+    let CatalogAuth::Delegated {
+        delegation,
+        audience,
+        token_endpoint,
+        scope,
+        actor,
+    } = &decl.auth
+    else {
+        panic!("{:?}", decl.auth)
+    };
+    assert_eq!(*delegation, Delegation::Exchange);
+    assert_eq!(audience, "lake-api");
+    assert_eq!(token_endpoint.as_deref(), Some("https://idp/token"));
+    assert_eq!(scope.as_deref(), Some("lake"));
+    assert_eq!(actor.as_ref().unwrap().client_id, "krishiv");
+    assert_eq!(decl.auth.name(), "delegated");
+    assert_eq!(decl.declared_hosts(), ["h", "idp"]);
+
+    let pairs = delegated_with(&[
+        ("krishiv.catalog.r.tokenEndpoint", "https://idp/token"),
+        ("krishiv.catalog.r.actorToken", "none"),
+    ]);
+    let decl = &parse(&pairs, DeclMode::Server).unwrap().catalogs[0];
+    assert!(matches!(
+        &decl.auth,
+        CatalogAuth::Delegated { actor: None, .. }
+    ));
+
+    let pairs = delegated_with(&[("krishiv.catalog.r.delegation", "forward")]);
+    let decl = &parse(&pairs, DeclMode::Server).unwrap().catalogs[0];
+    assert_eq!(decl.auth.delegation(), Some(Delegation::Forward));
+}
+
+#[test]
+fn delegated_refusals_name_the_key() {
+    for (extra, key) in [
+        (vec![], "krishiv.catalog.r.tokenEndpoint"),
+        (
+            vec![("krishiv.catalog.r.tokenEndpoint", "https://idp/token")],
+            "krishiv.catalog.r.clientId",
+        ),
+        (
+            vec![
+                ("krishiv.catalog.r.delegation", "forward"),
+                ("krishiv.catalog.r.tokenEndpoint", "https://idp/token"),
+            ],
+            "krishiv.catalog.r.tokenEndpoint",
+        ),
+        (
+            vec![("krishiv.catalog.r.delegation", "relay")],
+            "krishiv.catalog.r.delegation",
+        ),
+        (
+            vec![
+                ("krishiv.catalog.r.tokenEndpoint", "https://idp/token"),
+                ("krishiv.catalog.r.actorToken", "user"),
+            ],
+            "krishiv.catalog.r.actorToken",
+        ),
+    ] {
+        let e = parse(&delegated_with(&extra), DeclMode::Server).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_CONFIG_VALUE",
+            "{e}"
+        );
+        assert!(e.to_string().contains(key), "{key}: {e}");
+    }
+    // No audience.
+    let e = err(&DELEGATED[..3], DeclMode::Server);
+    assert!(e.contains("krishiv.catalog.r.audience"), "{e}");
+    // `delegation` on a catalog that is not delegated.
+    let mut pairs = rest_with(&[("krishiv.catalog.lake.delegation", "forward")]);
+    pairs.retain(|(k, _)| !k.ends_with("warehouse"));
+    let e = err(&pairs, DeclMode::Server);
+    assert!(e.contains("auth = delegated only"), "{e}");
+}
+
+#[test]
+fn remote_signing_refused_in_this_build() {
     let pairs = [
         ("krishiv.catalog.r.type", "iceberg-rest"),
         ("krishiv.catalog.r.uri", "https://h"),
@@ -467,8 +561,23 @@ fn registered_catalog_settings_are_not_declarations() {
     let mut pairs = rest_with(&[]);
     pairs.push(("krishiv.catalog.requestTimeout", "5s"));
     pairs.push(("krishiv.catalog.maxMetadataBytes", "1g"));
+    // The delegation limits are settings, never a catalog named `delegation` (P3-T067 §3.3).
+    pairs.push(("krishiv.catalog.delegation.maxExchangesPerMinute", "5"));
+    pairs.push((
+        "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+        "2",
+    ));
     let decls = parse(&pairs, DeclMode::Server).unwrap();
     assert_eq!(decls.catalogs.len(), 1);
+    assert!(!is_declaration_key(
+        "krishiv.catalog.delegation.maxExchangesPerMinute"
+    ));
+    // A mistyped one is a reserved catalog name, not a new catalog.
+    let e = err(
+        &[("krishiv.catalog.delegation.maxExchanges", "5")],
+        DeclMode::Server,
+    );
+    assert!(e.contains("reserved"), "{e}");
     assert!(!is_declaration_key("krishiv.catalog.requestTimeout"));
     assert!(is_declaration_key("krishiv.catalog.lake.type"));
     assert!(is_declaration_key("spark.sql.catalog.lake"));
@@ -740,4 +849,37 @@ fn one_field_under_two_spellings_fails_startup() {
     let decls = parse(&pairs, DeclMode::Server).unwrap();
     assert!(decls.catalogs[0].visible_to(Some("acme")));
     assert!(!decls.catalogs[0].visible_to(Some("globex")));
+}
+
+/// A delegated declaration's `Debug` (logged at startup) names its mode, audience, actor client
+/// and token endpoint host, never the endpoint's userinfo; the client secret shows only as its
+/// reference (`env:`/`file:`), since a declaration holds no secret value to print.
+#[test]
+fn delegated_debug_hides_userinfo_and_secret() {
+    let pairs = delegated_with(&[
+        (
+            "krishiv.catalog.r.tokenEndpoint",
+            "https://svc:Canary-Pw-91c2@idp.example.com/token",
+        ),
+        ("krishiv.catalog.r.clientId", "krishiv"),
+        ("krishiv.catalog.r.clientSecret", "env:R_SECRET"),
+    ]);
+    let decl = &parse(&pairs, DeclMode::Server).unwrap().catalogs[0];
+    let shown = format!("{:?}", decl.auth);
+    for part in [
+        "Delegated",
+        "Exchange",
+        "lake-api",
+        "idp.example.com",
+        "ActorClient",
+        "krishiv",
+    ] {
+        assert!(shown.contains(part), "{part}: {shown}");
+    }
+    assert!(
+        !shown.contains("Canary-Pw-91c2") && !shown.contains("svc:"),
+        "{shown}"
+    );
+    assert_eq!(Delegation::Exchange.name(), "exchange");
+    assert_eq!(Delegation::Forward.name(), "forward");
 }

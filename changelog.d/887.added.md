@@ -1,0 +1,1 @@
+Spark Connect `DataFrameWriter` and `DataFrameWriterV2` writes (`df.write.parquet(...)`, `saveAsTable`, `insertInto`, `writeTo(...).create()` / `append()`) run through the session's writers; clustering columns, schema evolution and V2 partition transforms are refused.

@@ -42,7 +42,7 @@ use crate::plan::VersionSpec;
 pub(super) struct Catalog {
     state: Mutex<(TableMetadata, String, u32)>,
     /// A request never answers (it is in flight forever) when set.
-    hang: AtomicBool,
+    pub(super) hang: AtomicBool,
     /// A request was sent.
     sent: AtomicBool,
 }
@@ -244,7 +244,7 @@ pub(super) fn range(from: i64, to: i64) -> RecordBatch {
 
 /// A table `t` of `schema`, partitioned by `identity(x)` when `partitioned`,
 /// with `props`.
-fn create(
+pub(super) fn create(
     env: &Env,
     schema: iceberg::spec::Schema,
     partitioned: bool,
@@ -347,7 +347,7 @@ pub(super) fn run(
 
 /// What `pool` holds once a cancelled or failed write's tasks had up to 5 s
 /// to abort (they are not the query's blocking work, see `sink`).
-fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
+pub(super) fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
     for _ in 0..500 {
         if pool.reserved() == 0 {
             break;
@@ -359,7 +359,7 @@ fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
 
 /// Every `.parquet` file under `dir`, once background deletes had up to 5 s
 /// to empty it when `settle`.
-fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
+pub(super) fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
     fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -388,7 +388,7 @@ fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
     list()
 }
 
-fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
+pub(super) fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
     let table = env
         .rt
         .block_on(IcebergTable::load(&env.reg, &catalog.location(), "db", "t"))
@@ -401,7 +401,7 @@ fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
     )
 }
 
-fn expected(ids: impl IntoIterator<Item = i64>) -> Vec<String> {
+pub(super) fn expected(ids: impl IntoIterator<Item = i64>) -> Vec<String> {
     ids.into_iter()
         .map(|i| format!("{i}|{}|n{i}", i % 3))
         .collect()

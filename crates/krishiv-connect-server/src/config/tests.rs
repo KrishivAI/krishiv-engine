@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Unit tests of `SettableBy`, redaction and the per-key warnings.
-use super::{check_static, is_redacted, warning};
+use super::{check_static, failed_to_set, is_redacted, warning};
 
 const STARTUP: &str = "krishiv.resultCache.maxBytes";
 const ADMIN: &str = "krishiv.resultCache.ttl";
@@ -79,4 +79,35 @@ fn explicit_resolves_a_legacy_alternative_to_its_primary_entry() {
     let conf = session.conf();
     conf.set(alt, "LEGACY").unwrap();
     assert_eq!(super::explicit(&conf, alt).as_deref(), Some("LEGACY"));
+}
+
+/// A silent set's warning keeps Spark's text for an ordinary pair and hides a value the
+/// redaction rules match, in the shown `Option` and wherever the message repeats it.
+#[test]
+fn a_failed_silent_set_hides_a_redacted_value() {
+    assert_eq!(
+        failed_to_set("my.flag", Some("1g"), "[X] no"),
+        "Failed to set my.flag to Some(1g) due to [X] no"
+    );
+    assert_eq!(
+        failed_to_set("my.null", None, "[X] no"),
+        "Failed to set my.null to None due to [X] no"
+    );
+    let w = failed_to_set(
+        "spark.sql.catalog.x.token",
+        Some("s3cr3t-abc"),
+        "[X] 's3cr3t-abc' is invalid",
+    );
+    assert_eq!(
+        w,
+        "Failed to set spark.sql.catalog.x.token to Some(*********(redacted)) due to \
+         [X] '*********(redacted)' is invalid"
+    );
+    let w = failed_to_set("my.db", Some("postgres://u:pw@h/db"), "[X] no");
+    assert!(!w.contains("pw@"), "{w}");
+    assert!(w.contains("Some(*********(redacted))"), "{w}");
+    assert_eq!(
+        failed_to_set("auth.token", Some(""), "[X] no"),
+        "Failed to set auth.token to Some(*********(redacted)) due to [X] no"
+    );
 }

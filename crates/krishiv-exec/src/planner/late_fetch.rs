@@ -91,7 +91,7 @@ impl Planner<'_> {
             output: kept,
             ..scan.clone()
         };
-        let input = self.scan_reading(below, &narrow, filter, true)?;
+        let input = self.scan_reading(below, &narrow, filter, true, None)?;
         let width = narrow.output.len();
         let (Some(&file_attr), Some(&row_attr)) =
             (input.layout.get(width), input.layout.get(width + 1))
