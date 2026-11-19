@@ -60,7 +60,7 @@ impl Session {
             return Ok(());
         };
         let mut without = env.clone();
-        without.quiet_denials = true;
+        without.set_quiet_denials(true, &self.state.policy);
         without.analysis.variables = Arc::new(VariableSnapshot {
             // Never a version a resolution with variables was cached under.
             version: u64::MAX,
@@ -110,7 +110,7 @@ impl Session {
         let Some(first) = variable_name_in_expr(&def.body, &env.analysis.variables) else {
             return Ok(());
         };
-        env.quiet_denials = true;
+        env.set_quiet_denials(true, &self.state.policy);
         env.analysis.variables = Arc::new(VariableSnapshot {
             // Never a version a resolution with variables was cached under.
             version: u64::MAX,
