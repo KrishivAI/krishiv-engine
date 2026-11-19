@@ -689,7 +689,7 @@ impl Partials {
     /// fails the Bloom hashes go first, the exact keys only if it still
     /// fails without them (an optional filter never waits or fails).
     fn fit(&mut self) {
-        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        let mut held: usize = self.memory.iter().map(Reservation::size).sum();
         let want = self.heap_bytes();
         let Some(memory) = self.memory.first_mut() else {
             return;
@@ -699,6 +699,8 @@ impl Partials {
             // hashes go; the exact keys only if the reservation still
             // fails without them.
             if self.settle_all(true).0 {
+                // A new fixed filter may have taken part of the reservations.
+                held = self.memory.iter().map(Reservation::size).sum();
                 let want = self.heap_bytes();
                 let Some(memory) = self.memory.first_mut() else {
                     return;
@@ -757,13 +759,14 @@ impl Partials {
     /// spill sheds this optional memory before it writes a table: at 20 M
     /// keys the hashes are up to 160 MB a driver.
     fn shed_hashes(&mut self) -> (usize, bool) {
-        let held: usize = self.memory.iter().map(Reservation::size).sum();
         let had = self.hash_bytes();
         // Those with a fixed Bloom move there; a filter created now costs
-        // what it reserved, so the build goes on to write tables when the
-        // net is short of the request.
+        // what it took from the pool (the rest came out of these
+        // reservations), so the build goes on to write tables when the net
+        // is short of the request.
         let (_, reserved) = self.settle_all(true);
         self.drop_hashes();
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
         let net = self
             .release(held.saturating_sub(self.heap_bytes()))
             .saturating_sub(reserved);

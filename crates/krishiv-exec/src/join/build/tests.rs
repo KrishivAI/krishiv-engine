@@ -816,6 +816,77 @@ fn a_refused_fixed_filter_loses_the_bloom_as_before() {
     assert!(k.bloom_bytes().is_none() && k.has_range());
 }
 
+/// A partial of `f` holding `n` keys as hashes, its pool then full: the
+/// rest of the limit taken by another reservation of its consumer.
+fn full_pool_partial(
+    f: &JoinRuntimeFilter,
+    lost: &Arc<[std::sync::atomic::AtomicBool]>,
+    spilled: &Arc<[super::SpilledBloom]>,
+    n: i64,
+) -> (Partials, Reservation) {
+    let limit = 1 << 20;
+    let mut p = owned_partial(f, lost, spilled, limit);
+    p.add_keys(std::slice::from_ref(f), &[spread(0, n)], None);
+    assert!(!spilled[0].active(), "made below the cap, unforced");
+    let mut hog = p.memory[0].split(0);
+    assert!(hog.try_grow(limit - p.memory[0].size()).is_ok());
+    assert!(p.memory[0].split(0).try_grow(1).is_err(), "pool not full");
+    (p, hog)
+}
+
+/// A spill request when the pool is full (TPC-H q09 SF100 at 2g: the
+/// filter was `planned; refused`): the hashes being drained already hold
+/// more than the filter, so it is paid from their reservation, the pool
+/// is not asked, and the net freed is the hashes less the filter.
+#[test]
+fn a_full_pool_funds_the_fixed_filter_from_the_hashes() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let (mut p, _hog) = full_pool_partial(&f, &lost, &spilled, 10_000);
+    let held = p.memory[0].size();
+    let hashes = p.hash_bytes();
+    assert!(hashes >= 64 << 10, "the hashes do not cover the filter");
+    let (net, moved) = p.shed_hashes();
+    assert!(moved, "no hashes left");
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE, "refused");
+    assert!(spilled[0].active());
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.hash_bytes(), 0);
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    assert_eq!(net, held - p.heap_bytes() - (64 << 10), "net freed");
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert_eq!(fixed.len(), 1);
+    assert_eq!(fixed[0].size(), 64 << 10, "the filter's reservation");
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k
+        .evaluate(spread(0, 10_000).as_ref())
+        .unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 10_000);
+}
+
+/// A batch the full pool refuses (`fit`) moves the hashes into a filter
+/// they pay for, and the partial's reservation is shrunk to its heap
+/// rather than kept at the size it had before the filter took its share.
+#[test]
+fn a_refused_batch_funds_the_fixed_filter_from_the_hashes() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let (mut p, _hog) = full_pool_partial(&f, &lost, &spilled, 10_000);
+    p.add_keys(&[f], &[spread(20_000, 100)], None);
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE, "refused");
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.hash_bytes(), 0);
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+}
+
 /// Through the sink: a build with a spill scope and a
 /// fixed filter, asked to spill below its key cap, moves its hashes to the
 /// filter, writes tables for the rest of the request, and after `combine`

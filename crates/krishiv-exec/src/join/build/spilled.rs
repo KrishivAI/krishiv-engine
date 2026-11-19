@@ -171,21 +171,34 @@ impl SpilledBloom {
     }
 
     /// Inserts `b`'s hashes (taking them from it), first creating the
-    /// filter of `bytes` on a new reservation of `memory`'s consumer.
-    fn drain(&self, b: &mut KeyFilterBuilder, bytes: usize, memory: &mut Reservation) -> Drained {
+    /// filter of `bytes` on a new reservation of `memory`'s consumer. Up to
+    /// `fund` bytes of it come from `memory` itself (the reserved bytes of
+    /// the hashes being drained, which the filter replaces) and only the
+    /// rest from the pool: a spill request or a refused batch finds the pool
+    /// full (TPC-H q09 SF100 at 2g), but the hashes it holds already pay for
+    /// most or all of the filter.
+    fn drain(
+        &self,
+        b: &mut KeyFilterBuilder,
+        bytes: usize,
+        fund: usize,
+        memory: &mut Reservation,
+    ) -> Drained {
         let mut st = lock(&self.state);
         let mut reserved = 0;
         if matches!(*st, Spilled::Unused) {
             let bytes = bytes.div_ceil(BLOCK_BYTES).max(1) * BLOCK_BYTES;
-            let mut r = memory.split(0);
-            *st = if r.try_grow(bytes).is_ok() {
-                reserved = bytes;
+            let fund = fund.min(bytes).min(memory.size());
+            // Grow by what `fund` does not cover, then move the whole filter
+            // to a reservation of its own: a refusal changes nothing.
+            *st = if memory.try_grow(bytes - fund).is_ok() {
+                reserved = bytes - fund;
                 self.note(events::ACTIVE);
                 let bloom = RuntimeBloom::with_bytes(bytes);
                 Spilled::Active {
                     capacity: capacity(&bloom, b.options().bloom_max_fpp),
                     bloom,
-                    memory: r,
+                    memory: memory.split(bytes),
                     inserted: 0,
                 }
             } else {
@@ -226,10 +239,12 @@ impl Partials {
     /// sixteenth of the filter as hashes. Past the cap (or forced) without
     /// the filter, or once it is full, the hashes are dropped and the Bloom
     /// lost for the build ([`Self::mark_lost`]). Returns `None` when no
-    /// hashes left the partial, else the bytes newly reserved for the
-    /// filter.
+    /// hashes left the partial, else the bytes newly taken from the pool for
+    /// the filter. A filter created here is paid first from the partials'
+    /// reservations, up to what they hold beyond everything but these
+    /// hashes, so the reservations may shrink: callers re-read them.
     pub(super) fn settle(&mut self, i: usize, force: bool) -> Option<usize> {
-        let (Some(Some(b)), Some(spilled)) = (self.builders.get_mut(i), self.spilled.get(i)) else {
+        let (Some(Some(b)), Some(spilled)) = (self.builders.get(i), self.spilled.get(i)) else {
             return None;
         };
         let bytes = b.options().bloom_spill_bytes? as usize;
@@ -237,8 +252,15 @@ impl Partials {
         if !b.has_hashes() || !(must || spilled.active()) {
             return None;
         }
+        // The reserved bytes beyond what the partials hold besides these
+        // hashes: the filter replaces them, so they fund it first.
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        let fund = held.saturating_sub(self.heap_bytes().saturating_sub(b.hash_bytes()));
+        let (Some(Some(b)), Some(spilled)) = (self.builders.get_mut(i), self.spilled.get(i)) else {
+            return None;
+        };
         let drained = match self.memory.first_mut() {
-            Some(m) => spilled.drain(b, bytes, m),
+            Some(m) => spilled.drain(b, bytes, fund, m),
             None => Drained::Not,
         };
         match drained {
