@@ -939,21 +939,28 @@ mod tests {
         assert!(rows[1].values().all(Value::is_null), "{:?}", rows[1]);
     }
 
-    /// A column of a type the pages never show (a map, a list) becomes null instead of failing the table.
+    /// A list cell renders as a JSON array (so `system.queries.hints` reaches the query page); a type the pages
+    /// never show (a map) becomes null instead of failing the table.
     #[test]
-    fn a_type_the_pages_do_not_show_is_null() {
-        use arrow_array::builder::{Int32Builder, ListBuilder};
+    fn a_list_renders_and_a_type_the_pages_do_not_show_is_null() {
+        use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
         let mut b = ListBuilder::new(Int32Builder::new());
         b.values().append_value(1);
         b.append(true);
         let list: ArrayRef = Arc::new(b.finish());
-        let schema = Schema::new(vec![Field::new(
-            "pipelines",
-            list.data_type().clone(),
-            true,
-        )]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![list]).unwrap();
-        assert_eq!(batches_to_rows(&[batch])[0]["pipelines"], Value::Null);
+        let mut m = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        m.keys().append_value("k");
+        m.values().append_value(1);
+        m.append(true).unwrap();
+        let map: ArrayRef = Arc::new(m.finish());
+        let schema = Schema::new(vec![
+            Field::new("pipelines", list.data_type().clone(), true),
+            Field::new("attrs", map.data_type().clone(), true),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![list, map]).unwrap();
+        let row = &batches_to_rows(&[batch])[0];
+        assert_eq!(row["pipelines"], json!([1]));
+        assert_eq!(row["attrs"], Value::Null);
     }
 
     fn new_run() -> Arc<Mutex<Run>> {
