@@ -68,6 +68,26 @@ impl UdtType {
         self.serialized_python_class.as_deref()
     }
 
+    /// Spark's `UserDefinedType.typeName`: the class's simple name without a trailing `$`, `Type` and `UDT`, lower
+    /// case (`ExamplePointUDT` is `examplepoint`). From the JVM class, else the Python class; `udt` for none.
+    pub fn type_name(&self) -> String {
+        let class = self
+            .jvm_class()
+            .or_else(|| self.python_class())
+            .unwrap_or("");
+        let simple = class
+            .rsplit(['.', '$'])
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        let name = simple.strip_suffix("Type").unwrap_or(simple);
+        let name = name.strip_suffix("UDT").unwrap_or(name).to_lowercase();
+        if name.is_empty() {
+            "udt".to_owned()
+        } else {
+            name
+        }
+    }
+
     /// The class that names this type for equality: the Python class, else the JVM class.
     fn identity(&self) -> Option<&str> {
         self.python_class().or_else(|| self.jvm_class())
