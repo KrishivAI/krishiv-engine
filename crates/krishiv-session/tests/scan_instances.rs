@@ -38,6 +38,13 @@ fn cols(names: &[&str]) -> Vec<String> {
     names.iter().map(|&n| n.to_owned()).collect()
 }
 
+/// `items` as strings, sorted (the order `rows` gives).
+fn sorted<S: ToString>(items: impl IntoIterator<Item = S>) -> Vec<String> {
+    let mut out: Vec<String> = items.into_iter().map(|i| i.to_string()).collect();
+    out.sort();
+    out
+}
+
 /// Every row as text, sorted.
 fn rows(batches: &[RecordBatch]) -> Vec<String> {
     let opts = FormatOptions::default().with_null("null");
@@ -153,7 +160,7 @@ fn a_mark_join_leg_reads_only_its_keys() {
     assert!(plan.contains("Existence"), "{plan}");
     // EXISTS: a row of the same k with 2 a' > 3 a, a' = a + 10 m <= 99, so a <= 59 (60
     // rows); `d = '5'` adds a = 5, already in.
-    assert_eq!(got.len(), 60, "{plan}");
+    assert_eq!(got, sorted((0..60).map(|a: i64| a.to_string())), "{plan}");
     assert!(scan_columns(&plan).contains(&cols(&["b", "k"])), "{plan}");
 }
 
@@ -194,12 +201,13 @@ fn an_instance_reading_only_the_corrupt_record_column_keeps_the_shared_columns()
         &s,
         &format!("SELECT a.x, b._corrupt_record FROM json.`{path}` a CROSS JOIN json.`{path}` b"),
     );
-    assert_eq!(got.len(), 9, "{got:?}");
-    assert_eq!(
-        got.iter().filter(|r| r.ends_with(",{not json")).count(),
-        3,
-        "{got:?}"
+    // a.x is 1, 2 and null (the corrupt line); b's corrupt column is null, null and the line.
+    let want = sorted(
+        ["1", "2", "null"]
+            .iter()
+            .flat_map(|x| ["null", "null", "{not json"].map(|c| format!("{x},{c}"))),
     );
+    assert_eq!(got, want);
     // Neither instance reads `_corrupt_record` alone: `b` keeps the shared columns.
     let scans = scan_columns(&plan);
     assert_eq!(scans.len(), 2, "{plan}");
@@ -215,6 +223,11 @@ fn an_instance_reading_only_the_corrupt_record_column_keeps_the_shared_columns()
 /// The window cases give the plain side exactly the window's columns (`k`, `b`), so
 /// optimizer pruning adds no projection under the window that would set its own demand
 /// (review of 5724f9c20, finding 1): with the Window arms forwarding the demand, both fail.
+/// The window cases' rows: each x row (a < 20, b = 2 a) with ranks 1 to `n` of its k.
+fn x_ranks(n: i64) -> Vec<String> {
+    sorted((0..20_i64).flat_map(|a| (1..=n).map(move |r| format!("{},{r}", 2 * a))))
+}
+
 #[test]
 fn the_demand_stops_at_a_window_and_an_expand() {
     let s = Session::new().unwrap();
@@ -230,10 +243,10 @@ fn the_demand_stops_at_a_window_and_an_expand() {
         (
             format!("{window} AND w.r <= 2"),
             cols(&["b", "k"]),
-            Some(40),
+            x_ranks(2),
         ),
         // The window alone: each x row meets the ten w rows of its k.
-        (window, cols(&["b", "k"]), Some(200)),
+        (window, cols(&["b", "k"]), x_ranks(10)),
         // A regression check only, not a guard of the Generate stop: the analyzer puts
         // `Project [k, arr AS _generate_arg]` under every `Generate`, and that projection
         // sets the demand, so SQL never reaches the stop itself.
@@ -244,7 +257,13 @@ fn the_demand_stops_at_a_window_and_an_expand() {
                  ON x.k = g.k WHERE x.a < 3 AND g.e < 25"
             ),
             cols(&["arr", "k"]),
-            None,
+            // x.a = k in 0..3; g's rows of that k are ids k, k + 10, k + 20, each
+            // exploding to the id and id + 1 (all under 25).
+            sorted((0..3_i64).flat_map(|k| {
+                [k, k + 10, k + 20]
+                    .into_iter()
+                    .flat_map(move |id| [id, id + 1].map(|e| format!("{k},{e}")))
+            })),
         ),
         // The `Expand` of a `ROLLUP` reads `k`, `b` and `c`.
         (
@@ -254,15 +273,14 @@ fn the_demand_stops_at_a_window_and_an_expand() {
                  ON x.k = r.k WHERE x.a < 3 AND r.b IS NULL"
             ),
             cols(&["b", "c", "k"]),
-            None,
+            // The (k, NULL) subtotals: sum of 3 id over id = k + 10 m, m < 10, is
+            // 30 k + 1350; the grand total's NULL k joins nothing.
+            cols(&["0,1350", "1,1380", "2,1410"]),
         ),
     ];
-    for (sql, used, count) in cases {
+    for (sql, used, want) in cases {
         let (got, plan) = both(&s, &sql);
-        assert!(!got.is_empty(), "{sql}\n{plan}");
-        if let Some(n) = count {
-            assert_eq!(got.len(), n, "{sql}\n{plan}");
-        }
+        assert_eq!(got, want, "{sql}\n{plan}");
         let scans = scan_columns(&plan);
         assert!(
             scans.iter().any(|c| used.iter().all(|u| c.contains(u))),
