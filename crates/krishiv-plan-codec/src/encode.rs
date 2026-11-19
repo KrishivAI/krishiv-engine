@@ -366,6 +366,23 @@ impl Encoder {
                 input: self.node_index(input)?,
                 udf: Some(self.python_relation(udf)?),
             }),
+            PhysNode::PythonUdtf { input, udf, call } => Kind::PythonUdtf(pb::PythonUdtfNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+                arg_names: call
+                    .arg_names
+                    .iter()
+                    .map(|n| pb::PythonUdtfArgName { name: n.clone() })
+                    .collect(),
+                table: call.table.as_ref().map(|t| pb::PythonUdtfTable {
+                    position: t.position as u64,
+                    columns: indexes(&t.columns),
+                    names: t.names.clone(),
+                    partition_child_indexes: indexes(&t.partition_child_indexes),
+                }),
+                carried: indexes(&call.carried),
+                analyzed: call.analyzed.clone(),
+            }),
             PhysNode::PythonGroupMap { input, keys, udf } => {
                 Kind::PythonGroupMap(pb::PythonGroupMapNode {
                     input: self.node_index(input)?,
