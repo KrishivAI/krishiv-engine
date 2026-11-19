@@ -171,7 +171,7 @@ impl RowLevelWrite {
 }
 
 /// The resolved columns of `e`'s function tree, each once.
-fn bound_columns(e: &Expr, out: &mut Vec<krishiv_plan::BoundColumn>) {
+pub(super) fn bound_columns(e: &Expr, out: &mut Vec<krishiv_plan::BoundColumn>) {
     use krishiv_plan::{ExprNode, ResolvedExpr};
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {

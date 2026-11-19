@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (87)
+## Spark functions Krishiv does not run yet (77)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -45,19 +45,9 @@ an empty cell means there is none yet.
 | [`approx_top_k_accumulate`](../reference/sql/functions/approx_top_k_accumulate.md) | not yet |  |
 | [`approx_top_k_combine`](../reference/sql/functions/approx_top_k_combine.md) | not yet |  |
 | [`approx_top_k_estimate`](../reference/sql/functions/approx_top_k_estimate.md) | not yet |  |
-| [`bitmap_and_agg`](../reference/sql/functions/bitmap_and_agg.md) | not yet |  |
-| [`bitmap_bit_position`](../reference/sql/functions/bitmap_bit_position.md) | not yet |  |
-| [`bitmap_bucket_number`](../reference/sql/functions/bitmap_bucket_number.md) | not yet |  |
-| [`bitmap_construct_agg`](../reference/sql/functions/bitmap_construct_agg.md) | not yet |  |
-| [`bitmap_count`](../reference/sql/functions/bitmap_count.md) | not yet |  |
-| [`bitmap_or_agg`](../reference/sql/functions/bitmap_or_agg.md) | not yet |  |
 | [`collations`](../reference/sql/functions/collations.md) | not yet |  |
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
 | [`from_protobuf`](../reference/sql/functions/from_protobuf.md) | not yet |  |
-| [`hll_sketch_agg`](../reference/sql/functions/hll_sketch_agg.md) | not yet | approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available |
-| [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
-| [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
-| [`hll_union_agg`](../reference/sql/functions/hll_union_agg.md) | not yet |  |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
@@ -165,6 +155,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Tags and global views](../concepts/known-differences.md#tags-and-global-views) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
+| [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
 
 ## Where it runs
 

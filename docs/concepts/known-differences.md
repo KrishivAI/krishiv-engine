@@ -528,3 +528,13 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   raises.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+
+## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
+
+`hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
+(`HllSketch.toUpdatableByteArray`). Both are the Apache DataSketches `HLL_8` format, and both libraries read
+both forms, so a sketch written by one engine can be estimated or unioned by the other, and
+`hll_sketch_estimate`, `hll_union` and `hll_union_agg` give the same numbers. What differs is the bytes:
+`length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
+`hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
+(`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.

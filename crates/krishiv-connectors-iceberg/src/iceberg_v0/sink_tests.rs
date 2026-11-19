@@ -4,7 +4,7 @@
 //! applies each request as `append_tests` does and read back through SQL; a
 //! second append on top; the write id in the snapshot summary; a failing
 //! driver and a cancelled write leaving no file, no commit and no memory; the
-//! capability check without a committer; a schema mismatch refused before
+//! capability check with and without a committer; a schema mismatch refused before
 //! anything is written.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +53,20 @@ impl Catalog {
             state: Mutex::new((
                 table.metadata().clone(),
                 table.metadata_location().unwrap().to_owned(),
+                0,
+            )),
+            hang: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
+        })
+    }
+
+    /// A catalog over the metadata file at `location`.
+    pub(super) fn at(location: &str) -> Arc<Self> {
+        let bytes = std::fs::read(location.strip_prefix("file://").unwrap()).unwrap();
+        Arc::new(Self {
+            state: Mutex::new((
+                serde_json::from_slice(&bytes).unwrap(),
+                location.to_owned(),
                 0,
             )),
             hang: AtomicBool::new(false),
@@ -293,7 +307,7 @@ pub(super) fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> Ice
     env.provider(&table, &VersionSpec::Current).unwrap()
 }
 
-fn request(write_id: Option<&str>) -> WriteRequest {
+pub(super) fn request(write_id: Option<&str>) -> WriteRequest {
     let mut r = WriteRequest::new(WriteMode::Append, "`db`.`t`", input_schema());
     r.write_id = write_id.map(str::to_owned);
     r
@@ -600,9 +614,10 @@ fn a_write_cancelled_during_its_commit_deletes_nothing() {
 }
 
 /// Without a committer the table declares no write mode, so the session's
-/// check (and `writer` itself) refuses an append; with one, only appends.
+/// check (and `writer` itself) refuses an append; with one, every batch
+/// mode (PR-36b part 2b added the overwrites).
 #[test]
-fn only_a_table_with_a_committer_takes_appends() {
+fn only_a_table_with_a_committer_takes_writes() {
     let env = env();
     let t = create(&env, ixn_schema(), false, &[]);
     let table = env.load(&t);
@@ -615,11 +630,6 @@ fn only_a_table_with_a_committer_takes_appends() {
         "{e}"
     );
     assert!(e.to_string().contains("append in batch mode"), "{e}");
-
-    let catalog = Catalog::new(&t);
-    let p = provider(&env, &catalog.location(), &catalog);
-    let caps = p.capabilities();
-    assert!(caps.batch_write && !caps.truncate && !caps.overwrite_by_filter);
     let mut truncate = request(None);
     truncate.mode = WriteMode::Truncate;
     let e = p.writer(&truncate).err().unwrap();
@@ -628,6 +638,13 @@ fn only_a_table_with_a_committer_takes_appends() {
         ErrorClass::UnsupportedFeatureTableOperation,
         "{e}"
     );
+
+    let catalog = Catalog::new(&t);
+    let p = provider(&env, &catalog.location(), &catalog);
+    let caps = p.capabilities();
+    assert!(caps.batch_write && caps.truncate && caps.overwrite_by_filter);
+    assert!(caps.overwrite_dynamic);
+    assert!(p.writer(&truncate).is_ok());
 }
 
 /// Rows that are not the table's columns are refused when the sink is
