@@ -689,6 +689,11 @@ async fn a_draining_service_maps_only_an_unknown_session_to_draining() {
         .await
         .unwrap_err();
     assert!(!e.message().contains("shutting down"), "closed: {e:?}");
+    // The status carries the session's own error class (in its ErrorInfo details), not the drain's.
+    assert!(
+        format!("{e:?}").contains("INVALID_HANDLE.SESSION_CLOSED"),
+        "closed: {e:?}"
+    );
     // A live session is served: the request gets as far as its own (empty) operation.
     let e = service
         .config(Request::new(config(live)))

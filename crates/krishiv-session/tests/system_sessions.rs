@@ -451,3 +451,47 @@ fn a_draining_runtime_refuses_drop_table_and_leaves_the_table() {
         ["0"]
     );
 }
+
+/// Every statement that writes, creates or drops is refused while the server drains, before its
+/// handler changes anything, and leaves a failed `system.queries` row as a refused query does
+/// (design P3-T066 §5.1).
+#[test]
+fn a_draining_runtime_refuses_every_changing_statement_before_it_changes_anything() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "alice");
+    let run = |sql: &str| block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() });
+    run("CREATE TABLE drain_all_t (a INT)");
+    run("INSERT INTO drain_all_t VALUES (1), (2)");
+    run("CREATE NAMESPACE drain_all_ns");
+    rt.set_draining(true);
+    for sql in [
+        "TRUNCATE TABLE drain_all_t",
+        "ALTER TABLE drain_all_t RENAME TO drain_all_t2",
+        "DROP NAMESPACE drain_all_ns CASCADE",
+        "CREATE NAMESPACE drain_all_ns2",
+        "CREATE TABLE drain_all_new (a INT)",
+        "INSERT INTO drain_all_t VALUES (3)",
+        "DROP TABLE drain_all_t",
+    ] {
+        let Err(err) = block_on(s.sql(sql)) else {
+            panic!("{sql} must be refused while draining");
+        };
+        assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING", "{sql}");
+    }
+    // A read of `system.*` still runs while draining.
+    assert_eq!(texts(&s, "SELECT state FROM system.sessions").len(), 1);
+    assert_eq!(
+        texts(
+            &s,
+            "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE state = 'failed' \
+             AND error_class = 'KRISHIV_SERVER_DRAINING' AND query_text LIKE 'TRUNCATE%'"
+        ),
+        ["1"]
+    );
+    rt.set_draining(false);
+    assert_eq!(
+        texts(&s, "SELECT CAST(count(*) AS STRING) FROM drain_all_t"),
+        ["2"]
+    );
+    run("DROP NAMESPACE drain_all_ns CASCADE");
+}
