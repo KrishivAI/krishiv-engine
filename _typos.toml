@@ -46,6 +46,7 @@ extend-ignore-re = [
     '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
     # the zone name in LEGACY parser docs and tests
     '(`IST`|\d\d:\d\d (IST|ist)")',
+    '"Basic [A-Za-z0-9+/=]+"', # base64 HTTP Basic credentials in the Flight SQL auth tests
 ]
 
 [default.extend-identifiers]

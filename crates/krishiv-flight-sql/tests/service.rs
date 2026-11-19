@@ -444,6 +444,12 @@ async fn statement_over_max_bytes_invalid_argument() {
         .await
         .expect_err("too long");
     assert_eq!(e.code(), Code::InvalidArgument, "{e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE")
+    );
     assert_eq!(h.flight.session_count(), 0, "refused before any session");
 }
 

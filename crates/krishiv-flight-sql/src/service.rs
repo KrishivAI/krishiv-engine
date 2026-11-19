@@ -196,7 +196,7 @@ impl FlightSqlService for FlightSqlServer {
         self.counted(Command::SqlInfo, result)
     }
 
-    /// `CancelFlightInfo` (design §4.5). [`crate::gate`] lets no other action reach here.
+    /// `CancelFlightInfo` (design §4.5). The crate's call gate lets no other action reach here.
     async fn do_action_fallback(
         &self,
         request: Request<Action>,

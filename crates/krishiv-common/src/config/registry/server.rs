@@ -369,7 +369,7 @@ pub static FLIGHT_SQL_ENABLED: ConfigEntry = startup(
     "krishiv.flightSql.enabled",
     ValueType::Bool,
     ConfigValue::Bool(true),
-    "Whether `krishiv server` serves Arrow Flight SQL on its Spark Connect port (P3-T101), when the binary is built with the `flight-sql` feature. Off: the Flight SQL paths answer `UNIMPLEMENTED`.",
+    "Whether `krishiv server` serves Arrow Flight SQL on its Spark Connect port, when the binary is built with the `flight-sql` feature. Off: the Flight SQL paths answer `UNIMPLEMENTED`.",
     None,
 );
 
