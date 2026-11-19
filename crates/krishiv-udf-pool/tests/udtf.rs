@@ -284,6 +284,60 @@ fn udtfs_run_eval_per_row_and_terminate_at_the_end() {
     assert_eq!(rows(&out), ["1|10", "2|20", "3|30", "-1|2"]);
 }
 
+/// A `LATERAL` call (300, 301): the input columns after the arguments are carried, not passed; each result
+/// row leads with the values of the row whose `eval` gave it, `terminate`'s rows with the last row's
+/// (Spark's `EvalPythonUDTFExec` join), and a row giving no result shows nowhere.
+#[test]
+fn a_lateral_call_carries_the_input_row_of_each_result() {
+    let Some(py) = python() else { return };
+    let (_pool, udfs) = udfs(&py);
+    let body = "class F:\n    def __init__(self):\n        self.n = 0\n    def eval(self, x):\n        \
+                self.n += 1\n        for i in range(x - 1):\n            yield x * 10 + i,\n    \
+                def terminate(self):\n        yield -self.n,";
+    for (code, eval_type) in [
+        (300, PythonEvalType::TableUdf),
+        (301, PythonEvalType::ArrowTableUdf),
+    ] {
+        let name = register(&udfs, udtf_command(&py, body, code));
+        let call = UdtfCall {
+            passthrough: vec![1, 2],
+            ..positional(1)
+        };
+        let prepared = prepare(
+            &udfs,
+            &name,
+            eval_type,
+            &[
+                ("_0", DataType::Long),
+                ("id", DataType::Long),
+                ("w", DataType::Long),
+            ],
+            &["id", "w", "r"],
+            call,
+        )
+        .expect("prepare");
+        let frames = vec![
+            frame(vec![
+                ("_0", longs(&[1, 2])),
+                ("id", longs(&[100, 200])),
+                ("w", longs(&[5, 6])),
+            ]),
+            frame(vec![
+                ("_0", longs(&[3])),
+                ("id", longs(&[300])),
+                ("w", longs(&[7])),
+            ]),
+            Frame::End,
+        ];
+        let out = run(prepared.as_ref(), frames).unwrap_or_else(|e| panic!("{code}: {e}"));
+        assert_eq!(
+            rows(&out),
+            ["200|6|20", "300|7|30", "300|7|31", "300|7|-3"],
+            "{code}"
+        );
+    }
+}
+
 /// A `TABLE` argument with `PARTITION BY`: the row is a struct whose projected partition values are removed
 /// before `eval` sees it, and `terminate` plus a fresh instance mark each change of those values
 /// (`UDTFWithPartitions`, `ArrowUDTFWithPartition`).
@@ -319,6 +373,7 @@ fn a_table_argument_partitioned_terminates_each_partition() {
         partition_child_indexes: vec![1],
         table_arg_offsets: vec![0],
         analyze_result: None,
+        passthrough: Vec::new(),
     };
     // The row has `v` only; the sum of a partition comes out at its end.
     let rows_body = "class F:\n    def __init__(self):\n        self.s = 0\n    def eval(self, row):\n        \

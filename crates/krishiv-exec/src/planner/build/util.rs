@@ -245,7 +245,7 @@ pub(super) fn range_node(
 }
 
 /// One row without columns (`SELECT` without `FROM`).
-pub(super) fn one_row() -> Planned {
+pub(crate) fn one_row() -> Planned {
     Planned {
         ordering: Vec::new(),
         schema: Arc::new(Schema::empty()),
@@ -348,4 +348,67 @@ pub(super) fn loop_limits(
         rows: u64::try_from(bound(conf(&CTE_RECURSION_ROW_LIMIT), 1_000_000)).unwrap_or(u64::MAX),
         pushed_limit: None,
     }
+}
+
+/// The input columns `exprs` read, or `None` when one of them may read its input any other
+/// way than by a resolved column (a subquery, whose correlated columns hide in its own plan; an
+/// unresolved name or star; a window; an aggregate's state input), so nothing can be dropped.
+pub(super) fn columns_read<'e>(
+    exprs: impl IntoIterator<Item = &'e Expr>,
+) -> Option<HashSet<AttrId>> {
+    let mut out = HashSet::new();
+    let mut stack: Vec<&Expr> = exprs.into_iter().collect();
+    while let Some(e) = stack.pop() {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                out.insert(c.id);
+            }
+            ExprNode::Resolved(ResolvedExpr::StateInput { .. })
+            | ExprNode::Subquery { .. }
+            | ExprNode::Column(_)
+            | ExprNode::Star(_)
+            | ExprNode::MultiAlias { .. }
+            | ExprNode::Pipe { .. }
+            | ExprNode::Window(_) => return None,
+            _ => {}
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    Some(out)
+}
+
+/// `demand` with the columns `predicate` reads added; `None` when there is no demand or the
+/// predicate may read its input otherwise ([`columns_read`]).
+pub(crate) fn with_columns_of(
+    demand: Option<HashSet<AttrId>>,
+    predicate: &Expr,
+) -> Option<HashSet<AttrId>> {
+    let mut demand = demand?;
+    demand.extend(columns_read([predicate])?);
+    Some(demand)
+}
+
+/// The columns a node's own expressions read from its input, as the demand it puts on that
+/// input (see the planner's `demand`), or `None` when they cannot be told.
+pub(crate) fn node_demand(node: &LogicalPlan) -> Option<HashSet<AttrId>> {
+    let mut exprs = Vec::new();
+    node.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+    columns_read(exprs.iter().map(AsRef::as_ref))
+}
+
+/// `scan` reading only the columns in `demand`, or `None` when that is every column or none.
+pub(super) fn narrow_scan(
+    scan: &krishiv_plan::Scan,
+    demand: &HashSet<AttrId>,
+) -> Option<krishiv_plan::Scan> {
+    let output: Vec<BoundColumn> = scan
+        .output
+        .iter()
+        .filter(|c| demand.contains(&c.id))
+        .cloned()
+        .collect();
+    (!output.is_empty() && output.len() < scan.output.len()).then(|| krishiv_plan::Scan {
+        output,
+        ..scan.clone()
+    })
 }

@@ -647,7 +647,13 @@ impl<'a> Walker<'a> {
                 table_arg,
                 udf: _,
                 output,
+                lateral,
+                analyzed: _,
             } => {
+                let carried: Out = match lateral {
+                    Some(l) => self.plan(l, offset)?,
+                    None => Arc::new(Vec::new()),
+                };
                 let mut values = Vec::with_capacity(args.len());
                 for a in args {
                     values.push(self.value(a, offset)?);
@@ -661,9 +667,20 @@ impl<'a> Walker<'a> {
                     for o in &t.order_by {
                         self.filter_by(FilterKind::Window, &o.expr, offset)?;
                     }
+                    for e in &t.select {
+                        values.push(self.value(e, offset)?);
+                    }
                 }
                 let value = self.opaque(values.iter());
-                self.opaque_columns(output, &value, offset)
+                if lateral.is_none() {
+                    return self.opaque_columns(output, &value, offset);
+                }
+                let mut out = carried.as_ref().clone();
+                let kept = out.len();
+                for c in output {
+                    out.push((shifted(c.id, offset)?, Arc::clone(&value)));
+                }
+                Ok(Rule::Extend(out, kept))
             }
             PlanNode::Read(_)
             | PlanNode::Sql { .. }

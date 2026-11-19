@@ -44,6 +44,15 @@
 //! | added delete files matching the filter, data sequence number above S0's | `overwrite`, `delete` | `validateNoNewDeleteFiles`, `:534-640`; `DeleteFileIndex.java:489-504` |
 //! | an added DV for a data file this write writes a DV for | `overwrite`, `delete`, `replace` | `validateAddedDVs`, `:869-955` |
 //! | a data file this write removes or references removed | `overwrite`, `replace`, `delete` (`delete` skipped for references when asked) | `validateDataFilesExist`, `:817-860` |
+//! | a delete file added that applies to a data file this write replaces | `overwrite`, `delete` | `validateNoNewDeletesForDataFiles`, `:519-559` |
+//! | a data file matching the filter (or of the partitions) removed | `overwrite`, `replace`, `delete` | `validateDeletedDataFiles`, `:680-771` |
+//!
+//! INSERT OVERWRITE (PR-36b part 2b, `overwrite.rs`) sets an explicit start
+//! ([`Validation::start`]: `validate-from-snapshot-id`, or the whole history)
+//! validated on every attempt, the first included, and for a
+//! `ReplacePartitions` a [`PartitionSet`] as the scope instead of the filter
+//! (Java's `PartitionSet` overloads: membership by spec id and tuple, and
+//! their "matching partitions %s" texts).
 //!
 //! A check that fires names the intervening snapshot that held the file, the
 //! check and Java's message text; the loop turns it into
@@ -67,15 +76,14 @@
 //!   so a file that matches may be pruned: a false "no conflict", an
 //!   exception to R:S11 kept for parity. Unit 2 should carry the filter's
 //!   field ids from planning, or treat a column whose id changed as unknown.
-//! - **The CoW check set (finding 4):** design note §7.3 maps CoW to "added
-//!   delete files matching the filter". As recalled (unverified),
-//!   `BaseOverwriteFiles.validate` with Spark's CoW (no row filter) runs only
-//!   `validateNoNewDeletesForDataFiles` over the files the write removes, so
-//!   Krishiv's set is wider: no lost update, but a concurrent MoR DELETE of
-//!   another file in the filter's region fails a CoW UPDATE that Spark
-//!   commits. Verify against `BaseOverwriteFiles` and `SparkWrite` at the tag
-//!   before unit 2 wires CoW; record it as a divergence or implement
-//!   `validateNoNewDeletesForDataFiles`.
+//! - **The CoW check set (finding 4), settled in part 2a:** Java's
+//!   `BaseOverwriteFiles.validate` with Spark's CoW (no row filter,
+//!   `BaseOverwriteFiles.java:136-179`, notes-36b2 §1 and §6) runs
+//!   `validateAddedDataFiles` (serializable) and
+//!   `validateNoNewDeletesForDataFiles` over the files the write removes
+//!   ([`Checks::new_deletes_for_replaced`]); `row_level.rs` asks for exactly
+//!   those, and the removed files' existence comes from the filter's
+//!   `failMissingDeletePaths` (`filter.rs`).
 //! - **Message texts (findings 8, 9), unverified:** "Missing required files
 //!   to delete: ..." joins with `", "`, where Java's `ManifestFilterManager`
 //!   may join with `","` (`Joiner.on(",")`, recalled); the DV description in
@@ -90,12 +98,13 @@ use iceberg::spec::{FormatVersion, Operation, TableMetadata};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::PushdownExpr;
 
+use super::filter::{PartitionKey, partition_key};
 use super::scan::{
     parse_manifest, partition_specs, read_capped, read_manifest_list, schema_fields,
 };
 use crate::plan::entry::{
-    ContentFile, ContentKind, DataFileEntry, DeleteKind, EntryStatus, LiveEntry, ManifestContent,
-    ManifestFileEntry, inherit_changes,
+    ContentFile, ContentKind, DataFileEntry, DeleteFileEntry, DeleteKind, EntryStatus, LiveEntry,
+    ManifestContent, ManifestFileEntry, inherit_changes,
 };
 use crate::plan::metrics::WriterMetrics;
 use crate::plan::prune::{PruneOptions, Pruner};
@@ -114,6 +123,10 @@ pub(crate) const CHECK_ADDED_DELETES: &str = "added delete files";
 pub(crate) const CHECK_ADDED_DVS: &str = "added DVs";
 /// See [`CHECK_HISTORY`].
 pub(crate) const CHECK_REMOVED: &str = "removed data files";
+/// See [`CHECK_HISTORY`].
+pub(crate) const CHECK_DELETED_DATA: &str = "deleted data files";
+/// See [`CHECK_HISTORY`].
+pub(crate) const CHECK_NEW_DELETES: &str = "new deletes for replaced data files";
 
 /// `data is only added in "append" and "overwrite" operations`
 /// (`VALIDATE_ADDED_FILES_OPERATIONS`).
@@ -136,10 +149,6 @@ pub(crate) enum Isolation {
     Serializable,
     /// Concurrently added data files are not a conflict (design note §7.3's
     /// table: no "added data files" check).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "chosen by the operations of PR-36b unit 2")
-    )]
     Snapshot,
 }
 
@@ -147,7 +156,7 @@ pub(crate) enum Isolation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "four independent checks, as Java's four validate calls"
+    reason = "independent checks, as Java's validate calls"
 )]
 pub(crate) struct Checks {
     /// Data files added matching the filter (serializable only).
@@ -159,6 +168,23 @@ pub(crate) struct Checks {
     /// A file of [`Validation::removes`] or [`Validation::references`]
     /// removed.
     pub(crate) removed_data_files: bool,
+    /// A delete file added that applies to a data file of
+    /// [`Validation::replaced`] (Java's `validateNoNewDeletesForDataFiles`).
+    pub(crate) new_deletes_for_replaced: bool,
+    /// A data file matching the filter (or of [`Validation::partitions`])
+    /// removed (Java's `validateDeletedDataFiles`; INSERT OVERWRITE).
+    pub(crate) deleted_data_files: bool,
+}
+
+/// Java's `PartitionSet`: the conflict scope of a `ReplacePartitions`
+/// (instead of a filter), each partition by spec id and tuple.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PartitionSet {
+    /// The partitions.
+    pub(crate) keys: HashSet<PartitionKey>,
+    /// As the messages print it (Java's `PartitionSet.toString`; Krishiv
+    /// prints the partition paths, unverified).
+    pub(crate) text: String,
 }
 
 /// What one write validates on a rebase.
@@ -182,8 +208,22 @@ pub(crate) struct Validation {
     pub(crate) references_skip_deletes: bool,
     /// The data files this write writes a DV for.
     pub(crate) dvs_for: BTreeSet<String>,
+    /// The data files this write replaces, as planned (CoW's rewritten
+    /// files), for [`Checks::new_deletes_for_replaced`].
+    pub(crate) replaced: Vec<DataFileEntry>,
     /// `krishiv.iceberg.commit.maxIntervening`.
     pub(crate) max_intervening: usize,
+    /// Where validation starts, overriding the write's base (S0) and run
+    /// on **every** attempt, the first included (Java's
+    /// `validateFromSnapshot`, set by INSERT OVERWRITE's
+    /// `validate-from-snapshot-id`; `Some(None)`: the whole history, Java's
+    /// null starting snapshot). `None`: S0, on every rebase.
+    pub(crate) start: Option<Option<i64>>,
+    /// The conflict scope as partitions (a `ReplacePartitions`); the filter
+    /// is then unused.
+    pub(crate) partitions: Option<PartitionSet>,
+    /// Appended to the message of a check that fires.
+    pub(crate) hint: Option<String>,
 }
 
 impl Default for Validation {
@@ -204,7 +244,11 @@ impl Validation {
             references: BTreeSet::new(),
             references_skip_deletes: false,
             dvs_for: BTreeSet::new(),
+            replaced: Vec::new(),
             max_intervening: DEFAULT_MAX_INTERVENING,
+            start: None,
+            partitions: None,
+            hint: None,
         }
     }
 
@@ -220,9 +264,24 @@ impl Validation {
         self.checks.removed_data_files && !(self.removes.is_empty() && self.references.is_empty())
     }
 
+    fn new_deletes(&self) -> bool {
+        self.checks.new_deletes_for_replaced && !self.replaced.is_empty()
+    }
+
+    /// Whether the history's delete manifests are read whole (every live
+    /// entry, as Java's `DeleteFileIndex`) for an intervening `op`.
+    fn reads_live_deletes(&self, op: &Operation) -> bool {
+        (self.checks.added_delete_files || self.new_deletes()) && ADDED_DELETES_OPS.contains(op)
+    }
+
     /// Whether any check runs (else the walk is skipped, as for an append).
     pub(crate) fn runs(&self) -> bool {
-        self.added_data() || self.checks.added_delete_files || self.added_dvs() || self.removed()
+        self.checks.deleted_data_files
+            || self.added_data()
+            || self.checks.added_delete_files
+            || self.added_dvs()
+            || self.removed()
+            || self.new_deletes()
     }
 
     /// Whether an intervening snapshot of `op` must be read for `content`.
@@ -230,11 +289,17 @@ impl Validation {
         let any = |on: bool, ops: &[Operation]| on && ops.contains(op);
         match content {
             ManifestContent::Data => {
-                any(self.added_data(), ADDED_FILES_OPS) || any(self.removed(), FILES_EXIST_OPS)
+                any(self.added_data(), ADDED_FILES_OPS)
+                    || any(
+                        self.removed() || self.checks.deleted_data_files,
+                        FILES_EXIST_OPS,
+                    )
             }
             ManifestContent::Deletes => {
-                any(self.checks.added_delete_files, ADDED_DELETES_OPS)
-                    || any(self.added_dvs(), ADDED_DVS_OPS)
+                any(
+                    self.checks.added_delete_files || self.new_deletes(),
+                    ADDED_DELETES_OPS,
+                ) || any(self.added_dvs(), ADDED_DVS_OPS)
             }
         }
     }
@@ -439,23 +504,29 @@ fn listed<'a>(paths: impl IntoIterator<Item = &'a str>) -> String {
     format!("[{}]", paths.into_iter().collect::<Vec<_>>().join(", "))
 }
 
-/// The four checks over `history` (module docs); the first that fires.
+/// The checks over `history` (module docs); the first that fires.
 pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<Fired> {
     let always = PushdownExpr::Constant(true);
     let pruner = judge.pruner(v.filter.as_ref().unwrap_or(&always));
-    let matches = |c: &Change, f: &ContentFile| {
-        pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f))
+    let matches = |c: &Change, f: &ContentFile| match &v.partitions {
+        Some(set) => partition_key(&judge.specs, f.spec_id, &f.partition)
+            .is_some_and(|k| set.keys.contains(&k)),
+        None => pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f)),
     };
     if v.added_data() {
         let found: Vec<_> = history
             .entries(ADDED_FILES_OPS, ManifestContent::Data, EntryStatus::Added)
             .filter(|(c, e)| matches(c, &data_entry(e).file))
             .collect();
-        let text = |p: String| {
-            format!(
+        let text = |p: String| match &v.partitions {
+            Some(set) => format!(
+                "Found conflicting files that can contain records matching partitions {}: {p}",
+                set.text
+            ),
+            None => format!(
                 "Found conflicting files that can contain records matching {}: {p}",
                 v.filter_text
-            )
+            ),
         };
         if let Some(f) = fired(CHECK_ADDED_DATA, &found, text) {
             return Some(f);
@@ -487,15 +558,43 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
             // A `LinkedHashSet` of locations.
             .filter(|(_, e)| seen.insert(data_entry(e).file.path.clone()))
             .collect();
+        let scope = v.partitions.as_ref().map_or(&v.filter_text, |s| &s.text);
         let text = |p: String| {
             format!(
-                "Found new conflicting delete files that can apply to records matching {}: {p}",
-                v.filter_text
+                "Found new conflicting delete files that can apply to records matching {scope}: {p}"
             )
         };
         if let Some(f) = fired(CHECK_ADDED_DELETES, &found, text) {
             return Some(f);
         }
+    }
+    // `validateDeletedDataFiles` (`MergingSnapshotProducer.java:680-727`):
+    // a data file matching the filter (or of the partitions) that an
+    // intervening `overwrite`, `replace` or `delete` removed.
+    if v.checks.deleted_data_files {
+        let found: Vec<_> = history
+            .entries(FILES_EXIST_OPS, ManifestContent::Data, EntryStatus::Deleted)
+            .filter(|(c, e)| matches(c, &data_entry(e).file))
+            .collect();
+        let text = |p: String| match &v.partitions {
+            Some(set) => format!(
+                "Found conflicting deleted files that can apply to records matching {}: {p}",
+                set.text
+            ),
+            None => format!(
+                "Found conflicting deleted files that can contain records matching {}: {p}",
+                v.filter_text
+            ),
+        };
+        if let Some(f) = fired(CHECK_DELETED_DATA, &found, text) {
+            return Some(f);
+        }
+    }
+    if v.new_deletes()
+        && !history.v1
+        && let Some(f) = new_deletes_for_replaced(history, v, judge, &pruner)
+    {
+        return Some(f);
     }
     if v.added_dvs()
         && let Some(f) = added_dvs(history, v, &pruner)
@@ -543,6 +642,80 @@ fn fired(
         snapshot_id: Some(first),
         message: message(paths),
     })
+}
+
+/// `validateNoNewDeletesForDataFiles` (`MergingSnapshotProducer.java:519-559`):
+/// per intervening `overwrite`/`delete` snapshot, an index of the live delete
+/// files of the delete manifests it added whose data sequence number is above
+/// S0's and that may match the filter (`addedDeleteFilesIndexedPerSnapshot`,
+/// `:604-640`); a replaced data file that any of them applies to, judged as
+/// written at S0's sequence number (`forDataFile(startingSequenceNumber,
+/// dataFile)`), is a conflict: "Cannot commit, found new delete for replaced
+/// data file: %s". Java prints the `DataFile`; Krishiv its path. A delete
+/// index that cannot be built or assigned counts as a conflict too
+/// (conservative).
+fn new_deletes_for_replaced(
+    history: &History,
+    v: &Validation,
+    judge: &Judge,
+    pruner: &Pruner<'_>,
+) -> Option<Fired> {
+    use std::sync::Arc;
+
+    use crate::plan::deletes::DeleteIndex;
+    let mut by_snapshot: Vec<(i64, Vec<Arc<DeleteFileEntry>>)> = Vec::new();
+    for c in history.changes.iter().filter(|c| {
+        ADDED_DELETES_OPS.contains(&c.operation) && c.manifest.content == ManifestContent::Deletes
+    }) {
+        if !pruner.manifest_may_match(&c.manifest) {
+            continue;
+        }
+        for e in &c.entries {
+            let LiveEntry::Delete(d) = e else { continue };
+            if d.entry.status == EntryStatus::Deleted
+                || d.entry
+                    .data_sequence_number
+                    .is_some_and(|s| s <= history.start_sequence)
+                || !pruner.file_may_match(&judged(&d.entry.file))
+            {
+                continue;
+            }
+            match by_snapshot.iter_mut().find(|(id, _)| *id == c.snapshot_id) {
+                Some((_, files)) => files.push(Arc::new(d.clone())),
+                None => by_snapshot.push((c.snapshot_id, vec![Arc::new(d.clone())])),
+            }
+        }
+    }
+    let fire = |id: i64, path: &str| Fired {
+        check: CHECK_NEW_DELETES,
+        snapshot_id: Some(id),
+        message: format!("Cannot commit, found new delete for replaced data file: {path}"),
+    };
+    // One index per snapshot, built once for every replaced file (an index
+    // that cannot be built matches every file).
+    let indexes: Vec<(i64, Option<DeleteIndex>)> = by_snapshot
+        .iter()
+        .map(|(id, files)| {
+            let index = DeleteIndex::new(files, &judge.specs)
+                .map(|i| i.with_fields(&judge.fields, &judge.metrics))
+                .ok();
+            (*id, index)
+        })
+        .collect();
+    for data in &v.replaced {
+        let mut at_start = data.clone();
+        at_start.data_sequence_number = Some(history.start_sequence);
+        for (id, index) in &indexes {
+            let applies = index
+                .as_ref()
+                .and_then(|i| i.for_data_file(&at_start).ok())
+                .is_none_or(|d| !d.is_empty());
+            if applies {
+                return Some(fire(*id, &data.file.path));
+            }
+        }
+    }
+    None
 }
 
 /// `validateAddedDVs`: the first DV an intervening `overwrite`, `delete` or
@@ -691,9 +864,8 @@ pub(crate) async fn read_history(
             }
             // Java's `DeleteFileIndex` reads every live entry of a delete
             // manifest (review finding 1).
-            let existing = manifest.content == ManifestContent::Deletes
-                && v.checks.added_delete_files
-                && ADDED_DELETES_OPS.contains(&op);
+            let existing =
+                manifest.content == ManifestContent::Deletes && v.reads_live_deletes(&op);
             let entries = read_changes(io, &manifest, existing, max_bytes).await?;
             changes.push(Change {
                 snapshot_id: *id,
@@ -756,11 +928,19 @@ pub(crate) async fn validate(
     let parent_of = |id: i64| m.snapshot_by_id(id).map(|s| s.parent_snapshot_id());
     let walked = match walk(head, s0, v.max_intervening, parent_of) {
         Ok(w) => w,
-        Err(f) => return Ok(Some(f)),
+        Err(f) => return Ok(Some(with_hint(f, v))),
     };
     if walked.is_empty() {
         return Ok(None);
     }
     let history = read_history(io, m, &walked, s0, v, max_bytes).await?;
-    Ok(check(&history, v, &Judge::of(m)))
+    Ok(check(&history, v, &Judge::of(m)).map(|f| with_hint(f, v)))
+}
+
+/// `f` with the validation's hint after its message.
+fn with_hint(mut f: Fired, v: &Validation) -> Fired {
+    if let Some(h) = &v.hint {
+        f.message = format!("{} ({h})", f.message);
+    }
+    f
 }

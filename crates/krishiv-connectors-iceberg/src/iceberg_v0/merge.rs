@@ -64,6 +64,7 @@ use iceberg::spec::{
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
+use super::filter::widen_partition;
 use super::scan::read_capped;
 use super::storage::from_iceberg;
 
@@ -282,24 +283,46 @@ async fn write_merged(
     bin: &[&ManifestFile],
 ) -> Result<ManifestFile, KrishivError> {
     let metadata = cx.metadata;
-    let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
-        internal(format!(
-            "a manifest of partition spec {spec_id}, which the table lacks"
-        ))
-    })?;
     let content = bin.first().map_or(ManifestContentType::Data, |m| m.content);
     let version = metadata.format_version();
     let path = format!("{}{}.avro", cx.prefix, cx.next);
     cx.next += 1;
     cx.merged.push(path.clone());
-    let output = cx.io.new_output(&path).map_err(from_iceberg)?;
+    let mut writer = manifest_writer(cx.io, &path, metadata, cx.snapshot_id, spec_id, content)?;
+    for m in bin {
+        copy_entries(cx, m, version, &mut writer).await?;
+    }
+    writer.write_manifest_file().await.map_err(from_iceberg)
+}
+
+/// A writer of a manifest of `content` at `path` for the partition spec
+/// `spec_id` of `metadata`, under the snapshot id `snapshot_id`, in the
+/// table's format version.
+///
+/// # Errors
+/// An internal error for a spec the table lacks or a delete manifest of a
+/// format version 1 table; iceberg-rust's output errors.
+pub(crate) fn manifest_writer(
+    io: &FileIO,
+    path: &str,
+    metadata: &TableMetadata,
+    snapshot_id: i64,
+    spec_id: i32,
+    content: ManifestContentType,
+) -> Result<ManifestWriter, KrishivError> {
+    let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
+        internal(format!(
+            "a manifest of partition spec {spec_id}, which the table lacks"
+        ))
+    })?;
+    let output = io.new_output(path).map_err(from_iceberg)?;
     let builder = ManifestWriterBuilder::new(
         output,
-        Some(cx.snapshot_id),
+        Some(snapshot_id),
         Arc::clone(metadata.current_schema()),
         spec.as_ref().clone(),
     );
-    let mut writer = match (version, content) {
+    Ok(match (metadata.format_version(), content) {
         (FormatVersion::V1, ManifestContentType::Data) => builder.build_v1(),
         (FormatVersion::V2, ManifestContentType::Data) => builder.build_v2_data(),
         (FormatVersion::V2, ManifestContentType::Deletes) => builder.build_v2_deletes(),
@@ -310,11 +333,7 @@ async fn write_merged(
                 "a delete manifest in a format version 1 table".to_owned(),
             ));
         }
-    };
-    for m in bin {
-        copy_entries(cx, m, version, &mut writer).await?;
-    }
-    writer.write_manifest_file().await.map_err(from_iceberg)
+    })
 }
 
 /// The entries of `m` into `writer` (module docs).
@@ -345,7 +364,8 @@ async fn copy_entries(
     let ours = cx.snapshot_id;
     let lineage = version == FormatVersion::V3 && m.content == ManifestContentType::Data;
     // `plan::entry::inherit`'s row-id rule: assigned in order to the live
-    // entries without one, from the manifest's `first_row_id`; none without it.
+    // entries without one, from the manifest's `first_row_id`; without one, each entry
+    // keeps its own (explicit or none).
     let mut next_row_id = match (lineage, m.first_row_id) {
         (true, Some(id)) => Some(i64::try_from(id).map_err(|_| {
             internal(format!(
@@ -362,7 +382,10 @@ async fn copy_entries(
         let seq = |v: Option<i64>| v.or(inherits.then_some(m.sequence_number));
         let data_seq = seq(e.sequence_number());
         let file_seq = seq(e.file_sequence_number);
-        let file = e.data_file();
+        // A manifest written before `int -> long` or `float -> double` on a
+        // partition source column holds the old literal, which the writer on
+        // the current schema refuses (review 36b2b round 2, finding 1).
+        let file = &widen_partition(e.data_file().clone(), cx.metadata, m.partition_spec_id)?;
         let row_id = match &mut next_row_id {
             Some(next) if status != ManifestStatus::Deleted && file.first_row_id().is_none() => {
                 let id = *next;
@@ -373,8 +396,10 @@ async fn copy_entries(
                     })?;
                 Some(id)
             }
-            Some(_) => file.first_row_id(),
-            None => None,
+            // An explicit id always wins, also over a manifest without a
+            // `first_row_id` (a manifest `filter.rs` rewrote: its entries
+            // carry explicit ids, review 36b2a B2).
+            _ => file.first_row_id(),
         };
         let explicit = |v: Option<i64>, what: &str| {
             v.filter(|n| *n >= 0).ok_or_else(|| {
@@ -427,11 +452,22 @@ pub(crate) fn with_first_row_id(
     if f.first_row_id() == id {
         return Ok(f.clone());
     }
+    rebuild(f, id, f.partition().clone(), spec_id)
+}
+
+/// `f` with the partition tuple `partition`, the first row id `id` and the
+/// spec id `spec_id`.
+pub(crate) fn rebuild(
+    f: &DataFile,
+    id: Option<i64>,
+    partition: iceberg::spec::Struct,
+    spec_id: i32,
+) -> Result<DataFile, KrishivError> {
     let mut b = DataFileBuilder::default();
     b.content(f.content_type())
         .file_path(f.file_path().to_owned())
         .file_format(f.file_format())
-        .partition(f.partition().clone())
+        .partition(partition)
         .record_count(f.record_count())
         .file_size_in_bytes(f.file_size_in_bytes())
         .column_sizes(f.column_sizes().clone())

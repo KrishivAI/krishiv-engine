@@ -31,6 +31,12 @@
 //!   outcome deletes nothing). A finalize dropped while a request is in
 //!   flight leaves orphans, never a table that references deleted files. A
 //!   write of no rows still commits a snapshot with no files.
+//! - **Statistics** (PR-54b, `statistics_file.rs`): when the target has them
+//!   on, each driver's writer sketches its rows (charged to a reservation of
+//!   the driver's consumer, refused → that task has none), `finalize`
+//!   unions the tasks' sketches (charged to its own consumer) into the
+//!   write's, and each commit attempt writes them into a statistics file. A
+//!   task without sketches leaves the whole write without statistics.
 //! - **Input checks.** [`IcebergWriteSink::try_new`] refuses a request whose
 //!   `input_schema` does not have the table's columns, by name in order and of
 //!   the table's types (nullability and field ids aside), with
@@ -59,9 +65,14 @@
 //!   processes (workers, or a query retried after a restart) collide only if
 //!   their random keys line up, about 2^-64 per pair.
 //!
-//! Only appends: [`IcebergTableProvider`](crate::IcebergTableProvider)
-//! declares `BATCH_WRITE` alone, so a truncate or overwrite is refused before
-//! a sink is built. A distributed write would need the `WrittenDataFile`s of
+//! The other commits are a copy-on-write rewrite's and an `INSERT
+//! OVERWRITE`'s ([`IcebergWriteSink::try_rewrite`], `row_level.rs`,
+//! `overwrite.rs`): the same writers (with the lineage columns on v3), then
+//! an `OverwriteFiles` or `ReplacePartitions` through [`commit_validated`]
+//! with what it removes and its [`Validation`]; a dynamic overwrite takes
+//! its partitions from the files written and commits nothing when it wrote
+//! none. A
+//! distributed write would need the `WrittenDataFile`s of
 //! every worker's tasks gathered to one place that runs the commit once; the
 //! `Sink` contract commits once per pipeline run of one process, which is what
 //! this sink does.
@@ -87,10 +98,13 @@ use krishiv_types::batch::Batch;
 use tokio::sync::{mpsc, oneshot};
 
 use super::append::{WriteIds, write_new_manifests};
-use super::commit::{CommitClock, CommitContext, CommitTable, commit_append};
+use super::commit::{CommitClock, CommitContext, CommitTable, commit_append, commit_validated};
 use super::data_file::{WrittenDataFile, data_file};
+use super::filter::{Removals, partition_key};
+use super::statistics_file::{SketchColumn, TaskSketches, sketch_columns, union_tasks};
 use super::storage::Registered;
 use super::types::arrow_schema;
+use super::validate::{PartitionSet, Validation};
 use super::write::{DataFileWriter, TaskIds};
 
 /// The branch an append commits to.
@@ -111,6 +125,24 @@ pub(crate) struct WriteTarget {
     pub(crate) max_metadata_bytes: u64,
     /// `krishiv.iceberg.write.maxOpenFiles`, as the provider was opened.
     pub(crate) max_open_files: usize,
+    /// Whether the write writes statistics (`krishiv.iceberg.write.statistics.enabled`
+    /// and the table's `krishiv.write.statistics.enabled`, as the provider was opened).
+    pub(crate) statistics: bool,
+    /// `krishiv.iceberg.commit.maxIntervening`, as the provider was opened.
+    pub(crate) max_intervening: usize,
+}
+
+/// A copy-on-write rewrite's commit (`row_level.rs`): an `OverwriteFiles`
+/// removing `removals`, validated by `validation` on every rebase.
+#[derive(Debug, Clone)]
+pub(crate) struct Overwrite {
+    /// The files removed.
+    pub(crate) removals: Removals,
+    /// The rebase checks.
+    pub(crate) validation: Validation,
+    /// The rows carry `_row_id` and `_last_updated_sequence_number` after
+    /// the table's columns (a v3 table), written under their reserved ids.
+    pub(crate) lineage: bool,
 }
 
 impl std::fmt::Debug for WriteTarget {
@@ -132,6 +164,10 @@ pub(crate) struct IcebergWriteSink {
     /// The commit's idempotency key, also the files' operation id.
     write_id: String,
     clock: Arc<dyn CommitClock>,
+    /// The columns sketched, when the write has statistics (PR-54b).
+    sketch_columns: Option<Arc<[SketchColumn]>>,
+    /// `None`: an append.
+    overwrite: Option<Overwrite>,
 }
 
 impl std::fmt::Debug for IcebergWriteSink {
@@ -146,7 +182,8 @@ impl std::fmt::Debug for IcebergWriteSink {
 /// Batches queued per driver before its sink blocks.
 const QUEUED_BATCHES: usize = 2;
 
-type Outcome = Result<Vec<WrittenDataFile>, KrishivError>;
+/// A task's files and, when the write has statistics, its sketches.
+type Outcome = Result<(Vec<WrittenDataFile>, Option<TaskSketches>), KrishivError>;
 
 /// One driver's writer task, as `finalize` sees it.
 struct Writer {
@@ -220,6 +257,7 @@ impl WriterTask {
             writer.abort().await;
             return;
         }
+        let sketches = writer.take_sketches();
         let files = match writer.finish().await {
             Ok(files) => files,
             Err(e) => {
@@ -228,7 +266,7 @@ impl WriterTask {
             }
         };
         let locations: Vec<String> = files.iter().map(|f| f.location.clone()).collect();
-        let kept = done.send(Ok(files)).is_ok() && keep.await.unwrap_or(false);
+        let kept = done.send(Ok((files, sketches))).is_ok() && keep.await.unwrap_or(false);
         if !kept {
             delete_paths(&file_io, locations).await;
         }
@@ -251,8 +289,54 @@ impl IcebergWriteSink {
         target: Arc<WriteTarget>,
         request: &WriteRequest,
     ) -> Result<Self, KrishivError> {
+        Self::build(
+            target,
+            &request.input_schema,
+            &request.table_name,
+            request.write_id.clone(),
+            None,
+        )
+    }
+
+    /// The sink of a copy-on-write rewrite into `target`'s table: the rows
+    /// written replace the removed files in one `OverwriteFiles` commit
+    /// (`row_level.rs`). With lineage the input ends with `_row_id` and
+    /// `_last_updated_sequence_number`.
+    ///
+    /// # Errors
+    /// As [`Self::try_new`].
+    pub(crate) fn try_rewrite(
+        target: Arc<WriteTarget>,
+        input_schema: &SchemaRef,
+        table_name: &str,
+        write_id: Option<String>,
+        overwrite: Overwrite,
+    ) -> Result<Self, KrishivError> {
+        Self::build(target, input_schema, table_name, write_id, Some(overwrite))
+    }
+
+    /// Whether this write sketches its columns (appends only).
+    #[cfg(test)]
+    pub(super) fn sketches_columns(&self) -> bool {
+        self.sketch_columns.is_some()
+    }
+
+    fn build(
+        target: Arc<WriteTarget>,
+        input_schema: &SchemaRef,
+        table_name: &str,
+        write_id: Option<String>,
+        overwrite: Option<Overwrite>,
+    ) -> Result<Self, KrishivError> {
         let table = arrow_schema(target.base.current_schema())?;
-        check_input(&request.input_schema, &table, &request.table_name)?;
+        let expected = if overwrite.as_ref().is_some_and(|o| o.lineage) {
+            let mut fields: Vec<FieldRef> = table.fields().iter().cloned().collect();
+            fields.extend(super::lineage::lineage_fields());
+            Arc::new(arrow_schema::Schema::new(fields))
+        } else {
+            Arc::clone(&table)
+        };
+        check_input(input_schema, &expected, table_name)?;
         let handle = target
             .registered
             .io
@@ -263,13 +347,19 @@ impl IcebergWriteSink {
                 internal("an Iceberg commit needs the I/O scheduler's runtime".to_owned())
             })?;
         let has_required = table.fields().iter().any(|f| has_required(f));
-        let write_id = request.write_id.clone().unwrap_or_else(random_uuid);
+        let write_id = write_id.unwrap_or_else(random_uuid);
+        // Statistics are for appends only: a copy-on-write rewrite would union the parent's
+        // blob with the rewritten rows and keep counting deleted keys.
+        let sketch_columns = (target.statistics && overwrite.is_none())
+            .then(|| sketch_columns(target.base.current_schema()).into());
         Ok(Self {
             target,
             table,
             has_required,
             write_id,
             clock: Arc::new(IoClock { handle }),
+            sketch_columns,
+            overwrite,
         })
     }
 
@@ -305,11 +395,15 @@ impl IcebergWriteSink {
         };
         let mut keeps = Vec::with_capacity(writers.len());
         let mut files: Vec<WrittenDataFile> = Vec::new();
+        let mut sketches = Vec::with_capacity(writers.len());
         let mut first_error = None;
         for w in writers {
             keeps.push(w.keep);
             match w.done.await {
-                Ok(Ok(f)) => files.extend(f),
+                Ok(Ok((f, s))) => {
+                    files.extend(f);
+                    sketches.push(s);
+                }
                 Ok(Err(e)) => {
                     first_error.get_or_insert(e);
                 }
@@ -345,6 +439,18 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         };
+        let mut overwrite = self.overwrite.clone();
+        if let Some(o) = overwrite.as_mut().filter(|o| o.removals.replace_partitions) {
+            // Spark skips an empty dynamic overwrite (`SparkWrite.java:341-344`).
+            if entries.is_empty() {
+                written.delete().await;
+                return Ok(());
+            }
+            if let Err(e) = replaced_partitions(o, &t.base, &entries) {
+                written.delete().await;
+                return Err(e);
+            }
+        }
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
         let mut new = match write_new_manifests(
@@ -365,6 +471,10 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         };
+        // The tasks' sketches, unioned (statistics never fail the write).
+        if let Some(columns) = &self.sketch_columns {
+            new.statistics = union_tasks(columns, sketches, ctx.consumer().reservation());
+        }
         // From here the commit loop owns cleanup (design note §7.4).
         written.armed = false;
         let query_id = ctx.query().id().0.to_string();
@@ -378,10 +488,78 @@ impl IcebergWriteSink {
             write_id: &self.write_id,
             query_id: Some(&query_id),
         };
-        commit_append(t.committer.as_ref(), cx, &t.base, &mut new, ids)
-            .await
-            .map(drop)
+        match &overwrite {
+            None => commit_append(t.committer.as_ref(), cx, &t.base, &mut new, ids)
+                .await
+                .map(drop),
+            Some(o) => {
+                new.removals = Some(o.removals.clone());
+                commit_validated(
+                    t.committer.as_ref(),
+                    cx,
+                    &t.base,
+                    &mut new,
+                    ids,
+                    &o.validation,
+                )
+                .await
+                .map(drop)
+            }
+        }
     }
+}
+
+/// A `ReplacePartitions`' removals and conflict scope from the files it
+/// writes (`BaseReplacePartitions.java:51-56`, `:113-117`): their partitions
+/// (spec id and tuple, compared by value: `filter::partition_key`), or
+/// every row when none of their spec's fields is non-`void` (validated over
+/// `true`, Java's `alwaysTrue`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a written partition value that cannot
+/// be read back (never matched, so never dropped: refused instead).
+fn replaced_partitions(
+    o: &mut Overwrite,
+    base: &TableMetadata,
+    entries: &[(i32, iceberg::spec::DataFile)],
+) -> Result<(), KrishivError> {
+    let schema = base.current_schema();
+    // Java's `PartitionSpec.isUnpartitioned`: no field, or only `void` fields.
+    let unpartitioned = entries.iter().all(|(spec_id, _)| {
+        base.partition_spec_by_id(*spec_id).is_some_and(|s| {
+            s.fields()
+                .iter()
+                .all(|f| f.transform == iceberg::spec::Transform::Void)
+        })
+    });
+    if unpartitioned {
+        o.removals.row_filter = Some(krishiv_io::PushdownExpr::Constant(true));
+        o.validation.filter = None;
+        "true".clone_into(&mut o.validation.filter_text);
+        return Ok(());
+    }
+    let specs = super::scan::partition_specs(base, schema);
+    let mut paths = std::collections::BTreeSet::new();
+    for (spec_id, f) in entries {
+        let tuple = super::scan::content_file(f, *spec_id).partition;
+        let key = partition_key(&specs, *spec_id, &tuple).ok_or_else(|| {
+            KrishivError::from(KrishivUnsupportedFeature {
+                feature: format!(
+                    "a dynamic overwrite writing a partition value Krishiv cannot read back ({})",
+                    f.file_path()
+                ),
+            })
+        })?;
+        o.removals.drop_partitions.insert(key);
+        if let Some(spec) = base.partition_spec_by_id(*spec_id) {
+            paths.insert(spec.partition_to_path(f.partition(), Arc::clone(schema)));
+        }
+    }
+    o.validation.partitions = Some(PartitionSet {
+        keys: o.removals.drop_partitions.clone(),
+        text: format!("[{}]", paths.into_iter().collect::<Vec<_>>().join(", ")),
+    });
+    Ok(())
 }
 
 /// The files of a write not yet handed to the commit loop: deleted on
@@ -459,13 +637,21 @@ impl Sink for IcebergWriteSink {
             attempt_id: unique_u64(),
             write_id: &self.write_id,
         };
-        let writer = DataFileWriter::with_registered(
+        let sketches = self
+            .sketch_columns
+            .as_ref()
+            .and_then(|c| TaskSketches::new(Arc::clone(c), ctx.consumer().reservation()));
+        let mut writer = DataFileWriter::with_registered(
             &self.target.base,
             self.target.registered.clone(),
             ids,
             self.target.max_open_files,
             ctx.consumer().reservation(),
-        )?;
+        )?
+        .with_sketches(sketches);
+        if self.overwrite.as_ref().is_some_and(|o| o.lineage) {
+            writer = writer.with_lineage()?;
+        }
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();
@@ -587,7 +773,7 @@ fn check_input(input: &SchemaRef, table: &SchemaRef, name: &str) -> Result<(), K
     } else {
         Err(KrishivUnsupportedFeature {
             feature: format!(
-                "an append into the Iceberg table {name} of rows ({}) that are not its columns ({})",
+                "a write into the Iceberg table {name} of rows ({}) that are not its columns ({})",
                 show(input),
                 show(table)
             ),

@@ -161,6 +161,16 @@ fn results_are_nullable_as_spark_has_them() {
         result("concat_ws", &a, &[]).unwrap(),
         t(DataType::String, true)
     );
+    // An array of strings is an argument too.
+    let arr = t(
+        DataType::Array(krishiv_types::ArrayType::new(DataType::String, true).into()),
+        false,
+    );
+    let a = [s(), arr, s()];
+    assert_eq!(
+        result("concat_ws", &a, &[]).unwrap(),
+        t(DataType::String, false)
+    );
     // `base64` never gives NULL for a value.
     assert_eq!(
         result("base64", &[ty(DataType::Binary)], &[]).unwrap(),

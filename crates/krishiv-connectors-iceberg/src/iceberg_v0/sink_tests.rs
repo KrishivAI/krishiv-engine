@@ -4,7 +4,7 @@
 //! applies each request as `append_tests` does and read back through SQL; a
 //! second append on top; the write id in the snapshot summary; a failing
 //! driver and a cancelled write leaving no file, no commit and no memory; the
-//! capability check without a committer; a schema mismatch refused before
+//! capability check with and without a committer; a schema mismatch refused before
 //! anything is written.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,16 +39,16 @@ use crate::plan::VersionSpec;
 
 /// A catalog holding one table: each request's requirements checked, its
 /// updates applied and the new metadata file written.
-struct Catalog {
+pub(super) struct Catalog {
     state: Mutex<(TableMetadata, String, u32)>,
     /// A request never answers (it is in flight forever) when set.
-    hang: AtomicBool,
+    pub(super) hang: AtomicBool,
     /// A request was sent.
     sent: AtomicBool,
 }
 
 impl Catalog {
-    fn new(table: &iceberg::table::Table) -> Arc<Self> {
+    pub(super) fn new(table: &iceberg::table::Table) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new((
                 table.metadata().clone(),
@@ -60,11 +60,25 @@ impl Catalog {
         })
     }
 
-    fn location(&self) -> String {
+    /// A catalog over the metadata file at `location`.
+    pub(super) fn at(location: &str) -> Arc<Self> {
+        let bytes = std::fs::read(location.strip_prefix("file://").unwrap()).unwrap();
+        Arc::new(Self {
+            state: Mutex::new((
+                serde_json::from_slice(&bytes).unwrap(),
+                location.to_owned(),
+                0,
+            )),
+            hang: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
+        })
+    }
+
+    pub(super) fn location(&self) -> String {
         self.state.lock().unwrap().1.clone()
     }
 
-    fn metadata(&self) -> TableMetadata {
+    pub(super) fn metadata(&self) -> TableMetadata {
         self.state.lock().unwrap().0.clone()
     }
 }
@@ -161,10 +175,10 @@ impl ExecNode for Write {
 
 /// A source of `batches`, one per driver (so as many drivers as batches),
 /// that never ends after them when `stall`.
-struct PerDriver {
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
-    stall: bool,
+pub(super) struct PerDriver {
+    pub(super) schema: SchemaRef,
+    pub(super) batches: Vec<RecordBatch>,
+    pub(super) stall: bool,
 }
 
 impl Source for PerDriver {
@@ -205,7 +219,7 @@ impl Source for PerDriver {
 }
 
 /// The schema of the rows written into [`ixn_schema`] tables.
-fn input_schema() -> SchemaRef {
+pub(super) fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", A::Int64, true),
         Field::new("x", A::Int32, true),
@@ -214,7 +228,7 @@ fn input_schema() -> SchemaRef {
 }
 
 /// Rows `ids` with `x = id % 3` and `name = n<id>` (a `None` id stays null).
-fn rows(ids: &[Option<i64>]) -> RecordBatch {
+pub(super) fn rows(ids: &[Option<i64>]) -> RecordBatch {
     let names: Vec<String> = ids
         .iter()
         .map(|i| format!("n{}", i.unwrap_or(-1)))
@@ -238,13 +252,13 @@ fn rows(ids: &[Option<i64>]) -> RecordBatch {
     .unwrap()
 }
 
-fn range(from: i64, to: i64) -> RecordBatch {
+pub(super) fn range(from: i64, to: i64) -> RecordBatch {
     rows(&(from..to).map(Some).collect::<Vec<_>>())
 }
 
 /// A table `t` of `schema`, partitioned by `identity(x)` when `partitioned`,
 /// with `props`.
-fn create(
+pub(super) fn create(
     env: &Env,
     schema: iceberg::spec::Schema,
     partitioned: bool,
@@ -284,7 +298,7 @@ fn create(
 }
 
 /// The provider of the table at `location`, committing through `catalog`.
-fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTableProvider {
+pub(super) fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTableProvider {
     let table = env
         .rt
         .block_on(IcebergTable::load(&env.reg, location, "db", "t"))
@@ -293,7 +307,7 @@ fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> IcebergTablePr
     env.provider(&table, &VersionSpec::Current).unwrap()
 }
 
-fn request(write_id: Option<&str>) -> WriteRequest {
+pub(super) fn request(write_id: Option<&str>) -> WriteRequest {
     let mut r = WriteRequest::new(WriteMode::Append, "`db`.`t`", input_schema());
     r.write_id = write_id.map(str::to_owned);
     r
@@ -302,7 +316,7 @@ fn request(write_id: Option<&str>) -> WriteRequest {
 /// Runs `input` into `sink` to the end (cancelled once `cancel_when`
 /// holds); the result, the query's pool and the runner (whose runtime the
 /// writer tasks run on: keep it while they settle).
-fn run(
+pub(super) fn run(
     env: &Env,
     sink: Arc<dyn Sink>,
     input: Arc<dyn Source>,
@@ -347,7 +361,7 @@ fn run(
 
 /// What `pool` holds once a cancelled or failed write's tasks had up to 5 s
 /// to abort (they are not the query's blocking work, see `sink`).
-fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
+pub(super) fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
     for _ in 0..500 {
         if pool.reserved() == 0 {
             break;
@@ -359,7 +373,7 @@ fn settled(pool: &Arc<dyn MemoryPool>) -> usize {
 
 /// Every `.parquet` file under `dir`, once background deletes had up to 5 s
 /// to empty it when `settle`.
-fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
+pub(super) fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
     fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -388,7 +402,7 @@ fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
     list()
 }
 
-fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
+pub(super) fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
     let table = env
         .rt
         .block_on(IcebergTable::load(&env.reg, &catalog.location(), "db", "t"))
@@ -401,7 +415,7 @@ fn read_back(env: &Env, catalog: &Catalog) -> Vec<String> {
     )
 }
 
-fn expected(ids: impl IntoIterator<Item = i64>) -> Vec<String> {
+pub(super) fn expected(ids: impl IntoIterator<Item = i64>) -> Vec<String> {
     ids.into_iter()
         .map(|i| format!("{i}|{}|n{i}", i % 3))
         .collect()
@@ -600,9 +614,10 @@ fn a_write_cancelled_during_its_commit_deletes_nothing() {
 }
 
 /// Without a committer the table declares no write mode, so the session's
-/// check (and `writer` itself) refuses an append; with one, only appends.
+/// check (and `writer` itself) refuses an append; with one, every batch
+/// mode (PR-36b part 2b added the overwrites).
 #[test]
-fn only_a_table_with_a_committer_takes_appends() {
+fn only_a_table_with_a_committer_takes_writes() {
     let env = env();
     let t = create(&env, ixn_schema(), false, &[]);
     let table = env.load(&t);
@@ -615,11 +630,6 @@ fn only_a_table_with_a_committer_takes_appends() {
         "{e}"
     );
     assert!(e.to_string().contains("append in batch mode"), "{e}");
-
-    let catalog = Catalog::new(&t);
-    let p = provider(&env, &catalog.location(), &catalog);
-    let caps = p.capabilities();
-    assert!(caps.batch_write && !caps.truncate && !caps.overwrite_by_filter);
     let mut truncate = request(None);
     truncate.mode = WriteMode::Truncate;
     let e = p.writer(&truncate).err().unwrap();
@@ -628,6 +638,13 @@ fn only_a_table_with_a_committer_takes_appends() {
         ErrorClass::UnsupportedFeatureTableOperation,
         "{e}"
     );
+
+    let catalog = Catalog::new(&t);
+    let p = provider(&env, &catalog.location(), &catalog);
+    let caps = p.capabilities();
+    assert!(caps.batch_write && caps.truncate && caps.overwrite_by_filter);
+    assert!(caps.overwrite_dynamic);
+    assert!(p.writer(&truncate).is_ok());
 }
 
 /// Rows that are not the table's columns are refused when the sink is

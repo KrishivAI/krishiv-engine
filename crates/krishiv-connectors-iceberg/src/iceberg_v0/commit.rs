@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The append commit loop (P3-T027, PR-36a; design note
 //! `P3-T026-T027-iceberg-scan-and-commit.md` §7, Tier U): [`commit_append`]
-//! sends the attempts [`prepare_attempt`] builds through a [`CommitTable`]
+//! sends the attempts [`prepare_attempt`](super::append::prepare_attempt) builds through a [`CommitTable`]
 //! until one is known to be in the table, the retry budget runs out, or the
 //! write fails.
 //!
@@ -28,7 +28,7 @@
 //!   never moved) stays unresolved until a later load shows the branch off its
 //!   base.
 //! - **Rebase** (§7.3 steps 4a.0, 4a.1, 4a.3): an append validates nothing; it
-//!   keeps its manifests (reset to unassigned by [`prepare_attempt`]) and
+//!   keeps its manifests (reset to unassigned by [`prepare_attempt`](super::append::prepare_attempt)) and
 //!   recomputes the list, sequence number, totals, v3 row ids and timestamp
 //!   against the refreshed table. Across a v2 → v3 upgrade it takes the v3
 //!   lineage fields; any other change of format version, or a replaced table
@@ -41,7 +41,10 @@
 //!   and the format and UUID checks, before the next attempt is built; a check
 //!   that fires is `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the intervening
 //!   snapshot and the check, with §7.4's cleanup. [`commit_append`] passes
-//!   [`Validation::none`] and walks nothing.
+//!   [`Validation::none`] and walks nothing. A validation with an explicit
+//!   [`Validation::start`] (INSERT OVERWRITE) validates from there, before the
+//!   first attempt too. An overwrite whose row filter matches a data file in
+//!   part (`filter.rs`) ends as a conflict (check `rows to delete`).
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -59,7 +62,7 @@
 //!   that is not a number is `KRISHIV_UNSUPPORTED_FEATURE` (Java:
 //!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
-//!   the manifest lists of every other attempt and the manifests the found
+//!   the manifest lists (and statistics files) of every other attempt and the manifests the found
 //!   snapshot does not list are deleted (this write's new manifests a listed
 //!   merged manifest absorbed, and merged manifests of an attempt that did
 //!   not commit, `merge.rs`), never a data file and never a base manifest. Every outcome known
@@ -78,6 +81,16 @@
 //!   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **nothing is deleted**:
 //!   a late request would otherwise reference deleted files.
 //!
+//! - **Statistics** (PR-54b, `statistics_file.rs`): an attempt's
+//!   `set-statistics` and its Puffin file are rebuilt with the attempt (a
+//!   resend repeats them); the statistics files are cleaned up as the lists
+//!   are (kept when the committed metadata names them). Any known refusal
+//!   ([`CommitOutcome::Failed`] to an attempt's first request, a 403 or 404, or
+//!   a refused update: one extra request on a failure that was fatal anyway)
+//!   of a request carrying `set-statistics` is resent once without it, the
+//!   statistics dropped for the rest of the write (counted as skipped), so a
+//!   catalog that does not take the update never fails the data commit.
+//!
 //! This differs from Java, which never resends and throws
 //! `CommitStateUnknownException` once its status check gives up (R:B2).
 //! A resend repeats the attempt exactly, `timestamp-ms` included.
@@ -91,12 +104,19 @@ use iceberg::spec::{FormatVersion, Snapshot, TableMetadata};
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{
     KrishivError, KrishivIcebergCommitConflict, KrishivIcebergCommitFailed,
-    KrishivIcebergCommitStateUnknown, KrishivUnsupportedFeature,
+    KrishivIcebergCommitStateUnknown, KrishivIcebergOverwritePartialFile,
+    KrishivUnsupportedFeature,
 };
 
-use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt};
+use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
+use super::filter::FilterError;
 use super::scan::{read_manifest_files, snapshot_refs};
+use super::statistics_file::skipped;
 use super::validate::{Validation, validate};
+
+/// The check named by a conflict whose overwrite found a file to remove no
+/// longer live (Java's `failMissingDeletePaths`).
+pub(crate) const CHECK_MISSING: &str = "files to delete";
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -212,7 +232,7 @@ pub(crate) struct CommitContext<'a> {
 /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` for a format-version change other than
 /// v2 → v3 or a replaced table, `KRISHIV_UNSUPPORTED_FEATURE` for a commit
 /// property that is not a number, a failure answered to an attempt's first
-/// request, or [`prepare_attempt`]'s errors. A refresh after a conflict that
+/// request, or [`prepare_attempt`](super::append::prepare_attempt)'s errors. A refresh after a conflict that
 /// never succeeds is `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`.
 ///
 /// # Cancellation
@@ -278,7 +298,9 @@ pub(crate) async fn commit_validated(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
-        s0: branch_head(base, ids.branch).flatten(),
+        s0: validation
+            .start
+            .unwrap_or_else(|| branch_head(base, ids.branch).flatten()),
         validation,
         requests: 0,
         lists: Vec::new(),
@@ -304,6 +326,17 @@ enum End {
     /// request still unresolved names it without the error's "files removed"
     /// text (review nit 4).
     Conflict(Box<KrishivIcebergCommitConflict>),
+    /// An overwrite's row filter matches a data file in part (Java's
+    /// `ValidationException` at `apply`): deterministic, so not a conflict
+    /// (`KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`, SQLSTATE 22000, a data
+    /// exception no client retries, where the conflict's 40001 is retried;
+    /// review 36b2b M4).
+    Partial {
+        /// The filter as Java prints it.
+        filter: String,
+        /// The data file.
+        file: String,
+    },
     /// An error; its own request's outcome (if any) known.
     Error(KrishivError),
 }
@@ -422,9 +455,14 @@ impl Loop<'_> {
         mut current: TableMetadata,
         new: &mut NewManifests,
     ) -> Result<TableMetadata, End> {
+        // An explicit start validates the first attempt too (Java's
+        // `validate` runs on every `apply`); S0 itself has nothing between.
+        if self.validation.start.is_some() {
+            self.validate(&current).await?;
+        }
         'attempts: loop {
             self.before_request().await?;
-            let attempt = prepare_attempt(
+            let mut attempt = match prepare(
                 self.cx.io,
                 &current,
                 new,
@@ -433,7 +471,20 @@ impl Loop<'_> {
                 self.cx.max_metadata_bytes,
             )
             .await
-            .map_err(End::Error)?;
+            {
+                Ok(a) => a,
+                // An overwrite's file is no longer live in this base
+                // (`filter.rs`, Java's `failMissingDeletePaths`).
+                Err(FilterError::Missing(message)) => {
+                    return Err(self.conflict(&current, CHECK_MISSING, message));
+                }
+                // A data file the row filter matches in part (Java's
+                // `ValidationException` at `apply`).
+                Err(FilterError::Partial { filter, file }) => {
+                    return Err(End::Partial { filter, file });
+                }
+                Err(FilterError::Error(e)) => return Err(End::Error(e)),
+            };
             self.lists.push(attempt.snapshot.manifest_list().to_owned());
             let base = attempt_base(&attempt);
             let mut unknown = false;
@@ -450,7 +501,19 @@ impl Loop<'_> {
                     .await;
                 match outcome {
                     CommitOutcome::Committed(m) => return Ok(*m),
-                    CommitOutcome::Failed(e) if !unknown => return Err(End::Error(e)),
+                    CommitOutcome::Failed(e) if !unknown => {
+                        if drop_statistics(&mut attempt) {
+                            new.statistics = None;
+                            skipped(&format!(
+                                "the catalog refused the request that carried them ({e}); \
+                                 sent again without them"
+                            ));
+                            // Known not applied: the same attempt, at once.
+                            first = true;
+                            continue;
+                        }
+                        return Err(End::Error(e));
+                    }
                     CommitOutcome::Failed(e) => self.last_answer = e.to_string(),
                     CommitOutcome::Unknown(reason) => {
                         if !unknown {
@@ -622,7 +685,7 @@ impl Loop<'_> {
     }
 
     /// The branch's head in `m` (`Some(None)`: no such branch), as
-    /// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+    /// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
     fn head(&self, m: &TableMetadata) -> Option<Option<i64>> {
         branch_head(m, self.ids.branch)
     }
@@ -723,6 +786,17 @@ impl Loop<'_> {
         for list in self.lists.iter().filter(|l| !named.contains(l.as_str())) {
             let _ = self.cx.io.delete(list).await;
         }
+        let stats: HashSet<&str> = m
+            .statistics_iter()
+            .map(|f| f.statistics_path.as_str())
+            .collect();
+        for path in new
+            .statistics_files
+            .iter()
+            .filter(|p| !stats.contains(p.as_str()))
+        {
+            let _ = self.cx.io.delete(path).await;
+        }
         let Ok(listed) = read_manifest_files(
             self.cx.io,
             keep,
@@ -756,6 +830,7 @@ impl Loop<'_> {
                     "a conflict with the table at snapshot {} ({}): {}",
                     c.conflicting_snapshot_id, c.check, c.message
                 ),
+                End::Partial { filter, file } => FilterError::partial_text(&filter, &file),
                 End::Error(e) => e.to_string(),
             };
             return KrishivIcebergCommitStateUnknown {
@@ -786,6 +861,14 @@ impl Loop<'_> {
                 c.files = files;
                 (*c).into()
             }
+            End::Partial { filter, file } => KrishivIcebergOverwritePartialFile {
+                filter,
+                file,
+                table: self.table.name(),
+                snapshot_id: self.snapshot_id.to_string(),
+                files,
+            }
+            .into(),
             End::Error(e) => e,
         }
     }
@@ -802,8 +885,17 @@ const KEPT: &str = "the written files were kept, since an earlier request of thi
      again, or its rows may appear twice (remove_orphan_files removes the files if \
      it never lands)";
 
+/// Removes `attempt`'s `set-statistics`; whether it had one.
+fn drop_statistics(attempt: &mut Attempt) -> bool {
+    let before = attempt.updates.len();
+    attempt
+        .updates
+        .retain(|u| !matches!(u, TableUpdate::SetStatistics { .. }));
+    attempt.updates.len() != before
+}
+
 /// The head of `branch` in `m` (`Some(None)`: no such branch), as
-/// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+/// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
 fn branch_head(m: &TableMetadata, branch: &str) -> Option<Option<i64>> {
     let refs = snapshot_refs(m).ok()?;
     Some(match refs.get(branch) {
@@ -830,6 +922,7 @@ async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
         .iter()
         .chain(manifests)
         .chain(&new.merged)
+        .chain(&new.statistics_files)
         .chain(lists)
     {
         let _ = io.delete(path).await;

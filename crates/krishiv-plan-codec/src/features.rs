@@ -124,6 +124,7 @@ registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
+    (bitmap_aggregates, BitmapAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The bitmap aggregates (`bitmap_construct_agg`, `bitmap_or_agg`, `bitmap_and_agg`): a 4,096-byte bitmap per group."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
     (captured_eval_mode, CapturedEvalMode, POST_MIGRATION_READER_VERSION, Semantic, "An expression evaluated in a fixed ANSI mode whatever the query's: the body of a SQL function created under the other mode (T184). A reader without it would evaluate the body in the query's mode."),
     (collated_min_max, CollatedMinMax, POST_MIGRATION_READER_VERSION, Semantic, "`max` and `min` of a collated string (`MAX_BY_KEY_FIRST`, `MIN_BY_KEY_FIRST`): the value of the largest or smallest collation key, the first of equal keys kept."),
@@ -139,6 +140,7 @@ registry! {
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (histogram_numeric, HistogramNumeric, POST_MIGRATION_READER_VERSION, Semantic, "The `histogram_numeric` aggregate (Spark's `NumericHistogram`, with its folded number of bins)."),
+    (hll_sketch_aggregates, HllSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches HLL aggregates (`hll_sketch_agg` with its folded lgConfigK, `hll_union_agg` with its folded allowDifferentLgConfigK): a sketch per group."),
     (indeterminate_collation, IndeterminateCollation, POST_MIGRATION_READER_VERSION, Semantic, "STRING types of the INDETERMINATE collation (`string collate null`: a mixed expression's operands' collations conflict), by its name `null`, alone or inside a nested type."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -165,6 +167,7 @@ registry! {
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan. A `PythonEval` of the scalar iterator codes 204 and 251 runs from the reader that also has `python_udf_windows` on; an earlier reader with this feature decodes it and fails at run time with `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` (no such reader was released)."),
     (python_udf_windows, PythonUdfWindows, POST_MIGRATION_READER_VERSION, Semantic, "A `PythonAggregate` node in window form (design P3-T085 §3.1, Spark's `ArrowWindowPythonExec`): a window aggregate of Python UDFs (codes 203, 253), every input row with one value per call, a bounded frame's rows with their frame bounds; an older reader would run it as a grouped aggregate."),
+    (python_udtf, PythonUdtf, POST_MIGRATION_READER_VERSION, Semantic, "The `PythonUdtf` node (a Python table function, eval types 300-302, design P3-T085 §3.1): one UDTF task per partition fed the call's arguments (a `TABLE` argument as one struct column per row, its `PARTITION BY` values among its fields), a `LATERAL` call's input columns carried ahead of the results, and `analyze`'s pickled result; a worker without a UDTF runtime refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -479,6 +482,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
             | PhysNode::PythonAggregate { window: None, .. } => Some(Feature::PythonUdfRelations),
+            PhysNode::PythonUdtf { .. } => Some(Feature::PythonUdtf),
             PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -686,6 +690,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::PercentileDisc { .. }
             | AggregateFunction::ApproxCountDistinct { .. } => Some(Feature::PercentileAggregates),
             AggregateFunction::HistogramNumeric { .. } => Some(Feature::HistogramNumeric),
+            AggregateFunction::BitmapConstructAgg
+            | AggregateFunction::BitmapOrAgg
+            | AggregateFunction::BitmapAndAgg => Some(Feature::BitmapAggregates),
+            AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
+                Some(Feature::HllSketchAggregates)
+            }
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
@@ -807,7 +817,8 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Union { .. } => {}
         PhysNode::PythonMap { udf, .. }
         | PhysNode::PythonGroupMap { udf, .. }
-        | PhysNode::PythonCoGroupMap { udf, .. } => {
+        | PhysNode::PythonCoGroupMap { udf, .. }
+        | PhysNode::PythonUdtf { udf, .. } => {
             f(Construct::PythonEvalType(udf.udf.eval_type));
         }
         PhysNode::WriteFiles { write, .. } => {
@@ -942,7 +953,8 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     }
     if let PhysNode::PythonMap { udf, .. }
     | PhysNode::PythonGroupMap { udf, .. }
-    | PhysNode::PythonCoGroupMap { udf, .. } = node
+    | PhysNode::PythonCoGroupMap { udf, .. }
+    | PhysNode::PythonUdtf { udf, .. } = node
     {
         out.extend(udf.sides.iter().flat_map(|s| &s.types));
         out.extend(udf.output.iter().map(|c| &c.data_type));
@@ -1012,7 +1024,8 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::ExchangeSource { .. }
         | PhysNode::PythonMap { .. }
         | PhysNode::PythonGroupMap { .. }
-        | PhysNode::PythonCoGroupMap { .. } => {}
+        | PhysNode::PythonCoGroupMap { .. }
+        | PhysNode::PythonUdtf { .. } => {}
     }
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();

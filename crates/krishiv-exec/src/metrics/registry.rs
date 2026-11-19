@@ -177,7 +177,7 @@ pub const ERROR_CLASS_LABEL: LabelDef = LabelDef {
 /// `surface`: the server listener a request came in on (ADR 0046 §8).
 pub const SURFACE_LABEL: LabelDef = LabelDef {
     name: "surface",
-    values: &["connect", "admin", "metrics", "ui"],
+    values: &["connect", "admin", "metrics", "ui", "flight-sql"],
 };
 
 /// `method`: how a request tried to authenticate.
@@ -200,6 +200,50 @@ pub const PRIVILEGE_LABEL: LabelDef = LabelDef {
         "OPERATE",
         "MANAGE",
         "IMPERSONATE",
+    ],
+};
+
+/// `command`: the Flight SQL RPC or command a request asked for (design P3-T101 §7;
+/// everything §4.6 refuses is `unsupported`).
+pub const FLIGHT_SQL_COMMAND_LABEL: LabelDef = LabelDef {
+    name: "command",
+    values: &[
+        "handshake",
+        "statement_query",
+        "statement_update",
+        "fetch",
+        "prepared_create",
+        "prepared_query",
+        "prepared_update",
+        "prepared_close",
+        "catalogs",
+        "db_schemas",
+        "tables",
+        "table_types",
+        "keys",
+        "sql_info",
+        "xdbc_type_info",
+        "cancel",
+        "session_options",
+        "session_close",
+        "list_actions",
+        "unsupported",
+    ],
+};
+
+/// `outcome`: how a Flight SQL request ended, by its gRPC status.
+pub const OUTCOME_LABEL: LabelDef = LabelDef {
+    name: "outcome",
+    values: &[
+        "ok",
+        "invalid",
+        "not_found",
+        "denied",
+        "exhausted",
+        "cancelled",
+        "unavailable",
+        "unimplemented",
+        "failed",
     ],
 };
 
@@ -248,6 +292,8 @@ pub const LABEL_ALLOWLIST: &[&str] = &[
     "surface",
     "method",
     "privilege",
+    "command",
+    "outcome",
 ];
 
 /// The most distinct `error_class` label values kept per metric; further
@@ -556,8 +602,9 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
         description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
-                      malformed, wrong or expired credential) or throttled, by listener and \
-                      the method tried. Served only by `krishiv server` with authentication \
+                      malformed, wrong or expired credential) or throttled, by request surface (the \
+                      service the request's path names; Connect and Flight SQL share a \
+                      listener) and the method tried. Served only by `krishiv server` with authentication \
                       configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
@@ -568,8 +615,20 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{request}",
         labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
         description: "Access checks of `krishiv server` callers refused with \
-                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
+                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by request surface (where the request \
+                      arrived; Connect and Flight SQL share a listener) and the privilege asked \
                       for. Served only by `krishiv server` with authentication configured.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.flight_sql.requests",
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[FLIGHT_SQL_COMMAND_LABEL, OUTCOME_LABEL],
+        description: "Arrow Flight SQL requests that passed authentication, by command and \
+                      how they ended (`fetch` is a `DoGet` of a statement ticket). Served only \
+                      by `krishiv server` built with the `flight-sql` feature.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },

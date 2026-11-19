@@ -363,7 +363,7 @@ fn struct_projected_size_covers_the_size_after_an_update() {
         let mut acc = Accumulator::new(&expr, true).unwrap();
         acc.reserve(32);
         acc.resize(32);
-        let allowed = acc.projected(0, Some(&col), None);
+        let allowed = acc.projected(0, Some(&col), None, false);
         acc.update(&groups, std::slice::from_ref(&col), &Weights::Const(1))
             .unwrap();
         assert!(

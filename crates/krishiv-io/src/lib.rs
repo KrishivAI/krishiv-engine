@@ -76,6 +76,8 @@ pub use io::{
     parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
+/// Refuses an `hf://` directory or glob (no listing), from `krishiv-store`.
+pub use krishiv_store::check_hf_file_path;
 /// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
 pub use krishiv_store::egress;
 /// Per-location credential sources (design P3-T067 §4.1), from `krishiv-store`.

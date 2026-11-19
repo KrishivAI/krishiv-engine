@@ -37,8 +37,8 @@ use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, Spill
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -65,7 +65,7 @@ use crate::variables::SessionVariables;
 mod context;
 mod lifecycle;
 #[cfg(feature = "unstable-ir")]
-pub use lifecycle::SqlOutcome;
+pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
 mod run_task;
 
@@ -117,6 +117,9 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
+    /// plan reads the clock.
+    pub(crate) query_start: Option<i64>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
@@ -553,63 +556,10 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
             .await
+            .and_then(Ran::into_frame)
             .map(|(df, _)| df)
-    }
-
-    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
-    pub(crate) async fn sql_here_marked(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
-    }
-
-    async fn sql_here_inner(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-        spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        let mut env = self.query_env();
-        env.row = row;
-        let written = query;
-        let query = self.substituted(query);
-        let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
-        let resolved = self.identifier_clauses_into(query, &mut env).await?;
-        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
-        if !spans.is_empty() && !named_by_clause && query == written {
-            env.identifier_spans = spans.into();
-        }
-        let query: &str = &resolved;
-        let redacted = krishiv_sql::redact_sql(query);
-        let statement = krishiv_sql::parse_statement(query, &env.parser)
-            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
-        // clause when it drops it; the parser sees only the evaluated name.
-        if named_by_clause
-            && let Statement::DropFunction(f) = &statement
-            && f.temporary
-        {
-            krishiv_sql::check_temporary_function_name(&f.name, f.span)
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        }
-        // Before any side effect: what the statement writes, creates or
-        // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
-        self.authorize_statement(&statement, class, &env).await?;
-        env.statement_class = Some(class.name());
-        let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok((df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -1415,6 +1365,7 @@ impl Session {
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
+        let udtfs = self.table_functions();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -1422,7 +1373,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: Arc::new(BuiltinTableFunctions::new()),
+            table_functions: Arc::clone(&udtfs) as _,
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
@@ -1459,7 +1410,9 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
+            udtfs,
+            spill_failure: Arc::default(),
         }
     }
 
@@ -1476,7 +1429,7 @@ impl Session {
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
         let r = self
-            .check_store_options(&env.config, std::iter::empty())
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
             .await;
         crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the
@@ -1660,6 +1613,26 @@ impl Session {
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((crate::run_site::resolve_sites(stream, env), query))
+    }
+
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as
@@ -1924,6 +1897,7 @@ impl Session {
         };
         match submitted {
             Err(error) => {
+                let error = Self::name_spill_failure(error, &env.spill_failure);
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
@@ -1931,7 +1905,11 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let (inner, fold) = (stream, pending.0.take());
+                let failure = Arc::clone(&env.spill_failure);
+                let inner = Box::pin(
+                    stream.map(move |r| r.map_err(|e| Self::name_spill_failure(e, &failure))),
+                );
+                let fold = pending.0.take();
                 let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
@@ -1977,3 +1955,6 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+mod ran;
+pub(crate) use ran::Ran;
