@@ -168,6 +168,19 @@ impl ResponseBudget {
     pub fn cap(&self) -> usize {
         self.cap
     }
+
+    /// Waits until `bytes` (clamped to the whole budget, at least 1) are free and holds them
+    /// until the returned permit is dropped: another service on the Connect listener (an Arrow
+    /// Flight SQL `DoGet`, P3-T101 note §16 M1) shares `krishiv.connect.maxResponseBytes` with
+    /// Connect's operations. Cancel-safe: dropping the future gives nothing back because it took
+    /// nothing. `None` once the budget is closed (never, today).
+    pub async fn reserve(&self, bytes: usize) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let want = u32::try_from(bytes.clamp(1, self.cap)).unwrap_or(u32::MAX);
+        Arc::clone(&self.permits)
+            .acquire_many_owned(want)
+            .await
+            .ok()
+    }
 }
 
 /// Removes its operation from the session when dropped, unless kept: the
