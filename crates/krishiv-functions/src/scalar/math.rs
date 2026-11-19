@@ -263,7 +263,13 @@ fn round(t: &DataType, scale: Option<i32>, mode: RoundMode, opts: &BindOptions) 
 
 /// `ceil`/`floor` of a `double` as a `bigint`, of a `bigint` as it is, or of
 /// a decimal to `scale`.
-fn ceil_floor(t: &DataType, scale: Option<i32>, ceil: bool, one_arg: bool) -> Option<Binding> {
+fn ceil_floor(
+    t: &DataType,
+    scale: Option<i32>,
+    ceil: bool,
+    one_arg: bool,
+    ansi: bool,
+) -> Option<Binding> {
     let rounding = if ceil {
         DecimalRounding::Ceiling
     } else {
@@ -272,7 +278,11 @@ fn ceil_floor(t: &DataType, scale: Option<i32>, ceil: bool, one_arg: bool) -> Op
     Some(match t {
         DataType::Int64 if one_arg => Binding::new(DataType::Int64, |x: &Inputs<'_>| x.column(0)),
         DataType::Float64 if one_arg => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
-            Ok(Arc::new(math::ceil_floor_to_long(&x.array::<Float64Type>(0)?, ceil)) as ArrayRef)
+            Ok(Arc::new(math::ceil_floor_to_long_checked(
+                &x.array::<Float64Type>(0)?,
+                ceil,
+                ansi,
+            )?) as ArrayRef)
         }),
         // Spark's one-argument `floor`/`ceil` keep the type of a decimal whose scale is 0
         // (`case dt @ DecimalType.Fixed(_, 0) => dt`), and its values are already whole.
@@ -496,7 +506,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(s) => s,
                 Err(e) => return Some((listed, Err(e))),
             };
-            match ceil_floor(t, scale, listed != "floor", args.len() == 1) {
+            match ceil_floor(t, scale, listed != "floor", args.len() == 1, opts.ansi) {
                 Some(b) => b,
                 None => return Some((listed, Err(bad_types(listed, args)))),
             }

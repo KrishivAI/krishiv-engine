@@ -509,6 +509,35 @@ pub fn ceil_floor_to_long(input: &arrow_array::Float64Array, ceil: bool) -> Int6
     input.unary(|v| saturating_long(if ceil { v.ceil() } else { v.floor() }))
 }
 
+/// [`ceil_floor_to_long`] for Spark 4.3, where ANSI mode raises `ARITHMETIC_OVERFLOW` for a result outside `bigint`
+/// (an infinity too) instead of saturating; NaN stays 0, and without ANSI the result is the saturating one.
+///
+/// # Errors
+/// `ARITHMETIC_OVERFLOW` (ANSI only), carrying the failing row.
+pub fn ceil_floor_to_long_checked(
+    input: &arrow_array::Float64Array,
+    ceil: bool,
+    ansi: bool,
+) -> Result<Int64Array, KernelError> {
+    if !ansi {
+        return Ok(ceil_floor_to_long(input, ceil));
+    }
+    input
+        .iter()
+        .enumerate()
+        .map(|(row, v)| {
+            let Some(v) = v else { return Ok(None) };
+            let r = if ceil { v.ceil() } else { v.floor() };
+            // 2^63 is the first double past `i64::MAX`; the range is [-2^63, 2^63).
+            if r.is_nan() || (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&r) {
+                Ok(Some(saturating_long(r)))
+            } else {
+                Err(KernelError::arithmetic_overflow(row, "overflow", None))
+            }
+        })
+        .collect()
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     reason = "Java's (long) cast saturates and maps NaN to 0, as Rust's `as` does"

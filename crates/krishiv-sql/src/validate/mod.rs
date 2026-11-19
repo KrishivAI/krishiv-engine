@@ -1470,6 +1470,7 @@ impl Checker<'_> {
                 }
                 args.iter().try_for_each(|a| self.expr(&a.expr))
             }
+            TableFactorKind::JsonTable(t) => self.expr(&t.input),
         }
     }
 

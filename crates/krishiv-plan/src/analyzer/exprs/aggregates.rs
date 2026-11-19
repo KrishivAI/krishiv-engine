@@ -4,6 +4,55 @@
 use super::*;
 
 impl Resolver<'_> {
+    /// `collect_union(x)` (Spark 4.3): the distinct non-NULL elements of the arrays of `x`, an aggregate over
+    /// `collect_list` shown under its own name: `array_distinct(array_compact(flatten(collect_list(x))))`.
+    /// `DISTINCT` and `FILTER` apply to the collected rows. Kept out of line so the recursive binder's frame stays small.
+    #[inline(never)]
+    pub(super) fn collect_union_call(
+        &mut self,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let collected = Expr::new(ExprNode::Function(FunctionCall {
+            name: "collect_list".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![Arc::clone(&kids[0].expr)],
+            arg_names: Vec::new(),
+            distinct: f.distinct,
+            filter: f
+                .filter
+                .as_ref()
+                .and_then(|_| kids.get(1))
+                .map(|k| Arc::clone(&k.expr)),
+            within_group: Vec::new(),
+        }));
+        let call = Expr::function(
+            "array_distinct",
+            vec![Expr::function(
+                "array_compact",
+                vec![Expr::function("flatten", vec![collected])],
+            )],
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr(&Arc::new(call), cx)?;
+        b.carry_markers(&kids[..1]);
+        b.shown = Some(Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: "collect_union".to_owned(),
+                qualifier: Vec::new(),
+                args: vec![kids[0].shown()],
+                arg_names: Vec::new(),
+                distinct: f.distinct,
+                filter: None,
+                within_group: Vec::new(),
+            }))
+            .with_origin(e.origin),
+        ));
+        Ok(b)
+    }
+
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
     /// `mode` with its `WITHIN GROUP` ordering and deterministic flag
     /// (Spark's `ModeBuilder` and `SupportsOrderingWithinGroup` checks):

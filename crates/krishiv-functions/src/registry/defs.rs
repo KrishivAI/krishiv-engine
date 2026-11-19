@@ -250,7 +250,7 @@ fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(t, c)
 }
 
-fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Double, c)
 }
 

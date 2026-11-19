@@ -60,6 +60,7 @@ mod session;
 mod shuffle;
 mod string;
 mod r#struct;
+mod text43;
 mod time_window;
 mod udf;
 mod url;
@@ -525,6 +526,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (shuffle::NAMES, shuffle::bind),
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
+    (text43::NAMES, text43::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
     (geo::NAMES, geo::bind),
@@ -582,6 +584,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         string::NAMES,
         chars::NAMES,
         codec::NAMES,
+        text43::NAMES,
         math::NAMES,
         arith::NAMES,
         interval::NAMES,
