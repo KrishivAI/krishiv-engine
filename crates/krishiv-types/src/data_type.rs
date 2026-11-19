@@ -10,7 +10,7 @@ use krishiv_common::error::KrishivError;
 
 use crate::collation::Collation;
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, StructField, StructType};
+use crate::nested::{ArrayType, MapType, StructField, StructType, UdtType};
 
 /// A Spark SQL data type.
 ///
@@ -110,6 +110,9 @@ pub enum DataType {
     /// Variant v1 encoding (`crate::variant`), held unshredded in memory as
     /// a `(metadata, value)` byte pair. Not orderable and not hashable.
     Variant,
+    /// A user-defined type (Spark's `UserDefinedType`): stored as its underlying SQL type, which is what the
+    /// engine computes on; the type keeps the class names a client needs to rebuild the object.
+    Udt(Arc<UdtType>),
 }
 
 impl PartialEq for DataType {
@@ -134,6 +137,7 @@ impl PartialEq for DataType {
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
+            (Self::Udt(a), Self::Udt(b)) => a == b,
             (a, b) => a.is_payload_free() && std::mem::discriminant(a) == std::mem::discriminant(b),
         }
     }
@@ -165,6 +169,7 @@ impl std::hash::Hash for DataType {
             Self::Array(a) => a.hash(state),
             Self::Map(m) => m.hash(state),
             Self::Struct(st) => st.hash(state),
+            Self::Udt(u) => u.hash(state),
             _ => {}
         }
     }
@@ -199,7 +204,8 @@ impl DataType {
             | Self::DayTimeInterval { .. }
             | Self::Array(_)
             | Self::Map(_)
-            | Self::Struct(_) => false,
+            | Self::Struct(_)
+            | Self::Udt(_) => false,
         }
     }
 }
@@ -669,6 +675,7 @@ impl DataType {
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",
             Self::Variant => "variant",
+            Self::Udt(_) => "udt",
         }
     }
 }

@@ -318,6 +318,8 @@ impl DataType {
             Self::CalendarInterval => calendar_struct(),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
             Self::Variant => variant_struct(),
+            // Computed on as its storage type (P3-T079); the class names ride the field metadata.
+            Self::Udt(u) => u.sql_type().to_arrow(),
             Self::Array(a) => ArrowType::List(Arc::new(
                 a.element_type()
                     .to_arrow_field("element", a.contains_null()),

@@ -11,7 +11,7 @@ use crate::arrow::{
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
-    StructType, parse_data_type,
+    StructType, UdtType, parse_data_type,
 };
 
 fn dec(p: u32, s: u32) -> DataType {
@@ -1192,4 +1192,27 @@ fn only_a_top_level_float_vector_stays_a_carrier_and_edges_read_lists() {
         edge_arrow_type(&fixed(ArrowType::Float32, 4)),
         list(ArrowType::Float32)
     );
+}
+
+fn udt(py: &str, storage: DataType) -> DataType {
+    DataType::Udt(Arc::new(UdtType::new(
+        storage,
+        Some(py.to_owned()),
+        None,
+        None,
+    )))
+}
+
+/// P3-T079: a UDT is equal to another by its class, computes as its storage type, and is not its storage type.
+#[test]
+fn a_udt_is_equal_by_class_and_stored_as_its_sql_type() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let a = udt("pyspark.ml.linalg.VectorUDT", storage.clone());
+    assert_eq!(a, udt("pyspark.ml.linalg.VectorUDT", storage.clone()));
+    assert_ne!(a, udt("pyspark.ml.linalg.MatrixUDT", storage.clone()));
+    assert_ne!(a, storage);
+    assert_eq!(a.to_arrow(), storage.to_arrow());
+    let set: std::collections::HashSet<DataType> =
+        [a, udt("pyspark.ml.linalg.VectorUDT", storage)].into();
+    assert_eq!(set.len(), 1);
 }
