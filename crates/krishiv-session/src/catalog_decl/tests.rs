@@ -850,3 +850,36 @@ fn one_field_under_two_spellings_fails_startup() {
     assert!(decls.catalogs[0].visible_to(Some("acme")));
     assert!(!decls.catalogs[0].visible_to(Some("globex")));
 }
+
+/// A delegated declaration's `Debug` (logged at startup) names its mode, audience, actor client
+/// and token endpoint host, never the endpoint's userinfo; the client secret shows only as its
+/// reference (`env:`/`file:`), since a declaration holds no secret value to print.
+#[test]
+fn delegated_debug_hides_userinfo_and_secret() {
+    let pairs = delegated_with(&[
+        (
+            "krishiv.catalog.r.tokenEndpoint",
+            "https://svc:Canary-Pw-91c2@idp.example.com/token",
+        ),
+        ("krishiv.catalog.r.clientId", "krishiv"),
+        ("krishiv.catalog.r.clientSecret", "env:R_SECRET"),
+    ]);
+    let decl = &parse(&pairs, DeclMode::Server).unwrap().catalogs[0];
+    let shown = format!("{:?}", decl.auth);
+    for part in [
+        "Delegated",
+        "Exchange",
+        "lake-api",
+        "idp.example.com",
+        "ActorClient",
+        "krishiv",
+    ] {
+        assert!(shown.contains(part), "{part}: {shown}");
+    }
+    assert!(
+        !shown.contains("Canary-Pw-91c2") && !shown.contains("svc:"),
+        "{shown}"
+    );
+    assert_eq!(Delegation::Exchange.name(), "exchange");
+    assert_eq!(Delegation::Forward.name(), "forward");
+}

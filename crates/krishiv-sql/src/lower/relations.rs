@@ -660,18 +660,20 @@ impl Lowerer {
                 if name.parts.len() > 3 {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
-                for a in args {
-                    if matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)) {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                }
                 // A named argument (`f(x => 1)`) travels as an `Alias`; the
                 // analyzer binds it for a SQL-bodied function and refuses it
-                // for any other table function.
+                // for any other table function. A `TABLE(...)` argument is a
+                // `SubqueryKind::Table` subquery, which only a Python table
+                // function takes.
                 let lowered = args
                     .iter()
                     .map(|a| {
-                        let value = self.arg(&a.expr)?;
+                        let value = match &a.expr.kind {
+                            crate::ast::ExprKind::TableArgument(t) => {
+                                arc(self.table_argument(t, a.expr.span)?)
+                            }
+                            _ => self.arg(&a.expr)?,
+                        };
                         Ok(match &a.name {
                             Some(n) => Arc::new(self.ex(
                                 ExprNode::Alias {
@@ -696,6 +698,12 @@ impl Lowerer {
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
+                    if let Some(a) = args
+                        .iter()
+                        .find(|a| matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)))
+                    {
+                        return Err(unsupported("table-valued functions", a.span));
+                    }
                     // `variant_explode` names its one parameter `input`
                     // (Spark's `FunctionSignature(InputParameter("input"))`).
                     let named = |a: &&crate::ast::FunctionArg| match &a.name {
@@ -742,6 +750,57 @@ impl Lowerer {
             }
         };
         Ok(plan)
+    }
+
+    /// `TABLE(name)` or `TABLE(query)` with its partitioning, as an
+    /// argument of a table-function call: a `SubqueryKind::Table`
+    /// subquery (Spark's `FunctionTableSubqueryArgumentExpression`). The
+    /// parser and `validate` have refused the forms Spark's parser refuses.
+    fn table_argument(
+        &mut self,
+        t: &crate::ast::TableArgument,
+        span: crate::ast::Span,
+    ) -> R<krishiv_plan::Expr> {
+        let plan = match &t.source {
+            crate::ast::TableArgumentSource::Query(q) => self.deeper(|l| l.subquery(q))?,
+            crate::ast::TableArgumentSource::Table(crate::ast::DdlName::Parts(name)) => {
+                let tf = crate::ast::TableFactor {
+                    kind: TableFactorKind::Table {
+                        name: name.clone(),
+                        temporal: None,
+                        options: Vec::new(),
+                    },
+                    sample: None,
+                    alias: None,
+                    span: name.span,
+                };
+                self.factor(&tf)?
+            }
+            crate::ast::TableArgumentSource::Table(_) => {
+                return Err(unsupported("IDENTIFIER() in a TABLE argument", span));
+            }
+        };
+        let mut spec = krishiv_plan::TableArgSpec::default();
+        if let Some(p) = &t.partitioning {
+            spec.single_partition = p.single;
+            spec.partition_by = p
+                .partition_by
+                .iter()
+                .map(|e| self.arg(e))
+                .collect::<R<Vec<_>>>()?;
+            spec.order_by = p
+                .order_by
+                .iter()
+                .map(|o| self.sort_order(o))
+                .collect::<R<Vec<_>>>()?;
+        }
+        Ok(self.ex(
+            ExprNode::Subquery {
+                kind: krishiv_plan::SubqueryKind::Table(spec),
+                plan: arc(plan),
+            },
+            span,
+        ))
     }
 
     /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the

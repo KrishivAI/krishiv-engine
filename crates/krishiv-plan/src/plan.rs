@@ -590,6 +590,15 @@ pub enum PlanNode {
         udf: PythonUdfRef,
         /// The declared (or analyzed) result columns.
         output: Vec<BoundColumn>,
+        /// A `LATERAL` call's left side (Spark's `Generate(PythonUDTF)`
+        /// over it): `args` read its columns, and the node's rows are each
+        /// input row's columns then the rows the call gave for it (the last
+        /// input row's for `terminate`'s rows). `None` in `FROM`.
+        lateral: Option<Arc<LogicalPlan>>,
+        /// `analyze`'s pickled `AnalyzeResult`, for a UDTF analyzed per call
+        /// (passed to its `__init__`); kept in the plan so that a cached
+        /// plan never runs `analyze` again.
+        analyzed: Option<Arc<[u8]>>,
     },
 }
 
@@ -606,6 +615,15 @@ pub struct TableArg {
     pub order_by: Vec<SortOrder>,
     /// `WITH SINGLE PARTITION`: every row in one partition.
     pub single_partition: bool,
+    /// What the function receives of each row (`analyze`'s `select`, each
+    /// expression over `input` named as the function sees it); empty for
+    /// every column of `input`.
+    pub select: Vec<Arc<Expr>>,
+    /// Its position among the call's arguments (the node's `args` hold
+    /// the others, in order).
+    pub position: usize,
+    /// Its name, when it is a named argument (`row => TABLE(t)`).
+    pub name: Option<String>,
 }
 
 /// The attribute a resolved generator reads: its argument is always a
@@ -1176,7 +1194,12 @@ impl LogicalPlan {
                 f(left);
                 f(right);
             }
-            PlanNode::PythonTableFunction { table_arg, .. } => {
+            PlanNode::PythonTableFunction {
+                table_arg, lateral, ..
+            } => {
+                if let Some(l) = lateral {
+                    f(l);
+                }
                 if let Some(t) = table_arg {
                     f(&t.input);
                 }
@@ -1237,7 +1260,12 @@ impl LogicalPlan {
                 f(left);
                 f(right);
             }
-            PlanNode::PythonTableFunction { table_arg, .. } => {
+            PlanNode::PythonTableFunction {
+                table_arg, lateral, ..
+            } => {
+                if let Some(l) = lateral {
+                    f(l);
+                }
                 if let Some(t) = table_arg {
                     f(&mut t.input);
                 }
@@ -1343,6 +1371,7 @@ impl LogicalPlan {
                 if let Some(t) = table_arg {
                     t.partition_by.iter().for_each(&mut *f);
                     t.order_by.iter().for_each(|o| f(&o.expr));
+                    t.select.iter().for_each(&mut *f);
                 }
             }
             PlanNode::Window {
@@ -1460,6 +1489,7 @@ impl LogicalPlan {
                 if let Some(t) = table_arg {
                     t.partition_by.iter_mut().for_each(&mut *f);
                     t.order_by.iter_mut().for_each(|o| f(&mut o.expr));
+                    t.select.iter_mut().for_each(&mut *f);
                 }
             }
             PlanNode::Window {
@@ -1547,8 +1577,21 @@ impl LogicalPlan {
                 | PlanNode::MapPartitions { output, .. }
                 | PlanNode::GroupMap { output, .. }
                 | PlanNode::CoGroupMap { output, .. }
-                | PlanNode::PythonTableFunction { output, .. } => {
+                | PlanNode::PythonTableFunction {
+                    output,
+                    lateral: None,
+                    ..
+                } => {
                     return Some(output.clone());
+                }
+                PlanNode::PythonTableFunction {
+                    output,
+                    lateral: Some(input),
+                    ..
+                } => {
+                    let mut out = input.resolved_output()?;
+                    out.extend(output.iter().cloned());
+                    return Some(out);
                 }
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),

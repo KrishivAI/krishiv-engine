@@ -39,8 +39,9 @@ crosses the socket: an Arrow IPC stream in a memfd does.
 - EOF on the socket: the worker exits 0.
 
 ``error`` is ``{kind, message}``: ``kind`` ``python`` is an exception raised while loading or running the UDF
-(the server raises ``PYTHON_EXCEPTION`` with ``message``, the traceback); ``protocol`` is a message the worker
-cannot read (a server bug: the server discards the worker).
+(the server raises ``PYTHON_EXCEPTION`` with ``message``, the traceback); ``spark`` is an error Spark's JVM raises
+converting a 300 UDTF's row, ``message`` the JSON ``{class, parameters}`` (the server raises that class, for the
+classes it knows); ``protocol`` is a message the worker cannot read (a server bug: the server discards the worker).
 """
 
 from __future__ import annotations
@@ -427,11 +428,15 @@ class _Worker:
                     return
                 except Exception as e:
                     from krishiv._udf.relations import FrameError
+                    from krishiv._udf.udtf import SparkJvmError
 
                     if isinstance(e, FrameError):
                         _error(self.sock, "protocol", str(e))
                         return
-                    _error(self.sock, "python", _traceback(e))
+                    if isinstance(e, SparkJvmError):
+                        _error(self.sock, "spark", json.dumps({"class": e.condition, "parameters": e.parameters}))
+                    else:
+                        _error(self.sock, "python", _traceback(e))
                 finally:
                     for fd in fds:
                         os.close(fd)

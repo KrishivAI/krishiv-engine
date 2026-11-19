@@ -125,13 +125,6 @@ pub(super) fn with_inputs(read: &SchemaRef) -> SchemaRef {
 }
 
 /// The per-file constant values of `e`, in [`constant_fields`] order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the seam 36b unit 2's copy-on-write rewrite calls"
-    )
-)]
 pub(super) fn constants_of(e: &DataFileEntry) -> [ScalarValue; 2] {
     let long = |v: Option<i64>| v.map_or(ScalarValue::Null, ScalarValue::Int64);
     [long(e.file.first_row_id), long(e.data_sequence_number)]
@@ -146,13 +139,6 @@ pub(super) fn constants_of(e: &DataFileEntry) -> [ScalarValue; 2] {
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the seam 36b unit 2's copy-on-write rewrite calls"
-    )
-)]
 pub(crate) fn check_table(format_version: u8, columns: &Schema) -> Result<(), KrishivError> {
     if format_version < 3 {
         return Err(KrishivUnsupportedFeature {

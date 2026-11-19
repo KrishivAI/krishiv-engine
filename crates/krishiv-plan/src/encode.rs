@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 11;
+pub const ENCODING_VERSION: u16 = 12;
 
 /// The tag that starts a plan node's encoding: one per node kind, never
 /// reused (`plan_tags_are_unique`). A new kind takes the next number; a
@@ -1153,6 +1153,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 table_arg,
                 udf,
                 output,
+                lateral,
+                analyzed,
             } => {
                 self.exprs(args);
                 match table_arg {
@@ -1162,9 +1164,26 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.exprs(&t.partition_by);
                         self.orders(&t.order_by);
                         self.u8(u8::from(t.single_partition));
+                        self.exprs(&t.select);
+                        self.len(t.position);
+                        match &t.name {
+                            None => self.u8(0),
+                            Some(n) => {
+                                self.u8(1);
+                                self.str(n);
+                            }
+                        }
                     }
                 }
                 self.python_udf(udf, output);
+                self.u8(u8::from(lateral.is_some()));
+                match analyzed {
+                    None => self.u8(0),
+                    Some(bytes) => {
+                        self.u8(1);
+                        self.bytes(bytes);
+                    }
+                }
             }
             PlanNode::Range {
                 start,
@@ -1441,6 +1460,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     SubqueryKind::In(values) => {
                         self.u8(3);
                         self.exprs(values);
+                    }
+                    SubqueryKind::Table(t) => {
+                        self.u8(4);
+                        self.exprs(&t.partition_by);
+                        self.orders(&t.order_by);
+                        self.u8(u8::from(t.single_partition));
                     }
                 }
                 let mut outer = self.op.outer.clone();
