@@ -24,7 +24,7 @@
 //! krishiv.catalog.default                = <name>
 //! ```
 //!
-//! `auth = delegated` (P3-T067 §3.3) needs `.audience`; `exchange` needs `.tokenEndpoint`, and
+//! `auth = delegated` needs `.audience`; `exchange` needs `.tokenEndpoint`, and
 //! with `actorToken = client-credentials` also `.clientId` and `.clientSecret` (the server's own
 //! client, the exchange's actor). `forward` takes no token endpoint, client or actor setting. The
 //! names `delegation` and `vended` are reserved: `krishiv.catalog.delegation.*` and

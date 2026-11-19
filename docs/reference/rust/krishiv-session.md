@@ -278,7 +278,7 @@ The web UI and its `/api/internal` routes.
 
 ###### `FlightSql`
 
-The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+The Arrow Flight SQL service (on the Spark Connect listener).
 
 ##### Implementations
 
@@ -684,7 +684,7 @@ pub struct Authenticated {
 | `role` | `Option<Role>` | The role; `None` when the credential maps to no role (every request is then refused by<br>the policy). |
 | `method` | `Method` | How it authenticated. |
 | `token_id` | `Option<String>` | The credential's own id (an OIDC token's `jti`), for the audit record; never enforced. |
-| `credential` | `Option<InboundCredential>` | The user token itself, kept for delegated catalogs (P3-T067 §3.3): an OIDC token or a<br>signed assertion; `None` for a static token, a certificate or plain act-as metadata. |
+| `credential` | `Option<InboundCredential>` | The user token itself, kept for delegated catalogs: an OIDC token or a<br>signed assertion; `None` for a static token, a certificate or plain act-as metadata. |
 
 ##### Implementations
 
@@ -698,7 +698,7 @@ pub struct Authenticated {
 - ```rust
   pub fn with_credential(self: Self, credential: Option<InboundCredential>) -> Self { /* ... */ }
   ```
-  This result keeping `credential`, the user token (P3-T067 §3.3).
+  This result keeping `credential`, the user token.
 
 - ```rust
   pub fn with_token_id(self: Self, token_id: Option<String>) -> Self { /* ... */ }
@@ -1232,7 +1232,7 @@ krishiv.catalog.<name>.option.<key>    = <value>                               (
 krishiv.catalog.default                = <name>
 ```
 
-`auth = delegated` (P3-T067 §3.3) needs `.audience`; `exchange` needs `.tokenEndpoint`, and
+`auth = delegated` needs `.audience`; `exchange` needs `.tokenEndpoint`, and
 with `actorToken = client-credentials` also `.clientId` and `.clientSecret` (the server's own
 client, the exchange's actor). `forward` takes no token endpoint, client or actor setting. The
 names `delegation` and `vended` are reserved: `krishiv.catalog.delegation.*` and

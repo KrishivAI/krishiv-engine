@@ -144,7 +144,7 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
-    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    /// The Arrow Flight SQL service (on the Spark Connect listener).
     FlightSql,
 }
 
@@ -311,7 +311,7 @@ pub struct Authenticated {
     pub method: Method,
     /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
     pub token_id: Option<String>,
-    /// The user token itself, kept for delegated catalogs (P3-T067 §3.3): an OIDC token or a
+    /// The user token itself, kept for delegated catalogs: an OIDC token or a
     /// signed assertion; `None` for a static token, a certificate or plain act-as metadata.
     pub credential: Option<InboundCredential>,
 }
@@ -329,7 +329,7 @@ impl Authenticated {
         }
     }
 
-    /// This result keeping `credential`, the user token (P3-T067 §3.3).
+    /// This result keeping `credential`, the user token.
     #[must_use]
     pub fn with_credential(mut self, credential: Option<InboundCredential>) -> Self {
         self.credential = credential;
