@@ -152,7 +152,7 @@ def test_profiled_calls_from_many_threads_do_not_clash(spark: SparkSession) -> N
         t.join()
     assert errors == []
     calls = _plus_one_calls(spark)
-    if sys._is_gil_enabled():  # ty: ignore[unresolved-attribute]
+    if getattr(sys, "_is_gil_enabled", lambda: True)():  # absent before Python 3.13: always a GIL build
         assert calls == 4 * 20
     else:
         # `cProfile` on free-threaded CPython can count a call or two extra even with every enable/disable under one
