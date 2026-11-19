@@ -159,7 +159,9 @@
         "blocked_io_ns": 0,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 0
+        "spilled_bytes": 0,
+        "node_id": 0,
+        "bytes_out": 80
       },
       {
         "operator_id": 1,
@@ -171,7 +173,10 @@
         "blocked_io_ns": 0,
         "blocked_memory_ns": 20000000,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 0
+        "spilled_bytes": 0,
+        "node_id": 1,
+        "peak_reserved_bytes": 50000000,
+        "bytes_out": 80
       },
       {
         "operator_id": 2,
@@ -183,7 +188,10 @@
         "blocked_io_ns": 0,
         "blocked_memory_ns": 300000000,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 134217728
+        "spilled_bytes": 134217728,
+        "node_id": 2,
+        "peak_reserved_bytes": 100000000,
+        "bytes_out": 240000000
       },
       {
         "operator_id": 3,
@@ -195,7 +203,10 @@
         "blocked_io_ns": 900000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 0
+        "spilled_bytes": 0,
+        "node_id": 3,
+        "peak_reserved_bytes": 150000000,
+        "bytes_out": 960000000
       },
       {
         "operator_id": 4,
@@ -207,7 +218,10 @@
         "blocked_io_ns": 120000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 0
+        "spilled_bytes": 0,
+        "node_id": 4,
+        "peak_reserved_bytes": 200000000,
+        "bytes_out": 0
       }
     ],
     "hot_operator": {
@@ -227,6 +241,45 @@
         "operator": "HashJoin",
         "kind": "skew",
         "hint": "One of 4 parallel drivers of HashJoin did most of the work, so the others waited. A few keys probably hold most of the rows; check the join or group-by keys for skew."
+      }
+    ],
+    "plan": [
+      {
+        "id": 0,
+        "name": "Result",
+        "detail": "",
+        "children": [
+          1
+        ]
+      },
+      {
+        "id": 1,
+        "name": "HashAggregate",
+        "detail": "o_orderpriority",
+        "children": [
+          2
+        ]
+      },
+      {
+        "id": 2,
+        "name": "HashJoin",
+        "detail": "o_orderkey = l_orderkey",
+        "children": [
+          3,
+          4
+        ]
+      },
+      {
+        "id": 3,
+        "name": "Scan lineitem",
+        "detail": "",
+        "children": []
+      },
+      {
+        "id": 4,
+        "name": "Scan orders",
+        "detail": "",
+        "children": []
       }
     ]
   },

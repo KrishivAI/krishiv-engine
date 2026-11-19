@@ -631,6 +631,7 @@ fn authenticated(caller: &Caller) -> Option<&Authenticated> {
 pub struct ProfilesSource {
     queries: Vec<Row>,
     operators: Vec<Row>,
+    plans: std::collections::HashMap<String, Value>,
 }
 
 impl ProfilesSource {
@@ -648,6 +649,7 @@ impl ProfilesSource {
     pub fn from_profiles(stored: &[krishiv_session::StoredProfile]) -> Self {
         let mut queries = Vec::new();
         let mut operators = Vec::new();
+        let mut plans = std::collections::HashMap::new();
         for p in stored {
             let doc: Value = serde_json::from_str(&p.profile).unwrap_or(Value::Null);
             let usage = &doc["usage"];
@@ -681,6 +683,9 @@ impl ProfilesSource {
                 p.error_class.clone().map_or(Value::Null, Value::String),
             );
             queries.push(q);
+            if doc["plan"].is_array() {
+                plans.insert(p.query_id.clone(), doc["plan"].clone());
+            }
             for o in doc["operators"].as_array().map_or(&[][..], Vec::as_slice) {
                 let m = &o["metrics"];
                 let mut r = Row::new();
@@ -693,6 +698,7 @@ impl ProfilesSource {
                     ("drivers", "drivers"),
                     ("rows_in", "rows_in"),
                     ("rows_out", "rows_out"),
+                    ("bytes_out", "bytes_out"),
                     ("compute_ns", "compute_time_ns"),
                     ("max_driver_compute_ns", "max_driver_compute_time_ns"),
                     ("blocked_io_ns", "blocked_on_io_ns"),
@@ -707,7 +713,11 @@ impl ProfilesSource {
                 operators.push(r);
             }
         }
-        Self { queries, operators }
+        Self {
+            queries,
+            operators,
+            plans,
+        }
     }
 }
 
@@ -724,6 +734,10 @@ impl UiSource for ProfilesSource {
 
     fn cancel<'a>(&'a self, _query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async { Ok(false) })
+    }
+
+    fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move { Ok(self.plans.get(query_id).cloned()) })
     }
 }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type Operator, type QueryDetail } from "../api";
+  import { nodeValue, planRows, unplaced } from "../plan";
   import { bytes, count, nanos, when } from "../format";
   import { Alert } from "$lib/components/ui/alert";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
@@ -25,17 +26,21 @@
   const metrics: Metric[] = [
     { key: "compute", label: "Compute time", value: (o) => o.compute_ns ?? null, show: nanos },
     { key: "rows", label: "Rows out", value: (o) => o.rows_out ?? null, show: count },
+    // 0 bytes beside rows is a profile from before the column: not reported.
+    { key: "bytes", label: "Bytes out", value: (o) => (o.bytes_out == null || (o.bytes_out === 0 && (o.rows_out ?? 0) > 0) ? null : o.bytes_out), show: bytes },
+    { key: "memory", label: "Peak memory", value: (o) => o.peak_reserved_bytes ?? null, show: bytes },
     { key: "wait", label: "Waiting time", value: (o) => sum(o.blocked_io_ns, o.blocked_memory_ns, o.blocked_sink_ns), show: nanos },
     { key: "spill", label: "Spilled bytes", value: (o) => o.spilled_bytes ?? null, show: bytes },
   ];
   let metricKey = $state("compute");
   const metric = $derived(metrics.find((m) => m.key === metricKey) ?? metrics[0]);
-  const heatMax = $derived(Math.max(1, ...(q.data?.operators ?? []).map((o) => metric.value(o) ?? 0)));
+  const rows = $derived(q.data?.plan?.length ? planRows(q.data.plan, q.data.operators) : []);
+  const loose = $derived(q.data?.plan?.length ? unplaced(q.data.plan, q.data.operators) : (q.data?.operators ?? []));
+  const valueOf = (ops: Operator[]) => nodeValue(ops, metric.value);
+  const heatMax = $derived(Math.max(1, ...rows.map((r) => valueOf(r.operators) ?? 0), ...loose.map((o) => metric.value(o) ?? 0)));
   // An operator that did not report the metric is "not reported", never a zero.
-  const heat = (o: Operator) => {
-    const v = metric.value(o);
-    return v == null ? null : Math.round((v / heatMax) * 100);
-  };
+  const heat = (v: number | null) => (v == null ? null : Math.round((v / heatMax) * 100));
+  const shade = (h: number | null) => (h == null ? "transparent" : `color-mix(in srgb, var(--primary) ${Math.max(4, Math.round(h * 0.5))}%, transparent)`);
 
   const columns: Column[] = [
     { key: "operator", label: "Operator", title: true },
@@ -90,15 +95,25 @@
         <button type="button" class="min-h-11 rounded-md border border-border px-3 py-2 {m.key === metricKey ? 'bg-primary text-primary-foreground' : 'bg-card'}" aria-pressed={m.key === metricKey} onclick={() => (metricKey = m.key)}>{m.label}</button>
       {/each}
     </div>
-    <ol class="mb-2 grid list-none gap-1 p-0" aria-label={`Operators shaded by ${metric.label.toLowerCase()}`}>
-      {#each d.operators as o (o.operator_id)}
-        {@const h = heat(o)}
-        <li class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2" style:background={h == null ? "transparent" : `color-mix(in srgb, var(--primary) ${Math.max(4, Math.round(h * 0.5))}%, transparent)`}>
+    <ol class="mb-2 grid list-none gap-1 p-0" aria-label={`Plan shaded by ${metric.label.toLowerCase()}`} data-testid="plan-tree">
+      {#each rows as r (r.node.id)}
+        {@const v = valueOf(r.operators)}
+        <li class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2" style:margin-left={`${Math.min(r.depth, 12) * 1.25}rem`} style:background={shade(heat(v))}>
+          <span><span class="mono text-muted-foreground">{r.node.id}</span> {r.node.name}{#if r.node.detail} <span class="text-muted-foreground">{r.node.detail}</span>{/if}</span>
+          <span class="mono">{v == null ? "not reported" : metric.show(v)}</span>
+        </li>
+      {/each}
+      {#each loose as o (o.operator_id)}
+        {@const v = metric.value(o)}
+        <li class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2" style:background={shade(heat(v))}>
           <span><span class="mono text-muted-foreground">{o.operator_id}</span> {o.name}</span>
-          <span class="mono">{h == null ? "not reported" : metric.show(metric.value(o) ?? 0)}</span>
+          <span class="mono">{v == null ? "not reported" : metric.show(v)}</span>
         </li>
       {/each}
     </ol>
+    <p class="mb-3 text-muted-foreground" data-testid="wall-note">
+      Operator times are summed over parallel drivers and overlap while operators wait on each other, so they do not add up to the query's wall time ({nanos(d.query.wall_ns)}).
+    </p>
   {/if}
 
   <h2 class="mt-6 mb-1">Operators</h2>

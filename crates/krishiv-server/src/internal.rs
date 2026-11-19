@@ -114,6 +114,14 @@ pub trait UiSource: Send + Sync + 'static {
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
 
+    /// The plan tree of a finished query as the profile document stores it (an array of nodes: `id`, `name`,
+    /// `detail`, `children` as indexes into the array), `None` when this source keeps no plan for it. The page
+    /// joins the nodes to the query's operators by `node_id`.
+    fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
+        let _ = query_id;
+        Box::pin(async { Ok(None) })
+    }
+
     /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
     /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
     /// (`name`, `data_type`, `comment`). A source with no catalog has none.
@@ -558,6 +566,7 @@ const OPERATOR_COLUMNS: &[&str] = &[
     "drivers",
     "rows_in",
     "rows_out",
+    "bytes_out",
     "compute_ns",
     "max_driver_compute_ns",
     "blocked_io_ns",
@@ -781,6 +790,8 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
         .filter(|r| text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
+    // A source with no plan for the query leaves the page its flat operator list.
+    let plan = s.source.plan(&id).await.ok().flatten();
     json_response(
         StatusCode::OK,
         &json!({
@@ -788,6 +799,7 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
             "warnings": warnings(&ops),
+            "plan": plan,
         }),
     )
 }

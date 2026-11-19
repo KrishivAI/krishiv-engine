@@ -328,6 +328,7 @@ fn a_history_copy_shares_the_operator_rows() {
         rows_out: 3,
         batches_in: 0,
         batches_out: 1,
+        bytes_out: 0,
         compute_ns: 0,
         max_driver_compute_ns: 0,
         blocked_io_ns: 0,

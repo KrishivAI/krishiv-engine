@@ -635,6 +635,22 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
             .iter()
             .all(|o| o["query_id"] == queries[0]["query_id"])
     );
+    // Bytes out is the operator's own figure from the document, and every produced batch has a size.
+    for (row, o) in operators.iter().zip(doc["operators"].as_array().unwrap()) {
+        assert_eq!(row["bytes_out"], o["metrics"]["bytes_out"], "{row:?}");
+    }
+    assert!(
+        operators
+            .iter()
+            .any(|o| o["rows_out"].as_i64() > Some(0) && o["bytes_out"].as_i64() > Some(0)),
+        "{operators:?}"
+    );
+    // The plan of a stored query is the document's own (nodes join operators by `node_id`); an unknown query has none.
+    assert_eq!(
+        source.plan(&stored[0].query_id).await.unwrap(),
+        Some(doc["plan"].clone())
+    );
+    assert_eq!(source.plan("no-such-query").await.unwrap(), None);
     assert!(source.rows(SystemTable::Memory).await.unwrap().is_empty());
     assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
     assert!(!source.cancel("anything").await.unwrap());

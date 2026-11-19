@@ -35,7 +35,7 @@ PAGES = [
     (
         "query-detail",
         "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
-        ["HashJoin", "128.0 MiB", "Operators"],
+        ["HashJoin", "128.0 MiB", "Operators", "Bytes out", "Peak memory", "not reported", "do not add up"],
     ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),

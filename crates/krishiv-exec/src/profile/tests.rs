@@ -76,6 +76,7 @@ fn entry(name: &'static str, node: Option<u32>, role: OperatorRole, rows: u64) -
         batches_in: 1,
         rows_out: rows,
         batches_out: 1,
+        bytes_out: rows * 8,
         compute_time: Duration::from_micros(rows * 10),
         peak_reserved: rows * 100,
         ..OperatorMetrics::default()
@@ -206,6 +207,14 @@ fn json_round_trips() {
     assert_eq!(v["format"], PROFILE_FORMAT);
     assert_eq!(v["version"], PROFILE_VERSION);
     assert_eq!(v["plan"][0]["children"], serde_json::json!([1]));
+    // The size of what each operator produced is written, and read back.
+    assert!(
+        v["operators"].as_array().is_some_and(|ops| !ops.is_empty()
+            && ops
+                .iter()
+                .all(|o| o["metrics"]["bytes_out"].as_u64().is_some_and(|b| b > 0))),
+        "{v}"
+    );
 }
 
 /// A shared plan's nodes are numbered before the root's, as instantiation
@@ -791,10 +800,18 @@ fn schema_matches_the_writer() {
         if let Some(m) = o["metrics"].as_object_mut() {
             m.remove("spill_files");
             m.remove("spill_write_bytes");
+            m.remove("bytes_out");
         }
     }
     let back = QueryProfile::from_json(&old.to_string()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(back.metrics.memory, crate::metrics::QueryMemory::default());
+    assert!(
+        back.metrics
+            .operators
+            .iter()
+            .all(|(_, e)| e.metrics.bytes_out == 0),
+        "a document from before the column reads 0 bytes out"
+    );
 }
 
 /// Merging documents with extreme counters saturates instead of
