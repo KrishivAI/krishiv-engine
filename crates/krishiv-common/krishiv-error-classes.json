@@ -110,6 +110,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS" : {
+    "message" : [
+      "The parameter rows bound to an Arrow Flight SQL prepared statement cannot be used: <reason>. Nothing was run."
+    ],
+    "sqlState" : "07001"
+  },
   "KRISHIV_FLIGHT_SQL_NOT_A_QUERY" : {
     "message" : [
       "This Arrow Flight SQL call needs a query, but the statement is not a query (its class is <statementClass>; it may have become a command through a changed ${...} variable). Nothing was run. Send it as a statement update (DoPut) or with GetFlightInfo of a new statement."

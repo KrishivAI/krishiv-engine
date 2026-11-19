@@ -129,11 +129,11 @@ impl Drop for FetchGuard {
 
 /// The slot a `GetFlightInfo` reserved (design §4.1 step 1): given back when dropped before its
 /// answer (§16 M3: also after its command ran; the client never saw the ticket), else left idle.
-struct SlotGuard {
+pub(crate) struct SlotGuard {
     server: FlightSqlServer,
     cap: SessionOwner,
-    id: HandleId,
-    answered: bool,
+    pub(crate) id: HandleId,
+    pub(crate) answered: bool,
 }
 
 impl Drop for SlotGuard {
@@ -285,7 +285,7 @@ pub(crate) fn now_micros() -> i64 {
 }
 
 /// The session time zone results are shaped in (as Connect's `sql_command`).
-fn time_zone(session: &Session) -> Option<Arc<str>> {
+pub(crate) fn time_zone(session: &Session) -> Option<Arc<str>> {
     session
         .conf()
         .get("spark.sql.session.timeZone")
@@ -293,7 +293,10 @@ fn time_zone(session: &Session) -> Option<Arc<str>> {
 }
 
 /// `schema` in the Spark-to-Arrow form the stream sends (design §4.1, m11).
-fn spark_schema(schema: &SchemaRef, tz: Option<&Arc<str>>) -> Result<SchemaRef, KrishivError> {
+pub(crate) fn spark_schema(
+    schema: &SchemaRef,
+    tz: Option<&Arc<str>>,
+) -> Result<SchemaRef, KrishivError> {
     Ok(empty_batch(schema, tz)?.schema())
 }
 
@@ -323,7 +326,7 @@ pub(crate) fn handle_of(statement_handle: &[u8]) -> Result<HandleId, KrishivErro
 }
 
 /// A handle another owner holds, an unknown one and one not answered yet get the same answer.
-fn not_found() -> KrishivError {
+pub(crate) fn not_found() -> KrishivError {
     InvalidHandleOperationNotFound {
         handle: "<ticket>".to_owned(),
     }
@@ -331,7 +334,7 @@ fn not_found() -> KrishivError {
 }
 
 /// The `FlightInfo` of a statement handle (design §4.1).
-fn flight_info(
+pub(crate) fn flight_info(
     schema: &SchemaRef,
     id: &HandleId,
     descriptor: arrow_flight::FlightDescriptor,
@@ -376,7 +379,7 @@ impl FlightSqlServer {
     }
 
     /// Steps 1-3 of §4.1 in the call's session: the slot, the operation, the analysis or the run.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         call: &mut CallSession,
         sql: Arc<str>,
@@ -570,7 +573,7 @@ impl FlightSqlServer {
         let Some((sid, payload)) = inner.handles.get(&cap, &id, Instant::now()) else {
             return Err(flight_status(&not_found()));
         };
-        if payload.owner != owner || matches!(payload.kind, Kind::Pending) {
+        if payload.owner != owner || matches!(payload.kind, Kind::Pending | Kind::Prepared(_)) {
             return Err(flight_status(&not_found()));
         }
         // The call is counted from before its analysis (admission waits count, §3.2).
@@ -648,7 +651,7 @@ impl FlightSqlServer {
                     .boxed();
                 (schema, rows)
             }
-            Kind::Pending => return Err(flight_status(&not_found())),
+            Kind::Pending | Kind::Prepared(_) => return Err(flight_status(&not_found())),
         };
         let encoded = encode_results(schema, batches, consumer, limits);
         let cell = Arc::new(FetchCell::new(
@@ -682,7 +685,8 @@ impl FlightSqlServer {
         let cap = owner.cap_key();
         let id = handle_of(statement_handle)?;
         match inner.handles.get(&cap, &id, Instant::now()) {
-            Some((_, p)) if p.owner == owner => {}
+            // A prepared statement is closed, not cancelled (§4.4).
+            Some((_, p)) if p.owner == owner && !matches!(p.kind, Kind::Prepared(_)) => {}
             _ => return Err(not_found()),
         }
         let Some((sid, payload)) = inner.handles.remove(&cap, &id) else {
@@ -745,7 +749,7 @@ pub(crate) fn marks_changed(class: StatementClass, sql: &str) -> bool {
 }
 
 /// What a schema costs a handle (its IPC message, roughly).
-fn schema_bytes(schema: &SchemaRef) -> usize {
+pub(crate) fn schema_bytes(schema: &SchemaRef) -> usize {
     schema
         .fields()
         .iter()

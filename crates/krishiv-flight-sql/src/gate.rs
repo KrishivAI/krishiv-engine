@@ -7,8 +7,9 @@
 
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::{
-    Any, CommandGetSqlInfo, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
-    TicketStatementQuery,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest, Any,
+    CommandGetSqlInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -26,6 +27,10 @@ use crate::server::FlightSqlServer;
 pub(crate) const CANCEL_FLIGHT_INFO: &str = "CancelFlightInfo";
 /// The deprecated Flight SQL action `CancelQuery` (design §4.5).
 pub(crate) const CANCEL_QUERY: &str = "CancelQuery";
+/// The Flight SQL action `CreatePreparedStatement` (design §4.4).
+pub(crate) const CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
+/// The Flight SQL action `ClosePreparedStatement` (design §4.4).
+pub(crate) const CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 
 /// One gRPC call as 65a sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +49,16 @@ pub(crate) enum FlightRpc {
     CancelQuery,
     /// `DoPut(CommandStatementUpdate)`.
     Update,
+    /// The `CreatePreparedStatement` action.
+    CreatePrepared,
+    /// The `ClosePreparedStatement` action.
+    ClosePrepared,
+    /// `GetFlightInfo(CommandPreparedStatementQuery)`.
+    PreparedInfo,
+    /// `DoPut(CommandPreparedStatementQuery)`: a binding.
+    PreparedBind,
+    /// `DoPut(CommandPreparedStatementUpdate)`.
+    PreparedUpdate,
     /// A command whose `Any` could not be decoded.
     Malformed(&'static str),
     /// Anything else: the RPC, and the command type or action named in the answer.
@@ -56,6 +71,9 @@ impl FlightRpc {
         match Any::decode(descriptor.cmd.as_ref()) {
             Ok(any) if any.type_url == CommandStatementQuery::type_url() => Self::StatementInfo,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if any.type_url == CommandPreparedStatementQuery::type_url() => {
+                Self::PreparedInfo
+            }
             Ok(any) => Self::Unsupported(format!("GetFlightInfo of {:?}", any.type_url)),
             Err(_) => Self::Malformed("a FlightDescriptor command"),
         }
@@ -78,6 +96,12 @@ impl FlightRpc {
         };
         match Any::decode(descriptor.cmd.as_ref()) {
             Ok(any) if any.type_url == CommandStatementUpdate::type_url() => Self::Update,
+            Ok(any) if any.type_url == CommandPreparedStatementQuery::type_url() => {
+                Self::PreparedBind
+            }
+            Ok(any) if any.type_url == CommandPreparedStatementUpdate::type_url() => {
+                Self::PreparedUpdate
+            }
             Ok(any) => Self::Unsupported(format!("DoPut of {:?}", any.type_url)),
             Err(_) => Self::Malformed("a DoPut command"),
         }
@@ -88,6 +112,8 @@ impl FlightRpc {
         match action.r#type.as_str() {
             CANCEL_FLIGHT_INFO => Self::CancelFlightInfo,
             CANCEL_QUERY => Self::CancelQuery,
+            CREATE_PREPARED_STATEMENT => Self::CreatePrepared,
+            CLOSE_PREPARED_STATEMENT => Self::ClosePrepared,
             other => Self::Unsupported(format!("the Flight action {other:?}")),
         }
     }
@@ -103,7 +129,12 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::SqlInfo
         | FlightRpc::CancelFlightInfo
         | FlightRpc::CancelQuery
-        | FlightRpc::Update => Ok(()),
+        | FlightRpc::Update
+        | FlightRpc::CreatePrepared
+        | FlightRpc::ClosePrepared
+        | FlightRpc::PreparedInfo
+        | FlightRpc::PreparedBind
+        | FlightRpc::PreparedUpdate => Ok(()),
         FlightRpc::Malformed(what) => Err(Status::invalid_argument(format!(
             "{what} is not a Flight SQL command"
         ))),
@@ -124,6 +155,14 @@ pub(crate) fn served_actions() -> Vec<ActionType> {
         ActionType {
             r#type: CANCEL_QUERY.to_owned(),
             description: "Cancel a query (deprecated; use CancelFlightInfo).".to_owned(),
+        },
+        ActionType {
+            r#type: CREATE_PREPARED_STATEMENT.to_owned(),
+            description: "Create a prepared statement.".to_owned(),
+        },
+        ActionType {
+            r#type: CLOSE_PREPARED_STATEMENT.to_owned(),
+            description: "Close a prepared statement.".to_owned(),
         },
     ]
 }
@@ -247,6 +286,38 @@ impl FlightService for FlightGate {
                 };
                 self.0.counted(Command::StatementUpdate, result)
             }
+            FlightRpc::PreparedBind => {
+                let bind = command
+                    .and_then(|any| any.unpack::<CommandPreparedStatementQuery>().ok().flatten())
+                    .ok_or_else(|| {
+                        Status::invalid_argument("a malformed CommandPreparedStatementQuery")
+                    });
+                let result = match bind {
+                    Ok(bind) => self.0.do_put_bind(bind, stream, &request).await,
+                    Err(s) => Err(s),
+                };
+                self.0.counted(Command::PreparedQuery, result)
+            }
+            FlightRpc::PreparedUpdate => {
+                let update = command
+                    .and_then(|any| {
+                        any.unpack::<CommandPreparedStatementUpdate>()
+                            .ok()
+                            .flatten()
+                    })
+                    .ok_or_else(|| {
+                        Status::invalid_argument("a malformed CommandPreparedStatementUpdate")
+                    });
+                let result = match update {
+                    Ok(update) => {
+                        self.0
+                            .do_put_prepared_update(update, stream, &request)
+                            .await
+                    }
+                    Err(s) => Err(s),
+                };
+                self.0.counted(Command::PreparedUpdate, result)
+            }
             _ => self.refuse("DoPut"),
         }
     }
@@ -262,8 +333,44 @@ impl FlightService for FlightGate {
         &self,
         request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        self.gate(&FlightRpc::of_action(request.get_ref()))?;
-        FlightService::do_action(&self.0, request).await
+        let rpc = FlightRpc::of_action(request.get_ref());
+        self.gate(&rpc)?;
+        match rpc {
+            // Dispatched here, not by arrow-rs, whose answer could not carry the cookie of a
+            // session the create made (design §3.2).
+            FlightRpc::CreatePrepared => {
+                let create = Any::decode(request.get_ref().body.as_ref())
+                    .ok()
+                    .and_then(|any| {
+                        any.unpack::<ActionCreatePreparedStatementRequest>()
+                            .ok()
+                            .flatten()
+                    })
+                    .ok_or_else(|| {
+                        Status::invalid_argument("a malformed ActionCreatePreparedStatementRequest")
+                    });
+                let result = match create {
+                    Ok(create) => self.0.do_action_create(create, &request).await,
+                    Err(s) => Err(s),
+                };
+                self.0.counted(Command::PreparedCreate, result)
+            }
+            FlightRpc::ClosePrepared => {
+                let close = Any::decode(request.get_ref().body.as_ref())
+                    .ok()
+                    .and_then(|any| {
+                        any.unpack::<ActionClosePreparedStatementRequest>()
+                            .ok()
+                            .flatten()
+                    })
+                    .ok_or_else(|| {
+                        Status::invalid_argument("a malformed ActionClosePreparedStatementRequest")
+                    });
+                let result = close.and_then(|close| self.0.do_action_close(&close, &request));
+                self.0.counted(Command::PreparedClose, result)
+            }
+            _ => FlightService::do_action(&self.0, request).await,
+        }
     }
 
     /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either);
@@ -324,9 +431,9 @@ mod tests {
 
         // arrow-rs decodes these bodies before its own UNIMPLEMENTED default; the gate does not.
         for kind in [
-            "ClosePreparedStatement",
             "BeginTransaction",
-            "CreatePreparedStatement",
+            "EndTransaction",
+            "CreatePreparedSubstraitPlan",
         ] {
             let rpc = FlightRpc::of_action(&Action::new(kind, b"not a protobuf".to_vec()));
             assert_eq!(
@@ -344,7 +451,15 @@ mod tests {
     #[test]
     fn listed_actions_are_the_served_ones() {
         let listed: Vec<String> = served_actions().into_iter().map(|a| a.r#type).collect();
-        assert_eq!(listed, [CANCEL_FLIGHT_INFO, CANCEL_QUERY]);
+        assert_eq!(
+            listed,
+            [
+                CANCEL_FLIGHT_INFO,
+                CANCEL_QUERY,
+                CREATE_PREPARED_STATEMENT,
+                CLOSE_PREPARED_STATEMENT
+            ]
+        );
         for kind in &listed {
             let rpc = FlightRpc::of_action(&Action::new(kind.clone(), Vec::new()));
             assert!(check_flight(&rpc).is_ok(), "{kind}");
@@ -356,6 +471,15 @@ mod tests {
         let put = |m: Vec<u8>| FlightData::new().with_descriptor(FlightDescriptor::new_cmd(m));
         let update = put(any_of(&CommandStatementUpdate::default()));
         assert_eq!(FlightRpc::of_put(Some(&update)), FlightRpc::Update);
+        let bind = put(any_of(&CommandPreparedStatementQuery::default()));
+        assert_eq!(FlightRpc::of_put(Some(&bind)), FlightRpc::PreparedBind);
+        let prepared = put(any_of(&CommandPreparedStatementUpdate::default()));
+        assert_eq!(
+            FlightRpc::of_put(Some(&prepared)),
+            FlightRpc::PreparedUpdate
+        );
+        let info = FlightDescriptor::new_cmd(any_of(&CommandPreparedStatementQuery::default()));
+        assert_eq!(FlightRpc::of_descriptor(&info), FlightRpc::PreparedInfo);
         let ingest = put(any_of(&arrow_flight::sql::CommandStatementIngest::default()));
         assert!(matches!(
             FlightRpc::of_put(Some(&ingest)),
