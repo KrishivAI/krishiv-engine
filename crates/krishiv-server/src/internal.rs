@@ -190,13 +190,13 @@ fn is_embed_page(req: &axum::extract::Request) -> bool {
         (seg.next(), seg.next(), seg.next(), seg.next()),
         (Some("queries"), Some(id), Some("profile"), None) if !id.is_empty()
     );
-    let mut embeds = req
-        .uri()
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .filter(|kv| kv.split_once('=').map_or(*kv, |(k, _)| k) == crate::embed::EMBED_PARAM);
-    profile && embeds.next() == Some("embed=1") && embeds.next().is_none()
+    // Names and values are decoded as the page decodes them (`emb%65d` is `embed`).
+    let mut embeds = req.uri().query().unwrap_or("").split('&').filter_map(|kv| {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        (crate::embed::percent_decode(k).as_deref() == Some(crate::embed::EMBED_PARAM))
+            .then(|| crate::embed::percent_decode(v))
+    });
+    profile && embeds.next() == Some(Some("1".to_owned())) && embeds.next().is_none()
 }
 
 async fn security_headers(
