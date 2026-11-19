@@ -1,7 +1,5 @@
 {
  "approx_top_k": "exact top k, one row per value: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch)",
- "hll_sketch_agg": "approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available",
- "hll_sketch_estimate": "approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available",
  "java_method": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
  "kll_sketch_agg_bigint": "percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available",
  "kll_sketch_agg_double": "percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available",

@@ -448,6 +448,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-flight"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8709a798bd0825cb6207861aad09093133d64314c25569132dbc7f9f083879a5"
+dependencies = [
+ "arrow-arith 60.1.0",
+ "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
+ "arrow-cast 60.1.0",
+ "arrow-data 60.1.0",
+ "arrow-ipc 60.1.0",
+ "arrow-ord 60.1.0",
+ "arrow-row",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
+ "arrow-string 60.1.0",
+ "base64 0.23.1",
+ "bytes",
+ "futures",
+ "prost",
+ "prost-types",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
 name = "arrow-ipc"
 version = "58.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3017,6 +3043,8 @@ dependencies = [
 name = "krishiv-cli"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
+ "arrow-flight",
  "axum",
  "clap",
  "futures",
@@ -3025,6 +3053,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
+ "krishiv-flight-sql",
  "krishiv-functions",
  "krishiv-mcp",
  "krishiv-memory",
@@ -3039,6 +3068,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -3156,6 +3186,7 @@ dependencies = [
  "arrow-select 60.1.0",
  "async-trait",
  "bytes",
+ "codspeed-criterion-compat",
  "datasketches",
  "foldhash",
  "futures",
@@ -3228,6 +3259,24 @@ dependencies = [
 [[package]]
 name = "krishiv-flight-sql"
 version = "0.2.1"
+dependencies = [
+ "arrow-array 60.1.0",
+ "arrow-flight",
+ "arrow-schema 60.1.0",
+ "futures",
+ "getrandom 0.4.3",
+ "krishiv-common",
+ "krishiv-connect-server",
+ "krishiv-exec",
+ "krishiv-memory",
+ "krishiv-session",
+ "krishiv-sql",
+ "prost",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tracing",
+]
 
 [[package]]
 name = "krishiv-functions"
@@ -3240,6 +3289,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "cbc",
+ "datasketches",
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
@@ -3361,6 +3411,7 @@ dependencies = [
  "arrow-array 60.1.0",
  "arrow-schema 60.1.0",
  "codspeed-criterion-compat",
+ "datasketches",
  "insta",
  "krishiv-common",
  "krishiv-functions",

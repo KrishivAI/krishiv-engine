@@ -113,7 +113,7 @@ fn krishiv_meets_spark_tables() {
             sorted(spark_rows(&created["rows"])),
             "{name}: Krishiv reads Spark's table"
         );
-        let catalog = Catalog::at(metadata_at(location), location.to_owned());
+        let catalog = Catalog::with_metadata(metadata_at(location), location.to_owned());
         let mut steps = Vec::new();
 
         // An append: two drivers, one row with a NULL id.

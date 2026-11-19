@@ -23,6 +23,8 @@ krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.1" }
 
 [dev-dependencies]
 criterion.workspace = true
+# Theta sketch distinct counts in the q-error report (`cargo xtask qerror --ndv theta`).
+datasketches = { workspace = true }
 insta.workspace = true
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }

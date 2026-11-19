@@ -9,7 +9,7 @@ description: "Returns a bitmap that is the bitwise OR of all of the bitmaps from
 Returns a bitmap that is the bitwise OR of all of the bitmaps from the child
 expression. The input should be bitmaps created from bitmap_construct_agg().
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ bitmap_or_agg(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.5.0 |
@@ -34,18 +34,19 @@ bitmap_or_agg(child)
 ```sql
 -- bitmap_or_agg, example 1
 > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+700000
 ```
 
 ```sql
 -- bitmap_or_agg, example 2
 > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+100000
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

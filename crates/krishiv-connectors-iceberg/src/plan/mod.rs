@@ -17,6 +17,9 @@ pub(crate) mod file_metrics;
 pub(crate) mod metrics;
 pub(crate) mod prune;
 pub(crate) mod snapshot;
+pub(crate) mod strict;
+#[cfg(test)]
+mod strict_tests;
 pub(crate) mod theta_value;
 pub(crate) mod transform;
 pub(crate) mod types;
@@ -43,6 +46,7 @@ pub use entry::{
 pub use metrics::{METRICS_COLUMN_PREFIX, METRICS_DEFAULT, MetricsMode, WriterMetrics};
 pub use prune::{DEFAULT_TRUNCATE_LENGTH, PruneMode, PruneOptions, Pruner};
 pub use snapshot::{RefInfo, RefKind, TableSnapshot, VersionSpec};
+pub use theta_value::bench_estimate;
 pub use transform::apply as apply_transform;
 pub use types::{
     IcebergType, PartitionFieldInfo, PartitionSpecInfo, PartitionSpecs, SchemaField, Transform,
