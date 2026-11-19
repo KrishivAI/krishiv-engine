@@ -146,7 +146,7 @@ mod tests {
     fn matches_spark_4_3_0() {
         for (b, want) in [
             (&b"f"[..], "MY======"),
-            (b"fo", "MZXQ===="),
+            (&[0x66, 0x6f][..], "MZXQ===="),
             (b"foo", "MZXW6==="),
             (b"foob", "MZXW6YQ="),
             (b"fooba", "MZXW6YTB"),

@@ -388,15 +388,9 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
-                // `collect_union(x)` (Spark 4.3): see `collect_union_call`.
-                if !session_qualified
-                    && n == 1
-                    && !window_fn
-                    && f.within_group.is_empty()
-                    && lookup_name.eq_ignore_ascii_case("collect_union")
-                    && matches!(kids[0].ty.data_type, Some(DataType::Array(_)))
-                {
-                    return self.collect_union_call(e, f, &kids, cx);
+                let plain = !session_qualified && !window_fn;
+                if let Some(b) = self.collect_union_call(plain, lookup_name, e, f, &kids, cx)? {
+                    return Ok(b);
                 }
                 // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
                 // and the numeric forms of `make_timestamp` produce a

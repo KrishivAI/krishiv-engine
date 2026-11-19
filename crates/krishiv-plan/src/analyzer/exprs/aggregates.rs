@@ -6,26 +6,39 @@ use super::*;
 impl Resolver<'_> {
     /// `collect_union(x)` (Spark 4.3): the distinct non-NULL elements of the arrays of `x`, an aggregate over
     /// `collect_list` shown under its own name: `array_distinct(array_compact(flatten(collect_list(x))))`.
-    /// `DISTINCT` and `FILTER` apply to the collected rows. Kept out of line so the recursive binder's frame stays small.
+    /// `DISTINCT` and `FILTER` apply to the collected rows. `None` when the call is not that form: another function,
+    /// a qualified or windowed call (`plain` false), or not one array argument (the registry then reports its type
+    /// error). Kept out of line so the recursive binder's frame stays small.
     #[inline(never)]
     pub(super) fn collect_union_call(
         &mut self,
+        plain: bool,
+        name: &str,
         e: &Arc<Expr>,
         f: &FunctionCall,
         kids: &[Bound],
         cx: &Cx<'_>,
-    ) -> Result<Bound, AnalysisError> {
+    ) -> Result<Option<Bound>, AnalysisError> {
+        // The bound arguments, then the filter when there is one.
+        let (n, filter) = (
+            f.args.len(),
+            kids.get(f.args.len()).filter(|_| f.filter.is_some()),
+        );
+        if !plain
+            || !name.eq_ignore_ascii_case("collect_union")
+            || n != 1
+            || !f.within_group.is_empty()
+            || !matches!(kids[0].ty.data_type, Some(DataType::Array(_)))
+        {
+            return Ok(None);
+        }
         let collected = Expr::new(ExprNode::Function(FunctionCall {
             name: "collect_list".to_owned(),
             qualifier: Vec::new(),
             args: vec![Arc::clone(&kids[0].expr)],
             arg_names: Vec::new(),
             distinct: f.distinct,
-            filter: f
-                .filter
-                .as_ref()
-                .and_then(|_| kids.get(1))
-                .map(|k| Arc::clone(&k.expr)),
+            filter: filter.map(|k| Arc::clone(&k.expr)),
             within_group: Vec::new(),
         }));
         let call = Expr::function(
@@ -50,7 +63,7 @@ impl Resolver<'_> {
             }))
             .with_origin(e.origin),
         ));
-        Ok(b)
+        Ok(Some(b))
     }
 
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
