@@ -53,6 +53,10 @@ unity = [
     "krishiv-store/cloud",
 ]
 
+# Test helpers for other crates' tests (`testing::serve_s3`, a loopback S3 stand-in, and `write_s3_table`).
+# Never in a product build.
+testing = ["session", "krishiv-connectors-iceberg/testing"]
+
 # The embedded SQLite catalog (`rusqlite` with the bundled C amalgamation: a C build). Off by default.
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]
 
@@ -84,5 +88,3 @@ tempfile.workspace = true
 # The declared-table read tests serve a table the connector's test helper writes.
 krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
 arrow-array = { workspace = true }
-# The vended read tests place the writer's `s3://` table through a store id of their own.
-krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }

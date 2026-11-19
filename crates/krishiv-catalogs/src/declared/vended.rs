@@ -36,8 +36,9 @@ use crate::iceberg_rest::vended::{VendedPrefix, covering, credential, keep_crede
 use crate::iceberg_rest::{LoadedTable, RestCaller, RestClient};
 use crate::location::{LocationRule, refused};
 
-/// A vended-answer cache key: the identity, the namespace and the table as asked.
-pub(crate) type Key = (IdentityKey, Vec<String>, String);
+/// A vended-answer cache key: the catalog instance (two runtimes declaring a catalog of one name against different
+/// servers never share an answer), the identity, the namespace and the table as asked.
+pub(crate) type Key = (u64, IdentityKey, Vec<String>, String);
 
 /// The vended part of one catalog answer (module docs). Holds secrets: its `Debug` shows none.
 pub(crate) struct VendedAnswer {
@@ -141,13 +142,30 @@ impl VendedCache {
         entries.insert(key, (answer, now));
     }
 
-    /// Drops every identity's answer for `namespace.name` (`REFRESH TABLE`).
-    pub(crate) fn drop_table(&self, catalog: &str, namespace: &[String], name: &str) {
+    /// Keeps `answer` for `key` unless the entry held was fetched later (a `loadTable` answer that raced a refresh).
+    pub(crate) fn put_if_newer(&self, key: Key, answer: Arc<VendedAnswer>, max: usize) {
+        let held = self.get(&key);
+        if held.is_none_or(|h| h.fetched < answer.fetched) {
+            self.put(key, answer, max);
+        }
+    }
+
+    /// Drops every identity's answer for `namespace.name` of the catalog `instance` (`REFRESH TABLE`).
+    pub(crate) fn drop_table(&self, instance: u64, namespace: &[String], name: &str) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .0
-            .retain(|(id, ns, n), _| !(id.catalog == catalog && ns == namespace && n == name));
+            .retain(|(i, _, ns, n), _| !(*i == instance && ns == namespace && n == name));
+    }
+
+    /// Drops every answer of the catalog `instance` (the catalog was dropped).
+    pub(crate) fn drop_instance(&self, instance: u64) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .retain(|(i, _, _, _), _| *i != instance);
     }
 
     #[cfg(test)]

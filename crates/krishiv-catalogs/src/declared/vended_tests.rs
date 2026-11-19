@@ -23,7 +23,12 @@ fn user(name: &str, tenant: Option<&str>) -> Principal {
 }
 
 fn key(identity: IdentityKey, table: &str) -> Key {
-    (identity, vec!["db".to_owned()], table.to_owned())
+    key_of(1, identity, table)
+}
+
+/// The key of `table` in the catalog instance `instance`.
+fn key_of(instance: u64, identity: IdentityKey, table: &str) -> Key {
+    (instance, identity, vec!["db".to_owned()], table.to_owned())
 }
 
 fn answer(location: &str) -> Arc<VendedAnswer> {
@@ -55,11 +60,34 @@ fn vended_cache_per_identity() {
             .get(&key(IdentityKey::of("other", &user("ana", None)), "t"))
             .is_none()
     );
-    // REFRESH TABLE drops every identity's answer for the table, in that catalog only.
+    // Another instance of a catalog of the same name (another runtime, maybe another server) is another key.
+    assert!(cache.get(&key_of(2, ana.clone(), "t")).is_none());
+    cache.put(key_of(2, ana.clone(), "t"), answer("s3://b/two"), 10);
+    // REFRESH TABLE drops every identity's answer for the table, in that catalog instance only.
     cache.put(key(ana.clone(), "u"), answer("s3://b/u"), 10);
-    cache.drop_table("cat", &["db".to_owned()], "t");
+    cache.drop_table(1, &["db".to_owned()], "t");
+    assert_eq!(cache.len(), 2);
+    assert!(cache.get(&key(ana.clone(), "u")).is_some());
+    assert!(cache.get(&key_of(2, ana.clone(), "t")).is_some());
+    // A dropped catalog's answers go with it.
+    cache.drop_instance(2);
     assert_eq!(cache.len(), 1);
     assert!(cache.get(&key(ana, "u")).is_some());
+}
+
+/// A `loadTable` answer replaces the held one only when it was fetched later.
+#[test]
+fn vended_cache_keeps_the_newer_answer() {
+    let cache = VendedCache::default();
+    let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
+    let older = answer("s3://b/old");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let newer = answer("s3://b/new");
+    cache.put_if_newer(k(), Arc::clone(&older), 10);
+    cache.put_if_newer(k(), Arc::clone(&newer), 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
+    cache.put_if_newer(k(), older, 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
 }
 
 #[test]

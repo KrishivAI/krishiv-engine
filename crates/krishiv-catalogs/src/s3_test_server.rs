@@ -13,47 +13,56 @@ use std::thread;
 
 /// One request as the stand-in saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct S3Seen {
-    pub(crate) method: String,
+pub struct S3Seen {
+    /// `GET`, `PUT`, ...
+    pub method: String,
     /// `bucket/key`, without the query.
-    pub(crate) object: String,
+    pub object: String,
     /// The SigV4 access key id, or `None` for an unsigned request.
-    pub(crate) key_id: Option<String>,
+    pub key_id: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct State {
     objects: BTreeMap<String, Vec<u8>>,
     seen: Vec<S3Seen>,
     denied: BTreeSet<String>,
 }
 
-pub(crate) struct S3Server {
+/// A running stand-in ([`serve_s3`]); it serves until the process ends. Clones share it.
+#[derive(Debug, Clone)]
+pub struct S3Server {
     /// `http://127.0.0.1:<port>`, the `fs.s3a.endpoint`.
-    pub(crate) endpoint: String,
+    pub endpoint: String,
     state: Arc<Mutex<State>>,
 }
 
 impl S3Server {
-    pub(crate) fn seen(&self) -> Vec<S3Seen> {
+    /// Every request since the start or the last [`Self::clear_seen`], in arrival order.
+    #[must_use]
+    pub fn seen(&self) -> Vec<S3Seen> {
         self.state.lock().unwrap().seen.clone()
     }
 
-    pub(crate) fn clear_seen(&self) {
+    /// Forgets the requests seen so far.
+    pub fn clear_seen(&self) {
         self.state.lock().unwrap().seen.clear();
     }
 
     /// Requests signed with `key_id` get 403 from now on.
-    pub(crate) fn deny(&self, key_id: &str) {
+    pub fn deny(&self, key_id: &str) {
         self.state.lock().unwrap().denied.insert(key_id.to_owned());
     }
 
     /// The access key ids the requests since the last [`Self::clear_seen`] were signed with.
-    pub(crate) fn key_ids(&self) -> BTreeSet<Option<String>> {
+    #[must_use]
+    pub fn key_ids(&self) -> BTreeSet<Option<String>> {
         self.seen().into_iter().map(|s| s.key_id).collect()
     }
 
-    pub(crate) fn objects(&self) -> Vec<String> {
+    /// The `bucket/key` of every object held.
+    #[must_use]
+    pub fn objects(&self) -> Vec<String> {
         self.state.lock().unwrap().objects.keys().cloned().collect()
     }
 }
@@ -247,8 +256,12 @@ fn handle(mut stream: TcpStream, state: &Mutex<State>) {
     }
 }
 
-/// Starts a stand-in that serves until the test ends.
-pub(crate) fn serve_s3() -> S3Server {
+/// Starts a stand-in on a loopback port that serves until the process ends.
+///
+/// # Panics
+/// When no loopback port can be bound (test code only).
+#[must_use]
+pub fn serve_s3() -> S3Server {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let state = Arc::new(Mutex::new(State::default()));
@@ -263,6 +276,39 @@ pub(crate) fn serve_s3() -> S3Server {
     S3Server { endpoint, state }
 }
 
+/// `krishiv_connectors_iceberg::testing::write_table`'s table written under `warehouse` (an `s3://bucket/...` URL) on
+/// `s3`, every request signed with the access key id `key_id`. Call it off any async runtime: the writer runs one of
+/// its own.
+///
+/// # Panics
+/// When the write fails (test code only).
+#[must_use]
+pub fn write_s3_table(
+    s3: &S3Server,
+    warehouse: &str,
+    key_id: &str,
+) -> krishiv_connectors_iceberg::testing::WrittenTable {
+    let mut settings = BTreeMap::new();
+    for (k, v) in [
+        ("fs.s3a.endpoint", s3.endpoint.as_str()),
+        ("fs.s3a.region", "us-east-1"),
+        ("fs.s3a.access.key", key_id),
+        ("fs.s3a.secret.key", "writer-secret"),
+    ] {
+        settings.insert(k.to_owned(), v.to_owned());
+    }
+    krishiv_connectors_iceberg::testing::write_table_with(warehouse, move |sched| {
+        std::sync::Arc::new(krishiv_exec::files::ObjectPaths::new(
+            krishiv_store::StoreId::new("file://"),
+            "/",
+            Arc::clone(sched),
+            Arc::new(krishiv_store::StoreRegistry::new(Arc::new(settings))),
+        ))
+    })
+    .unwrap()
+}
+
+#[cfg(test)]
 #[test]
 fn ranges() {
     assert_eq!(range("bytes=0-3", 10), Some((0, 4)));

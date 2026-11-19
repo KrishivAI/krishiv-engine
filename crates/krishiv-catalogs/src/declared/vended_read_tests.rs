@@ -3,48 +3,28 @@
 //! with a writer key, served by a fake REST catalog that vends another key, read by a session that has no S3
 //! credential of its own. The stand-in records the access key id every request was signed with.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use futures::executor::block_on;
-use krishiv_connectors_iceberg::testing::{WrittenTable, write_table_with};
-use krishiv_exec::files::ObjectPaths;
-use krishiv_io::StoreId;
+use krishiv_connectors_iceberg::testing::WrittenTable;
 use krishiv_session::catalog_decl::DeclMode;
 use krishiv_session::catalog_registry::CatalogSetup;
 use krishiv_session::{EngineRuntime, Session};
-use krishiv_store::StoreRegistry;
 
 use super::IcebergRestFactory;
 use super::tests::path;
 use crate::iceberg_rest::test_server::{Reply, Server, serve};
-use crate::s3_test_server::{S3Server, serve_s3};
+use crate::s3_test_server::{S3Server, serve_s3, write_s3_table};
 
 const WRITER: &str = "AKIAWRITERKEY";
 
 /// `db.t` written to `s3://bucket/wh` on `s3`, every request signed with [`WRITER`].
 fn s3_table(s3: &S3Server) -> WrittenTable {
-    let mut settings = BTreeMap::new();
-    for (k, v) in [
-        ("fs.s3a.endpoint", s3.endpoint.as_str()),
-        ("fs.s3a.region", "us-east-1"),
-        ("fs.s3a.access.key", WRITER),
-        ("fs.s3a.secret.key", "writer-secret"),
-    ] {
-        settings.insert(k.to_owned(), v.to_owned());
-    }
-    let table = write_table_with("s3://bucket/wh", move |sched| {
-        Arc::new(ObjectPaths::new(
-            StoreId::new("file://"),
-            "/",
-            Arc::clone(sched),
-            Arc::new(StoreRegistry::new(Arc::new(settings))),
-        ))
-    })
-    .unwrap();
+    let table = write_s3_table(s3, "s3://bucket/wh", WRITER);
     assert!(table.metadata_location.starts_with("s3://bucket/wh/db/t/"));
     assert!(
         s3.objects().iter().any(|o| o.ends_with(".parquet")),
@@ -224,5 +204,108 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
     // The table's `token` replaces the catalog's on no request.
     for r in server.seen() {
         assert_ne!(r.header("authorization"), Some("Bearer table-token"));
+    }
+}
+
+/// All text of the batches `sql` returns (every column displayed).
+fn text_of(s: &Session, sql: &str) -> String {
+    let batches = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let mut out = String::new();
+    for b in &batches {
+        for c in b.columns() {
+            let f = arrow_cast_free_display(c);
+            out.push_str(&f);
+        }
+    }
+    out
+}
+
+/// A column's values as text without `arrow-cast`: strings as they are, everything else through `Debug`.
+fn arrow_cast_free_display(c: &arrow_array::ArrayRef) -> String {
+    if let Some(v) = c.as_string_opt::<i32>() {
+        return v.iter().flatten().collect::<Vec<_>>().join("\n");
+    }
+    if let Some(v) = c.as_string_view_opt() {
+        return v.iter().flatten().collect::<Vec<_>>().join("\n");
+    }
+    format!("{c:?}")
+}
+
+/// Design §3.2 / §8 (T-C4), the vended part of the planted-secret check: a vended secret key and session token and
+/// a catalog-supplied table `token` never appear in `EXPLAIN`, an error, `system.catalogs`, `system.queries` or the
+/// configuration listing.
+#[test]
+fn vended_secrets_never_shown() {
+    const SECRET: &str = "vended-secret-canary-7c1d";
+    const SESSION: &str = "vended-session-canary-7c1d";
+    const TABLE_TOKEN: &str = "table-token-canary-7c1d";
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    let credential = format!(
+        r#"{{"prefix": "s3://bucket/wh", "config": {{"s3.access-key-id": "AKIACANARYKEY", "s3.secret-access-key": "{SECRET}",
+            "s3.session-token": "{SESSION}", "s3.session-token-expires-at-ms": "{}"}}}}"#,
+        ms_from_now(Duration::from_secs(3600))
+    );
+    let server = catalog(
+        load_body(
+            &table,
+            &format!(r#"{{"token": "{TABLE_TOKEN}"}}"#),
+            &[credential],
+        ),
+        None,
+    );
+    let s = session(&server, &s3);
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    let mut shown = String::new();
+    for sql in [
+        "EXPLAIN EXTENDED SELECT id FROM lake.db.t WHERE id > 1",
+        "EXPLAIN COST SELECT id FROM lake.db.t",
+        "SELECT * FROM system.catalogs",
+        "SELECT * FROM system.queries",
+        "SET",
+        "SET -v",
+    ] {
+        shown.push_str(&text_of(&s, sql));
+    }
+    // A refusal: another runtime declares `lake` against a catalog that vends only `s3://bucket/other`. Its read is
+    // refused, never served the first runtime's cached credential (vended answers are keyed by catalog instance).
+    let moved = catalog(
+        load_body(
+            &table,
+            &format!(r#"{{"token": "{TABLE_TOKEN}"}}"#),
+            &[vended(
+                "s3://bucket/other",
+                "AKIACANARYKEY",
+                Duration::from_secs(3600),
+            )
+            .replace("secret-of-AKIACANARYKEY", SECRET)],
+        ),
+        None,
+    );
+    let e = block_on(async {
+        session(&moved, &s3)
+            .sql("SELECT id FROM lake.db.t")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivCatalogLocationRefused,
+        "{e}"
+    );
+    assert!(
+        e.to_string()
+            .contains("outside the vended credential prefixes"),
+        "{e}"
+    );
+    shown.push_str(&format!("{e} {e:?}"));
+    assert!(shown.contains("lake"), "the listings ran");
+    for planted in [SECRET, SESSION, TABLE_TOKEN] {
+        assert!(!shown.contains(planted), "{planted} shown");
+    }
+    for r in server.seen().iter().chain(moved.seen().iter()) {
+        assert!(!format!("{r:?}").contains(TABLE_TOKEN), "{r:?}");
     }
 }

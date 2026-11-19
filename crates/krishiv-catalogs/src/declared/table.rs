@@ -106,8 +106,16 @@ pub(crate) struct RestCatalog {
     ttl: Duration,
     epoch: AtomicU64,
     cache: Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>,
-    /// The vended answers (one cache per process, §4.3).
+    /// The vended answers (one cache per process, §4.3), keyed with `instance`.
     vended: Arc<VendedCache>,
+    /// This catalog's own part of every vended key: unique in the process.
+    instance: u64,
+}
+
+impl Drop for RestCatalog {
+    fn drop(&mut self) {
+        self.vended.drop_instance(self.instance);
+    }
 }
 
 impl RestCatalog {
@@ -121,6 +129,10 @@ impl RestCatalog {
             epoch: AtomicU64::new(0),
             cache: Mutex::new(HashMap::new()),
             vended: VendedCache::global(),
+            instance: {
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            },
         }
     }
 
@@ -357,7 +369,10 @@ impl CallerCatalog for RestCatalog {
             let relation = self.relation(&id.namespace, &id.name);
             let vended = (self.storage == CatalogStorage::Vended).then(|| VendedRead {
                 cache: Arc::clone(&self.vended),
-                key: self.key(caller, &id.namespace, &id.name),
+                key: {
+                    let (identity, namespace, name) = self.key(caller, &id.namespace, &id.name);
+                    (self.instance, identity, namespace, name)
+                },
                 identity: caller.identity.clone(),
                 delegated: self.delegated,
                 refetch: Refetch {
@@ -402,7 +417,8 @@ impl CallerCatalog for RestCatalog {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .retain(|(_, ns, name), _| !(ns == &id.namespace && name == &id.name));
-            self.vended.drop_table(&self.name, &id.namespace, &id.name);
+            self.vended
+                .drop_table(self.instance, &id.namespace, &id.name);
             self.epoch.fetch_add(1, Ordering::SeqCst);
             if id.namespace.is_empty() {
                 return Ok(false);
@@ -466,7 +482,7 @@ impl std::fmt::Debug for RestTable {
 #[derive(Debug)]
 struct VendedRead {
     cache: Arc<VendedCache>,
-    key: Key,
+    key: super::vended::Key,
     identity: IdentityKey,
     delegated: bool,
     refetch: Refetch,
@@ -498,13 +514,11 @@ impl RestTable {
                 .unwrap_or(krishiv_store::DEFAULT_REFRESH_SKEW),
             refetch: v.refetch.clone(),
         };
-        // The answer `loadTable` just gave, kept unless the cache holds a newer one for this identity.
-        if let Some(a) = &self.loaded.vended
-            && table.cache.get(&table.key).is_none()
-        {
+        // The answer `loadTable` gave, kept unless the cache holds a newer one for this identity.
+        if let Some(a) = &self.loaded.vended {
             table
                 .cache
-                .put(table.key.clone(), Arc::clone(a), table.max_entries);
+                .put_if_newer(table.key.clone(), Arc::clone(a), table.max_entries);
         }
         let answer = table.answer().await?;
         let refuse = |rule| refused(&table.refetch.catalog, &self.relation, rule);
