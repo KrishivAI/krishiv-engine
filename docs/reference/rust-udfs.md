@@ -1,3 +1,7 @@
+---
+description: "Write and register native Rust user-defined functions."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Native Rust UDFs
 
@@ -9,16 +13,19 @@ a built-in. Aggregate UDFs implement `AggregateUdf` and are registered with `reg
 
 ## A complete example
 
+The code needs only the `krishiv` crate (`cargo add krishiv`); Arrow types come from `krishiv::arrow`. Both
+examples on this page have a copy that is compiled and run in CI (`crates/krishiv/tests/docs_rust_udfs.rs`); change the
+two together.
+
 ```rust
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{ArrayRef, Int32Array};
+use krishiv::arrow::array::{ArrayRef, Int32Array};
 use krishiv::functions::{call_udf, col};
 use krishiv::{
-    ArgField, InvokeContext, ReturnField, ScalarUdf, Session, Signature, UdfArg, UdfError,
+    ArgField, DataType, InvokeContext, ReturnField, ScalarUdf, Session, Signature, UdfArg, UdfError,
     UdfInputType,
 };
-use krishiv_types::DataType;
 
 #[derive(Debug)]
 struct AddOne;
@@ -52,15 +59,18 @@ impl ScalarUdf for AddOne {
             .as_any()
             .downcast_ref::<Int32Array>()
             .ok_or_else(|| UdfError::new("add_one needs an INT argument"))?;
-        let out: Int32Array = ints
-            .iter()
-            .map(|v| v.map(|v| v.checked_add(1)).transpose())
-            .collect::<Option<_>>()
-            .ok_or_else(|| UdfError::new("add_one overflowed"))?;
-        Ok(Arc::new(out))
+        let mut out = Vec::with_capacity(ints.len());
+        for v in ints.iter() {
+            out.push(match v {
+                None => None,
+                Some(v) => Some(v.checked_add(1).ok_or_else(|| UdfError::new("add_one overflowed"))?),
+            });
+        }
+        Ok(Arc::new(Int32Array::from(out)))
     }
 }
 
+// In an async fn returning Result<(), krishiv::Error>:
 let session = Session::new()?;
 session.register_udf(AddOne)?;
 
@@ -113,22 +123,107 @@ An aggregate UDF declares its partial state as Arrow columns and holds the state
 hash-aggregate table in a `GroupsAccumulator`, over dense group indices:
 
 ```rust
+use krishiv::arrow::array::{Array, Int64Array};
+use krishiv::{AggregateUdf, GroupsAccumulator, StateField};
+
 #[derive(Debug)]
 struct Total;
 
 impl AggregateUdf for Total {
-    fn name(&self) -> &str { "total" }
-    fn version(&self) -> u32 { 1 }
-    fn signature(&self) -> &Signature { /* one BIGINT, as for a scalar UDF */ }
+    fn name(&self) -> &str {
+        "total"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Long)]))
+    }
     fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
-        Ok(ReturnField { data_type: DataType::Long, nullable: true })
+        Ok(ReturnField {
+            data_type: DataType::Long,
+            nullable: true,
+        })
     }
     fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
-        Ok(vec![StateField { name: "sum".into(), data_type: DataType::Long, nullable: true }])
+        Ok(vec![StateField {
+            name: "sum".into(),
+            data_type: DataType::Long,
+            nullable: true,
+        }])
     }
-    fn accumulator(&self, _: &[ArgField], _: &InvokeContext)
-        -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+    fn accumulator(
+        &self,
+        _: &[ArgField],
+        _: &InvokeContext,
+    ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
         Ok(Box::new(Sums(Vec::new())))
+    }
+}
+
+/// One running sum per group; `None` is a group that has seen no rows.
+#[derive(Debug)]
+struct Sums(Vec<Option<i64>>);
+
+impl Sums {
+    fn add(&mut self, group: u32, v: i64) -> Result<(), UdfError> {
+        let slot = &mut self.0[group as usize];
+        let sum = slot
+            .unwrap_or(0)
+            .checked_add(v)
+            .ok_or_else(|| UdfError::new("total overflowed"))?;
+        *slot = Some(sum);
+        Ok(())
+    }
+
+    fn column(&self, groups: &[u32]) -> ArrayRef {
+        Arc::new(Int64Array::from_iter(
+            groups.iter().map(|g| self.0[*g as usize]),
+        ))
+    }
+}
+
+impl GroupsAccumulator for Sums {
+    fn resize(&mut self, groups: usize) {
+        self.0.resize(groups, None);
+    }
+
+    fn update(&mut self, args: &[UdfArg<'_>], groups: &[u32]) -> Result<(), UdfError> {
+        let values = args[0].array();
+        let values = values
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| UdfError::new("total needs a BIGINT argument"))?;
+        for (row, group) in groups.iter().enumerate() {
+            self.add(*group, values.value(row))?;
+        }
+        Ok(())
+    }
+
+    fn merge(&mut self, states: &[ArrayRef], groups: &[u32]) -> Result<(), UdfError> {
+        let partial = states[0]
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| UdfError::new("total state is not a BIGINT"))?;
+        for (row, group) in groups.iter().enumerate() {
+            if partial.is_valid(row) {
+                self.add(*group, partial.value(row))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn state(&self, groups: &[u32]) -> Result<Vec<ArrayRef>, UdfError> {
+        Ok(vec![self.column(groups)])
+    }
+
+    fn evaluate(&self, groups: &[u32]) -> Result<ArrayRef, UdfError> {
+        Ok(self.column(groups))
+    }
+
+    fn size(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<Option<i64>>()
     }
 }
 
@@ -140,6 +235,7 @@ session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
   `merge(states, groups)` folds partial states (the columns `state` returned, possibly from another worker or a
   spill file); `state(groups)` and `evaluate(groups)` return one row per group and must not change anything.
   An empty group evaluates to the aggregate of no rows.
+  The `Total` example above returns 0 for a group with no non-NULL rows, where the built-in `sum` returns NULL.
 - **What the engine does.** `FILTER (WHERE ...)` rows and, with the default `NullHandling::Strict`, rows with a
   NULL argument never reach `update`. `DISTINCT` is allowed unless `properties()` sets `distinct = false`, which
   makes `f(DISTINCT x)` `INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX`. Results and states are checked
