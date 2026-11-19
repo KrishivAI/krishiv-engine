@@ -660,6 +660,7 @@ pub fn krishiv_session::auth::ServerAuth::impersonate(&self, &krishiv_session::a
 pub async fn krishiv_session::auth::ServerAuth::impersonate_signed(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &str, &krishiv_session::auth::ActAsHint) -> core::result::Result<(krishiv_session::auth::ActAs, krishiv_session::auth::Authenticated), krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::ServerAuth::impersonation_counts(&self) -> krishiv_session::auth::ImpersonationCount
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
+pub fn krishiv_session::auth::ServerAuth::jwks_ready(&self) -> core::option::Option<core::result::Result<(), alloc::string::String>>
 pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::ServerAuth::refuse_impersonation(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, krishiv_session::auth::Denial) -> krishiv_common::error::KrishivError
@@ -1379,7 +1380,6 @@ pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
 pub fn krishiv_session::DataFrame::cache(&self) -> Self
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
-pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::cube(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
@@ -1436,6 +1436,8 @@ pub async fn krishiv_session::DataFrame::explain_analyze_verbose(&self) -> core:
 pub async fn krishiv_session::DataFrame::explain_analyze_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose(&self) -> core::result::Result<krishiv_session::ExplainVerbose, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
+pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::estimate(&self) -> core::result::Result<krishiv_session::Estimate, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
@@ -1501,6 +1503,7 @@ pub struct krishiv_session::EngineRuntime
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
+pub fn krishiv_session::EngineRuntime::cancel_all(&self, krishiv_session::CancelReason) -> usize
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::EngineRuntime::cancel_in_session(&self, &str, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::catalogs(&self) -> &alloc::sync::Arc<krishiv_session::catalog_registry::CatalogRegistry>
@@ -1508,17 +1511,26 @@ pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
+pub fn krishiv_session::EngineRuntime::is_draining(&self) -> bool
 pub fn krishiv_session::EngineRuntime::kill_session(&self, &str, krishiv_session::CancelReason) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::memory(&self) -> alloc::sync::Arc<dyn krishiv_memory::MemoryPool>
 pub fn krishiv_session::EngineRuntime::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::EngineRuntime::session_ended(&self, &str) -> bool
+pub fn krishiv_session::EngineRuntime::set_draining(&self, bool)
 impl krishiv_session::EngineRuntime
-pub fn krishiv_session::EngineRuntime::query_infos(&self) -> alloc::vec::Vec<krishiv_session::QueryInfo>
-pub fn krishiv_session::EngineRuntime::session_infos(&self) -> alloc::vec::Vec<krishiv_session::SessionInfo>
 pub fn krishiv_session::EngineRuntime::config_defaults(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::EngineRuntime::set_config_defaults(&self, &[(alloc::string::String, alloc::string::String)], &[alloc::string::String]) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::config_listing(&self, core::option::Option<&str>, bool) -> alloc::vec::Vec<krishiv_session::ConfigListing>
+impl krishiv_session::EngineRuntime
+pub fn krishiv_session::EngineRuntime::query_infos(&self) -> alloc::vec::Vec<krishiv_session::QueryInfo>
+pub fn krishiv_session::EngineRuntime::session_infos(&self) -> alloc::vec::Vec<krishiv_session::SessionInfo>
+impl krishiv_session::EngineRuntime
+pub fn krishiv_session::EngineRuntime::reload_resource_group_document(&self) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::replace_resource_group_document(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::resource_group_document(&self) -> krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::EngineRuntime::resource_group_infos(&self, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::ResourceGroupInfo>
+pub fn krishiv_session::EngineRuntime::validate_resource_group_document(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::EngineRuntimeBuilder
@@ -1752,6 +1764,48 @@ pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::
 pub fn krishiv_session::ReadOnlyPolicy::column_level(&self) -> bool
 pub fn krishiv_session::ReadOnlyPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::ResourceGroupDocument
+pub krishiv_session::ResourceGroupDocument::document: alloc::string::String
+pub krishiv_session::ResourceGroupDocument::etag: alloc::string::String
+pub krishiv_session::ResourceGroupDocument::file_etag: core::option::Option<alloc::string::String>
+pub krishiv_session::ResourceGroupDocument::loaded_at_ms: i64
+impl core::clone::Clone for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::clone(&self) -> krishiv_session::ResourceGroupDocument
+impl core::cmp::Eq for krishiv_session::ResourceGroupDocument
+impl core::cmp::PartialEq for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::eq(&self, &krishiv_session::ResourceGroupDocument) -> bool
+impl core::fmt::Debug for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::ResourceGroupDocument
+pub struct krishiv_session::ResourceGroupInfo
+pub krishiv_session::ResourceGroupInfo::config_etag: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::group_id: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::hard_concurrency_limit: i32
+pub krishiv_session::ResourceGroupInfo::loaded_at_ms: i64
+pub krishiv_session::ResourceGroupInfo::max_queued: i32
+pub krishiv_session::ResourceGroupInfo::memory_reserved_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::parent_id: core::option::Option<alloc::string::String>
+pub krishiv_session::ResourceGroupInfo::per_query_memory_limit_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::priority: i32
+pub krishiv_session::ResourceGroupInfo::queued: core::option::Option<i32>
+pub krishiv_session::ResourceGroupInfo::running: core::option::Option<i32>
+pub krishiv_session::ResourceGroupInfo::scan_bytes_in_window: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_quota_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_quota_period_s: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_window_resets_at_ms: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scheduling_policy: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::scheduling_weight: i32
+pub krishiv_session::ResourceGroupInfo::soft_memory_limit_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::state: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::workload_class: alloc::string::String
+impl core::clone::Clone for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::clone(&self) -> krishiv_session::ResourceGroupInfo
+impl core::cmp::Eq for krishiv_session::ResourceGroupInfo
+impl core::cmp::PartialEq for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::eq(&self, &krishiv_session::ResourceGroupInfo) -> bool
+impl core::fmt::Debug for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::ResourceGroupInfo
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::entries(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
@@ -1923,6 +1977,25 @@ impl core::fmt::Debug for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::StorageLevel
 impl core::marker::StructuralPartialEq for krishiv_session::StorageLevel
+#[non_exhaustive] pub struct krishiv_session::StoredProfile
+pub krishiv_session::StoredProfile::duration_ns: i64
+pub krishiv_session::StoredProfile::error_class: core::option::Option<alloc::string::String>
+pub krishiv_session::StoredProfile::finished_at_ms: i64
+pub krishiv_session::StoredProfile::principal: alloc::string::String
+pub krishiv_session::StoredProfile::profile: alloc::string::String
+pub krishiv_session::StoredProfile::profile_minor: i64
+pub krishiv_session::StoredProfile::profile_version: i64
+pub krishiv_session::StoredProfile::query_id: alloc::string::String
+pub krishiv_session::StoredProfile::sql: core::option::Option<alloc::string::String>
+pub krishiv_session::StoredProfile::state: alloc::string::String
+impl core::clone::Clone for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::clone(&self) -> krishiv_session::StoredProfile
+impl core::cmp::Eq for krishiv_session::StoredProfile
+impl core::cmp::PartialEq for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::eq(&self, &krishiv_session::StoredProfile) -> bool
+impl core::fmt::Debug for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::StoredProfile
 pub struct krishiv_session::Unlimited
 impl core::clone::Clone for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::clone(&self) -> krishiv_session::Unlimited
@@ -1969,6 +2042,7 @@ pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
+pub fn krishiv_session::read_profile_history(&std::path::Path) -> core::result::Result<alloc::vec::Vec<krishiv_session::StoredProfile>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
 pub fn krishiv_session::register_surface(&str, &str, &str)
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>
