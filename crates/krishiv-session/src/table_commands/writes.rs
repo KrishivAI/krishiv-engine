@@ -319,11 +319,14 @@ impl Session {
         );
         let mut select = Vec::with_capacity(values.len());
         // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
-        let null_checks = !env
-            .config
-            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
-            .and_then(krishiv_common::config::ConfigValue::as_str)
-            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
+        // A Delta table's writer checks NOT NULL itself, as delta-spark does
+        // (`DELTA_NOT_NULL_CONSTRAINT_VIOLATED`, `WRITE-EDGES.json` `not_null`).
+        let null_checks = !delta
+            && !env
+                .config
+                .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+                .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
             let checked =
                 crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;

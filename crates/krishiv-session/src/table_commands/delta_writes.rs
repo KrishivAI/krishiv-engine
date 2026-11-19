@@ -217,9 +217,12 @@ impl Session {
             let (Some(hit), None) = (hits.next(), hits.next()) else {
                 return Err(columns_differ(quoted));
             };
+            // Nested fields cast as nullable: the writer checks the table's NOT NULL fields
+            // and raises delta-spark's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` (a cast into a
+            // non-null struct field is refused before any row is read).
             select.push(
                 col(&ident(hit))
-                    .cast_ansi(c.data_type.clone())
+                    .cast_ansi(c.data_type.as_nullable())
                     .alias(&c.name),
             );
         }
@@ -284,7 +287,7 @@ impl Session {
                         properties: BTreeMap::new(),
                     },
                     WriteMode::Append,
-                    BTreeMap::new(),
+                    writer_options(plain.iter().map(|(k, v)| (k, v))),
                     &quoted,
                 )
                 .await;
@@ -312,7 +315,7 @@ impl Session {
                 }
             },
         };
-        let mut request_options = BTreeMap::new();
+        let mut request_options = writer_options(plain.iter().map(|(k, v)| (k, v)));
         if let Some(text) = option("replaceWhere") {
             request_options.insert(PREDICATE_TEXT_OPTION.to_owned(), text);
         }
@@ -391,7 +394,7 @@ impl Session {
             &aligned,
             DeltaTarget::Existing { source, name },
             WriteMode::Truncate,
-            BTreeMap::new(),
+            writer_options(plain.iter().map(|(k, v)| (k, v))),
             &quoted,
         )
         .await?;
@@ -489,6 +492,18 @@ fn columns_differ(quoted: &str) -> KrishivError {
         ),
     }
     .into()
+}
+
+/// The write options the Delta writer reads from its request (`maxRecordsPerFile`, matched
+/// ignoring case as Spark's case-insensitive options are), forwarded as written.
+pub(crate) fn writer_options<'a>(
+    options: impl IntoIterator<Item = (&'a String, &'a String)>,
+) -> BTreeMap<String, String> {
+    options
+        .into_iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 fn plain_options(

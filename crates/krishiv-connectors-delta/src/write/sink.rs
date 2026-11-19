@@ -36,7 +36,7 @@ use super::{PREDICATE_TEXT_OPTION, READS_TARGET_OPTION};
 use crate::commit::{CommitOperation, ReadSet, RetryLimits, StagedCommit, StagedRemoves, commit};
 use crate::engine::{DeltaEngine, KrishivEngineData};
 use crate::error::from_kernel;
-use crate::features::{WriteProtocol, check_write};
+use crate::features::{WriteProtocol, check_create, check_write};
 use crate::table::{DeltaTable, hadoop_path, partition_scalar};
 
 /// The default `delta.checkpointInterval`.
@@ -804,6 +804,7 @@ pub(super) fn plan_create(
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
+    check_create(name, &new.properties, &new.schema)?;
     let kernel = |err: &delta_kernel::KernelError| from_kernel(err, name);
     let mut builder = create_table(
         e.table_root().as_str(),
@@ -1293,7 +1294,18 @@ pub(super) fn check_filter(
                     .column_by_name(p)
                     .ok_or_else(|| internal(&format!("the partition column {p} is not written")))?;
                 crate::engine::relabel::relabel(c, f.data_type())
-                    .or_else(|_| arrow_cast::cast(c, f.data_type()))
+                    .or_else(|_| {
+                        // Not the default safe cast: a value that does not fit fails, never
+                        // turns into NULL (the session casts first; this catches a gap).
+                        arrow_cast::cast_with_options(
+                            c,
+                            f.data_type(),
+                            &arrow_cast::CastOptions {
+                                safe: false,
+                                ..arrow_cast::CastOptions::default()
+                            },
+                        )
+                    })
                     .map_err(|err| internal(&format!("the partition column {p}: {err}")))
             })
             .collect::<Result<Vec<_>, _>>()?;

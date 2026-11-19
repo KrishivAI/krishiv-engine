@@ -19,9 +19,10 @@
 //! - `tightBounds = true` only on a table that supports deletion vectors (`:286-290`), NULL
 //!   (omitted) otherwise.
 //!
-//! Floating-point bounds use Arrow's total order, where NaN is above every number, as in
-//! Spark's ordering; Arrow orders `-0.0` below `0.0`, where Spark has them equal (a recorded
-//! difference when a file holds both).
+//! Floating-point bounds use Spark's ordering, where every NaN (whatever its sign bit: x86's
+//! default NaN has it set) is one value above every number: Arrow's total order alone puts a
+//! negative NaN below every number. Arrow orders `-0.0` below `0.0`, where Spark has them equal
+//! (a recorded difference when a file holds both).
 
 use std::sync::Arc;
 
@@ -383,6 +384,39 @@ fn is_struct_count(s: &StructType) -> bool {
     s.fields().next().is_some()
 }
 
+/// Which values of a float column are NaN (any sign bit, any payload); `None` for other types.
+fn nan_mask(column: &ArrayRef) -> Option<Vec<bool>> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Float16Type, Float32Type, Float64Type};
+    match column.data_type() {
+        ArrowType::Float16 => Some(
+            column
+                .as_primitive::<Float16Type>()
+                .values()
+                .iter()
+                .map(|v| v.is_nan())
+                .collect(),
+        ),
+        ArrowType::Float32 => Some(
+            column
+                .as_primitive::<Float32Type>()
+                .values()
+                .iter()
+                .map(|v| v.is_nan())
+                .collect(),
+        ),
+        ArrowType::Float64 => Some(
+            column
+                .as_primitive::<Float64Type>()
+                .values()
+                .iter()
+                .map(|v| v.is_nan())
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 /// The smallest (or, with `max`, the largest) value of `column` among the rows `nulls` leaves
 /// valid, as a one-row array of `out`; NULL when there is none. With `finish`, strings are cut
 /// as delta-spark cuts them and floats written as it writes them.
@@ -395,6 +429,13 @@ fn extreme(
 ) -> Result<ArrayRef, KrishivError> {
     let cmp = arrow_ord::ord::make_comparator(column, column, SortOptions::default())
         .map_err(|e| internal(&format!("comparing a stats column: {e}")))?;
+    let nan = nan_mask(column);
+    let cmp = |i: usize, b: usize| match nan.as_deref().map(|m| (m[i], m[b])) {
+        Some((true, true)) => std::cmp::Ordering::Equal,
+        Some((true, false)) => std::cmp::Ordering::Greater,
+        Some((false, true)) => std::cmp::Ordering::Less,
+        _ => cmp(i, b),
+    };
     let mut best: Option<usize> = None;
     for i in 0..column.len() {
         if nulls.is_some_and(|n| n.is_null(i)) {
@@ -538,6 +579,63 @@ mod tests {
         );
         let done = acc.finish(&schema, false).unwrap();
         assert_eq!(done.len(), 1);
+    }
+
+    /// A NaN with the sign bit set (x86's default NaN, `0xFFF8_0000_0000_0000`) is above every
+    /// number, as in Spark's ordering: the max, never the min, in one batch and across two.
+    #[test]
+    fn a_negative_nan_is_the_max_not_the_min() {
+        use delta_kernel::schema::StructField;
+        let leaf = |t: DataType| StructType::new_unchecked([StructField::nullable("x", t)]);
+        let schema = StructType::new_unchecked([
+            StructField::nullable("numRecords", DataType::LONG),
+            StructField::nullable(
+                "nullCount",
+                DataType::Struct(Box::new(leaf(DataType::LONG))),
+            ),
+            StructField::nullable(
+                "minValues",
+                DataType::Struct(Box::new(leaf(DataType::DOUBLE))),
+            ),
+            StructField::nullable(
+                "maxValues",
+                DataType::Struct(Box::new(leaf(DataType::DOUBLE))),
+            ),
+        ]);
+        let neg_nan = f64::from_bits(0xFFF8_0000_0000_0000);
+        assert!(neg_nan.is_nan() && neg_nan.is_sign_negative());
+        let batch = |v: Vec<f64>| {
+            RecordBatch::try_from_iter([(
+                "x",
+                Arc::new(arrow_array::Float64Array::from(v)) as ArrayRef,
+            )])
+            .unwrap()
+        };
+        let bounds = |acc: StatsAccumulator| {
+            let done = acc.finish(&schema, false).unwrap();
+            let row = done
+                .as_any()
+                .downcast_ref::<arrow_array::StructArray>()
+                .unwrap();
+            let get = |name: &str| {
+                let s = row.column_by_name(name).unwrap();
+                let s = s
+                    .as_any()
+                    .downcast_ref::<arrow_array::StructArray>()
+                    .unwrap();
+                let x = s.column_by_name("x").unwrap();
+                arrow_cast::display::array_value_to_string(x, 0).unwrap()
+            };
+            (get("minValues"), get("maxValues"))
+        };
+        let mut one = StatsAccumulator::default();
+        one.update(&batch(vec![1.0, 5.0, neg_nan]), &schema)
+            .unwrap();
+        assert_eq!(bounds(one), ("1.0".to_owned(), "NaN".to_owned()));
+        let mut two = StatsAccumulator::default();
+        two.update(&batch(vec![neg_nan, 5.0]), &schema).unwrap();
+        two.update(&batch(vec![1.0]), &schema).unwrap();
+        assert_eq!(bounds(two), ("1.0".to_owned(), "NaN".to_owned()));
     }
 
     /// delta-spark's own cases (`StatsCollectionSuite` "truncateMaxStringAgg"), and the min's

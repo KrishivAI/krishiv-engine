@@ -633,3 +633,136 @@ fn empty_writes_commit_as_delta_spark() {
         serde_json::json!([[0]])
     );
 }
+
+/// A NULL into a `NOT NULL` column of a Delta table, through SQL and the DataFrame writer, at
+/// the top level and in a nested struct field, fails as delta-spark does (`WRITE-EDGES.json`
+/// `not_null`) and commits nothing.
+#[test]
+fn a_null_in_a_not_null_column_fails_as_delta_spark() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["not_null"].as_array().unwrap().clone();
+    let theirs = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["error"]
+            .clone()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE nn (id BIGINT, a INT NOT NULL, s STRUCT<x: INT NOT NULL, y: INT>) \
+             USING delta LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(
+        &s,
+        "INSERT INTO nn VALUES (1, 1, named_struct('x', 1, 'y', 1))",
+    )
+    .unwrap();
+    let check = |name: &str, e: KrishivError| {
+        let t = theirs(name);
+        assert_eq!(
+            e.error_class().name(),
+            t["condition"].as_str().unwrap(),
+            "{name}: {e}"
+        );
+        assert_eq!(e.sql_state(), t["sqlstate"].as_str(), "{name}");
+        assert!(
+            e.to_string().contains(t["message"].as_str().unwrap()),
+            "{name}: {e}"
+        );
+        assert_eq!(versions(&dir), 2, "{name}: nothing committed");
+    };
+    let df = |sql: &str| block_on(s.sql(sql)).unwrap();
+    for (name, select) in [
+        (
+            "dataframe_null_top_level",
+            "SELECT CAST(2 AS BIGINT) AS id, CAST(NULL AS INT) AS a, named_struct('x', 2, 'y', 2) AS s",
+        ),
+        (
+            "dataframe_null_nested",
+            "SELECT CAST(3 AS BIGINT) AS id, 3 AS a, named_struct('x', CAST(NULL AS INT), 'y', 3) AS s",
+        ),
+        (
+            "dataframe_null_struct",
+            "SELECT CAST(4 AS BIGINT) AS id, 4 AS a, CAST(NULL AS STRUCT<x: INT, y: INT>) AS s",
+        ),
+    ] {
+        let e = block_on(
+            df(select)
+                .write()
+                .format("delta")
+                .mode("append")
+                .save(&path),
+        )
+        .unwrap_err();
+        check(name, e);
+    }
+    let e = run(
+        &s,
+        "INSERT INTO nn VALUES (5, NULL, named_struct('x', 5, 'y', 5))",
+    )
+    .unwrap_err();
+    check("sql_null_top_level", e);
+    assert_eq!(query(&s, "SELECT id FROM nn"), serde_json::json!([[1]]));
+}
+
+/// `maxRecordsPerFile` reaches the Delta writer from `df.write.format("delta")`: the files roll
+/// over at it, on a new table and an existing one, `0` is no limit (`WRITE-EDGES.json`
+/// `max_records`), and a value that is not a number is refused (delta-spark raises the JVM's
+/// unclassed `NumberFormatException`; Krishiv names the option).
+#[test]
+fn max_records_per_file_reaches_the_writer() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["max_records"].as_array().unwrap().clone();
+    let adds = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["commits"][0]["adds"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let save = |value: &str, mode: &str| {
+        block_on(
+            block_on(s.sql(
+                "SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)",
+            ))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode(mode)
+            .option("maxRecordsPerFile", value)
+            .save(&path),
+        )
+    };
+    save("2", "errorifexists").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("create_two"));
+    save("1", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_one"));
+    let before = versions(&dir);
+    let e = save("abc", "append").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(versions(&dir), before);
+    save("0", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_zero"));
+}

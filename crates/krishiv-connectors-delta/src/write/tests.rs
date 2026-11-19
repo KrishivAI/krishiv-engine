@@ -739,6 +739,276 @@ fn delta_write_refusals() {
     assert!(refused.len() >= 10, "{refused:?}");
 }
 
+/// An empty-string partition value is stored as null, as delta-spark does: a dynamic overwrite
+/// of `''` replaces the null partition, an append of `''` lands there, and `replaceWhere`
+/// checks the stored value (`WRITE-EDGES.json` `empty_partition`).
+#[test]
+fn an_empty_partition_value_is_the_null_partition() {
+    let oracle = expected("WRITE-EDGES.json");
+    let steps = oracle["empty_partition"].as_array().unwrap();
+    let step = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    let env = Env::new();
+    let check_rows = |name: &str| {
+        assert_eq!(
+            Value::Array(typed_rows(&env.read(&env.open().unwrap()))),
+            step(name)["rows"],
+            "{name}"
+        );
+    };
+    let new = NewDeltaTable::new(
+        env.engine.clone(),
+        &modes_schema(),
+        vec!["p".to_owned()],
+        std::collections::BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    env.write(
+        &new,
+        WriteMode::Append,
+        rows(&[(1, "a", None), (2, "b", Some("x"))]),
+        &[],
+    )
+    .unwrap();
+
+    env.write(
+        &env.open().unwrap(),
+        WriteMode::OverwriteDynamic,
+        rows(&[(3, "c", Some(""))]),
+        &[],
+    )
+    .unwrap();
+    check_rows("dynamic_overwrite_empty");
+    let theirs = &step("dynamic_overwrite_empty")["commits"][0];
+    assert_eq!(
+        removes(&env.log(env.latest())),
+        theirs["removes"].as_array().unwrap().len()
+    );
+    assert_eq!(
+        adds(&env.log(env.latest()))[0]["partitionValues"]["p"],
+        Value::Null
+    );
+
+    env.write(
+        &env.open().unwrap(),
+        WriteMode::Append,
+        rows(&[(4, "d", Some("")), (5, "e", None)]),
+        &[],
+    )
+    .unwrap();
+    check_rows("append_empty");
+    // `''` and NULL rows share one file: one partition.
+    assert_eq!(adds(&env.log(env.latest())).len(), 1);
+
+    let before = env.latest();
+    let e = env
+        .write(
+            &env.open().unwrap(),
+            WriteMode::OverwriteByFilter(eq("p", "", false)),
+            rows(&[(6, "f", Some(""))]),
+            &[],
+        )
+        .unwrap_err();
+    let theirs = &step("replace_where_empty")["error"];
+    assert_eq!(
+        e.error_class().name(),
+        theirs["condition"].as_str().unwrap(),
+        "{e}"
+    );
+    assert_eq!(env.latest(), before);
+    check_rows("replace_where_empty");
+
+    let is_null = Arc::new(Expr::function("isnull", vec![Expr::column(["p"])]));
+    env.write(
+        &env.open().unwrap(),
+        WriteMode::OverwriteByFilter(is_null),
+        rows(&[(7, "g", Some(""))]),
+        &[],
+    )
+    .unwrap();
+    check_rows("replace_where_null_with_empty");
+}
+
+/// A NULL written into a `NOT NULL` column, at the top level, in a nested struct field, or as
+/// a NULL struct above one, fails as delta-spark does (`WRITE-EDGES.json` `not_null`), with
+/// rows that come in nullable (a DataFrame's), and writes nothing.
+#[test]
+fn a_null_in_a_not_null_column_fails_as_delta_spark() {
+    use arrow_array::{Int32Array, StructArray};
+    let oracle = expected("WRITE-EDGES.json");
+    let steps = oracle["not_null"].as_array().unwrap();
+    let step = |name: &str| {
+        &steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["error"]
+    };
+    let s_fields = |strict: bool| {
+        arrow_schema::Fields::from(vec![
+            Field::new("x", ArrowType::Int32, !strict),
+            Field::new("y", ArrowType::Int32, true),
+        ])
+    };
+    let table_schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int64, true),
+        Field::new("a", ArrowType::Int32, false),
+        Field::new("s", ArrowType::Struct(s_fields(true)), true),
+    ]));
+    let loose: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int64, true),
+        Field::new("a", ArrowType::Int32, true),
+        Field::new("s", ArrowType::Struct(s_fields(false)), true),
+    ]));
+    let batch = |id: i64, a: Option<i32>, x: Option<i32>, s_null: bool| {
+        let s = StructArray::try_new(
+            s_fields(false),
+            vec![
+                Arc::new(Int32Array::from(vec![x])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(1)])),
+            ],
+            s_null.then(|| arrow_buffer::NullBuffer::from(vec![false])),
+        )
+        .unwrap();
+        RecordBatch::try_new(
+            Arc::clone(&loose),
+            vec![
+                Arc::new(Int64Array::from(vec![id])),
+                Arc::new(Int32Array::from(vec![a])),
+                Arc::new(s),
+            ],
+        )
+        .unwrap()
+    };
+    let env = Env::new();
+    let new = NewDeltaTable::new(
+        env.engine.clone(),
+        &table_schema,
+        Vec::new(),
+        std::collections::BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    env.write(
+        &new,
+        WriteMode::Append,
+        vec![batch(1, Some(1), Some(1), false)],
+        &[],
+    )
+    .unwrap();
+    for (name, row) in [
+        ("dataframe_null_top_level", batch(2, None, Some(2), false)),
+        ("dataframe_null_nested", batch(3, Some(3), None, false)),
+        ("dataframe_null_struct", batch(4, Some(4), Some(4), true)),
+    ] {
+        let theirs = step(name);
+        let e = env
+            .write(&env.open().unwrap(), WriteMode::Append, vec![row], &[])
+            .unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            theirs["condition"].as_str().unwrap(),
+            "{name}: {e}"
+        );
+        assert_eq!(e.sql_state(), theirs["sqlstate"].as_str(), "{name}");
+        assert!(
+            e.to_string().contains(theirs["message"].as_str().unwrap()),
+            "{name}: {e}"
+        );
+        assert_eq!(env.latest(), 0, "{name}: nothing committed");
+    }
+}
+
+/// A create (CTAS and an empty `CREATE TABLE`) under a feature the kernel's create admits but
+/// Krishiv's writer does not honour (design section 4.2) is refused before anything is written.
+#[test]
+fn a_create_under_a_refused_feature_writes_nothing() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("delta.feature.rowTracking", "supported", "rowTracking"),
+        ("delta.enableRowTracking", "true", "rowTracking"),
+        ("delta.feature.variantType", "supported", "variantType"),
+        (
+            "delta.feature.variantShredding",
+            "supported",
+            "variantShredding",
+        ),
+        (
+            "delta.feature.materializePartitionColumns",
+            "supported",
+            "materializePartitionColumns",
+        ),
+        (
+            "delta.feature.icebergCompatV2",
+            "supported",
+            "icebergCompatV2",
+        ),
+        ("delta.enableIcebergCompatV2", "true", "icebergCompatV2"),
+        (
+            "delta.feature.icebergCompatV3",
+            "supported",
+            "icebergCompatV3",
+        ),
+        ("delta.enableIcebergCompatV3", "true", "icebergCompatV3"),
+        (
+            "delta.feature.catalogManaged",
+            "supported",
+            "catalogManaged",
+        ),
+    ];
+    for (key, value, feature) in cases {
+        for ctas in [true, false] {
+            let env = Env::new();
+            let properties =
+                std::collections::BTreeMap::from([((*key).to_owned(), (*value).to_owned())]);
+            let new = NewDeltaTable::new(
+                env.engine.clone(),
+                &modes_schema(),
+                vec!["p".to_owned()],
+                properties,
+                None,
+            )
+            .unwrap();
+            let e = if ctas {
+                env.write(&new, WriteMode::Append, rows(&[(1, "a", Some("x"))]), &[])
+                    .unwrap_err()
+            } else {
+                env.rt.block_on(new.create_empty("w")).unwrap_err()
+            };
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::DeltaUnsupportedFeaturesForWrite,
+                "{key} (ctas {ctas}): {e}"
+            );
+            assert_eq!(e.sql_state(), Some("56038"));
+            assert!(e.to_string().contains(feature), "{key}: {e}");
+            assert_eq!(
+                std::fs::read_dir(&env.dir).unwrap().count(),
+                0,
+                "{key} (ctas {ctas}): nothing written"
+            );
+        }
+    }
+    // A feature Krishiv writes is still created.
+    let env = Env::new();
+    let new = NewDeltaTable::new(
+        env.engine.clone(),
+        &modes_schema(),
+        vec!["p".to_owned()],
+        std::collections::BTreeMap::from([(
+            "delta.feature.deletionVectors".to_owned(),
+            "supported".to_owned(),
+        )]),
+        None,
+    )
+    .unwrap();
+    env.rt.block_on(new.create_empty("w")).unwrap();
+    assert_eq!(env.latest(), 0);
+}
+
 /// Every field of `logical` is in `written` under its physical name with its column-mapping id
 /// as the Parquet field id, at every level: struct in struct, and the structs inside array
 /// elements and map keys and values.

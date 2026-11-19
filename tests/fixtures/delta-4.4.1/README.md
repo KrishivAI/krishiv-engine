@@ -67,5 +67,9 @@ Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as th
   `ignore`, an insert reading its own table), v1 `saveAsTable` overwrite (same schema, other schema, no
   `partitionBy`), an overwrite of an append-only table, a `CREATE TABLE` at a new location and a CTAS into it; each
   step's error or its commits (commitInfo without times and ids, adds, removes) and rows.
+- `WRITE-EDGES.json` (`gen_delta_fixtures.py /out edges`, review of PR-37a part 2): an empty-string partition value
+  under a dynamic overwrite, an append and `replaceWhere` (delta-spark stores it as null); a NULL into a `NOT NULL`
+  column at the top level, in a nested field and as a NULL struct, through the DataFrame writer and SQL; the
+  `maxRecordsPerFile` option (a number, `0`, and a value that is not one). Each step's error or commits and rows.
 - `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
   row, its protocol and whether Krishiv refuses writing it.

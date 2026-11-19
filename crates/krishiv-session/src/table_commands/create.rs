@@ -540,7 +540,7 @@ impl Session {
                     properties: table.properties.clone(),
                 },
                 krishiv_exec::planner::WriteMode::Append,
-                BTreeMap::new(),
+                super::delta_writes::writer_options(&table.options),
                 &quoted(&table.namespace, &table.name),
             )
             .await?;

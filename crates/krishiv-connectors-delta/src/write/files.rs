@@ -28,7 +28,7 @@ use delta_kernel::expressions::{MapData, PredicateRef, Scalar};
 use delta_kernel::schema::{DataType, MapType, StructType};
 use delta_kernel::transaction::{BoundWriteContext, WriteState};
 use delta_kernel::{EvaluationHandler as _, ExpressionEvaluator};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{DeltaNotNullConstraintViolated, InternalError, KrishivError};
 use krishiv_io::Encoder;
 use krishiv_io::io::Upload;
 use krishiv_memory::Reservation;
@@ -251,6 +251,7 @@ impl DriverWriter {
     ) -> Result<(), KrishivError> {
         if batch.num_rows() > 0 {
             let batch = conform(batch, &plan.logical)?;
+            let batch = null_empty_partition_values(batch, &plan.partition_columns)?;
             if let Some((pred, text, schema)) = &plan.check {
                 super::sink::check_filter(
                     &self.engine,
@@ -730,6 +731,83 @@ fn add_row(
 
 /// `batch` with each column in the type of the same column of `target` (the kernel's Arrow
 /// form: the engine's string views, small decimals and zone labels to the kernel's).
+/// Delta stores an empty string or binary partition value as null (the kernel's
+/// `serialize_partition_value`; delta-spark turns `''` into null before it writes), so a
+/// partition column's empty values become NULL before the rows are checked against
+/// `replaceWhere` and grouped: the key, the add's logical values, the dynamic overwrite's
+/// predicate and the check all see the value that is stored (`WRITE-EDGES.json`
+/// `empty_partition`).
+///
+/// # Errors
+/// An internal error when a partition column is missing or the NULL mask cannot be applied.
+pub(crate) fn null_empty_partition_values(
+    batch: RecordBatch,
+    partitions: &[String],
+) -> Result<RecordBatch, KrishivError> {
+    use arrow_array::BooleanArray;
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType as ArrowType;
+    let mut columns: Option<Vec<ArrayRef>> = None;
+    for p in partitions {
+        let Some((at, _)) = batch.schema().column_with_name(p) else {
+            return Err(internal(&format!(
+                "the partition column {p} is not written"
+            )));
+        };
+        let c = batch.column(at);
+        let empty: Option<BooleanArray> = match c.data_type() {
+            ArrowType::Utf8 => Some(
+                c.as_string::<i32>()
+                    .iter()
+                    .map(|v| Some(v == Some("")))
+                    .collect(),
+            ),
+            ArrowType::LargeUtf8 => Some(
+                c.as_string::<i64>()
+                    .iter()
+                    .map(|v| Some(v == Some("")))
+                    .collect(),
+            ),
+            ArrowType::Utf8View => Some(
+                c.as_string_view()
+                    .iter()
+                    .map(|v| Some(v == Some("")))
+                    .collect(),
+            ),
+            ArrowType::Binary => Some(
+                c.as_binary::<i32>()
+                    .iter()
+                    .map(|v| Some(v.is_some_and(<[u8]>::is_empty)))
+                    .collect(),
+            ),
+            ArrowType::LargeBinary => Some(
+                c.as_binary::<i64>()
+                    .iter()
+                    .map(|v| Some(v.is_some_and(<[u8]>::is_empty)))
+                    .collect(),
+            ),
+            ArrowType::BinaryView => Some(
+                c.as_binary_view()
+                    .iter()
+                    .map(|v| Some(v.is_some_and(<[u8]>::is_empty)))
+                    .collect(),
+            ),
+            _ => None,
+        };
+        let Some(empty) = empty.filter(|m| m.true_count() > 0) else {
+            continue;
+        };
+        let nulled = arrow_select::nullif::nullif(c.as_ref(), &empty)
+            .map_err(|e| internal(&format!("the partition column {p}: {e}")))?;
+        columns.get_or_insert_with(|| batch.columns().to_vec())[at] = nulled;
+    }
+    match columns {
+        None => Ok(batch),
+        Some(columns) => RecordBatch::try_new(batch.schema(), columns)
+            .map_err(|e| internal(&format!("a write's rows: {e}"))),
+    }
+}
+
 pub(crate) fn conform(
     batch: &RecordBatch,
     target: &SchemaRef,
@@ -741,6 +819,9 @@ pub(crate) fn conform(
             target.fields().len()
         )));
     }
+    for (c, f) in batch.columns().iter().zip(target.fields()) {
+        check_not_null(c.as_ref(), f, f.name(), None)?;
+    }
     let columns = batch
         .columns()
         .iter()
@@ -750,7 +831,18 @@ pub(crate) fn conform(
                 Ok(Arc::clone(c))
             } else {
                 crate::engine::relabel::relabel(c, f.data_type())
-                    .or_else(|_| arrow_cast::cast(c, f.data_type()))
+                    .or_else(|_| {
+                        // Not the default safe cast: a value that does not fit fails, never
+                        // turns into NULL (the session casts first; this catches a gap).
+                        arrow_cast::cast_with_options(
+                            c,
+                            f.data_type(),
+                            &arrow_cast::CastOptions {
+                                safe: false,
+                                ..arrow_cast::CastOptions::default()
+                            },
+                        )
+                    })
                     .map_err(|e| {
                         internal(&format!(
                             "the column {} as {}: {e}",
@@ -763,6 +855,48 @@ pub(crate) fn conform(
         .collect::<Result<Vec<_>, _>>()?;
     RecordBatch::try_new(Arc::clone(target), columns)
         .map_err(|e| internal(&format!("a write's rows in the table's types: {e}")))
+}
+
+/// delta-spark's NOT NULL invariant (`DeltaInvariantChecker`: `<path> IS NOT NULL` for each
+/// non-nullable column, nested struct fields included): a row whose value at `path` is NULL,
+/// because it or a struct above it is NULL, fails with `DELTA_NOT_NULL_CONSTRAINT_VIOLATED`
+/// naming the dotted path (`WRITE-EDGES.json` `not_null`). Checked on the incoming column,
+/// before any cast, so no cast refuses the NULL first. Struct fields are matched by name, then
+/// by position. Fields inside arrays and maps are not checked here (Arrow's own validation
+/// refuses a NULL there).
+fn check_not_null(
+    column: &dyn Array,
+    field: &Field,
+    path: &str,
+    above: Option<&arrow_buffer::NullBuffer>,
+) -> Result<(), KrishivError> {
+    let own = column.logical_nulls();
+    let nulls = arrow_buffer::NullBuffer::union(above, own.as_ref());
+    if !field.is_nullable() && nulls.as_ref().is_some_and(|n| n.null_count() > 0) {
+        return Err(DeltaNotNullConstraintViolated {
+            column_name: path.to_owned(),
+        }
+        .into());
+    }
+    if let (arrow_schema::DataType::Struct(children), Some(s)) = (
+        field.data_type(),
+        column.as_any().downcast_ref::<StructArray>(),
+    ) {
+        for (i, child) in children.iter().enumerate() {
+            let c = s
+                .column_by_name(child.name())
+                .or_else(|| s.columns().get(i));
+            if let Some(c) = c {
+                check_not_null(
+                    c.as_ref(),
+                    child,
+                    &format!("{path}.{}", child.name()),
+                    nulls.as_ref(),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A fresh random UUID (version 4 layout) for a file name.
