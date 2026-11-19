@@ -4,6 +4,40 @@
 use super::*;
 
 impl Session {
+    /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
+    /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
+    pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
+        if !self.state.runtime.is_draining() {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        self.state.queries.record_failed_row(log_id, &error);
+        Err(error)
+    }
+
+    /// While the server drains, a statement that writes, creates or drops is refused here, before
+    /// its handler changes any catalog or file state (design P3-T066 §5.1): the command handlers
+    /// do their work inside `sql`, so admission at collect would come too late. Queries are
+    /// admitted when they run; `SET`, `USE`, `SHOW`, `DESCRIBE` and session variables change no
+    /// shared state. The refusal leaves a failed `system.queries` row, as a refused query does.
+    pub(crate) fn refuse_changes_while_draining(
+        &self,
+        class: krishiv_sql::StatementClass,
+        redacted: &krishiv_common::redact::RedactedSql,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        use krishiv_sql::StatementClass::{Admin, Ddl, Write};
+        if !self.state.runtime.is_draining() || !matches!(class, Write | Ddl | Admin) {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        let id = self.record_refused(Some(redacted.as_str()), Some(class.name()), &error);
+        *env.row
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        Err(error)
+    }
+
     /// [`Self::sql`] and whether the statement was a command (not a query).
     pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
         self.check_open()?;

@@ -607,24 +607,7 @@ impl Session {
         let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
-        // While the server drains, a statement that writes, creates or drops is refused here, before
-        // its handler changes any catalog or file state (design P3-T066 §5.1): the command handlers
-        // do their work inside `sql`, so admission at collect would come too late. Queries are
-        // admitted when they run; `SET`, `USE`, `SHOW`, `DESCRIBE` and session variables change no
-        // shared state.
-        if self.state.runtime.is_draining()
-            && matches!(
-                class,
-                krishiv_sql::StatementClass::Write
-                    | krishiv_sql::StatementClass::Ddl
-                    | krishiv_sql::StatementClass::Admin
-            )
-        {
-            let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
-            let id = self.record_refused(Some(redacted.as_str()), Some(class.name()), &error);
-            *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-            return Err(error);
-        }
+        self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
         let df = self.run_statement(statement, env, query, &redacted).await?;
         // Whatever frame the statement returns (a command's result too) shows the statement's
@@ -1750,16 +1733,11 @@ impl Session {
         env: &QueryEnv,
         exempt: bool,
     ) -> Result<crate::admission::Permit, KrishivError> {
-        // A query that reads only `system.*` is never queued behind the load it inspects, and it
-        // still runs while the server drains (design P3-T066 §5.1).
+        // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
             return Ok(self.exempt_permit(log_id));
         }
-        if self.state.runtime.is_draining() {
-            let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
-            self.state.queries.record_failed_row(log_id, &error);
-            return Err(error);
-        }
+        self.refuse_query_while_draining(log_id)?;
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
             tags: self.effective_tags(),
