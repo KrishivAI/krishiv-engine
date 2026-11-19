@@ -559,6 +559,15 @@ pub(crate) struct QueryCatalog {
     /// each action over the analysis pins and unpins (`SnapshotLease`).
     pinned: Mutex<HashMap<String, Pinned>>,
     files: Arc<FileReads>,
+    /// The Delta tables of the query's scans, opened before planning.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(
+            dead_code,
+            reason = "read by the Delta reads of the `delta` feature only"
+        )
+    )]
+    pub(crate) delta: Arc<crate::delta::DeltaReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
     loaded: Mutex<HashMap<String, Arc<TempTable>>>,
@@ -613,6 +622,7 @@ impl QueryCatalog {
         session: Arc<SessionCatalog>,
         cache: Arc<RelationCache>,
         files: Arc<FileReads>,
+        delta: Arc<crate::delta::DeltaReads>,
         scans: FileScans,
         default_path: &str,
         system: crate::system::Sources,
@@ -631,6 +641,7 @@ impl QueryCatalog {
             cache,
             pinned: Mutex::new(HashMap::new()),
             files,
+            delta,
             scans,
             loaded: Mutex::new(HashMap::new()),
             opened: Mutex::new(Vec::new()),
@@ -771,6 +782,29 @@ impl QueryCatalog {
         }
     }
 
+    /// Whether any scan of `plan` reads a Delta table: every tree
+    /// ([`PhysicalPlan::roots`]) and every node's inputs and subquery plans
+    /// ([`PhysNode::children`]), not only the streaming pipeline.
+    #[cfg(feature = "delta")]
+    fn reads_delta(&self, plan: &PhysicalPlan) -> bool {
+        let mut stack: Vec<&PhysNode> = plan.roots().collect();
+        while let Some(node) = stack.pop() {
+            if let PhysNode::Scan(scan) = node {
+                let delta = match &scan.scan.source {
+                    ReadSource::Table { name, .. } => self.loaded_for(name).is_some_and(
+                        |t| matches!(&*t, TempTable::Files { source, .. } if crate::delta::is_delta(source)),
+                    ),
+                    source => crate::delta::is_delta(source),
+                };
+                if delta {
+                    return true;
+                }
+            }
+            stack.extend(node.children());
+        }
+        false
+    }
+
     /// The scan splits of one stage over `plan`: one [`TaskSpec`] per task
     /// of `tasks`, dealing the streaming pipeline's scans (or relation
     /// batches) in contiguous index ranges, deterministically.
@@ -792,7 +826,10 @@ impl QueryCatalog {
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for no tasks, a task count past `u32`, or a scan
-    /// whose files were not opened before planning.
+    /// whose files were not opened before planning;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a plan that reads Delta anywhere
+    /// (a worker cannot open the session's snapshots), a range source or a
+    /// shared plan across several tasks, and a scan it cannot split.
     #[cfg_attr(
         not(test),
         expect(
@@ -832,6 +869,13 @@ impl QueryCatalog {
         }
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
+        // A worker cannot open the session's Delta snapshots, so no stage
+        // that reads Delta anywhere (a build side, a subquery or a shared
+        // plan included, not only the streaming pipeline) leaves the driver.
+        #[cfg(feature = "delta")]
+        if self.reads_delta(plan) {
+            return Err(unsupported("a Delta scan in a distributed stage"));
+        }
         for scan in scans {
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
@@ -1086,6 +1130,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::PythonMap { input, .. }
             | PhysNode::PythonGroupMap { input, .. }
             | PhysNode::PythonCoGroupMap { input, .. }
+            | PhysNode::PythonUdtf { input, .. }
             | PhysNode::PythonAggregate { input, .. }
             | PhysNode::WriteFiles { input, .. }
             | PhysNode::TableWrite { input, .. } => go(input, out),
@@ -1420,9 +1465,18 @@ impl TableProviderResolver for QueryCatalog {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(
-                            &reference_key(key, *known, *permanent, source, options).0,
-                        )
+                        // The source `file_scans` opened: a permanent table's
+                        // reference options are merged in, and for a cloud
+                        // path they are part of the store's key.
+                        let (key, effective) =
+                            reference_key(key, *known, *permanent, source, options);
+                        #[cfg(feature = "delta")]
+                        if crate::delta::is_delta(&effective) {
+                            return self.delta.provider(&effective);
+                        }
+                        #[cfg(not(feature = "delta"))]
+                        let _ = effective;
+                        self.files_provider(&key)
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
@@ -1431,6 +1485,10 @@ impl TableProviderResolver for QueryCatalog {
                     }
                     .into()),
                 }
+            }
+            #[cfg(feature = "delta")]
+            source @ ReadSource::Files { .. } if crate::delta::is_delta(source) => {
+                self.delta.provider(source)
             }
             source @ ReadSource::Files { .. } => {
                 self.files_provider(&FilesKey::Read(source.clone()))

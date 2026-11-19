@@ -186,6 +186,8 @@ message Node {
     TableWriteNode table_write = 32;
     // feature: observe
     CollectMetricsNode collect_metrics = 33;
+    // feature: python_udtf
+    PythonUdtfNode python_udtf = 34;
   }
 }
 
@@ -293,6 +295,38 @@ message CollectMetricsNode {
 message PythonMapNode {
   uint32 input = 1;
   PythonRelation udf = 2;
+}
+
+// feature: python_udtf
+// A Python table function (eval types 300-302) over `input`: one task per
+// partition; `udf`'s one side holds the scalar argument columns, its output
+// the carried columns then the UDTF's.
+message PythonUdtfNode {
+  uint32 input = 1;
+  PythonRelation udf = 2;
+  // Per argument, in call order: its name (unset for a positional one).
+  repeated PythonUdtfArgName arg_names = 3;
+  // The `TABLE` argument, if any.
+  PythonUdtfTable table = 4;
+  // The input columns each result row leads with (a `LATERAL` call).
+  repeated uint64 carried = 5;
+  // `analyze`'s pickled `AnalyzeResult`, if any.
+  optional bytes analyzed = 6;
+}
+
+// feature: python_udtf
+message PythonUdtfArgName {
+  optional string name = 1;
+}
+
+// feature: python_udtf
+// The `TABLE` argument's row struct: its fields as input columns, their
+// names, and the fields that are `PARTITION BY` values.
+message PythonUdtfTable {
+  uint64 position = 1;
+  repeated uint64 columns = 2;
+  repeated string names = 3;
+  repeated uint64 partition_child_indexes = 4;
 }
 
 // feature: python_udf_relations

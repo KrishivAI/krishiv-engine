@@ -185,13 +185,6 @@ pub(crate) struct DataFileWriter {
     attempt_id: u64,
     write_id: String,
     /// The table's format version (row lineage from 3).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the seam 36b unit 2's copy-on-write rewrite calls"
-        )
-    )]
     format_version: u8,
     /// Files opened so far (the last file's number).
     files: u32,
@@ -317,13 +310,6 @@ impl DataFileWriter {
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` on a format v1 or v2 table or one with
     /// a column of either name; `INTERNAL_ERROR` after a write.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the seam 36b unit 2's copy-on-write rewrite calls"
-        )
-    )]
     pub(crate) fn with_lineage(mut self) -> Result<Self, KrishivError> {
         lineage::check_table(self.format_version, &self.arrow)?;
         if self.files > 0 {

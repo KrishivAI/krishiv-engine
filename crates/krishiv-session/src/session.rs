@@ -37,8 +37,8 @@ use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, Spill
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -117,6 +117,9 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
+    /// plan reads the clock.
+    pub(crate) query_start: Option<i64>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
@@ -1290,17 +1293,26 @@ impl Session {
         // One I/O context for the query's reads, scans and writes: its
         // counters are the query's own bytes (`system.queries`).
         let io = self.scoped_io();
+        let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            Arc::clone(&stores),
+        ));
         let files = Arc::new(FileReads::new(
             io.clone(),
             Arc::clone(&self.state.runtime.formats),
-            Arc::new(ObjectPaths::new(
-                StoreId::new(LOCAL_STORE),
-                self.state.cwd.clone(),
-                Arc::clone(&self.state.io),
-                Arc::clone(&stores),
-            )),
+            Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
+            io: io.clone(),
+            paths,
+            runtime: self.state.runtime.executor.io_handle().clone(),
+            config: Arc::clone(&config),
+            cache: Arc::clone(&self.state.runtime.delta),
+            credential: self.state.principal.id(),
+        }));
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
@@ -1324,6 +1336,7 @@ impl Session {
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
             Arc::clone(&files),
+            Arc::clone(&delta),
             scans,
             &config
                 .get(&krishiv_common::config::SQL_DEFAULT_PATH)
@@ -1387,6 +1400,7 @@ impl Session {
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
+        let udtfs = self.table_functions();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -1394,9 +1408,9 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: Arc::new(BuiltinTableFunctions::new()),
+            table_functions: Arc::clone(&udtfs) as _,
             sql: Some(Arc::new(Frontend { options: parser })),
-            files: Some(files),
+            files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
             // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
             // `Metadata`; every other analysis may run the plan.
@@ -1431,7 +1445,8 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
+            udtfs,
         }
     }
 
@@ -1448,7 +1463,7 @@ impl Session {
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
         let r = self
-            .check_store_options(&env.config, std::iter::empty())
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
             .await;
         crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the
@@ -1580,39 +1595,6 @@ impl Session {
                 None => Ok(views),
             }
         })
-    }
-
-    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
-    ///
-    /// # Errors
-    /// What [`crate::view_schema::check_read`] raises.
-    async fn check_stored_views(
-        &self,
-        reads: &[crate::view_schema::StoredRead],
-        env: &QueryEnv,
-    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
-        let compensation = crate::view_schema::compensation(&env.config);
-        let mut synced = Vec::new();
-        let mut renames = Vec::new();
-        for read in reads {
-            // A view whose query does not analyze alone is left to the outer query.
-            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
-            else {
-                continue;
-            };
-            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
-                continue;
-            };
-            let case_sensitive = env.analysis.conf.case_sensitive;
-            let check =
-                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
-            if let Some(changed) = check.changed {
-                synced.push((Arc::clone(&read.entry), changed));
-            }
-            renames.extend(check.rename);
-        }
-        Ok((synced, renames))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.

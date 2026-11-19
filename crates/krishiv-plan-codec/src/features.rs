@@ -167,6 +167,7 @@ registry! {
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan. A `PythonEval` of the scalar iterator codes 204 and 251 runs from the reader that also has `python_udf_windows` on; an earlier reader with this feature decodes it and fails at run time with `KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH` (no such reader was released)."),
     (python_udf_windows, PythonUdfWindows, POST_MIGRATION_READER_VERSION, Semantic, "A `PythonAggregate` node in window form (design P3-T085 §3.1, Spark's `ArrowWindowPythonExec`): a window aggregate of Python UDFs (codes 203, 253), every input row with one value per call, a bounded frame's rows with their frame bounds; an older reader would run it as a grouped aggregate."),
+    (python_udtf, PythonUdtf, POST_MIGRATION_READER_VERSION, Semantic, "The `PythonUdtf` node (a Python table function, eval types 300-302, design P3-T085 §3.1): one UDTF task per partition fed the call's arguments (a `TABLE` argument as one struct column per row, its `PARTITION BY` values among its fields), a `LATERAL` call's input columns carried ahead of the results, and `analyze`'s pickled result; a worker without a UDTF runtime refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -481,6 +482,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
             | PhysNode::PythonAggregate { window: None, .. } => Some(Feature::PythonUdfRelations),
+            PhysNode::PythonUdtf { .. } => Some(Feature::PythonUdtf),
             PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -815,7 +817,8 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Union { .. } => {}
         PhysNode::PythonMap { udf, .. }
         | PhysNode::PythonGroupMap { udf, .. }
-        | PhysNode::PythonCoGroupMap { udf, .. } => {
+        | PhysNode::PythonCoGroupMap { udf, .. }
+        | PhysNode::PythonUdtf { udf, .. } => {
             f(Construct::PythonEvalType(udf.udf.eval_type));
         }
         PhysNode::WriteFiles { write, .. } => {
@@ -950,7 +953,8 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     }
     if let PhysNode::PythonMap { udf, .. }
     | PhysNode::PythonGroupMap { udf, .. }
-    | PhysNode::PythonCoGroupMap { udf, .. } = node
+    | PhysNode::PythonCoGroupMap { udf, .. }
+    | PhysNode::PythonUdtf { udf, .. } = node
     {
         out.extend(udf.sides.iter().flat_map(|s| &s.types));
         out.extend(udf.output.iter().map(|c| &c.data_type));
@@ -1020,7 +1024,8 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::ExchangeSource { .. }
         | PhysNode::PythonMap { .. }
         | PhysNode::PythonGroupMap { .. }
-        | PhysNode::PythonCoGroupMap { .. } => {}
+        | PhysNode::PythonCoGroupMap { .. }
+        | PhysNode::PythonUdtf { .. } => {}
     }
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();

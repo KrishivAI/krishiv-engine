@@ -245,7 +245,7 @@ pub(super) fn range_node(
 }
 
 /// One row without columns (`SELECT` without `FROM`).
-pub(super) fn one_row() -> Planned {
+pub(crate) fn one_row() -> Planned {
     Planned {
         ordering: Vec::new(),
         schema: Arc::new(Schema::empty()),

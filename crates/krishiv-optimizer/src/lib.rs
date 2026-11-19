@@ -118,6 +118,7 @@ pub use group_limit::{
 };
 pub use join_order::DP_LIMIT;
 pub use limit::TopN;
+pub use narrow::selectivity_is_guessed;
 pub use partition_advice::{AdvisedColumn, AdvisedTable, MAX_PARTITIONS, PartitionAdvice, advise};
 pub use plan_stats::PlanStats;
 pub use stats::{
