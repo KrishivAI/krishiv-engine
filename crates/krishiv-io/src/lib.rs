@@ -117,7 +117,10 @@ pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper, has_field_ids};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 pub use text_format::TextFormat;
-pub use write::{FileWriter, WriteOptions, WrittenFileInfo, effective_job_uuid, spark_file_name};
+pub use write::{
+    FileWriter, WriteOptions, WrittenFileInfo, bucket_id_of_file_name, effective_job_uuid,
+    spark_bucketed_file_name, spark_file_name,
+};
 
 #[cfg(test)]
 mod tests;
