@@ -934,7 +934,16 @@ impl Resolver<'_> {
                 pivot_columns,
                 values,
                 aggregates,
-            } => self.pivot(p, input, pivot_columns, values, aggregates, env),
+                group_by,
+            } => self.pivot(
+                p,
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+                group_by.as_deref(),
+                env,
+            ),
             PlanNode::Unpivot {
                 input,
                 value_columns,

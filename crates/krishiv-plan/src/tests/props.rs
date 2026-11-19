@@ -627,6 +627,7 @@ impl Gen<'_> {
                     alias: g.flag().then(|| g.name()),
                 }),
                 aggregates: self.exprs(),
+                group_by: self.flag().then(|| self.exprs()),
             },
             26 => PlanNode::Unpivot {
                 input: self.input(d),
@@ -1426,7 +1427,11 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             pivot_columns,
             values,
             aggregates,
+            group_by,
         } => {
+            if let Some(keys) = group_by {
+                site!(w, keys.push(Arc::new(Expr::column(["x"]))));
+            }
             site!(w, pivot_columns.push(Arc::new(Expr::column(["x"]))));
             site!(
                 w,
@@ -1442,6 +1447,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                     m_exprs(&mut v.exprs, w)
                 })
                 || m_exprs(aggregates, w)
+                || group_by.as_mut().is_some_and(|keys| m_exprs(keys, w))
                 || m_plan(input, w)
         }
         PlanNode::Unpivot {

@@ -56,6 +56,7 @@ use crate::{
 impl Resolver<'_> {
     /// Resolves `p`: a `PIVOT` over `input` with `pivot_columns`, `values`
     /// and `aggregates`.
+    #[expect(clippy::too_many_arguments, reason = "the parts of one PIVOT")]
     pub(super) fn pivot(
         &mut self,
         p: &LogicalPlan,
@@ -63,6 +64,7 @@ impl Resolver<'_> {
         pivot_columns: &[Arc<Expr>],
         values: &[PivotValue],
         aggregates: &[Arc<Expr>],
+        group_by: Option<&[Arc<Expr>]>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
@@ -213,12 +215,33 @@ impl Resolver<'_> {
         for b in pivots.iter().chain(items.iter()) {
             column_refs(&b.expr, &mut refs);
         }
-        let group: Vec<Bound> = c
-            .out
-            .iter()
-            .filter(|a| !refs.contains(&a.col.id))
-            .map(|a| column_bound(a, p.origin))
-            .collect();
+        // Named keys (Spark's `groupByExprsOpt`) group by their bare expressions and ride
+        // as the output items as written (an alias names the output column); otherwise
+        // every input column nothing above reads.
+        let (group, group_items): (Vec<Bound>, Vec<Bound>) = match group_by {
+            Some(keys) => {
+                let mut bare = Vec::with_capacity(keys.len());
+                let mut items = Vec::with_capacity(keys.len());
+                for k in keys {
+                    let inner = match &k.node {
+                        ExprNode::Alias { expr, .. } => expr,
+                        _ => k,
+                    };
+                    bare.push(self.bind(inner, &cx)?);
+                    items.push(self.bind(k, &cx)?);
+                }
+                (bare, items)
+            }
+            None => {
+                let group: Vec<Bound> = c
+                    .out
+                    .iter()
+                    .filter(|a| !refs.contains(&a.col.id))
+                    .map(|a| column_bound(a, p.origin))
+                    .collect();
+                (group.clone(), group)
+            }
+        };
         let global = group.is_empty();
         let zone = self.ctx.conf.session_zone;
         let single = items.len() == 1;
@@ -226,10 +249,19 @@ impl Resolver<'_> {
             .iter()
             .all(|b| pivot_first_type(b.ty.data_type.as_ref()))
         {
-            return self.pivot_first(p, &c, &cx, &pivots[0], &group, &items, &casts, env);
+            return self.pivot_first(
+                p,
+                &c,
+                &cx,
+                &pivots[0],
+                (&group, &group_items),
+                &items,
+                &casts,
+                env,
+            );
         }
         let pivot_ref = Arc::clone(&pivot_columns[0]);
-        let mut combined: Vec<Bound> = group.clone();
+        let mut combined: Vec<Bound> = group_items;
         for (value_name, cast) in &casts {
             let cond = Cond {
                 pivot: Arc::clone(&pivot_ref),
@@ -290,7 +322,7 @@ impl Resolver<'_> {
         c: &Rel,
         cx: &Cx<'_>,
         pivot: &Bound,
-        group: &[Bound],
+        (group, group_items): (&[Bound], &[Bound]),
         items: &[Bound],
         casts: &[(String, Arc<Expr>)],
         env: &Arc<Env>,
@@ -377,7 +409,7 @@ impl Resolver<'_> {
         }
         // Stage one: the aggregates per grouping columns and pivot value.
         let pivot_attr = self.attr("__pivot", &pivot.ty);
-        let mut first_items = group.to_vec();
+        let mut first_items = group_items.to_vec();
         first_items.push(Bound {
             expr: Arc::new(
                 Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {

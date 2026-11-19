@@ -448,6 +448,7 @@ impl Lowerer {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by: None,
             },
             p.span,
         );

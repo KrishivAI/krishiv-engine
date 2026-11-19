@@ -619,6 +619,7 @@ fn every_node_and_expression_form_hashes_distinctly() {
                         },
                     ],
                     aggregates: vec![a()],
+                    group_by: None,
                 }),
             ),
             (

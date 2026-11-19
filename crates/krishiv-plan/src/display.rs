@@ -506,6 +506,7 @@ impl Display for NodeLine<'_> {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
                 ..
             } => {
                 f.write_str("Pivot [")?;
@@ -527,7 +528,15 @@ impl Display for NodeLine<'_> {
                 for (i, e) in aggregates.iter().enumerate() {
                     write!(f, "{}{}", sep(i), Text(e))?;
                 }
-                f.write_str("]")
+                f.write_str("]")?;
+                if let Some(keys) = group_by {
+                    f.write_str(" group by [")?;
+                    for (i, e) in keys.iter().enumerate() {
+                        write!(f, "{}{}", sep(i), Text(e))?;
+                    }
+                    f.write_str("]")?;
+                }
+                Ok(())
             }
             PlanNode::Unpivot {
                 value_columns,
