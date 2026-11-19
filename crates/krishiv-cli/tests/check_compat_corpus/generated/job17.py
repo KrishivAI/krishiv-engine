@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT to_protobuf(a) FROM t17")
-df = df.select(F.endswith("a"), F.col("b"))
-df = spark.sql("SELECT forall(a) FROM t17")
-df = spark.sql("SELECT arrays_overlap(a) FROM t17")
-df = spark.sql("SELECT trunc(a) FROM t17")
+df = df.select(F.legacy_fn_36("a"), F.col("b"))
+df = df.select(F.trim("a"), F.col("b"))
+df = spark.sql("SELECT theta_intersection_agg(a) FROM t17")
+df = df.select(F.theta_union_agg("a"), F.col("b"))
+df = df.select(F.legacy_fn_37("a"), F.col("b"))

@@ -11,7 +11,7 @@ Datasketches HllSketch objects, using a Datasketches Union object. Set
 allowDifferentLgConfigK to true to allow unions of sketches with different
 lgConfigK values (defaults to false).
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -23,9 +23,9 @@ hll_union(first, second, allowDifferentLgConfigK)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 3.5.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | [2, 3] |
@@ -36,12 +36,13 @@ hll_union(first, second, allowDifferentLgConfigK)
 ```sql
 -- hll_union, example 1
 > SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

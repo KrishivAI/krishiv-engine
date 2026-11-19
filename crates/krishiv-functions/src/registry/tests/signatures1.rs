@@ -31,6 +31,12 @@ fn every_definition_is_in_sparks_catalog() {
             // (a golden runs `count(from_avro(..))`), so the registry says so.
             assert!(s.deterministic.is_none() && s.kind.is_none(), "{}", d.name);
             assert!(d.deterministic, "{}", d.name);
+        } else if matches!(d.name, "hll_sketch_estimate" | "hll_union") {
+            // The probe records the sketch scalars as aggregates (a generator artifact: Spark's
+            // `ExpressionDescription` group of both is `sketch_funcs`, and the probe's arguments are
+            // sketch aggregates); they are plain expressions in Spark. Regenerate with a Spark run to fix.
+            assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
+            assert_eq!(d.kind, FunctionKind::Scalar);
         } else {
             assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
             assert_eq!(s.kind, Some(d.kind), "{}", d.name);
@@ -601,10 +607,10 @@ fn calendar_signatures() {
     // What stays unregistered is known to Spark, so it is not "not found".
     assert!(
         matches!(
-            builtins().lookup("hll_sketch_agg", SparkProfile::V4_2),
+            builtins().lookup("theta_sketch_agg", SparkProfile::V4_2),
             Lookup::KnownUnsupported
         ),
-        "hll_sketch_agg"
+        "theta_sketch_agg"
     );
 }
 
@@ -673,6 +679,9 @@ fn misc_aggregates() {
         ("string_agg", Aggregate::ListAgg),
         ("try_sum", Aggregate::TrySum),
         ("try_avg", Aggregate::TryAvg),
+        ("bitmap_construct_agg", Aggregate::BitmapConstructAgg),
+        ("bitmap_or_agg", Aggregate::BitmapOrAgg),
+        ("bitmap_and_agg", Aggregate::BitmapAndAgg),
     ] {
         let d = def(name);
         assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
@@ -791,6 +800,18 @@ fn misc_aggregates() {
         result("try_avg", &[ty(DataType::Integer)], &[]).unwrap(),
         ArgType::new(DataType::Double, true)
     );
+    // The bitmap aggregates are a never-NULL `binary`.
+    for (name, input) in [
+        ("bitmap_construct_agg", DataType::Long),
+        ("bitmap_or_agg", DataType::Binary),
+        ("bitmap_and_agg", DataType::Binary),
+    ] {
+        assert_eq!(
+            result(name, &[ty(input)], &[]).unwrap(),
+            ArgType::new(DataType::Binary, false),
+            "{name}"
+        );
+    }
 }
 
 #[test]

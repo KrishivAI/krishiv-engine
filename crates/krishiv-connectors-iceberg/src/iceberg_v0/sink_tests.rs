@@ -293,7 +293,7 @@ pub(super) fn provider(env: &Env, location: &str, catalog: &Arc<Catalog>) -> Ice
     env.provider(&table, &VersionSpec::Current).unwrap()
 }
 
-fn request(write_id: Option<&str>) -> WriteRequest {
+pub(super) fn request(write_id: Option<&str>) -> WriteRequest {
     let mut r = WriteRequest::new(WriteMode::Append, "`db`.`t`", input_schema());
     r.write_id = write_id.map(str::to_owned);
     r
