@@ -97,9 +97,14 @@ fn nodes() -> Vec<LogicalPlan> {
                 partition_by: vec![column(1)],
                 order_by: vec![SortOrder::asc(column(2))],
                 single_partition: false,
+                select: Vec::new(),
+                position: 0,
+                name: None,
             }),
             udf: udf(PythonEvalType::ArrowUdtf),
             output: out,
+            lateral: None,
+            analyzed: None,
         }),
     ]
 }

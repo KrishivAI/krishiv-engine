@@ -66,7 +66,7 @@ impl Session {
             catalog.use_catalog(default);
         }
         let seed = Seed {
-            conf: ConfStore::new(config),
+            conf: ConfStore::new(config).with_profile(parts.profile),
             catalog,
             variables: SessionVariables::default(),
             udfs: Arc::new(UdfLibrary::new()),

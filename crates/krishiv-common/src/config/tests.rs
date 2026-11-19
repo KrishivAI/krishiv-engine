@@ -1991,4 +1991,21 @@ fn client_read_settings_refuse_what_spark_refuses() {
     assert!(c.set(key, "ROW").is_err());
     assert!(c.set(key, "row").is_ok());
     assert_eq!(ValueType::NonNegativeInt.to_string(), "non-negative int");
+    for key in [
+        "krishiv.sql.session.localRelationCacheThreshold",
+        "krishiv.sql.session.localRelationChunkSizeRows",
+        "krishiv.sql.repl.eagerEval.maxNumRows",
+        "krishiv.sql.repl.eagerEval.truncate",
+    ] {
+        assert!(c.set(key, "2147483647").is_ok(), "{key} at i32::MAX");
+        assert!(c.set(key, "2147483648").is_err(), "{key} above i32::MAX");
+    }
+    // The three `longConf` entries stay 64-bit.
+    assert!(
+        c.set(
+            "krishiv.sql.session.localRelationChunkSizeBytes",
+            "2147483648"
+        )
+        .is_ok()
+    );
 }

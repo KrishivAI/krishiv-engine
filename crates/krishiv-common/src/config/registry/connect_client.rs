@@ -11,7 +11,7 @@ pub static SQL_TIMESTAMP_TYPE: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.timestampType",
     value_type: ValueType::Enum(&["TIMESTAMP_LTZ", "TIMESTAMP_NTZ"]),
     default: Some(ConfigValue::String(Cow::Borrowed("TIMESTAMP_LTZ"))),
-    doc: "The type a bare `TIMESTAMP` (a literal, a cast target, a column type) stands for: `TIMESTAMP_LTZ` (with the session time zone) or `TIMESTAMP_NTZ` (without a zone).",
+    doc: "The type a bare `TIMESTAMP` literal, `to_timestamp` and `make_timestamp` produce (a bare `TIMESTAMP` cast target or column type does not follow it yet): `TIMESTAMP_LTZ` (with the session time zone) or `TIMESTAMP_NTZ` (without a zone).",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
@@ -21,7 +21,7 @@ pub static SQL_TIMESTAMP_TYPE: ConfigEntry = ConfigEntry {
 /// `spark.sql.session.localRelationCacheThreshold`.
 pub static LOCAL_RELATION_CACHE_THRESHOLD: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.session.localRelationCacheThreshold",
-    value_type: ValueType::NonNegativeInt,
+    value_type: ValueType::Int32 { min: 0 },
     default: Some(ConfigValue::Int(1024 * 1024)),
     doc: "The size in bytes from which a client uploads a local relation (`createDataFrame`) once and refers to it by hash. Read by Spark Connect clients.",
     scope: Scope::Session,
@@ -45,7 +45,7 @@ pub static LOCAL_RELATION_SIZE_LIMIT: ConfigEntry = ConfigEntry {
 /// `spark.sql.session.localRelationChunkSizeRows`.
 pub static LOCAL_RELATION_CHUNK_SIZE_ROWS: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.session.localRelationChunkSizeRows",
-    value_type: ValueType::PositiveInt,
+    value_type: ValueType::Int32 { min: 1 },
     default: Some(ConfigValue::Int(10_000)),
     doc: "The rows per chunk when a client splits a local relation. Read by Spark Connect clients.",
     scope: Scope::Session,
@@ -177,7 +177,7 @@ pub static REPL_EAGER_EVAL_ENABLED: ConfigEntry = ConfigEntry {
 /// `spark.sql.repl.eagerEval.maxNumRows`.
 pub static REPL_EAGER_EVAL_MAX_NUM_ROWS: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.repl.eagerEval.maxNumRows",
-    value_type: ValueType::Int,
+    value_type: ValueType::Int32 { min: i32::MIN },
     default: Some(ConfigValue::Int(20)),
     doc: "The most rows eager evaluation shows. Only used when `krishiv.sql.repl.eagerEval.enabled` is true. Read by Spark Connect clients.",
     scope: Scope::Session,
@@ -189,7 +189,7 @@ pub static REPL_EAGER_EVAL_MAX_NUM_ROWS: ConfigEntry = ConfigEntry {
 /// `spark.sql.repl.eagerEval.truncate`.
 pub static REPL_EAGER_EVAL_TRUNCATE: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.repl.eagerEval.truncate",
-    value_type: ValueType::Int,
+    value_type: ValueType::Int32 { min: i32::MIN },
     default: Some(ConfigValue::Int(20)),
     doc: "The most characters eager evaluation shows for a cell. Only used when `krishiv.sql.repl.eagerEval.enabled` is true. Read by Spark Connect clients.",
     scope: Scope::Session,

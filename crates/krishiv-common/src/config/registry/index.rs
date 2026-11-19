@@ -612,6 +612,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
+        "spark.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
+    ),
+    (
         "spark.sql.session.localRelationChunkSizeRows",
         &LOCAL_RELATION_CHUNK_SIZE_ROWS,
     ),
@@ -650,6 +654,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "krishiv.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
     ),
     (
         "krishiv.sql.session.localRelationChunkSizeRows",

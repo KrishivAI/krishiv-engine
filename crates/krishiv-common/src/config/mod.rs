@@ -102,6 +102,13 @@ pub enum ValueType {
     /// A signed 64-bit integer that must be at least 0 (Spark's
     /// `checkValue(_ >= 0)` settings).
     NonNegativeInt,
+    /// A signed 32-bit integer of at least `min` (Spark's `intConf`,
+    /// optionally with `checkValue(_ >= min)`); values outside the range
+    /// are refused as Spark's `toInt` does.
+    Int32 {
+        /// The smallest accepted value.
+        min: i32,
+    },
     /// A byte count: a number with an optional binary unit suffix
     /// `b`, `k`/`kb`, `m`/`mb`, `g`/`gb`, `t`/`tb`, `p`/`pb` (as Spark);
     /// no suffix means bytes.
@@ -161,6 +168,12 @@ impl ValueType {
                 .filter(|v: &i64| *v >= 0)
                 .map(ConfigValue::Int)
                 .ok_or_else(|| "expected a non-negative integer".to_owned()),
+            ValueType::Int32 { min } => s
+                .parse()
+                .ok()
+                .filter(|v: &i32| *v >= *min)
+                .map(|v| ConfigValue::Int(i64::from(v)))
+                .ok_or_else(|| format!("expected a 32-bit integer of at least {min}")),
             ValueType::Size => parse_with_unit(s, SIZE_UNITS, "b")
                 .map(ConfigValue::Size)
                 .ok_or_else(|| "expected a byte size such as `128m` or `1g`".to_owned()),
@@ -220,6 +233,7 @@ impl fmt::Display for ValueType {
             ValueType::Int => f.write_str("int"),
             ValueType::PositiveInt => f.write_str("positive int"),
             ValueType::NonNegativeInt => f.write_str("non-negative int"),
+            ValueType::Int32 { min } => write!(f, "32-bit int (min {min})"),
             ValueType::Size => f.write_str("size"),
             ValueType::SignedSize => f.write_str("signed size"),
             ValueType::Duration => f.write_str("duration"),
