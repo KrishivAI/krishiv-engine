@@ -136,7 +136,7 @@ fn an_exists_leg_reads_only_its_keys() {
     assert!(scans.iter().all(|c| !c.contains(&"c".to_owned())), "{plan}");
 }
 
-/// Review finding 3 (dc91ede0f), finding 2 (5724f9c20): an `EXISTS` under an `OR` plans
+/// Second review, finding 3; third review, finding 2: an `EXISTS` under an `OR` plans
 /// as a mark (Existence) join, which adds its mark column above the sides; the leg still
 /// reads only its keys.
 #[test]
