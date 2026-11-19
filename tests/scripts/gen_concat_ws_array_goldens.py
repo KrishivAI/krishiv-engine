@@ -145,7 +145,8 @@ def main() -> None:
         "spark_version": spark.version,
         "generator": GENERATOR,
         "notes": "Each case is a literal-only `SELECT concat_ws(...) AS r` run with ANSI on and off. Result: the "
-        "output column's simpleString type and nullability and its row(s) as the hex of the string's bytes (NULL as null), or the error condition, "
+        "output column's simpleString type and nullability and its row(s) as the hex of the string's bytes (NULL as null), "
+        "or the error condition, "
         "SQLSTATE, message parameters and rendered message.",
         "cases": cases,
     }
