@@ -420,7 +420,16 @@ impl Session {
         let (overwrite, statics) = (target.overwrite, target.statics);
         // `maxRecordsPerFile` of a DataFrame append (`writeTo(..).append()`, `saveAsTable`).
         let mut options = match target.options {
-            Some(o) => writer_options(plain_options(o)?.iter().map(|(k, v)| (k, v))),
+            // Only the option the writer reads is asked to be plain: an append ignores the
+            // others, a secret one included.
+            Some(o) => {
+                let read: BTreeMap<String, OptionValue> = o
+                    .iter()
+                    .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                writer_options(plain_options(&read)?.iter().map(|(k, v)| (k, v)))
+            }
             None => BTreeMap::new(),
         };
         let mode = if !overwrite {

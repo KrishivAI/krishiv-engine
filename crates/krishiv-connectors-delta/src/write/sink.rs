@@ -326,8 +326,9 @@ fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
     {
-        // Read as a long, as delta-spark does; a value not above 0 is no limit (`-1` too).
-        let value = raw.trim().parse::<i64>().map_err(|_| {
+        // Read as a long, as delta-spark does (no spaces around it); a value not above 0 is no
+        // limit (`-1` too).
+        let value = raw.parse::<i64>().map_err(|_| {
             KrishivError::from(krishiv_common::error::KrishivInvalidFormatOptionValue {
                 value: format!("'{raw}'"),
                 option: format!("\"{key}\""),

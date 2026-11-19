@@ -770,19 +770,25 @@ fn max_records_per_file_reaches_the_writer() {
     assert_eq!(count(&last_commit(&dir), "add"), adds("append_negative"));
 }
 
-/// An append to an existing Delta catalog table takes `maxRecordsPerFile` from the writer, as
-/// the path write does (`WRITE-EDGES.json` `max_records` `append_one`): `saveAsTable` append
-/// and `writeTo(..).append()`, and a value that is not a number is refused there too.
+/// A write to an existing Delta catalog table takes `maxRecordsPerFile` from the writer, as
+/// the path write does (`WRITE-EDGES.json` `max_records_table`): `insertInto` (append and
+/// overwrite), `saveAsTable` append and `writeTo(..).append()`, and a value that is not a
+/// number is refused there too.
 #[test]
 fn max_records_per_file_reaches_a_catalog_append() {
     let oracle: Value =
         serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
             .unwrap();
-    let steps = oracle["max_records"].as_array().unwrap().clone();
-    let one = steps.iter().find(|s| s["step"] == "append_one").unwrap()["commits"][0]["adds"]
-        .as_array()
-        .unwrap()
-        .len();
+    let steps = oracle["max_records_table"].as_array().unwrap().clone();
+    let step = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    let adds = |name: &str| step(name)["commits"][0]["adds"].as_array().unwrap().len();
+    let rows_after = |name: &str| step(name)["rows"].as_array().unwrap().len();
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("t");
     let path = dir.to_string_lossy().into_owned();
@@ -792,42 +798,61 @@ fn max_records_per_file_reaches_a_catalog_append() {
         &format!("CREATE TABLE mr (id BIGINT) USING delta LOCATION '{path}'"),
     )
     .unwrap();
-    let rows = || {
+    let writer = |value: &str, mode: &str| {
         block_on(
             s.sql("SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)"),
         )
         .unwrap()
+        .write()
+        .format("delta")
+        .mode(mode)
+        .option("maxRecordsPerFile", value)
     };
-    let save_as_table = |value: &str| {
-        block_on(
-            rows()
-                .write()
-                .format("delta")
-                .mode("append")
-                .option("maxRecordsPerFile", value)
-                .save_as_table("mr"),
-        )
-    };
-    save_as_table("1").unwrap();
-    assert_eq!(count(&last_commit(&dir), "add"), one);
-    block_on(
-        rows()
-            .write_to_table("mr")
-            .option("maxRecordsPerFile", "1")
-            .append(),
-    )
-    .unwrap();
-    assert_eq!(count(&last_commit(&dir), "add"), one);
+    let rows =
+        || usize::try_from(query(&s, "SELECT count(*) FROM mr")[0][0].as_u64().unwrap()).unwrap();
+    block_on(writer("1", "append").insert_into("mr")).unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("insert_into_one"));
+    assert_eq!(rows(), rows_after("insert_into_one"));
+    block_on(writer("1", "overwrite").insert_into("mr")).unwrap();
+    assert_eq!(
+        count(&last_commit(&dir), "add"),
+        adds("insert_into_overwrite_one")
+    );
+    assert_eq!(rows(), rows_after("insert_into_overwrite_one"));
     let before = versions(&dir);
-    let e = save_as_table("abc").unwrap_err();
+    let e = block_on(writer("abc", "append").insert_into("mr")).unwrap_err();
+    assert!(step("insert_into_not_a_number")["error"].is_object());
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivInvalidFormatOptionValue,
         "{e}"
     );
     assert_eq!(versions(&dir), before);
+    block_on(writer("1", "append").save_as_table("mr")).unwrap();
     assert_eq!(
-        query(&s, "SELECT count(*) FROM mr"),
-        serde_json::json!([[10]])
+        count(&last_commit(&dir), "add"),
+        adds("save_as_table_append_one")
     );
+    assert_eq!(rows(), rows_after("save_as_table_append_one"));
+    block_on(
+        block_on(
+            s.sql("SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)"),
+        )
+        .unwrap()
+        .write_to_table("mr")
+        .option("maxRecordsPerFile", "1")
+        .append(),
+    )
+    .unwrap();
+    assert_eq!(
+        count(&last_commit(&dir), "add"),
+        adds("save_as_table_append_one")
+    );
+    let e = block_on(writer("abc", "append").save_as_table("mr")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(rows(), 15);
 }

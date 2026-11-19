@@ -71,7 +71,8 @@ Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as th
   under a dynamic overwrite, an append and `replaceWhere` (delta-spark stores it as null); a NULL into a `NOT NULL`
   column at the top level, in a nested field and as a NULL struct, through the DataFrame writer and SQL; `''` into
   a `NOT NULL` partition column (`not_null_partition`); the `maxRecordsPerFile` option (a number, `0`, `-1`, and a
-  value that is not one). Each step's error or commits and rows.
+  value that is not one; `max_records_table`: through `insertInto` append and overwrite and `saveAsTable` append on
+  a catalog table). Each step's error or commits and rows.
 - `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
   row, its protocol and whether Krishiv refuses writing it.
 

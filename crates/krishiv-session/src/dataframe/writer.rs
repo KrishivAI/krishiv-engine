@@ -370,11 +370,15 @@ impl DataFrameWriter {
             }
             .into());
         }
-        let df = self.df;
+        let (df, options) = (self.df, self.options);
         let table = table.to_owned();
         let session = df.session.clone();
         session
-            .on_executor(async move { df.session.exec_insert_into(&df, &table, mode).await })
+            .on_executor(async move {
+                df.session
+                    .exec_insert_into(&df, &table, mode, &options)
+                    .await
+            })
             .await
     }
 

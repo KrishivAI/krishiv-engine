@@ -13,11 +13,13 @@ from krishiv._udf_hooks import register as _register_udf_hooks  # noqa: E402
 from krishiv.sql.profile_view import ProfileView, ui  # noqa: E402
 
 _register_udf_hooks()
+from krishiv._unsupported import SparkConf  # noqa: E402
 from krishiv.sql.session import SparkSession  # noqa: E402
 
 __all__ = [
     "LocalConnect",
     "ProfileView",
+    "SparkConf",
     "SparkSession",
     "__version__",
     "build_info",
