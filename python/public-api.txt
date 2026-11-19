@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['ProfileView', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'ui']
+__all__ = ['LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -86,6 +86,12 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+LocalConnectServer.@property def connection_string(self) -> str
+LocalConnectServer.@property def port(self) -> int
+LocalConnectServer.@property def token(self) -> str
+LocalConnectServer.def __new__(cls, config: list[tuple[str, str]] | None=...) -> LocalConnectServer
+LocalConnectServer.def is_running(self) -> bool
+LocalConnectServer.def stop(self) -> None
 Observation.@property def name(self) -> str
 Observation.def __new__(cls, name: str | None=...) -> Observation
 Observation.def get(self) -> ArrowStream
@@ -133,12 +139,13 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
 class DataFrame()
 class GroupedData()
+class LocalConnectServer()
 class Observation()
 class Session()
 class WindowSpec()
@@ -215,10 +222,14 @@ class SparkRuntimeException(PySparkException)
 class SparkUpgradeException(PySparkException)
 class SqlQueryContext(QueryContext)
 class UnknownException(PySparkException)
+class UnsupportedFeatureAttributeError(UnsupportedOperationException, AttributeError)
+class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError)
 class UnsupportedOperationException(PySparkException)
 def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
 def not_implemented(feature: str) -> PySparkNotImplementedError
+def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
+def unsupported_module(feature: str) -> UnsupportedFeatureImportError
 ## sql/__init__.py
 __all__
 __all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Observation', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
@@ -1472,6 +1483,9 @@ class PandasUDFType()
 def arrow_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
 def pandas_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
 def vectorized_udf(f: Any=None, returnType: Any=None, functionType: Any=None, kind: str='pandas') -> Any
+## sql/pandas/utils.py
+__all__
+__all__ = ['require_minimum_numpy_version', 'require_minimum_pandas_version', 'require_minimum_pyarrow_version']
 ## sql/profile_view.py
 ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
 ProfileView.def __repr__(self) -> str
@@ -1485,6 +1499,7 @@ def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
 DataFrameReader.def __init__(self, session: SparkSession) -> None
 DataFrameReader.def csv(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def format(self, source: str) -> DataFrameReader
+DataFrameReader.def jdbc(self, *args: object, **kwargs: object) -> DataFrame
 DataFrameReader.def json(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
@@ -1496,6 +1511,7 @@ DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def format(self, source: str) -> DataFrameWriter
 DataFrameWriter.def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
+DataFrameWriter.def jdbc(self, *args: object, **kwargs: object) -> None
 DataFrameWriter.def json(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def mode(self, saveMode: str) -> DataFrameWriter
 DataFrameWriter.def option(self, key: str, value: object) -> DataFrameWriter
@@ -1560,12 +1576,14 @@ SPARK_VERSION
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
 SparkSession.@property def read(self) -> DataFrameReader
+SparkSession.@property def sparkContext(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
 SparkSession.@property def version(self) -> str
 SparkSession.Builder.def __init__(self) -> None
 SparkSession.Builder.def appName(self, name: str) -> SparkSession.Builder
 SparkSession.Builder.def config(self, key: str | None=None, value: Any=None, *, conf: None=None, map: dict[str, Any] | None=None) -> SparkSession.Builder
 SparkSession.Builder.def create(self) -> SparkSession
+SparkSession.Builder.def enableHiveSupport(self) -> SparkSession.Builder
 SparkSession.Builder.def getOrCreate(self) -> SparkSession
 SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
 SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder

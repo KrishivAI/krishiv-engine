@@ -28,6 +28,14 @@ def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTyp
 def not_implemented(feature: str) -> PySparkNotImplementedError
 ```
 
+### `unsupported_attribute`
+
+```python
+def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError
+```
+
+`unsupported_feature` for an attribute or property (also an `AttributeError`).
+
 ### `unsupported_feature`
 
 ```python
@@ -38,6 +46,14 @@ The engine's unsupported-feature error, as the engine itself raises it
 (`KRISHIV_UNSUPPORTED_FEATURE`, SQLSTATE `0A000`): for a PySpark method
 whose plan the engine cannot build or run yet, where emulating it is out
 of scope. Raised eagerly, as there is no plan to attach it to.
+
+### `unsupported_module`
+
+```python
+def unsupported_module(feature: str) -> UnsupportedFeatureImportError
+```
+
+`unsupported_feature` for a module (also an `ImportError`).
 
 ## `AnalysisException`
 
@@ -412,6 +428,26 @@ def summary(self) -> str
 ```python
 class UnknownException(PySparkException)
 ```
+
+## `UnsupportedFeatureAttributeError`
+
+```python
+class UnsupportedFeatureAttributeError(UnsupportedOperationException, AttributeError)
+```
+
+`KRISHIV_UNSUPPORTED_FEATURE` raised where Spark has an attribute Krishiv lacks. It is also an
+`AttributeError`, so `getattr(obj, name, default)`, `hasattr` and `inspect.getmembers` treat the
+name as absent, as they do for a plain missing attribute.
+
+## `UnsupportedFeatureImportError`
+
+```python
+class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError)
+```
+
+`KRISHIV_UNSUPPORTED_FEATURE` raised by importing a module Krishiv lacks. It is also an
+`ImportError`, so `try: import x except ImportError` and `pkgutil.walk_packages` treat the
+module as absent.
 
 ## `UnsupportedOperationException`
 

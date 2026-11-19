@@ -43,6 +43,22 @@ pub enum RestAuth {
         /// Extra form fields the IdP needs (`audience`, `resource`).
         extra: Vec<(String, String)>,
     },
+    /// The end user's identity (T067 §3.3): the caller's own token (`forward`) or an RFC 8693 exchange of it at
+    /// `token_endpoint`, never the server's identity.
+    Delegated {
+        /// Send the caller's token unchanged (only when its audience names `audience`).
+        forward: bool,
+        /// The catalog's audience.
+        audience: String,
+        /// The token endpoint of the exchange (required unless `forward`).
+        token_endpoint: Option<Url>,
+        /// The `scope` of the exchange (and of the actor's client-credentials token).
+        scope: Option<String>,
+        /// The actor's client id and secret (`actorToken = client-credentials`); `None` sends no actor token.
+        actor: Option<(String, SecretString)>,
+        /// The exchange limits.
+        limits: super::delegated::DelegationLimits,
+    },
 }
 
 /// The limits of one client (design P3-lakehouse §5.6).
@@ -198,12 +214,26 @@ impl RestConfig {
         if is_s3_tables(&self.uri, self.warehouse.as_deref()) {
             return Err(unsupported("Iceberg S3 Tables catalog"));
         }
-        if let RestAuth::ClientCredentials {
-            token_endpoint: Some(endpoint),
-            ..
-        } = &self.auth
-        {
-            check_url(endpoint, self.allow_http, "oauth2-server-uri")?;
+        match &self.auth {
+            RestAuth::ClientCredentials {
+                token_endpoint: Some(endpoint),
+                ..
+            } => check_url(endpoint, self.allow_http, "oauth2-server-uri")?,
+            RestAuth::Delegated {
+                forward,
+                token_endpoint,
+                ..
+            } => match token_endpoint {
+                Some(endpoint) => check_url(endpoint, self.allow_http, "tokenEndpoint")?,
+                None if !forward => {
+                    return Err(invalid(
+                        "tokenEndpoint",
+                        "a token exchange needs the token endpoint",
+                    ));
+                }
+                None => {}
+            },
+            _ => {}
         }
         Ok(())
     }

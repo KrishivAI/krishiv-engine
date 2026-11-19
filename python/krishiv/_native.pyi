@@ -21,6 +21,7 @@ __all__ = [
     "Column",
     "DataFrame",
     "GroupedData",
+    "LocalConnectServer",
     "Observation",
     "Session",
     "WindowSpec",
@@ -38,6 +39,18 @@ __all__ = [
     "lit",
     "map_literal",
 ]
+
+@final
+class LocalConnectServer:
+    def __new__(cls, config: list[tuple[str, str]] | None = ...) -> LocalConnectServer: ...
+    @property
+    def port(self) -> int: ...
+    @property
+    def token(self) -> str: ...
+    @property
+    def connection_string(self) -> str: ...
+    def is_running(self) -> bool: ...
+    def stop(self) -> None: ...
 
 @final
 class Session:

@@ -426,6 +426,15 @@ def removeTag(self, tag: str) -> None
 
 Stops tagging with `tag` (no error when this thread has not added it).
 
+### `sparkContext`
+
+```python
+@property
+def sparkContext(self) -> Any
+```
+
+Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API.
+
 ### `sql`
 
 ```python
