@@ -1253,6 +1253,48 @@ fn a_udt_json_round_trips_in_sparks_key_order() {
     assert!(DataType::from_json(r#"{"type":"udt","sqlType":"integer","extra":1}"#).is_err());
 }
 
+/// Spark 4.2.0 (`tests/spark-golden/udt/spark-4.2.0-probe.txt`): a JVM UDT with no Python class writes
+/// `"pyClass":null` and parses back; a Python-only UDT is `PythonUserDefinedType` (`pyClass`, `serializedClass`),
+/// named `pythonuserdefined`; `fromJson` refuses a JVM UDT with no `pyClass` key and a Python one with no
+/// `serializedClass`, so Krishiv writes neither.
+#[test]
+fn a_jvm_only_and_a_python_only_udt_use_sparks_exact_json_forms() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let sql = r#"{"type":"array","elementType":"double","containsNull":false}"#;
+    let jvm = format!(
+        r#"{{"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":null,"sqlType":{sql}}}"#
+    );
+    let parsed = DataType::from_json(&jvm).unwrap();
+    assert_eq!(
+        parsed,
+        DataType::Udt(Arc::new(UdtType::new(
+            storage.clone(),
+            None,
+            Some("org.apache.spark.sql.test.ExamplePointUDT".to_owned()),
+            None,
+        )))
+    );
+    assert_eq!(parsed.json(), jvm);
+    assert_eq!(parsed.simple_string(), "examplepoint");
+
+    let py = format!(
+        r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+    );
+    let parsed = DataType::from_json(&py).unwrap();
+    assert_eq!(
+        parsed,
+        DataType::Udt(Arc::new(UdtType::new(
+            storage,
+            Some("__main__.PyOnlyUDT".to_owned()),
+            None,
+            Some("gAWV".to_owned()),
+        )))
+    );
+    assert_eq!(parsed.json(), py);
+    assert_eq!(parsed.simple_string(), "pythonuserdefined");
+    assert_eq!(parsed.catalog_string(), "array<double>");
+}
+
 /// A UDT field is stored as its SQL type and reads back as the UDT through the field tag.
 #[test]
 fn a_udt_field_reads_back_as_the_udt() {

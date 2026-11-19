@@ -85,17 +85,28 @@ impl DataType {
                 );
             }
             Self::Udt(u) => {
-                // Spark's `UserDefinedType.jsonValue`, in its key order (a real 4.2.0 run, tests/spark-golden/udt).
+                // Spark's `UserDefinedType.jsonValue` and `PythonUserDefinedType.jsonValue`, in their key order and with
+                // their exact key sets (Spark 4.2.0 `DataType.fromJson` refuses any other): a JVM UDT is
+                // `class`, `pyClass` (null when it has no Python class); a Python-only one is `pyClass`,
+                // `serializedClass`. A key whose value is unknown is left out of the Python-only form.
                 out.push_str(r#"{"type":"udt""#);
-                for (key, value) in [
-                    ("class", u.jvm_class()),
-                    ("pyClass", u.python_class()),
-                    ("serializedClass", u.serialized_python_class()),
-                ] {
-                    if let Some(v) = value {
-                        let _ = write!(out, r#","{key}":"#);
-                        write_string(v, out);
-                    }
+                let text =
+                    |key: &str, value: Option<&str>, null: bool, out: &mut String| match value {
+                        Some(v) => {
+                            let _ = write!(out, r#","{key}":"#);
+                            write_string(v, out);
+                        }
+                        None if null => {
+                            let _ = write!(out, r#","{key}":null"#);
+                        }
+                        None => {}
+                    };
+                if u.jvm_class().is_some() {
+                    text("class", u.jvm_class(), false, out);
+                    text("pyClass", u.python_class(), true, out);
+                } else {
+                    text("pyClass", u.python_class(), false, out);
+                    text("serializedClass", u.serialized_python_class(), false, out);
                 }
                 out.push_str(r#","sqlType":"#);
                 u.sql_type().write_json_in(out, in_field);
@@ -180,7 +191,8 @@ impl DataType {
             Some("udt") if obj.contains_key("sqlType") => {
                 let text = |key: &str| -> Result<Option<String>> {
                     match obj.get(key) {
-                        None => Ok(None),
+                        // Spark writes `"pyClass":null` for a JVM UDT with no Python class.
+                        None | Some(Value::Null) => Ok(None),
                         Some(Value::String(t)) => Ok(Some(t.clone())),
                         Some(_) => Err(invalid()),
                     }

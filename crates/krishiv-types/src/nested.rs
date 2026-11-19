@@ -69,12 +69,13 @@ impl UdtType {
     }
 
     /// Spark's `UserDefinedType.typeName`: the class's simple name without a trailing `$`, `Type` and `UDT`, lower
-    /// case (`ExamplePointUDT` is `examplepoint`). From the JVM class, else the Python class; `udt` for none.
+    /// case (`ExamplePointUDT` is `examplepoint`). From the JVM class; `pythonuserdefined` for a Python-only one; `udt` for none.
     pub fn type_name(&self) -> String {
-        let class = self
-            .jvm_class()
-            .or_else(|| self.python_class())
-            .unwrap_or("");
+        // A Python-only UDT is Spark's `PythonUserDefinedType`, whose type name is `pythonuserdefined` (4.2.0 run).
+        if self.jvm_class().is_none() && self.python_class().is_some() {
+            return "pythonuserdefined".to_owned();
+        }
+        let class = self.jvm_class().unwrap_or("");
         let simple = class
             .rsplit(['.', '$'])
             .find(|s| !s.is_empty())
