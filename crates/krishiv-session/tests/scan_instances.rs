@@ -157,6 +157,30 @@ fn a_mark_join_leg_reads_only_its_keys() {
     assert!(scan_columns(&plan).contains(&cols(&["b", "k"])), "{plan}");
 }
 
+#[test]
+fn a_self_join_of_json_reading_the_corrupt_record_column_still_runs() {
+    // The instance under the `Shift` reads its key and `_corrupt_record`; the
+    // corrupt-record-only check must still see that its key is referenced above.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.json");
+    std::fs::write(
+        &path,
+        "{\"a\": 1, \"k\": 1}\n{\"a\": 2, \"k\": 1}\n{not json\n",
+    )
+    .unwrap();
+    let path = path.display().to_string();
+    let s = Session::new().unwrap();
+    let (got, _) = both(
+        &s,
+        &format!(
+            "SELECT count(x._corrupt_record), count(*) FROM json.`{path}` x \
+             JOIN json.`{path}` y ON x.a = y.k WHERE y._corrupt_record IS NULL"
+        ),
+    );
+    // x.a = 1 meets both y rows with k = 1; x's corrupt column is null there.
+    assert_eq!(got, vec!["0,2".to_owned()]);
+}
+
 /// Review finding 2: an instance whose parent reads only `_corrupt_record` would parse
 /// nothing else; it keeps the shared scan's columns, and the rows are as with the switch off.
 #[test]
@@ -192,7 +216,7 @@ fn an_instance_reading_only_the_corrupt_record_column_keeps_the_shared_columns()
 /// optimizer pruning adds no projection under the window that would set its own demand
 /// (review of 5724f9c20, finding 1): with the Window arms forwarding the demand, both fail.
 #[test]
-fn the_demand_stops_at_a_window_a_generator_and_an_expand() {
+fn the_demand_stops_at_a_window_and_an_expand() {
     let s = Session::new().unwrap();
     let (_dir, path) = table(&s);
     let window = format!(

@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
-assertion_line: 630
 expression: tpch.plan(q).to_string()
 ---
 Sort [cntrycode#26 ASC NULLS FIRST]
