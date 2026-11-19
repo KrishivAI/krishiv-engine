@@ -310,7 +310,7 @@ def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
 
 def test_register_refuses_a_non_data_source(spark: SparkSession) -> None:
     with pytest.raises(PySparkTypeError):
-        spark.dataSource.register(int)  # type: ignore[arg-type]
+        spark.dataSource.register(int)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def test_schema_not_implemented_is_the_python_data_source_error(spark: SparkSession) -> None:
@@ -460,7 +460,7 @@ def test_filter_classes_are_dataclasses() -> None:
 
 def test_stream_reader_is_p4() -> None:
     with pytest.raises(PySparkNotImplementedError):
-        Fixed({}).streamReader(None)  # type: ignore[arg-type]
+        Fixed({}).streamReader(None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 # ---- writing ---------------------------------------------------------------------------------------

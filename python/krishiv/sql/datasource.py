@@ -104,10 +104,10 @@ class CaseInsensitiveDict(dict):  # type: ignore[type-arg]
     def __contains__(self, key: object) -> bool:
         return isinstance(key, str) and super().__contains__(key.lower())
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:  # ty: ignore[invalid-method-override]
         return super().get(key.lower(), default)
 
-    def pop(self, key: str, *default: Any) -> Any:
+    def pop(self, key: str, *default: Any) -> Any:  # ty: ignore[invalid-method-override]
         return super().pop(key.lower(), *default)
 
     def setdefault(self, key: str, default: Any = None) -> Any:
