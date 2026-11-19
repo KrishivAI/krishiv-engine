@@ -800,7 +800,12 @@ def _java_hash(v: Any) -> int | None:
         return (bits ^ (bits >> 32)) & mask
     if kind == "String":
         h = 0
-        data = v.encode("utf-16-be")
+        try:
+            data = v.encode("utf-16-be")
+        except UnicodeEncodeError:
+            # A lone surrogate: Python pickles it with `surrogatepass` and Pyrolite decodes those bytes as
+            # malformed UTF-8, so the Java key is not this text and its hash is not modelled.
+            return None
         for i in range(0, len(data), 2):
             h = (31 * h + ((data[i] << 8) | data[i + 1])) & mask
         return h
@@ -810,17 +815,37 @@ def _java_hash(v: Any) -> int | None:
 def _hash_map_order(m: dict[Any, Any]) -> list[tuple[Any, Any]]:
     """``m``'s entries in the order ``java.util.HashMap`` iterates them once Pyrolite has put them, in Python's
     order, into a default ``HashMap`` (``Unpickler.load_empty_dictionary``): by bucket (the spread hash
-    ``h ^ (h >>> 16)`` over a table of 16 doubled while more than 3/4 full), then by insertion within a bucket.
-    A key whose Java hash is not modelled keeps Python's order (a documented difference)."""
+    ``h ^ (h >>> 16)`` over the table), then by insertion within a bucket. The puts are replayed: the table
+    starts at 16 buckets and doubles when a put makes it more than 3/4 full, and also when a put makes one bin
+    9 nodes long while the table has fewer than 64 buckets (``putVal`` -> ``treeifyBin`` -> ``resize``).
+    A key whose Java hash is not modelled, or a bin that would become a red-black tree (9 nodes at 64 or more
+    buckets, iterated root first), keeps Python's order (a documented difference)."""
     items = list(m.items())
-    hashes = [_java_hash(k) for k, _ in items]
-    if any(h is None for h in hashes):
-        return items
+    spread: list[int] = []
+    for k, _ in items:
+        h = _java_hash(k)
+        if h is None:
+            return items
+        spread.append(h ^ (h >> 16))
     size = 16
-    while len(items) > size * 3 // 4:
-        size *= 2
-    buckets = [((h ^ (h >> 16)) & (size - 1), i) for i, h in enumerate(hashes) if h is not None]
-    return [items[i] for _, i in sorted(buckets)]
+    bins: dict[int, int] = {}
+    for count, s in enumerate(spread, start=1):
+        bucket = s & (size - 1)
+        bins[bucket] = bins.get(bucket, 0) + 1
+        resized = False
+        if bins[bucket] >= 9:
+            if size >= 64:
+                return items
+            size *= 2
+            resized = True
+        if count > size * 3 // 4:
+            size *= 2
+            resized = True
+        if resized:
+            bins = {}
+            for t in spread[:count]:
+                bins[t & (size - 1)] = bins.get(t & (size - 1), 0) + 1
+    return [items[i] for _, i in sorted((s & (size - 1), i) for i, s in enumerate(spread))]
 
 
 def _java_text(v: Any) -> str:

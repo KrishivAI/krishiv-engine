@@ -765,8 +765,30 @@ def test_java_narrowing_and_text() -> None:
             "{key1=18, key2=17, key0=19, key5=14, key6=13, key3=16, key4=15, key9=10, key7=12, key8=11, key11=8, "
             "key10=9, key15=4, key14=5, key13=6, key12=7, key19=0, key18=1, key17=2, key16=3}",
         ),
-        # A key whose Java hash is identity-based keeps Python's order.
+        # Nine keys in one bin of a table under 64 buckets double it (`treeifyBin` resizes instead).
+        ({i * 16: i for i in range(9)}, "{0=0, 32=2, 64=4, 96=6, 128=8, 16=1, 48=3, 80=5, 112=7}"),
+        (
+            {i * 32: i for i in range(10)},
+            "{0=0, 64=2, 128=4, 192=6, 256=8, 32=1, 96=3, 160=5, 224=7, 288=9}",
+        ),
+        (
+            {i * 64: i for i in range(10)},
+            "{0=0, 64=1, 128=2, 192=3, 256=4, 320=5, 384=6, 448=7, 512=8, 576=9}",
+        ),
+        (
+            {i * 16: i for i in range(20)},
+            "{0=0, 64=4, 128=8, 192=12, 256=16, 16=1, 80=5, 144=9, 208=13, 272=17, 32=2, 96=6, 160=10, 224=14, "
+            "288=18, 48=3, 112=7, 176=11, 240=15, 304=19}",
+        ),
+        # Documented differences, in Python's order: a bin that becomes a red-black tree (JDK 21 prints
+        # `{192=3, 0=0, ...}`, the tree root first), a key whose Java hash is identity-based, and a str key
+        # with a lone surrogate (Pyrolite reads its bytes as malformed UTF-8).
+        (
+            {i * 64: i for i in range(11)},
+            "{0=0, 64=1, 128=2, 192=3, 256=4, 320=5, 384=6, 448=7, 512=8, 576=9, 640=10}",
+        ),
         ({b"b": 1, b"a": 2}, "{b'b'=1, b'a'=2}"),
+        ({"\ud800": 1, "a": 2}, "{\ud800=1, a=2}"),
     ]
     for value, text in maps:
         assert udtf._java_string(value) == text, value
