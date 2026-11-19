@@ -370,6 +370,11 @@ impl Planner<'_> {
             AggregateFunction::PercentileApprox { .. }
                 | AggregateFunction::ApproxCountDistinct { .. }
                 | AggregateFunction::HistogramNumeric { .. }
+                | AggregateFunction::BitmapConstructAgg
+                | AggregateFunction::BitmapOrAgg
+                | AggregateFunction::BitmapAndAgg
+                | AggregateFunction::HllSketchAgg { .. }
+                | AggregateFunction::HllUnionAgg { .. }
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }

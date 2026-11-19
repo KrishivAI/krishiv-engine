@@ -65,7 +65,7 @@ use crate::variables::SessionVariables;
 mod context;
 mod lifecycle;
 #[cfg(feature = "unstable-ir")]
-pub use lifecycle::SqlOutcome;
+pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
 mod run_task;
 
@@ -556,63 +556,10 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
             .await
+            .and_then(Ran::into_frame)
             .map(|(df, _)| df)
-    }
-
-    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
-    pub(crate) async fn sql_here_marked(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
-    }
-
-    async fn sql_here_inner(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-        spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        let mut env = self.query_env();
-        env.row = row;
-        let written = query;
-        let query = self.substituted(query);
-        let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
-        let resolved = self.identifier_clauses_into(query, &mut env).await?;
-        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
-        if !spans.is_empty() && !named_by_clause && query == written {
-            env.identifier_spans = spans.into();
-        }
-        let query: &str = &resolved;
-        let redacted = krishiv_sql::redact_sql(query);
-        let statement = krishiv_sql::parse_statement(query, &env.parser)
-            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
-        // clause when it drops it; the parser sees only the evaluated name.
-        if named_by_clause
-            && let Statement::DropFunction(f) = &statement
-            && f.temporary
-        {
-            krishiv_sql::check_temporary_function_name(&f.name, f.span)
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        }
-        // Before any side effect: what the statement writes, creates or
-        // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
-        self.authorize_statement(&statement, class, &env).await?;
-        env.statement_class = Some(class.name());
-        let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok((df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -1451,6 +1398,7 @@ impl Session {
             },
             quiet: QuietDenials::default(),
             udtfs,
+            spill_failure: Arc::default(),
         }
     }
 
@@ -1651,6 +1599,26 @@ impl Session {
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((crate::run_site::resolve_sites(stream, env), query))
+    }
+
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as
@@ -1916,6 +1884,7 @@ impl Session {
         };
         match submitted {
             Err(error) => {
+                let error = Self::name_spill_failure(error, &env.spill_failure);
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
@@ -1923,7 +1892,11 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let (inner, fold) = (stream, pending.0.take());
+                let failure = Arc::clone(&env.spill_failure);
+                let inner = Box::pin(
+                    stream.map(move |r| r.map_err(|e| Self::name_spill_failure(e, &failure))),
+                );
+                let fold = pending.0.take();
                 let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
@@ -1969,3 +1942,6 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+mod ran;
+pub(crate) use ran::Ran;

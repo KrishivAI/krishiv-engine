@@ -66,6 +66,7 @@ impl Planner<'_> {
         let mut arg_at = Vec::with_capacity(calls.len());
         let mut lowered = Vec::with_capacity(calls.len());
         for c in &calls {
+            check_constants(&c.f)?;
             let l = lower(&c.f)
                 .ok_or_else(|| unsupported(&format!("the aggregate function {}", c.f.id.name())))?;
             let args = state_input(&c.f).map_or(l.args, |(columns, _)| columns.to_vec());
@@ -320,6 +321,7 @@ impl Planner<'_> {
             if f.kind != FunctionKind::Aggregate || f.distinct || f.filter.is_some() {
                 return Err(internal(&format!("{e} cannot run as a partial aggregate")));
             }
+            check_constants(f)?;
             let l = lower(f)
                 .ok_or_else(|| unsupported(&format!("the aggregate function {}", f.id.name())))?;
             if matches!(l.function, AggregateFunction::Udf(_)) {
@@ -456,6 +458,34 @@ pub(super) struct Lowered {
     pub(super) args: Vec<Arc<Expr>>,
 }
 
+/// The `lgConfigK` literal of an `hll_sketch_agg` call: its value, `0` for a NULL (Spark reads `null` as an
+/// `Int` 0), `None` for anything that is not a constant.
+fn integer_literal(e: &Arc<Expr>) -> Option<i64> {
+    match &e.node {
+        ExprNode::Literal(Literal::Integer(v)) => Some(i64::from(*v)),
+        ExprNode::Literal(Literal::Null(_)) => Some(0),
+        _ => None,
+    }
+}
+
+/// The constants of the HLL aggregates, checked as Spark checks them when it builds the first buffer:
+/// `HLL_K_MUST_BE_CONSTANT` for an `lgConfigK` that is not a literal, `HLL_INVALID_LG_K` for one outside
+/// `4..=21` (a NULL is 0).
+pub(super) fn check_constants(f: &ResolvedFunction) -> Result<()> {
+    if f.id.name() == "hll_sketch_agg"
+        && let Some(k) = f.args.get(1)
+    {
+        let Some(v) = integer_literal(k) else {
+            return Err(krishiv_common::error::HllKMustBeConstant {
+                function: "`hll_sketch_agg`".to_owned(),
+            }
+            .into());
+        };
+        krishiv_functions::sketch::hll::check_lg_k(i32::try_from(v).unwrap_or(i32::MAX))?;
+    }
+    Ok(())
+}
+
 /// `None` for a function the executor does not run as an aggregate.
 pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
     // Before the names: a UDF may be called as a built-in is (`count`).
@@ -549,6 +579,33 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "bit_and" if f.args.len() == 1 => (AggregateFunction::BitAnd, f.args.clone()),
         "bit_or" if f.args.len() == 1 => (AggregateFunction::BitOr, f.args.clone()),
         "bit_xor" if f.args.len() == 1 => (AggregateFunction::BitXor, f.args.clone()),
+        "bitmap_construct_agg" if f.args.len() == 1 => {
+            (AggregateFunction::BitmapConstructAgg, f.args.clone())
+        }
+        "bitmap_or_agg" if f.args.len() == 1 => (AggregateFunction::BitmapOrAgg, f.args.clone()),
+        "bitmap_and_agg" if f.args.len() == 1 => (AggregateFunction::BitmapAndAgg, f.args.clone()),
+        "hll_sketch_agg" if f.args.len() == 2 => {
+            let k = integer_literal(&f.args[1])?;
+            let lg_k = u8::try_from(k).ok()?;
+            (
+                AggregateFunction::HllSketchAgg { lg_k },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "hll_union_agg" if f.args.len() == 2 => {
+            // A NULL flag reads as false (Spark's `null.asInstanceOf[Boolean]`).
+            let allow = match &f.args[1].node {
+                ExprNode::Literal(Literal::Boolean(b)) => *b,
+                ExprNode::Literal(Literal::Null(_)) => false,
+                _ => return None,
+            };
+            (
+                AggregateFunction::HllUnionAgg {
+                    allow_different: allow,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
         "mode" => mode_lower(f)?,
         "listagg" => listagg_lower(f)?,
         "percentile" if f.args.len() == 3 => {

@@ -35,10 +35,11 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use arrow_schema::{FieldRef, SchemaRef};
 use krishiv_common::config::{
     Config, ConfigValue, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED,
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{
-    RowLevelOperation, RowLevelTable, TableCapabilities, TableProvider, WriteRequest,
+    RowLevelOperation, RowLevelTable, TableCapabilities, TableProvider, WriteMode, WriteRequest,
 };
 use krishiv_exec::{
     FileScan, FilterPushdown, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown,
@@ -57,6 +58,7 @@ use super::eq_deletes::{self, EqProjection, FILE_ORDINAL};
 use super::lazy::{self, DeleteEnv, DeleteSource, DeleteState, LazySelections, Locate, ScanTask};
 use super::lineage::{self, LineageSource, LineageSplit};
 use super::sink::{IcebergWriteSink, WriteTarget};
+use super::statistics_file::enabled as statistics_enabled;
 use super::table::IcebergTable;
 use super::types::arrow_schema;
 use super::write::DEFAULT_MAX_OPEN_FILES;
@@ -118,9 +120,21 @@ impl IcebergTableProvider {
                 .and_then(ConfigValue::as_int)
                 .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(DEFAULT_MAX_OPEN_FILES);
+            let statistics = config
+                .get(&ICEBERG_WRITE_STATISTICS_ENABLED)
+                .and_then(ConfigValue::as_bool)
+                .or_else(|| {
+                    ICEBERG_WRITE_STATISTICS_ENABLED
+                        .default
+                        .as_ref()
+                        .and_then(ConfigValue::as_bool)
+                })
+                .unwrap_or(false);
+            let base = table.table.metadata();
             provider.write = Some(Arc::new(WriteTarget {
                 committer: Arc::clone(committer),
-                base: table.table.metadata().clone(),
+                statistics: statistics_enabled(statistics, base.properties()),
+                base: base.clone(),
                 registered: table.registered.clone(),
                 file_io: table.table.file_io().clone(),
                 max_metadata_bytes: table.max_metadata_bytes,
@@ -396,11 +410,16 @@ impl TableProvider for IcebergTableProvider {
         Some(super::stats::scan_units(&self.scan.entries))
     }
 
-    /// `BATCH_WRITE` (appends only: overwrites are PR-36b) when the table
-    /// has a committer and the provider reads its current state; else none.
+    /// `BATCH_WRITE`, `TRUNCATE`, `OVERWRITE_BY_FILTER` and
+    /// `OVERWRITE_DYNAMIC` (as Iceberg's `SparkTable`) when the table has a
+    /// committer and the provider reads its current state; else none.
     fn capabilities(&self) -> TableCapabilities {
         let mut caps = TableCapabilities::default();
-        caps.batch_write = self.write.is_some();
+        let writes = self.write.is_some();
+        caps.batch_write = writes;
+        caps.truncate = writes;
+        caps.overwrite_by_filter = writes;
+        caps.overwrite_dynamic = writes;
         caps
     }
 
@@ -414,7 +433,8 @@ impl TableProvider for IcebergTableProvider {
         )))
     }
 
-    /// The append sink, committing when it finalizes (`sink.rs`).
+    /// The append sink (`sink.rs`) or an overwrite's (`overwrite.rs`),
+    /// committing when it finalizes.
     fn writer(&self, request: &WriteRequest) -> krishiv_exec::Result<Arc<dyn Sink>> {
         self.capabilities()
             .check(&request.mode, &request.table_name)?;
@@ -422,7 +442,13 @@ impl TableProvider for IcebergTableProvider {
             .write
             .as_ref()
             .ok_or_else(|| internal("a write capability without a target".to_owned()))?;
-        Ok(Arc::new(IcebergWriteSink::try_new(
+        if request.mode == WriteMode::Append {
+            return Ok(Arc::new(IcebergWriteSink::try_new(
+                Arc::clone(target),
+                request,
+            )?));
+        }
+        Ok(Arc::new(super::overwrite::sink(
             Arc::clone(target),
             request,
         )?))

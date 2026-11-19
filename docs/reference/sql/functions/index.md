@@ -86,12 +86,12 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`bit_length`](bit_length.md) | scalar | yes | Returns the bit length of string data or number of bits of binary data. |
 | [`bit_or`](bit_or.md) | aggregate | yes | Returns the bitwise OR of all non-null input values, or null if none. |
 | [`bit_xor`](bit_xor.md) | aggregate | yes | Returns the bitwise XOR of all non-null input values, or null if none. |
-| [`bitmap_and_agg`](bitmap_and_agg.md) | aggregate | not yet | Returns a bitmap that is the bitwise AND of all of the bitmaps from the child |
-| [`bitmap_bit_position`](bitmap_bit_position.md) | scalar | not yet | Returns the bit position for the given input child expression. |
-| [`bitmap_bucket_number`](bitmap_bucket_number.md) | scalar | not yet | Returns the bucket number for the given input child expression. |
-| [`bitmap_construct_agg`](bitmap_construct_agg.md) | aggregate | not yet | Returns a bitmap with the positions of the bits set from all the values from |
-| [`bitmap_count`](bitmap_count.md) | scalar | not yet | Returns the number of set bits in the child bitmap. |
-| [`bitmap_or_agg`](bitmap_or_agg.md) | aggregate | not yet | Returns a bitmap that is the bitwise OR of all of the bitmaps from the child |
+| [`bitmap_and_agg`](bitmap_and_agg.md) | aggregate | yes | Returns a bitmap that is the bitwise AND of all of the bitmaps from the child |
+| [`bitmap_bit_position`](bitmap_bit_position.md) | scalar | yes | Returns the bit position for the given input child expression. |
+| [`bitmap_bucket_number`](bitmap_bucket_number.md) | scalar | yes | Returns the bucket number for the given input child expression. |
+| [`bitmap_construct_agg`](bitmap_construct_agg.md) | aggregate | yes | Returns a bitmap with the positions of the bits set from all the values from |
+| [`bitmap_count`](bitmap_count.md) | scalar | yes | Returns the number of set bits in the child bitmap. |
+| [`bitmap_or_agg`](bitmap_or_agg.md) | aggregate | yes | Returns a bitmap that is the bitwise OR of all of the bitmaps from the child |
 | [`bool_and`](bool_and.md) | aggregate | yes | Returns true if all values of `expr` are true. |
 | [`bool_or`](bool_or.md) | aggregate | yes | Returns true if at least one value of `expr` is true. |
 | [`boolean`](boolean.md) | scalar | yes | Casts the value `expr` to the target data type `boolean`. |
@@ -202,10 +202,10 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`hash`](hash.md) | scalar | yes | Returns a hash value of the arguments. |
 | [`hex`](hex.md) | scalar | yes | Converts `expr` to hexadecimal. |
 | [`histogram_numeric`](histogram_numeric.md) | aggregate | yes | Computes a histogram on numeric 'expr' using nb bins. |
-| [`hll_sketch_agg`](hll_sketch_agg.md) | aggregate | not yet | Returns the HllSketch's updatable binary representation. |
-| [`hll_sketch_estimate`](hll_sketch_estimate.md) | aggregate | not yet | Returns the estimated number of unique values given the binary representation |
-| [`hll_union`](hll_union.md) | aggregate | not yet | Merges two binary representations of |
-| [`hll_union_agg`](hll_union_agg.md) | aggregate | not yet | Returns the estimated number of unique values. |
+| [`hll_sketch_agg`](hll_sketch_agg.md) | aggregate | yes | Returns the HllSketch's updatable binary representation. |
+| [`hll_sketch_estimate`](hll_sketch_estimate.md) | aggregate | yes | Returns the estimated number of unique values given the binary representation |
+| [`hll_union`](hll_union.md) | aggregate | yes | Merges two binary representations of |
+| [`hll_union_agg`](hll_union_agg.md) | aggregate | yes | Returns the estimated number of unique values. |
 | [`hour`](hour.md) | scalar | yes | Returns the hour component of the given expression. |
 | [`hypot`](hypot.md) | scalar | yes | Returns sqrt(`expr1`² + `expr2`²). |
 | [`if`](if.md) | scalar | yes | If `expr1` evaluates to true, then returns `expr2`; otherwise returns `expr3`. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-487 of 574 functions are implemented. The 87 that are not are listed in [functions not implemented yet](not-implemented.md).
+497 of 574 functions are implemented. The 77 that are not are listed in [functions not implemented yet](not-implemented.md).
