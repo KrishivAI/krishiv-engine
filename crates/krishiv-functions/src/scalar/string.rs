@@ -43,7 +43,8 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// The shape of an argument list: `S` string, `B` binary, `I` an integral
-/// up to `int`, `L` a `bigint`, `A` an array.
+/// up to `int`, `L` a `bigint`, `A` any array (the element type is
+/// checked when the function binds, e.g. `concat_ws` needs `array<string>`).
 pub(super) fn shape(args: &[BindArg]) -> String {
     args.iter()
         .map(|a| {
