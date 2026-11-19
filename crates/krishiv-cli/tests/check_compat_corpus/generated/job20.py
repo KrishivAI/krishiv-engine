@@ -2,9 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.tuple_intersection_theta_double("a"), F.col("b"))
-df = spark.sql("SELECT sign(a) FROM t20")
-df = df.select(F.reflect("a"), F.col("b"))
-df = df.select(F.rtrim("a"), F.col("b"))
-df = df.select(F.substr("a"), F.col("b"))
-df = spark.sql("SELECT bround(a) FROM t20")
+df = df.select(F.dayofmonth("a"), F.col("b"))
+df = spark.sql("SELECT from_protobuf(a) FROM t20")
+df = spark.sql("SELECT element_at(a) FROM t20")
+df = spark.sql("SELECT java_method(a) FROM t20")
+df = df.select(F.schema_of_variant_agg("a"), F.col("b"))

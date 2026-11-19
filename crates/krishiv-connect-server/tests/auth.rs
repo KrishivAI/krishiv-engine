@@ -852,6 +852,36 @@ async fn config_refusals_are_counted_like_sql_set() {
     assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
 
+/// A silent set that fails never sends the value back when the redaction rules match it: an
+/// operator's refused store endpoint with URL credentials comes back as
+/// `Some(*********(redacted))` (a difference toward safety: Spark echoes the value).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_set_warning_hides_a_secret_value() {
+    use krishiv_connect::proto::v4_3::config_request::{self as creq, operation::OpType as Op};
+    let run = start().await;
+    let quiet = config_as(
+        &run,
+        OPERATOR,
+        Op::Set(creq::Set {
+            pairs: vec![pb::KeyValue {
+                key: "fs.s3a.endpoint".to_owned(),
+                value: Some("http://u:canary-pw-7f3@minio.local:9000".to_owned()),
+            }],
+            silent: Some(true),
+        }),
+    )
+    .await
+    .expect("silent");
+    assert_eq!(quiet.warnings.len(), 1, "{:?}", quiet.warnings);
+    let w = &quiet.warnings[0];
+    assert!(
+        w.starts_with("Failed to set fs.s3a.endpoint to Some(*********(redacted)) due to "),
+        "{w}"
+    );
+    assert!(!w.contains("canary-pw-7f3"), "{w}");
+    assert!(w.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"), "{w}");
+}
+
 // ---------------------------------------------------- cache rows (P3-T083, ADR 0046 §3b)
 
 fn rel_range(end: i64) -> pb::Relation {
