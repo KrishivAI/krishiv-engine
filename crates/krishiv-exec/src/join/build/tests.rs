@@ -937,3 +937,112 @@ async fn a_spilling_build_publishes_its_fixed_bloom() {
     drop(manager);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A build without a spill scope, below its key cap, asked to spill after
+/// `combine`: `spill_global` moves the merged hashes into a new fixed
+/// filter, which costs more than they free, so it returns 0; the filter is
+/// active and the spillable-bytes signal no longer offers the hashes
+/// (`shed_hashes`' `moved`, fd8d1dada review finding 2).
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime via #[tokio::test]; never runs on a compute worker"
+)]
+async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
+    use krishiv_memory::{SpillOwner, Spillable as _};
+
+    use crate::join::{HashJoin, JoinSpec, JoinType};
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "k",
+        DataType::Int64,
+        true,
+    )]));
+    let join = HashJoin::try_new(JoinSpec {
+        join_type: JoinType::Inner,
+        probe_schema: Arc::clone(&schema),
+        build_schema: Arc::clone(&schema),
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        filter: None,
+        single_match: false,
+        spill: None,
+    })
+    .and_then(|j| j.with_runtime_filters(vec![f.clone()]))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let sink = join.build_sink();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = crate::QueryContext::new(
+        crate::QueryId(1),
+        crate::WorkloadClass::Interactive,
+        crate::ExecConfig::default(),
+        root.child("q", None),
+    );
+    let exec: Arc<dyn crate::Executor> =
+        crate::TokioExecutor::new(&crate::ExecutorConfig::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+    let ctx = crate::TaskContext::new(
+        Arc::clone(&query),
+        exec,
+        SpillOwner::new(),
+        crate::OperatorId(1),
+        "b",
+    );
+    // 2,000 keys as hashes pass a sixteenth of the 64 KiB filter, and
+    // free less than it costs.
+    let keys = spread(0, 2000);
+    let batch = krishiv_types::batch::Batch::new(
+        arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+    let g = sink.global_state(&ctx).unwrap_or_else(|e| panic!("{e}"));
+    let mut l = sink.local_state(&ctx, &g).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sink.sink(batch, &mut l, &g).is_ok());
+    let hashes = l
+        .downcast_ref::<super::BuildLocal>()
+        .map(|l| l.runtime.hash_bytes())
+        .unwrap_or_else(|| panic!("not a build local"));
+    assert!(hashes > 0 && hashes < 64 << 10, "{hashes} hash bytes");
+    assert!(sink.combine(l, &g).is_ok());
+    let offered = || ctx.consumer().signal().spillable_bytes();
+    let before = offered();
+    assert!(before >= hashes, "merged hashes not offered");
+    let freed = sink
+        .spill_global(&g, 1, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(freed, 0, "a net of 0 reported as freed");
+    assert_eq!(
+        lock(&super::state(&g).unwrap_or_else(|e| panic!("{e}")).runtime).hash_bytes(),
+        0
+    );
+    assert_eq!(
+        offered(),
+        before - hashes,
+        "the signal still offers hashes that sit in the filter"
+    );
+    sink.finalize(&g, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let extra = sink.extra_metrics();
+    let state = extra
+        .iter()
+        .find(|(n, _)| n == "fixed_bloom")
+        .map(|(_, m)| m.clone());
+    assert_eq!(
+        state,
+        Some(crate::metrics::Metric::Text(
+            "planned; active; bloom".into()
+        )),
+        "the fixed filter was not active"
+    );
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k.evaluate(keys.as_ref()).unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 2000);
+    drop((g, sink, join, ctx));
+    assert_eq!(query.pool().reserved(), 0, "the query pool is not empty");
+}

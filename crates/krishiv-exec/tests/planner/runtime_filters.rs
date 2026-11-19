@@ -838,7 +838,8 @@ fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
     );
     // TPC-H q09's own shape: the join is shuffled (hash partitioned on the
     // key), not broadcast. On one worker it is still one build, so it keeps
-    // the fixed Bloom too; with several producers instantiation drops it.
+    // the fixed Bloom too; a cut plan has none (`krishiv-scheduler`
+    // `tpch_stages.rs` `a_cut_plan_keeps_no_fixed_bloom`).
     let mut shuffled = scaled.clone();
     shuffled.push(("spark.sql.autoBroadcastJoinThreshold", "-1"));
     configured(&mut t, &shuffled);

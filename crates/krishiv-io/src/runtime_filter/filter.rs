@@ -59,7 +59,9 @@ pub struct KeyFilterOptions {
     /// as they come, and [`KeyFilterBuilder::finish_with`] publishes it.
     /// Only a producer that keeps such a filter acts on it
     /// ([`KeyFilterBuilder::keep_hashes_past_cap`]); `None`: the Bloom form
-    /// is lost then (TPC-H q09 at SF1000).
+    /// is lost then (TPC-H q09 at SF1000). A plan may carry both this and
+    /// `bloom_bytes`; a build of one producer uses this one and never the
+    /// planned size, several producers the planned size and never this.
     pub bloom_spill_bytes: Option<u32>,
 }
 

@@ -88,9 +88,11 @@ pub(crate) fn hash_join(
 /// filter's producer partitions. A planned Bloom size lets several build
 /// partitions' filters OR; one producer sizes its Bloom for the keys it
 /// saw, as an estimate can be far off. A fixed Bloom
-/// (`bloom_spill_bytes`) is kept only with one producer: several builds (a
-/// broadcast join's probe tasks) would each reserve the whole tier, and
-/// fixed filters do not merge.
+/// (`bloom_spill_bytes`) reaches here only in a plan that was not cut (one
+/// worker, one build): `krishiv-scheduler` clears it on every join of a
+/// fragment. With several producers it is cleared here as well, as fixed
+/// filters do not merge; a value service the product creates counts one
+/// producer per value, so that branch is a backstop.
 fn build_options(
     mut options: krishiv_io::KeyFilterOptions,
     producers: u32,

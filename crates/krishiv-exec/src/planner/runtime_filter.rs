@@ -76,9 +76,10 @@
 //! ~300M keys that always spills, had only a range on `orders`;
 //! `join/build/spilled.rs`). A Bloom that drops little is switched off by
 //! the scan's adaptive row stage. The join may be broadcast or shuffled
-//! (q09's is shuffled on the key); an exchange's collected filter and a
-//! build of several producer tasks keep none (dropped when the plan is cut
-//! and at instantiation).
+//! (q09's is shuffled on the key) when the plan runs on one worker: a cut
+//! plan keeps none (`krishiv-scheduler` `fragment.rs` clears it on every
+//! join of a fragment and on an exchange's collected filter, as a fragment
+//! runs as tasks).
 //! Whether the scan
 //! waits for the filter ([`scan_waits`]) still reads the uncapped
 //! estimate. Spark's size guards are not used: they are tuned for clusters.
@@ -414,9 +415,11 @@ impl Planner<'_> {
                 // A guessed build may hold far more keys than its capped
                 // estimate, and spill: past the cap, or when it sheds its
                 // hashes, it keeps a Bloom of the memory tier. Broadcast or
-                // shuffled alike (q09's join is shuffled): instantiation
-                // keeps it only for a filter of one producer, a build that
-                // runs once (`instantiate/join.rs` `build_options`).
+                // shuffled alike (q09's join is shuffled) on one worker,
+                // where the join is one build; cutting the plan clears it
+                // (`krishiv-scheduler` `fragment.rs` `local_filters`), and
+                // a build keeps it instead of the planned size
+                // (`instantiate/join.rs` `build_options`).
                 options.bloom_spill_bytes = (bloom && guessed)
                     .then(|| s.spill_bloom_bytes(site.scan_rows, options.bloom_fpp))
                     .flatten();
