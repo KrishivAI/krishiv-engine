@@ -1232,3 +1232,23 @@ fn a_udt_renders_as_spark_does() {
     assert_eq!(u.catalog_string(), "array<double>");
     assert_eq!(u.sql(), "ARRAY<DOUBLE>");
 }
+
+/// Spark 4.2.0's JSON of a UDT (`tests/spark-golden/udt`): `type`, `class`, `pyClass`, `sqlType`, and it parses back.
+#[test]
+fn a_udt_json_round_trips_in_sparks_key_order() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::new(
+        storage,
+        Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+        Some("org.apache.spark.sql.test.ExamplePointUDT".to_owned()),
+        None,
+    )));
+    let json = u.json();
+    assert_eq!(
+        json,
+        r#"{"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":"pyspark.testing.objects.ExamplePointUDT","sqlType":{"type":"array","elementType":"double","containsNull":false}}"#
+    );
+    assert_eq!(DataType::from_json(&json).unwrap(), u);
+    assert!(DataType::from_json(r#"{"type":"udt","class":"x"}"#).is_err());
+    assert!(DataType::from_json(r#"{"type":"udt","sqlType":"integer","extra":1}"#).is_err());
+}

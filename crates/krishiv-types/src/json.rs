@@ -6,6 +6,7 @@
 //! (`{"type":"array","elementType":"integer","containsNull":true}`).
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use krishiv_common::error::{
     CollationInvalidProvider, ErrorClass, InvalidJsonDataTypeForCollations, KrishivError,
@@ -14,7 +15,7 @@ use serde_json::{Map, Value};
 
 use crate::collation::{Collation, CollationFamily};
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
+use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType, UdtType};
 use crate::{DataType, DecimalType, Srid};
 
 impl DataType {
@@ -82,6 +83,23 @@ impl DataType {
                     &format!("geography({}, SPHERICAL)", json_srid(*srid, true)),
                     out,
                 );
+            }
+            Self::Udt(u) => {
+                // Spark's `UserDefinedType.jsonValue`, in its key order (a real 4.2.0 run, tests/spark-golden/udt).
+                out.push_str(r#"{"type":"udt""#);
+                for (key, value) in [
+                    ("class", u.jvm_class()),
+                    ("pyClass", u.python_class()),
+                    ("serializedClass", u.serialized_python_class()),
+                ] {
+                    if let Some(v) = value {
+                        let _ = write!(out, r#","{key}":"#);
+                        write_string(v, out);
+                    }
+                }
+                out.push_str(r#","sqlType":"#);
+                u.sql_type().write_json_in(out, in_field);
+                out.push('}');
             }
             atomic => write_string(&atomic.type_name(), out),
         }
@@ -158,6 +176,28 @@ impl DataType {
                     .map(|f| struct_field(f, depth, indeterminate))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(StructType::new(fields).into())
+            }
+            Some("udt") if obj.contains_key("sqlType") => {
+                let text = |key: &str| -> Result<Option<String>> {
+                    match obj.get(key) {
+                        None => Ok(None),
+                        Some(Value::String(t)) => Ok(Some(t.clone())),
+                        Some(_) => Err(invalid()),
+                    }
+                };
+                if obj.keys().any(|k| {
+                    !["type", "class", "pyClass", "serializedClass", "sqlType"]
+                        .contains(&k.as_str())
+                }) {
+                    return Err(invalid());
+                }
+                let udt = UdtType::new(
+                    child("sqlType")?,
+                    text("pyClass")?,
+                    text("class")?,
+                    text("serializedClass")?,
+                );
+                Ok(Self::Udt(Arc::new(udt)))
             }
             _ => Err(invalid()),
         }
