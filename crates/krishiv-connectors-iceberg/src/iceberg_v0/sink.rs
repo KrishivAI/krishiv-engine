@@ -479,8 +479,8 @@ impl IcebergWriteSink {
 /// A `ReplacePartitions`' removals and conflict scope from the files it
 /// writes (`BaseReplacePartitions.java:51-56`, `:113-117`): their partitions
 /// (spec id and tuple, compared by value: `filter::partition_key`), or
-/// every row when their spec has no field (validated over `true`, Java's
-/// `alwaysTrue`).
+/// every row when none of their spec's fields is non-`void` (validated over
+/// `true`, Java's `alwaysTrue`).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a written partition value that cannot
