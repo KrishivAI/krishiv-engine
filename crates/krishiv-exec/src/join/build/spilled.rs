@@ -24,7 +24,7 @@ const FORCED_DRAIN_SHARE: u64 = 16;
 pub(super) struct SpilledBloom {
     state: Mutex<Spilled>,
     /// Non-null keys every partial of the build added: the build's size,
-    /// whichever partial is asked to shed (review finding 4).
+    /// whichever partial is asked to shed.
     seen: AtomicU64,
     /// What happened to it, as [`events`] bits (`EXPLAIN ANALYZE`'s
     /// `fixed_bloom`).
@@ -44,8 +44,9 @@ pub(crate) mod events {
     pub(crate) const LOST: u64 = 8;
     /// It went out as the filter's Bloom.
     pub(crate) const SHIPPED: u64 = 16;
-    /// It existed at the end but the filter went out without a Bloom.
-    pub(crate) const DROPPED: u64 = 32;
+    /// It existed at the end but the filter went out without a Bloom (an
+    /// exact set, or a range when the end-of-build reservation failed).
+    pub(crate) const NOT_SHIPPED: u64 = 32;
     /// The plan gave the filter one (set by the build when it reports).
     pub(crate) const PLANNED: u64 = 64;
 
@@ -58,7 +59,7 @@ pub(crate) mod events {
             (FULL, "full"),
             (LOST, "lost"),
             (SHIPPED, "bloom"),
-            (DROPPED, "range"),
+            (NOT_SHIPPED, "no-bloom"),
         ]
         .iter()
         .filter(|(b, _)| bits & b != 0)
@@ -205,8 +206,7 @@ impl SpilledBloom {
         *inserted += hashes.len() as u64;
         if *inserted > *capacity {
             // More keys than it holds within the false-positive limit: it
-            // would publish as a range anyway, so stop paying for it now
-            // (review finding 2).
+            // would publish as a range anyway, so stop paying for it now.
             self.note(events::FULL);
             *st = Spilled::Closed;
             return Drained::Full;

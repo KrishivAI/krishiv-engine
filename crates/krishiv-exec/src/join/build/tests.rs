@@ -150,11 +150,11 @@ fn shedding_the_hashes_frees_their_memory_and_keeps_the_keys() {
     p.add_keys(&shared, &[Arc::clone(&keys)], None);
     let before = p.memory[0].size();
     assert_eq!(before, p.heap_bytes(), "hashes not reserved");
-    let freed = p.shed_hashes();
-    assert!(freed > 0, "nothing shed");
+    let (freed, moved) = p.shed_hashes();
+    assert!(freed > 0 && moved, "nothing shed");
     assert_eq!(p.memory[0].size(), before - freed);
     assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
-    assert_eq!(p.shed_hashes(), 0, "shed twice");
+    assert_eq!(p.shed_hashes(), (0, false), "shed twice");
     publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
     let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
         unreachable!("not published")
@@ -193,7 +193,7 @@ fn once_one_partial_sheds_the_others_stop_collecting_hashes() {
         assert!(p.hash_bytes() > 0, "no hashes collected");
     }
     let hashes = a.hash_bytes();
-    assert_eq!(a.shed_hashes(), hashes, "the shed is not the hash bytes");
+    assert_eq!(a.shed_hashes().0, hashes, "the shed is not the hash bytes");
     assert_eq!(a.hash_bytes(), 0);
     assert!(b.hash_bytes() > 0, "shed before its next batch");
     b.add_keys(&shared, &[Arc::clone(&keys)], None);
@@ -675,9 +675,9 @@ fn partials_past_the_cap_drain_into_one_fixed_bloom() {
 }
 
 /// A spill request (`shed_hashes`) creates the filter when the whole
-/// build's keys are big enough, whichever partial is asked (review finding
-/// 4), and returns the bytes freed net of the filter it reserved (finding
-/// 5); a small build's hashes are shed as before and its Bloom lost.
+/// build's keys are big enough, whichever partial is asked, and returns the
+/// bytes freed net of the filter it reserved and whether hashes left; a
+/// small build's hashes are shed as before and its Bloom lost.
 #[test]
 fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
     use std::sync::atomic::Ordering;
@@ -693,8 +693,13 @@ fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
     big.add_keys(&shared, &[spread(0, 1000)], None);
     small.add_keys(&shared, &[spread(50_000, 100)], None);
     assert!(small.hash_bytes() > 0 && !spilled[0].active());
-    // The filter (64 KiB) costs more than the hashes freed: net 0.
-    assert_eq!(small.shed_hashes(), 0, "reported the gross shed");
+    // The filter (64 KiB) costs more than the hashes freed: net 0, but
+    // the hashes left (the spillable-bytes signal must change).
+    assert_eq!(
+        small.shed_hashes(),
+        (0, true),
+        "reported the gross shed or no move"
+    );
     assert!(
         spilled[0].active(),
         "the small partial lost the build's Bloom"
@@ -703,12 +708,12 @@ fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
     assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
     // Now the filter exists: the big partial's shed frees its hashes.
     let freed = big.hash_bytes();
-    assert_eq!(big.shed_hashes(), freed);
+    assert_eq!(big.shed_hashes(), (freed, true));
     // A build of 100 keys in all is small: shed as before, Bloom lost.
     let (lost, spilled) = (flag(), fixed());
     let mut tiny = owned_partial(&f, &lost, &spilled, 1 << 24);
     tiny.add_keys(&shared, &[spread(0, 100)], None);
-    assert!(tiny.shed_hashes() > 0);
+    assert!(tiny.shed_hashes().0 > 0);
     assert!(
         !spilled[0].active(),
         "a small build reserved the fixed filter"
@@ -717,7 +722,7 @@ fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
 }
 
 /// More keys than the fixed filter holds within `bloom_max_fpp`: it is
-/// freed at once and hashing stops (review finding 2), and the build
+/// freed at once and hashing stops, and the build
 /// publishes a range.
 #[test]
 fn a_full_fixed_filter_is_freed_and_the_bloom_lost() {
@@ -778,6 +783,10 @@ fn a_lost_bloom_frees_the_fixed_filter() {
     assert!(spilled[0].active());
     let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
     p.add_keys(&shared, &[wrong], None);
+    assert!(
+        !spilled[0].active(),
+        "a dropped builder's fixed Bloom is held until publish"
+    );
     let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
     assert!(fixed.is_empty());
     assert!(
@@ -807,7 +816,7 @@ fn a_refused_fixed_filter_loses_the_bloom_as_before() {
     assert!(k.bloom_bytes().is_none() && k.has_range());
 }
 
-/// Through the sink (review finding 7a): a build with a spill scope and a
+/// Through the sink: a build with a spill scope and a
 /// fixed filter, asked to spill below its key cap, moves its hashes to the
 /// filter, writes tables for the rest of the request, and after `combine`
 /// and `finalize` publishes the fixed Bloom, which passes every key; the

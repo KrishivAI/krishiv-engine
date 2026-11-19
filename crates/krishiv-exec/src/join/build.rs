@@ -514,7 +514,7 @@ fn publish(
             s.note(if own > 0 && keys.bloom_bytes().is_some() {
                 spilled::events::SHIPPED
             } else {
-                spilled::events::DROPPED
+                spilled::events::NOT_SHIPPED
             });
         }
         publisher.publish(id, FilterSnapshot::Final(Arc::new(keys)));
@@ -655,6 +655,10 @@ impl Partials {
             };
             if !ok {
                 *b = None;
+                // The filter is disabled: its fixed Bloom is not needed.
+                if let Some(s) = self.spilled.get(i) {
+                    s.close();
+                }
             }
             if let (Some(b), Some(s)) = (b.as_ref(), self.spilled.get(i)) {
                 s.saw(b.rows().saturating_sub(before));
@@ -717,7 +721,7 @@ impl Partials {
                 if let Some(Some(b)) = self.builders.get_mut(i) {
                     let had = b.has_hashes();
                     b.drop_bloom();
-                    // A drained builder's Bloom goes too (review finding 6).
+                    // A drained builder's Bloom (the fixed filter) goes too.
                     if had {
                         self.mark_lost(i);
                     }
@@ -747,19 +751,23 @@ impl Partials {
     }
 
     /// Drops the Bloom filters' hashes and shrinks the reservations to what
-    /// is left; returns the bytes freed, net of a fixed filter this created.
-    /// A build asked to spill sheds this optional memory before it writes a
-    /// table (review of the raised Bloom caps, M1): at 20 M keys the hashes
-    /// are up to 160 MB a driver.
-    fn shed_hashes(&mut self) -> usize {
+    /// is left; returns the bytes freed, net of a fixed filter this created,
+    /// and whether any hashes left (a net of 0 may still have moved them
+    /// into a new filter, so the spillable bytes changed). A build asked to
+    /// spill sheds this optional memory before it writes a table: at 20 M
+    /// keys the hashes are up to 160 MB a driver.
+    fn shed_hashes(&mut self) -> (usize, bool) {
         let held: usize = self.memory.iter().map(Reservation::size).sum();
+        let had = self.hash_bytes();
         // Those with a fixed Bloom move there; a filter created now costs
         // what it reserved, so the build goes on to write tables when the
-        // net is short of the request (review finding 5).
+        // net is short of the request.
         let (_, reserved) = self.settle_all(true);
         self.drop_hashes();
-        self.release(held.saturating_sub(self.heap_bytes()))
-            .saturating_sub(reserved)
+        let net = self
+            .release(held.saturating_sub(self.heap_bytes()))
+            .saturating_sub(reserved);
+        (net, self.hash_bytes() < had)
     }
 
     fn merge(&mut self, other: Self) {
@@ -1657,7 +1665,7 @@ impl Sink for BuildSink {
         Box::pin(async move {
             let l = local_mut(local)?;
             // The optional Bloom hashes go before any table is written.
-            let shed = l.runtime.shed_hashes();
+            let (shed, _) = l.runtime.shed_hashes();
             if shed >= target || self.0.spill.is_none() {
                 l.signal
                     .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
@@ -1691,9 +1699,11 @@ impl Sink for BuildSink {
             let g = state(global)?;
             // The merged partials' Bloom hashes go before any table is
             // written, as in `spill` (review N2).
-            let shed = lock(&g.runtime).shed_hashes();
+            let (shed, moved) = lock(&g.runtime).shed_hashes();
             if shed >= target || self.0.spill.is_none() || g.built.get().is_some() {
-                if shed > 0 {
+                // Hashes moved into a new fixed filter free nothing net but
+                // are no longer spillable: the signal must say so.
+                if shed > 0 || moved {
                     let c = lock(&g.collect);
                     ctx.consumer()
                         .signal()

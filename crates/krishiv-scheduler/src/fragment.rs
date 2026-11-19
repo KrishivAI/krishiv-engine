@@ -401,13 +401,7 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
                     id: f.id,
                     column,
                     key_type: key_type.clone(),
-                    // An exchange keeps no fixed Bloom: its hashes stop at
-                    // the cap (the join build's `bloom_spill_bytes` is the
-                    // join's own).
-                    options: krishiv_io::KeyFilterOptions {
-                        bloom_spill_bytes: None,
-                        ..f.options
-                    },
+                    options: exchange_options(f.options),
                     null_safe: null_safe.get(f.key).copied().unwrap_or(false),
                 });
                 moved.insert(f.id);
@@ -501,4 +495,35 @@ fn unsupported(feature: &str) -> KrishivError {
         feature: feature.to_owned(),
     }
     .into()
+}
+
+/// The options a filter collected by a build exchange is made with: those
+/// of its join without a fixed Bloom, so its hashes stop at the cap (the
+/// join build's `bloom_spill_bytes` is the join's own, and an exchange
+/// writer has no place to keep one).
+fn exchange_options(options: krishiv_io::KeyFilterOptions) -> krishiv_io::KeyFilterOptions {
+    krishiv_io::KeyFilterOptions {
+        bloom_spill_bytes: None,
+        ..options
+    }
+}
+
+#[cfg(test)]
+mod exchange_filter_tests {
+    use super::exchange_options;
+
+    /// A filter moved to a build exchange keeps its join's caps and
+    /// planned size, never the fixed Bloom.
+    #[test]
+    fn an_exchange_filter_drops_the_fixed_bloom() {
+        let join = krishiv_io::KeyFilterOptions {
+            bloom_bytes: Some(1 << 20),
+            bloom_spill_bytes: Some(32 << 20),
+            ..krishiv_io::KeyFilterOptions::default()
+        };
+        let moved = exchange_options(join);
+        assert_eq!(moved.bloom_spill_bytes, None);
+        assert_eq!(moved.bloom_bytes, Some(1 << 20));
+        assert_eq!(moved.bloom_max_items, join.bloom_max_items);
+    }
 }

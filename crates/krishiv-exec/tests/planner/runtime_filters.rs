@@ -836,6 +836,28 @@ fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
         c.rows_dropped > c_off.rows_dropped,
         "{c:?} {c_off:?}\n{plan}"
     );
+    // TPC-H q09's own shape: the join is shuffled (hash partitioned on the
+    // key), not broadcast. On one worker it is still one build, so it keeps
+    // the fixed Bloom too; with several producers instantiation drops it.
+    let mut shuffled = scaled.clone();
+    shuffled.push(("spark.sql.autoBroadcastJoinThreshold", "-1"));
+    configured(&mut t, &shuffled);
+    let plan = t.plan_sql(q).unwrap();
+    assert!(plan.to_string().contains("hashpartitioning"), "{plan}");
+    let mut sizes = Vec::new();
+    spill_bloom_sizes(plan.plan.root(), &mut sizes);
+    assert!(
+        sizes
+            .iter()
+            .any(|s| s.is_some_and(|b| b > 4096 && b < 64 << 10)),
+        "a shuffled guessed build plans no fixed Bloom: {sizes:?}\n{plan}"
+    );
+    let (got, c) = run(&plan);
+    assert_eq!(sorted(&got), want);
+    assert!(
+        c.rows_dropped > c_off.rows_dropped,
+        "{c:?} {c_off:?}\n{plan}"
+    );
 }
 
 /// The `scan_waits` of every runtime filter a join in `node` publishes.

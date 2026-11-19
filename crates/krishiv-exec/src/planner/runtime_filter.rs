@@ -65,7 +65,7 @@
 //! `bloom.maxItems` publishes no Bloom form (`KeyFilterBuilder::add` and
 //! `merge` in `krishiv_io::runtime_filter` drop the hashes past it), so a
 //! wrong guess costs only the hashing until then. Except for such a guessed
-//! build of one partition while `bloom.memoryTier` is on: it gets a fixed
+//! build while `bloom.memoryTier` is on: it gets a fixed
 //! Bloom (`KeyFilterOptions::bloom_spill_bytes`) sized for a quarter of the
 //! scan's rows within the tier, which its partials create once one passes
 //! the cap, or the build's keys reach a sixteenth of it as hashes when it
@@ -75,8 +75,10 @@
 //! (TPC-H q09 at SF1000: `p_name LIKE '%green%'`, a lineitem-side build of
 //! ~300M keys that always spills, had only a range on `orders`;
 //! `join/build/spilled.rs`). A Bloom that drops little is switched off by
-//! the scan's adaptive row stage. An exchange's collected filter and a
-//! build of several producer tasks keep none.
+//! the scan's adaptive row stage. The join may be broadcast or shuffled
+//! (q09's is shuffled on the key); an exchange's collected filter and a
+//! build of several producer tasks keep none (dropped when the plan is cut
+//! and at instantiation).
 //! Whether the scan
 //! waits for the filter ([`scan_waits`]) still reads the uncapped
 //! estimate. Spark's size guards are not used: they are tuned for clusters.
@@ -409,10 +411,13 @@ impl Planner<'_> {
                 // Sized at the false-positive rate the producers build with.
                 options.bloom_bytes = (bloom && partitioned)
                     .then(|| planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes));
-                // A guessed build of one partition may hold far more keys
-                // than its capped estimate, and spill: past the cap, or when
-                // it sheds its hashes, it keeps a Bloom of the memory tier.
-                options.bloom_spill_bytes = (bloom && guessed && !partitioned)
+                // A guessed build may hold far more keys than its capped
+                // estimate, and spill: past the cap, or when it sheds its
+                // hashes, it keeps a Bloom of the memory tier. Broadcast or
+                // shuffled alike (q09's join is shuffled): instantiation
+                // keeps it only for a filter of one producer, a build that
+                // runs once (`instantiate/join.rs` `build_options`).
+                options.bloom_spill_bytes = (bloom && guessed)
                     .then(|| s.spill_bloom_bytes(site.scan_rows, options.bloom_fpp))
                     .flatten();
                 out.filters.push(JoinFilterPlan { id, key, options });
@@ -641,7 +646,7 @@ mod tests {
     }
 
     /// The fixed Bloom of a guessed build is sized for a quarter of its scan
-    /// within the tier (review finding 3): q09 at SF1000 (1.5B `orders`
+    /// within the tier: q09 at SF1000 (1.5B `orders`
     /// rows) keeps the whole 320 MiB at 20g, a 17M-row scan about 20 MiB;
     /// an explicit `bloom.maxBytes` binds; none with the tier off.
     #[test]
