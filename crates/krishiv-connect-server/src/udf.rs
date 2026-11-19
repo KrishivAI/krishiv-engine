@@ -80,11 +80,13 @@ pub type RunnerConf = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
 
 /// The server's Python UDF workers: one per server, shared by every Connect session.
 pub trait UdfHost: Send + Sync + fmt::Debug {
-    /// A new, empty runtime for session `session` of `principal`: its workers serve that owner only. Each
+    /// A new, empty runtime for session `session` of `principal` (of `tenant`, in a multi-tenant server): its
+    /// workers serve that owner only, and a tenant's workers and calls are bounded together. Each
     /// prepared call reads its runner conf from `conf`.
     fn session_runtime(
         &self,
         principal: &str,
+        tenant: Option<&str>,
         session: &str,
         conf: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime>;
@@ -112,6 +114,7 @@ impl UdfHost for krishiv_udf_pool::Pool {
     fn session_runtime(
         &self,
         principal: &str,
+        tenant: Option<&str>,
         session: &str,
         conf: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime> {
@@ -121,6 +124,7 @@ impl UdfHost for krishiv_udf_pool::Pool {
                 krishiv_udf_pool::Owner {
                     principal: principal.to_owned(),
                     session: session.to_owned(),
+                    tenant: tenant.map(str::to_owned),
                 },
             )
             .with_conf_source(conf),
@@ -190,10 +194,16 @@ impl fmt::Debug for SessionPython {
 
 impl SessionPython {
     /// The UDFs of `session`, built for `principal`, on `host`'s workers (none: UDFs are refused).
-    pub(crate) fn new(host: Option<&Arc<dyn UdfHost>>, principal: &str, session: &Session) -> Self {
+    pub(crate) fn new(
+        host: Option<&Arc<dyn UdfHost>>,
+        principal: &str,
+        tenant: Option<&str>,
+        session: &Session,
+    ) -> Self {
         Self {
             host: host.map(Arc::clone),
-            runtime: host.map(|h| h.session_runtime(principal, session.id(), runner_conf(session))),
+            runtime: host
+                .map(|h| h.session_runtime(principal, tenant, session.id(), runner_conf(session))),
             state: Mutex::default(),
             artifacts: Mutex::default(),
         }
@@ -276,8 +286,8 @@ impl SessionPython {
     /// The UDFs of `clone`, a copy of this session built for `principal` (`CloneSession`): a runtime of
     /// its own (its workers serve the clone only) holding every payload this session registered, so the
     /// registrations the clone copied keep running; installed on the clone when it was on this session.
-    pub(crate) fn copy_for(&self, principal: &str, clone: &Session) -> Self {
-        let copy = Self::new(self.host.as_ref(), principal, clone);
+    pub(crate) fn copy_for(&self, principal: &str, tenant: Option<&str>, clone: &Session) -> Self {
+        let copy = Self::new(self.host.as_ref(), principal, tenant, clone);
         let state = self.lock().clone();
         if let Some(runtime) = &copy.runtime {
             for (name, version, udf) in &state.payloads {

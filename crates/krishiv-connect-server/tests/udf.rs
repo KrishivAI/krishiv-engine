@@ -680,7 +680,13 @@ impl SessionUdfRuntime for SpyRuntime {
 }
 
 impl UdfHost for Spy {
-    fn session_runtime(&self, _: &str, _: &str, _: RunnerConf) -> Arc<dyn SessionUdfRuntime> {
+    fn session_runtime(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+        _: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime> {
         Arc::new(SpyRuntime(Arc::clone(&self.0)))
     }
 }

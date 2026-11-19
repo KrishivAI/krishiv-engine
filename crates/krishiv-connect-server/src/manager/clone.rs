@@ -101,7 +101,11 @@ impl SessionManager {
             (session, snapshot)
         };
         // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
-        let python = source.python().copy_for(&caller.principal.name, &session);
+        let python = source.python().copy_for(
+            &caller.principal.name,
+            caller.principal.tenant.as_deref(),
+            &session,
+        );
         let entry = self.new_entry(
             caller,
             session,

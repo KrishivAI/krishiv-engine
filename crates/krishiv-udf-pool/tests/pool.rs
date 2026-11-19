@@ -79,6 +79,7 @@ fn owner(session: &str) -> Owner {
     Owner {
         principal: "alice".to_owned(),
         session: session.to_owned(),
+        tenant: None,
     }
 }
 
@@ -961,4 +962,78 @@ fn the_session_cap_stops_an_idle_worker_of_another_interpreter() {
         !PathBuf::from(format!("/proc/{first}")).exists(),
         "the first interpreter's idle worker was stopped"
     );
+}
+
+fn tenant_owner(tenant: &str, session: &str) -> Owner {
+    Owner {
+        tenant: Some(tenant.to_owned()),
+        ..owner(session)
+    }
+}
+
+/// `pid|RLIMIT_AS` as the worker sees them.
+fn pid_and_limit(udfs: &SessionUdfs, py: &std::path::Path) -> String {
+    let body = "import os, resource\n\
+        def f(x):\n    \
+        return f'{os.getpid()}|{resource.getrlimit(resource.RLIMIT_AS)[0]}'";
+    let out = call(
+        udfs,
+        command(py, body, "StringType()"),
+        ARROW_BATCHED,
+        ArrowType::Utf8View,
+        longs(&[Some(1)]),
+    )
+    .expect("runs");
+    out.as_any()
+        .downcast_ref::<StringViewArray>()
+        .expect("string")
+        .value(0)
+        .to_owned()
+}
+
+#[test]
+fn two_tenants_never_share_a_worker_and_each_has_its_memory_limit() {
+    let Some(py) = python() else { return };
+    let mut config = config(&py);
+    config.memory_limit = Some(1 << 30);
+    config.tenant_memory_limit = Some(512 << 20);
+    let pool = Pool::new(config).expect("pool");
+    let acme = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s1"));
+    let acme2 = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s2"));
+    let globex = SessionUdfs::new(pool.clone(), tenant_owner("globex", "s1"));
+    let plain = SessionUdfs::new(pool, owner("s3"));
+    let results: Vec<String> = [&acme, &acme2, &globex, &plain]
+        .iter()
+        .map(|u| pid_and_limit(u, &py))
+        .collect();
+    let pids: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r.split('|').next().expect("pid"))
+        .collect();
+    assert_eq!(pids.len(), 4, "four owners, four workers: {results:?}");
+    let limit = |r: &String| r.split('|').nth(1).expect("limit").to_owned();
+    assert_eq!(limit(&results[0]), (512_u64 << 20).to_string());
+    assert_eq!(limit(&results[2]), (512_u64 << 20).to_string());
+    assert_eq!(limit(&results[3]), (1_u64 << 30).to_string(), "no tenant");
+    // The tenant's worker is reused by its own session.
+    assert_eq!(pid_and_limit(&acme, &py), results[0]);
+}
+
+#[test]
+fn a_tenant_at_its_worker_cap_replaces_its_idle_worker_and_never_another_tenants() {
+    let Some(py) = python() else { return };
+    let mut config = config(&py);
+    config.max_per_tenant = 1;
+    let pool = Pool::new(config).expect("pool");
+    let a1 = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s1"));
+    let a2 = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s2"));
+    let g1 = SessionUdfs::new(pool.clone(), tenant_owner("globex", "s1"));
+    let first = pid_and_limit(&a1, &py);
+    let other = pid_and_limit(&g1, &py);
+    assert_eq!(pool.live_workers(), 2);
+    // acme's second session finds its tenant at the cap: acme's idle worker goes, globex's stays.
+    let second = pid_and_limit(&a2, &py);
+    assert_ne!(first, second);
+    assert_eq!(pool.live_workers(), 2, "one per tenant");
+    assert_eq!(pid_and_limit(&g1, &py), other, "globex's worker was kept");
 }

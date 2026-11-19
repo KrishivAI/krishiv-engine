@@ -528,6 +528,7 @@ async fn udtfs_match_pyspark_4_2_0() {
         Owner {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
+            tenant: None,
         },
     ));
     session.set_python_udf_runtime(Arc::clone(&udfs) as Arc<_>);

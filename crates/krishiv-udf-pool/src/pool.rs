@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, ConfigValue, PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES,
-    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
-    PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
+    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_PER_TENANT,
+    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, PYTHON_WORKER_TENANT_MEMORY_LIMIT,
+    UDF_SANDBOX,
 };
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerLimit, OperationCanceled,
@@ -65,6 +66,10 @@ pub struct PoolConfig {
     pub max_per_session: usize,
     /// Most workers in all.
     pub max_total: usize,
+    /// Most workers of one tenant, over all its sessions.
+    pub max_per_tenant: usize,
+    /// `RLIMIT_AS` of a tenant's workers, when lower than [`Self::memory_limit`].
+    pub tenant_memory_limit: Option<u64>,
     /// Each worker's `RLIMIT_AS`.
     pub memory_limit: Option<u64>,
     /// Allow `fork` in sandboxed workers.
@@ -120,6 +125,10 @@ impl PoolConfig {
             idle_timeout: duration,
             max_per_session: count(&PYTHON_WORKER_MAX_PER_SESSION, 8),
             max_total: count(&PYTHON_WORKER_MAX_TOTAL, 64),
+            max_per_tenant: count(&PYTHON_WORKER_MAX_PER_TENANT, 32),
+            tenant_memory_limit: config
+                .get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+                .and_then(ConfigValue::as_size),
             memory_limit: config
                 .get(&PYTHON_WORKER_MEMORY_LIMIT)
                 .and_then(ConfigValue::as_size),
@@ -142,6 +151,9 @@ pub struct Owner {
     pub principal: String,
     /// The session id.
     pub session: String,
+    /// The principal's tenant (multi-tenant servers). Workers are never shared across tenants, and the
+    /// tenant's workers and running calls are bounded together (`krishiv.python.worker.maxPerTenant`).
+    pub tenant: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -163,6 +175,8 @@ struct State {
     /// Live workers (idle, busy or starting).
     live: usize,
     per_owner: HashMap<Owner, usize>,
+    /// Live workers per tenant (owners without a tenant are not counted).
+    per_tenant: HashMap<String, usize>,
     /// Owners whose session ended while some of their workers were busy: those are stopped on return.
     released: HashSet<Owner>,
 }
@@ -267,9 +281,10 @@ impl Pool {
                 }
             })
             .map_err(|e| internal(format!("cannot start the UDF worker spawner: {e}")))?;
-        let calls = CallThreads::new(
+        let calls = CallThreads::with_tenant_cap(
             config.max_total,
             config.max_per_session,
+            config.max_per_tenant,
             config.idle_timeout,
         );
         let inner = Arc::new(Inner {
@@ -359,7 +374,7 @@ impl Pool {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
     /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
@@ -367,23 +382,32 @@ impl Pool {
         self.inner
             .calls
             .submit_task(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
-    fn refused(&self, refused: Refused) -> KrishivError {
+    fn refused(&self, refused: Refused, owner: &Owner) -> KrishivError {
         match refused {
             Refused::NoThread(why) => internal(why),
-            Refused::Reserve => {
-                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
-            }
+            Refused::Reserve => self.worker_limit(
+                "A scalar Python UDF call beside an open Python UDF task",
+                2,
+                owner,
+            ),
         }
     }
 
     /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
     /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
-    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+    pub(crate) fn worker_limit(
+        &self,
+        operation: &str,
+        needed: usize,
+        owner: &Owner,
+    ) -> KrishivError {
         let config = &self.inner.config;
-        let (setting, value) = if self.inner.calls.threads_bound() {
+        let (setting, value) = if self.inner.calls.tenant_bound(owner) {
+            ("krishiv.python.worker.maxPerTenant", config.max_per_tenant)
+        } else if self.inner.calls.threads_bound() {
             ("krishiv.python.worker.maxTotal", config.max_total)
         } else {
             (
@@ -394,7 +418,7 @@ impl Pool {
         KrishivPythonWorkerLimit {
             operation: operation.to_owned(),
             needed: needed.to_string(),
-            available: self.inner.calls.slot_limit().to_string(),
+            available: self.inner.calls.slot_limit_for(owner).to_string(),
             setting: setting.to_owned(),
             value: value.to_string(),
         }
@@ -440,12 +464,38 @@ impl Pool {
                 return Ok(self.lease(key, idle.worker));
             }
             let mine = state.per_owner.get(owner).copied().unwrap_or(0);
+            if let Some(t) = &owner.tenant {
+                let theirs = state.per_tenant.get(t).copied().unwrap_or(0);
+                if theirs >= self.inner.config.max_per_tenant {
+                    // At the tenant's cap: stop its longest-idle worker of another key (another session,
+                    // interpreter or artifact set) rather than wait for the idle timeout; never another
+                    // tenant's.
+                    if let Some(victim) =
+                        state.take_oldest_idle(|k| k.owner.tenant.as_ref() == Some(t) && *k != key)
+                    {
+                        drop(state);
+                        drop(victim);
+                        state = self.inner.lock();
+                        continue;
+                    }
+                    state = self
+                        .inner
+                        .freed
+                        .wait_timeout(state, Duration::from_millis(100))
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0;
+                    continue;
+                }
+            }
             if mine < self.inner.config.max_per_session {
                 if state.live < self.inner.config.max_total {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
+                    if let Some(t) = &owner.tenant {
+                        *state.per_tenant.entry(t.clone()).or_default() += 1;
+                    }
                     drop(state);
-                    return match self.start(interpreter, artifacts, watch) {
+                    return match self.start(interpreter, artifacts, owner, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
                         Err(e) => {
                             self.inner.lock().forget(owner);
@@ -495,6 +545,7 @@ impl Pool {
         &self,
         interpreter: &Interpreter,
         artifacts: &ArtifactSet,
+        owner: &Owner,
         watch: &dyn CallWatch,
     ) -> Result<Worker, KrishivError> {
         let inner = &self.inner;
@@ -532,6 +583,11 @@ impl Pool {
             &package::Entry::Worker { paths },
             read,
             None,
+            owner
+                .tenant
+                .is_some()
+                .then_some(inner.config.tenant_memory_limit)
+                .flatten(),
         );
         command
             .stdin(Stdio::from(worker_end))
@@ -560,6 +616,7 @@ impl Pool {
         entry: &package::Entry<'_>,
         read: &[PathBuf],
         file_size: Option<u64>,
+        tenant_memory: Option<u64>,
     ) -> Command {
         let inner = &self.inner;
         let env: Vec<(OsString, OsString)> = vec![
@@ -569,7 +626,10 @@ impl Pool {
         ];
         let config = &inner.config;
         let mut limits = Limits::default();
-        limits.address_space = config.memory_limit;
+        limits.address_space = match (config.memory_limit, tenant_memory) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         if let Some(n) = file_size {
             limits.file_size = Some(limits.file_size.map_or(n, |m| m.min(n)));
         }
@@ -668,6 +728,7 @@ impl Pool {
             &[archive.to_path_buf()],
             // No one file past the whole budget (at least one byte, so an empty file still opens).
             Some(budget.max(1)),
+            None,
         );
         command
             .stdin(Stdio::null())
@@ -853,6 +914,14 @@ impl State {
     /// One worker of `owner` is gone.
     fn forget(&mut self, owner: &Owner) {
         self.live = self.live.saturating_sub(1);
+        if let Some(t) = &owner.tenant
+            && let Some(n) = self.per_tenant.get_mut(t)
+        {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.per_tenant.remove(t);
+            }
+        }
         if let Some(n) = self.per_owner.get_mut(owner) {
             *n = n.saturating_sub(1);
             if *n == 0 {

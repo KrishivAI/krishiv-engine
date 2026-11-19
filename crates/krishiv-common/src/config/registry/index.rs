@@ -282,6 +282,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
+        "krishiv.python.worker.maxPerTenant",
+        &PYTHON_WORKER_MAX_PER_TENANT,
+    ),
+    (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
     ),
@@ -498,6 +502,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.sandbox.allowFork",
         &PYTHON_WORKER_ALLOW_FORK,
+    ),
+    (
+        "krishiv.python.worker.tenantMemoryLimit",
+        &PYTHON_WORKER_TENANT_MEMORY_LIMIT,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",

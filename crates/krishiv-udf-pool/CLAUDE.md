@@ -146,6 +146,13 @@ Paths are relative to this crate.
   `execve`/`execveat` `EPERM` (`package::exec_deny_filter`), before `sys.path` changes: the parent-death signal is
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
+- **Tenants (P3-T072).** `Owner.tenant` (the principal's tenant, from Connect's `SessionOwner`; `None` in single-tenant
+  servers) is part of the key, so a worker never serves two tenants (nor two sessions). A tenant's live workers
+  (`State::per_tenant`) and running calls (`calls.rs` `tenant_total`, `with_tenant_cap`) are capped by
+  `krishiv.python.worker.maxPerTenant`, and its relation slots by one less (`slot_limit_for`), so one tenant cannot
+  take the shared call threads and a tenant's tasks never wait behind its own. At the cap a tenant's longest-idle
+  worker of another key is stopped, never another tenant's. `tenant_memory_limit` lowers `RLIMIT_AS` of tenant
+  workers. Owners without a tenant are uncapped by it. Tests: `calls.rs` tenant tests, `tests/pool.rs` `*tenant*`.
 - One worker serves one `Owner` (principal and session), one interpreter and one artifact set; reuse only within
   that key. Artifacts are reachable from the worker's working directory through links into a read-only directory
   (Spark's worker runs in a writable files directory): a recorded difference.

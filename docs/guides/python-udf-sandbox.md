@@ -63,7 +63,9 @@ A UDF that breaks a limit gets an error, and the worker is replaced. The server 
 | `krishiv.python.worker.idleTimeout` | `1min` | How long an idle worker is kept for the next call of its session. |
 | `krishiv.python.worker.maxPerSession` | `8` | Most workers one session runs at once. More calls wait. |
 | `krishiv.python.worker.maxTotal` | `64` | Most workers the server runs over all sessions. |
+| `krishiv.python.worker.maxPerTenant` | `32` | Most workers, and most running calls, of one tenant over all its sessions. More calls wait; one tenant cannot take every worker or call thread. Sessions without a tenant are not counted. |
 | `krishiv.python.worker.memoryLimit` | `1GB` | Address-space limit per worker. A UDF that allocates past it gets a `MemoryError`, or its worker ends. |
+| `krishiv.python.worker.tenantMemoryLimit` | unset | Address-space limit per worker of a tenant, when lower than `memoryLimit`. |
 | `krishiv.python.worker.sandbox.allowFork` | `false` | Lets a UDF fork (`multiprocessing`, `os.fork`). The other limits still apply to the forked processes. |
 
 All of these are set at start-up. Restart the server after a change.

@@ -89,6 +89,7 @@ fn udfs(pool: &Pool) -> SessionUdfs {
         Owner {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
+            tenant: None,
         },
     )
 }

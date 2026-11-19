@@ -558,7 +558,12 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller, transport)?;
-        let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
+        let python = SessionPython::new(
+            self.udfs.as_ref(),
+            &caller.principal.name,
+            caller.principal.tenant.as_deref(),
+            &session,
+        );
         let entry = self.new_entry(
             caller,
             session,

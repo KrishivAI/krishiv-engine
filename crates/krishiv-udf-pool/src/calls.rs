@@ -55,6 +55,8 @@ struct Shared {
     work: Condvar,
     max_threads: usize,
     max_per_owner: usize,
+    /// Most running calls (and slots, one fewer) of one tenant's owners together; `usize::MAX` for none.
+    max_per_tenant: usize,
     idle: Duration,
 }
 
@@ -178,16 +180,41 @@ impl Queue {
     }
 }
 
+/// The sum of `counts` over the owners of `owner`'s tenant (`owner` alone, if it has none).
+fn tenant_total(counts: &HashMap<Owner, usize>, owner: &Owner) -> usize {
+    match &owner.tenant {
+        Some(t) => counts
+            .iter()
+            .filter(|(o, _)| o.tenant.as_ref() == Some(t))
+            .map(|(_, n)| *n)
+            .sum(),
+        None => 0,
+    }
+}
+
 impl CallThreads {
     /// At most `max_threads` threads and `max_per_owner` running calls of one owner; a thread ends after
     /// `idle` without a call.
+    #[cfg(test)]
     pub(crate) fn new(max_threads: usize, max_per_owner: usize, idle: Duration) -> Self {
+        Self::with_tenant_cap(max_threads, max_per_owner, usize::MAX, idle)
+    }
+
+    /// As [`Self::new`], and at most `max_per_tenant` running calls over all owners of one tenant (owners
+    /// without a tenant are not capped by it): one tenant's sessions cannot take every call thread.
+    pub(crate) fn with_tenant_cap(
+        max_threads: usize,
+        max_per_owner: usize,
+        max_per_tenant: usize,
+        idle: Duration,
+    ) -> Self {
         CallThreads {
             shared: Arc::new(Shared {
                 state: Mutex::new(Queue::default()),
                 work: Condvar::new(),
                 max_threads: max_threads.max(1),
                 max_per_owner: max_per_owner.max(1),
+                max_per_tenant: max_per_tenant.max(1),
                 idle,
             }),
         }
@@ -268,6 +295,30 @@ impl CallThreads {
         self.owner_calls().saturating_sub(1).max(1)
     }
 
+    /// [`Self::slot_limit`] for `owner`: within its tenant's share when it has a tenant.
+    pub(crate) fn slot_limit_for(&self, owner: &Owner) -> usize {
+        if owner.tenant.is_some() {
+            self.slot_limit().min(self.tenant_slot_limit())
+        } else {
+            self.slot_limit()
+        }
+    }
+
+    /// Whether the tenant's cap, not the owner's share or the threads, bounds [`Self::slot_limit_for`].
+    pub(crate) fn tenant_bound(&self, owner: &Owner) -> bool {
+        owner.tenant.is_some() && self.tenant_slot_limit() < self.slot_limit()
+    }
+
+    /// The most relation task slots one tenant's owners hold together: one less than its calls, so a tenant's
+    /// scalar calls always have one, unless it can run only one.
+    fn tenant_slot_limit(&self) -> usize {
+        self.shared
+            .max_per_tenant
+            .min(self.shared.max_threads)
+            .saturating_sub(1)
+            .max(1)
+    }
+
     /// The most relation task slots all owners hold together: one less than the threads, unless there is
     /// only one.
     fn total_limit(&self) -> usize {
@@ -290,7 +341,7 @@ impl CallThreads {
         ticket: &mut Option<TaskTicket>,
         waker: &Waker,
     ) -> (SlotTake, Vec<TaskSlot>) {
-        if n > self.slot_limit() {
+        if n > self.slot_limit_for(owner) {
             return (SlotTake::TooMany, Vec::new());
         }
         let mut queue = self.shared.lock();
@@ -386,14 +437,14 @@ impl CallThreads {
         arrived: u64,
     ) -> bool {
         let limit = self.slot_limit();
+        let tenant_limit = self.tenant_slot_limit();
         let held_by = |o: &Owner| queue.slots.get(o).copied().unwrap_or(0);
+        let tenant_room = |o: &Owner, n: usize| tenant_total(&queue.slots, o) + n <= tenant_limit;
         // A waiter ahead holds this request back if it is the same owner's, or if its owner has room (it waits
         // for room in all, which this request would take).
-        let held_back = queue
-            .waiting_slots
-            .iter()
-            .take(ahead)
-            .any(|w| &w.owner == owner || held_by(&w.owner) + w.n <= limit);
+        let held_back = queue.waiting_slots.iter().take(ahead).any(|w| {
+            &w.owner == owner || (held_by(&w.owner) + w.n <= limit && tenant_room(&w.owner, w.n))
+        });
         // With one thread, no task is granted while another owner's call that arrived before the request waits
         // for that thread: arrival order across both kinds, so neither a stream of one owner's tasks (review
         // R4-5) nor a stream of other owners' scalar calls (R5-2) keeps the other waiting.
@@ -405,6 +456,7 @@ impl CallThreads {
         !held_back
             && !thread_wanted
             && held_by(owner) + n <= limit
+            && tenant_room(owner, n)
             && queue.slots_total + n <= self.total_limit()
     }
 
@@ -432,17 +484,20 @@ impl Shared {
         let at = queue
             .calls
             .iter()
-            .position(|c| queue.running.get(&c.owner).copied().unwrap_or(0) < self.max_per_owner)?;
+            .position(|c| self.may_run(queue, &c.owner))?;
         let Queued { owner, job, .. } = queue.calls.remove(at)?;
         *queue.running.entry(owner.clone()).or_default() += 1;
         Some((owner, job))
     }
 
     fn runnable(&self, queue: &Queue) -> bool {
-        queue
-            .calls
-            .iter()
-            .any(|c| queue.running.get(&c.owner).copied().unwrap_or(0) < self.max_per_owner)
+        queue.calls.iter().any(|c| self.may_run(queue, &c.owner))
+    }
+
+    /// Whether `owner` is under its share and its tenant under the tenant's.
+    fn may_run(&self, queue: &Queue, owner: &Owner) -> bool {
+        queue.running.get(owner).copied().unwrap_or(0) < self.max_per_owner
+            && tenant_total(&queue.running, owner) < self.max_per_tenant
     }
 
     /// Makes sure a thread will take a runnable queued call: wakes a waiting one, else starts one under the
@@ -537,6 +592,14 @@ mod tests {
         Owner {
             principal: "p".to_owned(),
             session: session.to_owned(),
+            tenant: None,
+        }
+    }
+
+    fn tenant_owner(tenant: &str, session: &str) -> Owner {
+        Owner {
+            tenant: Some(tenant.to_owned()),
+            ..owner(session)
         }
     }
 
@@ -569,6 +632,99 @@ mod tests {
         }
         assert!(calls.threads() <= 3, "{} threads", calls.threads());
         assert!(most.load(Ordering::SeqCst) <= 3);
+    }
+
+    #[test]
+    fn a_tenant_at_its_share_leaves_threads_to_other_tenants() {
+        // Four sessions of tenant t1 submit calls that block; at most two run at once (the tenant's share),
+        // so a call of t2 and one without a tenant still find threads.
+        let calls = CallThreads::with_tenant_cap(8, 8, 2, Duration::from_secs(60));
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Barrier::new(3));
+        let (done, finished) = mpsc::channel();
+        for i in 0..6 {
+            let (running, most, gate, done) = (
+                Arc::clone(&running),
+                Arc::clone(&most),
+                Arc::clone(&gate),
+                done.clone(),
+            );
+            calls
+                .submit(
+                    tenant_owner("t1", &format!("s{i}")),
+                    Box::new(move || {
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        most.fetch_max(now, Ordering::SeqCst);
+                        gate.wait();
+                        running.fetch_sub(1, Ordering::SeqCst);
+                        let _ = done.send("t1");
+                    }),
+                )
+                .expect("submitted");
+        }
+        for who in [tenant_owner("t2", "x"), owner("y")] {
+            let d = done.clone();
+            calls
+                .submit(
+                    who,
+                    Box::new(move || {
+                        let _ = d.send("other");
+                    }),
+                )
+                .expect("submitted");
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                finished.recv_timeout(Duration::from_secs(10)),
+                Ok("other"),
+                "another tenant's call ran while t1's two running calls blocked"
+            );
+        }
+        // Release t1's calls in pairs: its share never passes two.
+        for _ in 0..3 {
+            gate.wait();
+            for _ in 0..2 {
+                assert_eq!(finished.recv_timeout(Duration::from_secs(10)), Ok("t1"));
+            }
+        }
+        assert!(most.load(Ordering::SeqCst) <= 2);
+    }
+
+    #[test]
+    fn a_tenants_relation_slots_stay_within_its_share() {
+        let calls = CallThreads::with_tenant_cap(8, 8, 3, Duration::from_secs(60));
+        let waker = futures::task::noop_waker();
+        // Owners with a tenant: one less than the tenant's calls, over all its sessions.
+        assert_eq!(calls.slot_limit_for(&tenant_owner("t", "a")), 2);
+        assert_eq!(calls.slot_limit_for(&owner("a")), 7);
+        assert!(calls.tenant_bound(&tenant_owner("t", "a")));
+        assert!(!calls.tenant_bound(&owner("a")));
+        let (take, first) = calls.take_slots(&tenant_owner("t", "a"), 2, &mut None, &waker);
+        assert_eq!((take, first.len()), (SlotTake::Taken, 2));
+        // The tenant's other session finds none, though its own share is free; another tenant does.
+        let mut wait = None;
+        let (take, _) = calls.take_slots(&tenant_owner("t", "b"), 1, &mut wait, &waker);
+        assert_eq!(take, SlotTake::Wait);
+        assert_eq!(
+            calls
+                .take_slots(&tenant_owner("u", "c"), 2, &mut None, &waker)
+                .0,
+            SlotTake::Taken
+        );
+        assert_eq!(
+            calls
+                .take_slots(&tenant_owner("t", "b"), 3, &mut None, &waker)
+                .0,
+            SlotTake::TooMany
+        );
+        drop(first);
+        assert_eq!(
+            calls
+                .take_slots(&tenant_owner("t", "b"), 1, &mut wait, &waker)
+                .0,
+            SlotTake::Taken
+        );
     }
 
     #[test]

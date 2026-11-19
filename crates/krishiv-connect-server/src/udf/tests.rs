@@ -16,6 +16,8 @@ use super::{InlineUdfs, RunnerConf, SessionPython, SessionUdfRuntime, UdfHost};
 #[derive(Default)]
 struct Log {
     runtimes: Vec<(String, String)>,
+    /// Each runtime's tenant.
+    tenants: Vec<Option<String>>,
     /// Each runtime's runner conf source.
     confs: Vec<RunnerConf>,
     registered: Vec<(usize, String, u32)>,
@@ -79,12 +81,14 @@ impl UdfHost for Host {
     fn session_runtime(
         &self,
         principal: &str,
+        tenant: Option<&str>,
         session: &str,
         conf: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime> {
         let mut log = self.log();
         log.runtimes
             .push((principal.to_owned(), session.to_owned()));
+        log.tenants.push(tenant.map(str::to_owned));
         log.confs.push(conf);
         Arc::new(Runtime {
             index: log.runtimes.len() - 1,
@@ -112,9 +116,25 @@ fn session() -> Session {
 #[test]
 fn a_server_without_a_pool_refuses_python_udfs() {
     let s = session();
-    let python = SessionPython::new(None, "alice", &s);
+    let python = SessionPython::new(None, "alice", None, &s);
     let e = python.register(&s, udf("f", b"x")).expect_err("no pool");
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn a_runtime_is_built_for_the_sessions_tenant() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let (a, b, c) = (session(), session(), session());
+    let _pa = SessionPython::new(Some(&host), "alice", Some("acme"), &a);
+    let pb = SessionPython::new(Some(&host), "alice", None, &b);
+    let _copy = pb.copy_for("alice", Some("globex"), &c);
+    let log = log.lock().unwrap_or_else(PoisonError::into_inner);
+    assert_eq!(
+        log.tenants,
+        [Some("acme".to_owned()), None, Some("globex".to_owned())]
+    );
 }
 
 #[test]
@@ -124,8 +144,8 @@ fn each_session_gets_a_runtime_of_its_own_owner_and_releases_it() {
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let a = session();
     let b = session();
-    let pa = SessionPython::new(Some(&host), "alice", &a);
-    let pb = SessionPython::new(Some(&host), "bob", &b);
+    let pa = SessionPython::new(Some(&host), "alice", None, &a);
+    let pb = SessionPython::new(Some(&host), "bob", None, &b);
     {
         let log = log.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(
@@ -156,7 +176,7 @@ fn inline_udfs_wait_for_the_grant_and_keep_one_version_per_definition() {
     let log = Arc::clone(&host.0);
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let s = session();
-    let python = SessionPython::new(Some(&host), "alice", &s);
+    let python = SessionPython::new(Some(&host), "alice", None, &s);
     let mut inline = InlineUdfs::execution(&python);
     assert!(!inline.seen());
     let first = inline
@@ -215,7 +235,7 @@ fn analysis_names_inline_udfs_and_registers_nothing() {
     let log = Arc::clone(&host.0);
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let s = session();
-    let python = SessionPython::new(Some(&host), "alice", &s);
+    let python = SessionPython::new(Some(&host), "alice", None, &s);
     let mut inline = InlineUdfs::analysis(&python);
     let name = inline
         .inline_python_udf(&udf("f", b"a"))
@@ -241,12 +261,12 @@ fn a_clone_gets_its_own_runtime_with_the_sources_payloads() {
     let log = Arc::clone(&host.0);
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let source = session();
-    let python = SessionPython::new(Some(&host), "alice", &source);
+    let python = SessionPython::new(Some(&host), "alice", None, &source);
     python
         .register(&source, udf("f", b"a"))
         .unwrap_or_else(|e| panic!("{e}"));
     let clone = source.clone_session().unwrap_or_else(|e| panic!("{e}"));
-    let copy = python.copy_for("alice", &clone);
+    let copy = python.copy_for("alice", None, &clone);
     copy.release();
     let log = log.lock().unwrap_or_else(PoisonError::into_inner);
     // A second runtime, owned by the clone's id, holding the source's registration; releasing the
@@ -266,7 +286,7 @@ fn the_runner_conf_is_read_live_for_every_call() {
     let log = Arc::clone(&host.0);
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let s = session();
-    let python = SessionPython::new(Some(&host), "alice", &s);
+    let python = SessionPython::new(Some(&host), "alice", None, &s);
     python
         .register(&s, udf("f", b"a"))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -288,7 +308,7 @@ fn the_runner_conf_is_read_live_for_every_call() {
     assert!(!conf().contains_key("my.app.secret"));
     // A clone's runtime reads the clone's conf, not the source's.
     let clone = s.clone_session().unwrap_or_else(|e| panic!("{e}"));
-    let _copy = python.copy_for("alice", &clone);
+    let _copy = python.copy_for("alice", None, &clone);
     clone
         .conf()
         .set("spark.sql.session.timeZone", "Europe/Oslo")
@@ -304,7 +324,7 @@ fn a_relation_udf_needs_the_same_grant_as_an_inline_one() {
     let log = Arc::clone(&host.0);
     let host: Arc<dyn UdfHost> = Arc::new(host);
     let s = session();
-    let python = SessionPython::new(Some(&host), "alice", &s);
+    let python = SessionPython::new(Some(&host), "alice", None, &s);
     let map = PythonUdf {
         eval_type: 205,
         plan_eval_type: PythonEvalType::MapPandasIter,
