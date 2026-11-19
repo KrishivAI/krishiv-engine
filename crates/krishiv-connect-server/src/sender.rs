@@ -31,10 +31,10 @@ use krishiv_connect::proto::v4_3 as pb;
 use tokio::time::Instant;
 use tonic::Status;
 
+use crate::errors::SessionErrors;
 use crate::execute::ResponseStream;
 use crate::operation::replay::Next;
 use crate::operation::{ExecuteLimits, Operation, Operations};
-use crate::status::status_of;
 
 /// When a reattachable stream ends early for the client to reattach.
 #[derive(Debug, Clone, Copy, Default)]
@@ -65,6 +65,9 @@ impl SenderCaps {
 struct Attached {
     op: Arc<Operation>,
     operations: Arc<Operations>,
+    /// The session's errors: the statuses this stream ends with carry an
+    /// `errorId`.
+    errors: Arc<SessionErrors>,
     generation: u64,
     /// The index of the next response to send.
     next: u64,
@@ -94,6 +97,7 @@ impl Drop for Attached {
 pub fn attach(
     op: Arc<Operation>,
     operations: Arc<Operations>,
+    errors: Arc<SessionErrors>,
     after: u64,
     caps: SenderCaps,
 ) -> ResponseStream {
@@ -104,6 +108,7 @@ pub fn attach(
     let attached = Attached {
         op,
         operations,
+        errors,
         generation,
         next: after + 1,
         sent: 0,
@@ -134,11 +139,13 @@ async fn step(mut s: Attached) -> Option<(Result<pb::ExecutePlanResponse, Status
             }
             Next::Disconnected => {
                 s.done = true;
-                return Some((Err(status_of(&InvalidCursorDisconnected {}.into())), s));
+                let status = s.errors.status(&InvalidCursorDisconnected {}.into());
+                return Some((Err(status), s));
             }
             Next::Unavailable(e) => {
                 s.done = true;
-                return Some((Err(status_of(&e)), s));
+                let status = s.errors.status(&e);
+                return Some((Err(status), s));
             }
             Next::Finished(None) => return None,
             Next::Finished(Some(status)) => {

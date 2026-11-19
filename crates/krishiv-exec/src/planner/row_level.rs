@@ -198,6 +198,43 @@ pub enum RowLevelProblem<'a> {
     },
 }
 
+impl RowLevelWrite {
+    /// [`Self::read_filter`] as a typed predicate over the input's columns by name, for a
+    /// table's conflict check: a superset of the rows it keeps (an untranslatable conjunct is
+    /// left out), `None` when there is no filter or nothing of it translates (every row).
+    #[must_use]
+    pub fn read_filter_pushdown(&self) -> Option<krishiv_io::PushdownExpr> {
+        let filter = self.read_filter.as_ref()?;
+        let mut columns = Vec::new();
+        bound_columns(filter, &mut columns);
+        columns.retain(|c: &krishiv_plan::BoundColumn| {
+            self.input_schema
+                .fields()
+                .iter()
+                .any(|f| f.name() == &c.name)
+        });
+        super::pushdown::translate(filter, &columns)
+    }
+}
+
+/// The resolved columns of `e`'s function tree, each once.
+fn bound_columns(e: &Expr, out: &mut Vec<krishiv_plan::BoundColumn>) {
+    use krishiv_plan::{ExprNode, ResolvedExpr};
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+            if !out.iter().any(|o| o.id == c.id) {
+                out.push(c.clone());
+            }
+        }
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            for a in &f.args {
+                bound_columns(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// One table, at the version a row-level statement read, that the statement can change.
 pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// What the table can do.
@@ -679,6 +716,63 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_read_filter_translates_over_the_input_columns() {
+        use krishiv_io::{CmpOp, PushdownExpr, ScalarValue};
+        use krishiv_plan::{
+            AttrId, BoundColumn, Builtin, ExprNode, FunctionId, FunctionKind, Literal,
+            ResolvedExpr, ResolvedFunction,
+        };
+        let column = |name: &str, id| {
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                BoundColumn {
+                    id: AttrId(id),
+                    name: name.to_owned(),
+                    data_type: krishiv_types::DataType::Integer,
+                    nullable: true,
+                },
+            ))))
+        };
+        let eq = |c: Arc<Expr>| {
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::Eq),
+                    kind: FunctionKind::Scalar,
+                    args: vec![
+                        c,
+                        Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1)))),
+                    ],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: krishiv_types::DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            ))))
+        };
+        let mut w = RowLevelWrite::new(
+            RowLevelOperation::Delete,
+            "t",
+            table_schema(),
+            Vec::new(),
+            Some(eq(column("a", 1))),
+        );
+        assert_eq!(
+            w.read_filter_pushdown(),
+            Some(PushdownExpr::cmp(
+                ColumnPath::new("a"),
+                CmpOp::Eq,
+                ScalarValue::Int32(1)
+            ))
+        );
+        // A column the input lacks, or no filter: every row.
+        w.read_filter = Some(eq(column("b", 2)));
+        assert_eq!(w.read_filter_pushdown(), None);
+        w.read_filter = None;
+        assert_eq!(w.read_filter_pushdown(), None);
     }
 
     #[test]

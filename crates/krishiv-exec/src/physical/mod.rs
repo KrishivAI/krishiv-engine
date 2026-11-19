@@ -453,9 +453,30 @@ pub enum PhysNode {
         /// The UDF and its declared result; two frame sides.
         udf: PythonRelationPlan,
     },
+    /// A Python table function (UDTF, eval types 300-302; Spark's
+    /// `BatchEvalPythonUDTFExec` / `ArrowEvalPythonUDTFExec`): each
+    /// partition of `input` sent to one UDTF task, `eval` per row (per batch
+    /// for 302) and `terminate` at the end and at each `PARTITION BY`
+    /// boundary. The planner puts a `TABLE` argument's partitioning and
+    /// ordering below it.
+    PythonUdtf {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The UDTF, its scalar argument columns (one side) and its result:
+        /// the carried input columns, then the UDTF's own columns.
+        udf: PythonRelationPlan,
+        /// The call's arguments, `TABLE` argument and carried columns.
+        call: PythonUdtfPlan,
+    },
     /// An aggregate whose calls are all grouped-aggregate Python UDFs, over
     /// `input` clustered by the key columns and sorted by them: per group,
     /// the values of `key_values` in its first row, then one value per call.
+    ///
+    /// With `window`, a window aggregate of Python UDFs (Spark's
+    /// `ArrowWindowPythonExec`): `keys` are the window's partitioning, the
+    /// input is sorted by them then the window's ordering, `key_values` is
+    /// empty, and the output is every input column, then one value per row
+    /// per call.
     PythonAggregate {
         /// The input.
         input: Box<PhysNode>,
@@ -468,6 +489,12 @@ pub enum PhysNode {
         key_values: Vec<usize>,
         /// The calls, in output column order after the keys.
         calls: Vec<PythonCallPlan>,
+        /// `Some` for a window aggregate: per call, whether its frame is
+        /// bounded (not the whole partition), so its first two arguments
+        /// are each row's frame start and end (`INT` row indexes within the
+        /// partition, the end exclusive), as Spark's
+        /// `wrap_bounded_window_agg_pandas_udf` takes them.
+        window: Option<Vec<bool>>,
     },
     /// `TABLESAMPLE`: each row of `input` kept when its draw of input
     /// partition `i`'s `XORShiftRandom(seed + i)` is in `[lower, upper)`
@@ -482,6 +509,31 @@ pub enum PhysNode {
         upper: f64,
         /// The seed of partition 0.
         seed: i64,
+    },
+    /// `Dataset.observe`: the rows of `input` pass through unchanged while
+    /// each partition folds them into the metrics' aggregate states, which
+    /// the query's result reports under `name`. `measure` is plain data,
+    /// not a child: `Project(Aggregate(Project(OneRow)))` with `OneRow`
+    /// standing for the input's rows, as the planner lowers the metrics
+    /// as a global aggregate (the first projection computes the aggregates'
+    /// arguments, the aggregate is the partial phase's plan, the last
+    /// projection computes the metrics from its results).
+    CollectMetrics {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The observation's name.
+        name: String,
+        /// The metrics' computation over the input's columns.
+        measure: Box<PhysNode>,
+        /// The planner's rank of this node among the plan's observing
+        /// nodes, in plan order (Spark's `CollectMetricsExec.collect` lets
+        /// the last of a name win). Plan data, so every worker numbers the
+        /// instances alike.
+        instance: u32,
+        /// At most this many rows are folded: a `LIMIT` above (through
+        /// row-for-row operators only) takes no more, and Spark counts the
+        /// rows its consumer pulled.
+        limit: Option<u64>,
     },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
@@ -1153,13 +1205,15 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
+    CollectMetrics { input, name, measure, instance, limit },
     ReplicateRows { input, layout, count, subqueries },
     Sample { input, lower, upper, seed },
     PythonEval { input, layout, calls },
     PythonMap { input, udf },
     PythonGroupMap { input, keys, udf },
     PythonCoGroupMap { input, keys, side, udf },
-    PythonAggregate { input, layout, keys, key_values, calls },
+    PythonUdtf { input, udf, call },
+    PythonAggregate { input, layout, keys, key_values, calls, window },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
@@ -1184,6 +1238,8 @@ plan_data!(struct PythonCallPlan { call, output });
 plan_data!(struct PythonRelationPlan { udf, sides, output });
 plan_data!(struct PythonFrameSide { columns, names, types });
 plan_data!(struct PythonOutputColumn { name, data_type, nullable });
+plan_data!(struct PythonUdtfPlan { arg_names, table, carried, analyzed });
+plan_data!(struct PythonUdtfTable { position, columns, names, partition_child_indexes });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
@@ -1269,9 +1325,11 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::PythonMap { input, .. }
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonUdtf { input, .. }
             | Self::PythonAggregate { input, .. }
             | Self::WriteFiles { input, .. }
             | Self::TableWrite { input, .. } => vec![input.as_ref()],
@@ -1283,6 +1341,18 @@ impl PhysNode {
             Self::UnionLoop {
                 anchor, recursive, ..
             } => vec![anchor.as_ref(), recursive.as_ref()],
+        }
+    }
+
+    /// The plan of an observation's metrics (`CollectMetrics`): plain data
+    /// that is not a child (it reads no relation), listed for the codec and
+    /// the feature scan.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn measure(&self) -> Option<&PhysNode> {
+        match self {
+            Self::CollectMetrics { measure, .. } => Some(measure),
+            _ => None,
         }
     }
 
@@ -1321,9 +1391,11 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::PythonMap { input, .. }
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonUdtf { input, .. }
             | Self::PythonAggregate { input, .. }
             | Self::WriteFiles { input, .. }
             | Self::TableWrite { input, .. } => vec![input.as_mut()],
@@ -1374,6 +1446,41 @@ pub struct PythonFrameSide {
     pub names: Vec<String>,
     /// Their Spark types.
     pub types: Vec<krishiv_types::DataType>,
+}
+
+/// The call of a [`PhysNode::PythonUdtf`]: Spark's `ArgumentMetadata`
+/// (`EvalPythonUDTFExec`) plus the `TABLE` argument and the columns a
+/// `LATERAL` call carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonUdtfPlan {
+    /// Each argument's name, in call order (`None` for a positional one),
+    /// the `TABLE` argument included: the scalar ones read the frame side's
+    /// columns in order.
+    pub arg_names: Vec<Option<String>>,
+    /// The `TABLE` argument, if any.
+    pub table: Option<PythonUdtfTable>,
+    /// The input columns each result row leads with (a `LATERAL` call's
+    /// left side), as the declared result's first columns.
+    pub carried: Vec<usize>,
+    /// `analyze`'s pickled `AnalyzeResult`.
+    pub analyzed: Option<Vec<u8>>,
+}
+
+/// The `TABLE` argument of a [`PythonUdtfPlan`]: one struct column per row
+/// (Spark's `CreateStruct(subquery.output)`), whose fields are input
+/// columns: the table's (or `analyze`'s `select`), then the projected
+/// `PARTITION BY` values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonUdtfTable {
+    /// Its position among the arguments.
+    pub position: usize,
+    /// The struct's fields, as input columns.
+    pub columns: Vec<usize>,
+    /// The fields' names.
+    pub names: Vec<String>,
+    /// The fields that are `PARTITION BY` values (Spark's
+    /// `partitionChildIndexes`).
+    pub partition_child_indexes: Vec<usize>,
 }
 
 /// One declared result column of a Python relation node.

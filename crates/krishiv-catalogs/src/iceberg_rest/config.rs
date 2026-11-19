@@ -43,6 +43,22 @@ pub enum RestAuth {
         /// Extra form fields the IdP needs (`audience`, `resource`).
         extra: Vec<(String, String)>,
     },
+    /// The end user's identity (T067 §3.3): the caller's own token (`forward`) or an RFC 8693 exchange of it at
+    /// `token_endpoint`, never the server's identity.
+    Delegated {
+        /// Send the caller's token unchanged (only when its audience names `audience`).
+        forward: bool,
+        /// The catalog's audience.
+        audience: String,
+        /// The token endpoint of the exchange (required unless `forward`).
+        token_endpoint: Option<Url>,
+        /// The `scope` of the exchange (and of the actor's client-credentials token).
+        scope: Option<String>,
+        /// The actor's client id and secret (`actorToken = client-credentials`); `None` sends no actor token.
+        actor: Option<(String, SecretString)>,
+        /// The exchange limits.
+        limits: super::delegated::DelegationLimits,
+    },
 }
 
 /// The limits of one client (design P3-lakehouse §5.6).
@@ -120,6 +136,10 @@ pub struct RestConfig {
     pub allow_http: bool,
     /// The limits.
     pub limits: RestLimits,
+    /// The egress policy connector every request goes out on (design P3-T067 §5.2): the server's policy scoped to
+    /// this catalog's declared hosts, no redirects. `None` is a connector under no rule (embedded use, tests), still
+    /// with no redirect followed and no ambient proxy.
+    pub egress: Option<krishiv_store::PolicyConnector>,
 }
 
 /// Why a declaration is refused.
@@ -144,6 +164,25 @@ impl RestConfig {
             vended_credentials: false,
             allow_http: false,
             limits: RestLimits::default(),
+            egress: None,
+        })
+    }
+
+    /// The connector requests go out on: [`Self::egress`], or one under no rule.
+    pub(crate) fn connector(&self) -> krishiv_store::PolicyConnector {
+        self.egress.clone().unwrap_or_else(|| {
+            use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+            let policy = EgressPolicy::new(
+                PrivateAddresses::Allow,
+                Vec::new(),
+                ProviderEndpoints::default(),
+            );
+            krishiv_store::PolicyConnector::new(
+                policy.scope(Vec::<String>::new()),
+                krishiv_store::Redirects::None,
+                None,
+            )
+            .without_provider_literals()
         })
     }
 
@@ -175,12 +214,26 @@ impl RestConfig {
         if is_s3_tables(&self.uri, self.warehouse.as_deref()) {
             return Err(unsupported("Iceberg S3 Tables catalog"));
         }
-        if let RestAuth::ClientCredentials {
-            token_endpoint: Some(endpoint),
-            ..
-        } = &self.auth
-        {
-            check_url(endpoint, self.allow_http, "oauth2-server-uri")?;
+        match &self.auth {
+            RestAuth::ClientCredentials {
+                token_endpoint: Some(endpoint),
+                ..
+            } => check_url(endpoint, self.allow_http, "oauth2-server-uri")?,
+            RestAuth::Delegated {
+                forward,
+                token_endpoint,
+                ..
+            } => match token_endpoint {
+                Some(endpoint) => check_url(endpoint, self.allow_http, "tokenEndpoint")?,
+                None if !forward => {
+                    return Err(invalid(
+                        "tokenEndpoint",
+                        "a token exchange needs the token endpoint",
+                    ));
+                }
+                None => {}
+            },
+            _ => {}
         }
         Ok(())
     }

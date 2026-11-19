@@ -4,11 +4,18 @@ build-backend = "maturin"
 
 [project]
 name = "krishiv"
-description = "Krishiv: a Rust-native, Spark-compatible batch and streaming engine"
+description = "Spark alternative in Rust: PySpark and Spark SQL without the JVM"
+readme = "PYPI.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
+keywords = ["spark", "pyspark", "spark-alternative", "sql", "dataframe", "arrow", "rust", "etl", "big-data"]
+dependencies = ["pyarrow>=16"]
 dynamic = ["version"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
@@ -20,11 +27,17 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 
+[project.urls]
+Homepage = "https://krishiv.ai"
+Documentation = "https://krishiv.ai/docs"
+Benchmarks = "https://krishiv.ai/benchmarks"
+Changelog = "https://github.com/KrishivAI/krishiv-engine/releases"
+Source = "https://github.com/KrishivAI/krishiv-engine"
+
 [project.optional-dependencies]
-# Arrow libraries are optional: `__arrow_c_stream__` needs none (Polars and DuckDB consume it
-# directly); pyarrow is needed by `toArrow`, which imports it lazily. `toPandas` needs the
-# `pandas` extra (pandas and numpy; not bundled in the wheel).
-pyarrow = ["pyarrow>=16"]
+# pyarrow is a required dependency since 0.2.1; this extra stays so `krishiv[pyarrow]` install lines still work.
+# `toPandas` needs the `pandas` extra (pandas and numpy; not bundled in the wheel).
+pyarrow = []
 pandas = ["pandas>=2.2", "numpy>=1.26", "pyarrow>=16"]
 
 [dependency-groups]
@@ -116,12 +129,23 @@ exclude = [
     "tests/pyspark_udf/test_arrow_python_udf.py",
     "tests/pyspark_udf/goldenutils.py",
     "tests/pyspark_udf/coercion",
+    # Runs only under PySpark 4.2.0 (its docstring), never in the dev environment.
+    "tests/pyspark_udf/window_iter/gen_goldens.py",
+    "tests/pyspark_udf/udtf/gen_goldens.py",
+    "tests/pyspark_udf/udtf/export_cases.py",
 ]
 
 [tool.ty.analysis]
 # The compiled extension only exists after `maturin develop`; when it is missing
 # (or its stub is), the import is allowed to stay unresolved.
 allowed-unresolved-imports = ["krishiv._native", "pandas"]
+
+# pyspark-client is optional: this test skips without it, so ty may not resolve its imports.
+[[tool.ty.overrides]]
+include = ["tests/test_start_local_pyspark.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [tool.mypy]
 python_version = "3.11"
@@ -141,6 +165,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["krishiv._udf.*"]
 ignore_errors = true
+
+# `pyspark-client` is installed beside the wheel for the `start_local()` tests. The vendored
+# `krishiv._udf` code names `pyspark.sql.types`; with the package installed mypy would type them as
+# PySpark's classes, not Krishiv's. They stay untyped, as when it is absent.
+[[tool.mypy.overrides]]
+module = ["pyspark.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
 
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so

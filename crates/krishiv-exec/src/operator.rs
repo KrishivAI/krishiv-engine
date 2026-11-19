@@ -244,6 +244,22 @@ pub trait Operator: Send + Sync {
     fn lane_safe(&self) -> bool {
         false
     }
+    /// Whether the driver may join this operator's small input batches into
+    /// batches of about `krishiv.exec.batchSize` rows, in a pipeline whose
+    /// sink [allows it](Sink::coalesce_input) (Polars item 2, J1). Say yes
+    /// only if the operator's output rows depend on neither its input's
+    /// batch boundaries nor when its rows arrive; their order may follow the
+    /// batches only where Spark leaves it unspecified (a left outer hash
+    /// join's unmatched rows come after each batch's matches). An operator
+    /// that evaluates expressions which can fail (ANSI) then also evaluates
+    /// up to a joined batch of rows that a limit above it would have cut:
+    /// prefer `false` unless its per-batch cost is worth that. The joined
+    /// batches keep the row order and one scan split each; the
+    /// driver hands every row on before the operator's
+    /// [`finish`](Self::finish). Default `false`.
+    fn coalesce_input(&self) -> bool {
+        false
+    }
     /// Whether the operator has work left that needs **every** driver's
     /// input first (a hash join's spilled partitions). If so, after
     /// [`finish`](Self::finish) a driver calls [`end_input`](Self::end_input),
@@ -337,7 +353,10 @@ pub trait Sink: Send + Sync {
     fn published_filters(&self) -> Vec<FilterId> {
         Vec::new()
     }
-    /// Shared state, made once per pipeline run.
+    /// Shared state, made once per pipeline run. When the pipeline's source
+    /// reads a breaker, `ctx.dependency()` holds that breaker's finalized
+    /// state, as for the source: a sink that continues it adopts it
+    /// (`aggregate/distinct.rs` `KeyFeed`); other sinks ignore it.
     ///
     /// # Errors
     /// Any error fails the query.
@@ -357,6 +376,21 @@ pub trait Sink: Send + Sync {
         local: &mut LocalState,
         global: &GlobalState,
     ) -> Result<SinkStatus>;
+    /// Whether the driver may join this sink's small input batches, and
+    /// those of the operators of its pipeline that
+    /// [ask for it](Operator::coalesce_input), into batches of about
+    /// `krishiv.exec.batchSize` rows (`krishiv.exec.coalesceInput`; Polars
+    /// item 2, J1). Say yes only if the sink's result depends on neither
+    /// its batches' boundaries nor the source positions it is told
+    /// ([`position`](Self::position)), and on its rows' order only where
+    /// Spark leaves that unspecified: buffered rows reach it after positions
+    /// reported later, and an operator that allows joining may order its
+    /// output by the batches. Rows keep their order within a driver,
+    /// only unweighted rows of one scan split are joined, and a sink that
+    /// says yes gets every row before its `combine`. Default `false`.
+    fn coalesce_input(&self) -> bool {
+        false
+    }
     /// Whether this sink may be fed by several logical-partition drivers
     /// under `krishiv.deterministicOrder` (T094 G1): its `sink` touches only
     /// the driver's own local state (or the result sink's ordered slots), and

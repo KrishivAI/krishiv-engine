@@ -946,6 +946,7 @@ fn implied_features_of_each_legacy_version() {
     assert_eq!(names(1, 2, None), ["appendOnly", "invariants"]);
     // columnMapping only from reader 2 with writer 5 or 6; writer 7 implies nothing.
     assert!(!names(1, 5, None).contains(&"columnMapping".to_owned()));
+    assert_eq!(names(2, 2, None), ["appendOnly", "invariants"]);
     assert!(names(2, 6, None).contains(&"columnMapping".to_owned()));
     assert_eq!(names(2, 7, Some(&["appendOnly"])), ["appendOnly"]);
     assert_eq!(

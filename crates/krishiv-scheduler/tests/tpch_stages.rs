@@ -39,7 +39,7 @@ use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
-use krishiv_plan::{Plan, SourceId};
+use krishiv_plan::{Expr, LogicalPlan, Plan, PlanNode, SourceId};
 use krishiv_scheduler::{StageRunner, StageSplits, TableDealer, fragment};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
@@ -883,4 +883,79 @@ fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
             id += 1;
         }
     }
+}
+
+/// Rows of `lineitem` grouped by `l_returnflag` (a hash exchange), observed
+/// below the exchange as `m`.
+fn observed_group_by(tpch: &Tpch) -> PhysicalPlan {
+    let observed = LogicalPlan::new(PlanNode::CollectMetrics {
+        input: Arc::new(LogicalPlan::table(["lineitem"])),
+        name: "m".to_owned(),
+        metrics: vec![Arc::new(
+            Expr::function("count", vec![Expr::column(["l_orderkey"])]).alias("n"),
+        )],
+    });
+    let logical = observed.aggregate(
+        vec![Expr::column(["l_returnflag"])],
+        vec![
+            Expr::column(["l_returnflag"]),
+            Expr::function("count", vec![Expr::column(["l_orderkey"])]).alias("c"),
+        ],
+    );
+    let plan = Plan::try_new(logical).unwrap();
+    let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &tpch.ctx))
+        .unwrap()
+        .plan;
+    let cx = PlanningContext::new(Arc::clone(&tpch.tables) as _, Arc::clone(&tpch.config));
+    DefaultPlanner.plan(&plan, &cx).unwrap()
+}
+
+#[test]
+fn an_observation_below_an_exchange_reaches_the_query() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4).unwrap();
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let plan = observed_group_by(&tpch);
+    let query = QueryContext::new(
+        QueryId(9),
+        WorkloadClass::Interactive,
+        ExecConfig::default(),
+        root.child("q9", None),
+    );
+    let grouped: i64 = rt.block_on(async {
+        let mut stream = stages
+            .submit(plan.clone(), worker.clone(), Arc::clone(&query))
+            .await
+            .unwrap();
+        let mut total = 0;
+        while let Some(b) = stream.next().await {
+            let batch = b.unwrap().into_parts().0;
+            let counts = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap();
+            total += counts.iter().flatten().sum::<i64>();
+        }
+        query.finished().await;
+        total
+    });
+    assert!(grouped > 0);
+    let observed = query.observed().unwrap();
+    let m = observed
+        .get("m")
+        .expect("the observation reached the query");
+    let n = m
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(n, grouped);
 }

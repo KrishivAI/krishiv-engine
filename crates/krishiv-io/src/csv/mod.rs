@@ -70,6 +70,14 @@ impl FileFormat for CsvFormat {
         c
     }
 
+    fn corrupt_record_column(&self, o: &FormatOptions) -> Option<String> {
+        Some(
+            o.str("columnNameOfCorruptRecord")
+                .unwrap_or("_corrupt_record")
+                .to_owned(),
+        )
+    }
+
     fn file_suffix(&self, o: &FormatOptions) -> String {
         crate::text::output_suffix(".csv", o)
     }
@@ -141,5 +149,7 @@ impl FileFormat for CsvFormat {
     }
 }
 
+#[cfg(test)]
+mod corrupt_tests;
 #[cfg(test)]
 mod tests;

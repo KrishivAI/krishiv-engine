@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/payload_above.rs
+assertion_line: 375
+expression: text
+---
+Project [dk#6, dname#7, dp#8, sum_13#13 AS sum(fv)#11, count_14#14 AS count(1)#12]
++- Join Inner, (fk#0 == dk#6)
+   :- Aggregate [fk#0], [fk#0, sum(fv#1) AS sum_13#13, count(1) AS count_14#14]
+   :  +- Project [fv#1, fk#0]
+   :     +- Filter isnotnull(fk#0)
+   :        +- Scan spark_catalog.default.f [fk#0, fv#1]
+   +- Filter isnotnull(dk#6)
+      +- Scan spark_catalog.default.d [dk#6, dname#7, dp#8]

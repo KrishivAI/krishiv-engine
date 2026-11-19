@@ -230,12 +230,15 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive`
-    /// mode, as the SQL `USE` does. (Divergence: Spark 4.2 resets the namespace to `default` when the name differs
-    /// from the current catalog's only in case; here the current namespace is kept.)
+    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees (design P3-T067
+    /// §2.4). A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+    /// `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets the namespace to `default` when the name
+    /// differs from the current catalog's only in case; here the current namespace is kept.) The `system` catalog is
+    /// Krishiv's own (ADR 0023) and is reached with `USE system`, not here: Spark has no such catalog, so it is
+    /// `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
-    /// `CATALOG_NOT_FOUND` for a name that is not a catalog (a namespace's name is not one).
+    /// `CATALOG_NOT_FOUND` for any other name (a namespace's name is not a catalog).
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
         // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
         let Some(known) = self
@@ -252,10 +255,14 @@ impl Catalog<'_> {
         self.run(&format!("USE {}", quoted(&known))).await
     }
 
-    /// The catalogs, sorted.
+    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (design P3-T067 §2.4;
+    /// Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
+    /// [`Catalog::set_current_catalog`].
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
-        vec![crate::catalog::CATALOG.to_owned(), "system".to_owned()]
+        let mut names = self.session.catalog_names();
+        names.retain(|c| c != crate::system::SYSTEM);
+        names
     }
 
     /// The current namespace.
@@ -269,13 +276,47 @@ impl Catalog<'_> {
     /// # Errors
     /// `SCHEMA_NOT_FOUND` for an unknown namespace.
     pub async fn set_current_database(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("USE {}", quoted(name))).await
+        self.run(&format!("USE NAMESPACE {}", quoted(name))).await
     }
 
+    /// Whether `catalog` names a declared catalog this principal sees: not `spark_catalog`, not
+    /// `system`.
+    fn is_declared(&self, catalog: &str) -> bool {
+        !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            && !crate::system::is_system(catalog)
+            && self
+                .list_catalogs()
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(catalog))
+    }
+
+    /// Refuses a call about the namespaces or tables of the declared catalog `catalog`: a declared
+    /// catalog resolves names in queries only for now (design P3-T067 PR-58a), and the embedded
+    /// catalog's namespaces are never answered in its name.
+    fn refuse_declared(catalog: &str) -> KrishivError {
+        krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "the namespaces and tables of the declared catalog {} through the Catalog API",
+                quote(catalog)
+            ),
+        }
+        .into()
+    }
+
+    /// [`Self::refuse_declared`] when the current catalog is a declared one.
+    fn check_current(&self) -> Result<(), KrishivError> {
+        let current = self.current_catalog();
+        if self.is_declared(&current) {
+            return Err(Self::refuse_declared(&current));
+        }
+        Ok(())
+    }
+
+    /// The namespaces are always the embedded catalog's, so `spark_catalog` names them.
     fn database_of(&self, name: &str, meta: &crate::store::NamespaceMeta) -> Database {
         Database {
             name: name.to_owned(),
-            catalog: self.current_catalog(),
+            catalog: crate::catalog::CATALOG.to_owned(),
             description: meta.comment.clone(),
             location_uri: meta.location.clone().unwrap_or_else(|| {
                 let wh = self.session.warehouse_dir().unwrap_or_default();
@@ -299,6 +340,7 @@ impl Catalog<'_> {
         pattern: Option<&str>,
     ) -> Result<Vec<Database>, KrishivError> {
         self.authorize_as("SHOW NAMESPACES").await?;
+        self.check_current()?;
         Ok(self.databases(pattern))
     }
 
@@ -331,8 +373,12 @@ impl Catalog<'_> {
         // `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it.
         let p = parts(name);
         let bare = match p.as_slice() {
-            [db] => db.clone(),
+            [db] => {
+                self.check_current()?;
+                db.clone()
+            }
             [cat, db] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => db.clone(),
+            [cat, _] if self.is_declared(cat) => return Err(Self::refuse_declared(cat)),
             _ => name.to_owned(),
         };
         let name = bare.as_str();
@@ -449,7 +495,10 @@ impl Catalog<'_> {
         } else {
             let db = match database {
                 Some(d) => self.lookup_database(d)?.name,
-                None => self.current_database(),
+                None => {
+                    self.check_current()?;
+                    self.current_database()
+                }
             };
             permanent.extend(
                 catalog
@@ -501,6 +550,7 @@ impl Catalog<'_> {
                 {
                     return Ok(Self::temp_table(&n, false));
                 }
+                self.check_current()?;
                 catalog
                     .store
                     .table(&self.current_database(), &self.fold(only))
@@ -513,11 +563,17 @@ impl Catalog<'_> {
             {
                 Ok(Self::temp_table(t, true))
             }
-            [db, t] => catalog
-                .store
-                .table(&self.fold(db), &self.fold(t))
-                .map(|t| Self::table_of(&t))
-                .ok_or_else(not_found),
+            [db, t] => {
+                if !db.eq_ignore_ascii_case(GLOBAL_NAMESPACE) {
+                    self.check_current()?;
+                }
+                catalog
+                    .store
+                    .table(&self.fold(db), &self.fold(t))
+                    .map(|t| Self::table_of(&t))
+                    .ok_or_else(not_found)
+            }
+            [cat, _, _] if self.is_declared(cat) => Err(Self::refuse_declared(cat)),
             [cat, db, t] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => catalog
                 .store
                 .table(&self.fold(db), &self.fold(t))

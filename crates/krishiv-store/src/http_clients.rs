@@ -27,6 +27,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 #[cfg(feature = "cloud")]
 use object_store::client::{ClientConfigKey, ClientOptions, HttpClient, HttpConnector};
 
+#[cfg(feature = "cloud")]
+pub(crate) mod policy;
+#[cfg(feature = "cloud")]
+use policy::PolicyConnector;
+
 /// The most distinct option sets one cache holds; past it, clients are built uncached.
 #[cfg(feature = "cloud")]
 const MAX_CLIENTS: usize = 64;
@@ -49,6 +54,13 @@ struct Inner {
     clients: Mutex<HashMap<Fingerprint, HttpClient>>,
     /// Builds a client on a miss: object_store's reqwest connector, or a test's counter.
     build: Option<Arc<dyn HttpConnector>>,
+    /// The egress policy's connector (server mode, design P3-T067 §5.2): every client is a
+    /// policy client, its fingerprint carries the policy component.
+    egress: Option<PolicyConnector>,
+    /// The same policy without the provider literals, for stores with no ambient credential
+    /// providers (`http(s)://`, `hf://`): a data read of a metadata address is refused
+    /// (review 58a1 B2).
+    egress_data: Option<PolicyConnector>,
 }
 
 impl std::fmt::Debug for SharedHttpClients {
@@ -76,7 +88,41 @@ impl SharedHttpClients {
             inner: Arc::new(Inner {
                 clients: Mutex::new(HashMap::new()),
                 build: Some(connector),
+                egress: None,
+                egress_data: None,
             }),
+        }
+    }
+
+    /// An empty cache whose clients are all policy clients of `egress` (server mode; design
+    /// P3-T067 §5.2). Only an enforcing scope makes them: an `allow` policy builds plain clients.
+    #[cfg(feature = "cloud")]
+    #[must_use]
+    pub fn with_egress(egress: PolicyConnector) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                clients: Mutex::new(HashMap::new()),
+                build: None,
+                egress_data: egress
+                    .scope()
+                    .enforced()
+                    .then(|| egress.clone().without_provider_literals()),
+                egress: egress.scope().enforced().then_some(egress),
+            }),
+        }
+    }
+
+    /// Whether the clients of this cache apply an enforcing egress policy. A store that builds
+    /// its own client otherwise (`hf://`) connects through the cache when this holds.
+    #[must_use]
+    pub fn enforces_egress(&self) -> bool {
+        #[cfg(feature = "cloud")]
+        {
+            self.inner.egress.is_some()
+        }
+        #[cfg(not(feature = "cloud"))]
+        {
+            false
         }
     }
 
@@ -98,11 +144,37 @@ impl SharedHttpClients {
         self.len() == 0
     }
 
+    /// The connector for stores without ambient credential providers: the data-only policy
+    /// clients when the cache enforces the egress policy, else the cache itself.
     #[cfg(feature = "cloud")]
-    fn build(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
-        match &self.inner.build {
-            Some(connector) => connector.connect(options),
-            None => object_store::client::ReqwestConnector::default().connect(options),
+    #[must_use]
+    pub fn data_only(&self) -> DataOnlyClients {
+        DataOnlyClients(self.clone())
+    }
+
+    /// Checks a configured store endpoint against the egress rule (no provider exemption): `Ok`
+    /// without an enforcing policy.
+    ///
+    /// # Errors
+    /// The rule refuses the endpoint's address literal.
+    #[cfg(feature = "cloud")]
+    pub fn check_endpoint(&self, endpoint: &str) -> Result<(), crate::egress::EgressRefusal> {
+        match &self.inner.egress {
+            Some(egress) => egress.scope().check_endpoint(endpoint),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(feature = "cloud")]
+    fn build(
+        &self,
+        options: &ClientOptions,
+        egress: Option<&PolicyConnector>,
+    ) -> object_store::Result<HttpClient> {
+        match (egress, &self.inner.build) {
+            (Some(egress), _) => egress.connect(options),
+            (None, Some(connector)) => connector.connect(options),
+            (None, None) => object_store::client::ReqwestConnector::default().connect(options),
         }
     }
 }
@@ -135,30 +207,58 @@ const KEYS: [ClientConfigKey; 20] = [
     ClientConfigKey::UserAgent,
 ];
 
-/// A cache key: each listed key's config value, or none.
+/// A cache key: the egress policy component (§5.2: generation, exemption set, redirects, proxy),
+/// then each listed key's config value, or none.
 #[cfg(feature = "cloud")]
-type Fingerprint = Vec<(ClientConfigKey, Option<String>)>;
+type Fingerprint = (Option<String>, Vec<(ClientConfigKey, Option<String>)>);
 
 /// The cache key of `options`, or `None` when they hold a field no config value shows (default
 /// headers, a DNS resolver): such a client is never shared. Root certificates have no getter;
 /// no builder that connects through the cache adds any.
 #[cfg(feature = "cloud")]
-fn fingerprint(options: &ClientOptions) -> Option<Fingerprint> {
+fn fingerprint(options: &ClientOptions, egress: Option<&PolicyConnector>) -> Option<Fingerprint> {
     if options.get_default_headers().is_some() || options.dns_resolver().is_some() {
         return None;
     }
-    Some(
+    Some((
+        egress.map(PolicyConnector::fingerprint),
         KEYS.iter()
             .map(|key| (*key, options.get_config_value(key)))
             .collect(),
-    )
+    ))
 }
 
 #[cfg(feature = "cloud")]
 impl HttpConnector for SharedHttpClients {
     fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
-        let Some(key) = fingerprint(options) else {
-            return self.build(options);
+        self.connect_via(options, self.inner.egress.as_ref())
+    }
+}
+
+/// [`SharedHttpClients`] for stores with no ambient credential providers (`http(s)://`,
+/// `hf://`): under an enforcing policy their clients never admit the provider literals, so a
+/// data read of a cloud metadata address is refused before it is dialled (review 58a1 B2).
+#[cfg(feature = "cloud")]
+#[derive(Debug, Clone)]
+pub struct DataOnlyClients(SharedHttpClients);
+
+#[cfg(feature = "cloud")]
+impl HttpConnector for DataOnlyClients {
+    fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
+        self.0
+            .connect_via(options, self.0.inner.egress_data.as_ref())
+    }
+}
+
+#[cfg(feature = "cloud")]
+impl SharedHttpClients {
+    fn connect_via(
+        &self,
+        options: &ClientOptions,
+        egress: Option<&PolicyConnector>,
+    ) -> object_store::Result<HttpClient> {
+        let Some(key) = fingerprint(options, egress) else {
+            return self.build(options, egress);
         };
         if let Some(client) = self
             .inner
@@ -172,7 +272,7 @@ impl HttpConnector for SharedHttpClients {
         // Built outside the lock: a build parses the root store (milliseconds). Two racing
         // misses build twice; the first insert wins and both callers get its client, so one
         // pool serves the options.
-        let client = self.build(options)?;
+        let client = self.build(options, egress)?;
         let mut clients = self
             .inner
             .clients

@@ -26,10 +26,13 @@
 //!    raised. At most one runs per table root ([`checkpoints_skipped`] counts the others),
 //!    within a time budget, and it is cancelled when the runtime drops it.
 //!
-//! Data files are invisible until the commit. A write that fails before its commit (or whose
-//! create surely did not land) deletes its files, best effort; a cancelled write's files
-//! (during its batches or its `finalize`, up to the commit attempt) are deleted in the
-//! background. A file left behind is an orphan no snapshot reads.
+//! Data files are invisible until the commit. A write that fails before its commit attempt
+//! (or whose create surely did not land) deletes its files, best effort; a cancelled write's
+//! files (during its batches or its `finalize`, up to the commit attempt) are deleted in the
+//! background. From the commit attempt on, every failure of an existing table's commit
+//! (conflicts and exhausted retries included) keeps the files, as delta-spark's are kept: the
+//! commit loop does not tell a surely-lost commit from an unknown outcome. A file left behind
+//! is an orphan no snapshot reads.
 //!
 //! # Refusals (before any file is written)
 //! - Krishiv's writer allow-list ([`crate::features::check_write`]).

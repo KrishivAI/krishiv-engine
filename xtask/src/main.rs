@@ -29,7 +29,7 @@ use xtask::qerror;
 use xtask::quarantine;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-analyze [--check [--base REF]] | docs-sql [--check] | docs-examples [--check] | docs-python [--check] | docs-rust [--check] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | changelog check --base REF [--head REF] [--labels a,b] | changelog pending | changelog assemble VERSION [--highlights FILE] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | connect-coverage [--check] | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | admin-api [--write] [--base REF] [--allow-breaking-before-release] | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-analyze [--check [--base REF]] | docs-sql [--check] | docs-examples [--check] | docs-python [--check] | docs-rust [--check] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | changelog check --base REF [--head REF] [--labels a,b] | changelog pending | changelog assemble VERSION [--highlights FILE] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | connect-coverage [--check] | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -46,6 +46,7 @@ fn main() -> ExitCode {
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
         ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
+        ["admin-api", flags @ ..] => xtask::admin_api::run(&workspace_root(), flags),
         ["connect-coverage"] => xtask::connect_coverage::run(&workspace_root(), false),
         ["connect-coverage", "--check"] => xtask::connect_coverage::run(&workspace_root(), true),
         ["docs-compat", flags @ ..] => compat::run(&workspace_root(), flags),
@@ -218,6 +219,17 @@ fn cargo_cmd() -> Command {
 fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
+    // `--repo DIR` names the tree being checked: its assets are the ones measured, not the workspace's.
+    let assets_root = match &mode {
+        budgets::Mode::Precheck { repo: Some(r), .. }
+        | budgets::Mode::CacheMain { repo: Some(r) } => r.clone(),
+        _ => root.clone(),
+    };
+    eprintln!(
+        "budgets: UI assets {} bytes (limit {})",
+        budgets::check_ui_assets(&assets_root)?,
+        budgets::UI_ASSET_BUDGET_BYTES
+    );
     if let budgets::Mode::Precheck { base, repo } = &mode {
         return run_budgets_precheck(repo.as_deref().unwrap_or(&root), base);
     }

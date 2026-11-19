@@ -302,35 +302,13 @@ fn sql_function_roots(
         let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
             if let Node::Plan(p) = node
                 && let PlanNode::TableFunction { name, .. } = &p.node
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &name
-                        .split(crate::TABLE_FUNCTION_NAME_SEP)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>(),
-                    ctx.profile,
-                )
+                && let Some(def) = sql_table_function(ctx, name)
             {
                 defs.push(def);
             }
             if let Node::Expr(e) = node
                 && let ExprNode::Function(f) = &e.node
-                && is_registry_call(&f.name)
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &if is_session_qualifier(&f.qualifier) {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    } else if f.qualifier.is_empty() {
-                        vec![f.name.clone()]
-                    } else if is_builtin_qualifier(&f.qualifier) {
-                        return ControlFlow::Continue(());
-                    } else {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    },
-                    ctx.profile,
-                )
+                && let Some(def) = sql_call(ctx, f)
             {
                 defs.push(def);
             }
@@ -358,6 +336,43 @@ fn sql_function_roots(
         }
     }
     Ok(())
+}
+
+/// The SQL-bodied table function `name` (a `FROM f(..)` table function name, parts joined by
+/// [`crate::TABLE_FUNCTION_NAME_SEP`]), if it is one.
+pub(super) fn sql_table_function(
+    ctx: &AnalysisContext,
+    name: &str,
+) -> Option<Arc<super::SqlFunction>> {
+    let parts: Vec<String> = name
+        .split(crate::TABLE_FUNCTION_NAME_SEP)
+        .map(str::to_owned)
+        .collect();
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
+}
+
+/// The SQL-bodied function an unresolved call `f` calls, if it calls one (a `builtin.` call never does).
+pub(super) fn sql_call(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+) -> Option<Arc<super::SqlFunction>> {
+    if !is_registry_call(&f.name) || is_builtin_qualifier(&f.qualifier) {
+        return None;
+    }
+    let parts = if f.qualifier.is_empty() {
+        vec![f.name.clone()]
+    } else {
+        let mut parts = f.qualifier.clone();
+        parts.push(f.name.clone());
+        parts
+    };
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
 }
 
 /// Whether a call of `name` is for the function registry to answer: not a
@@ -637,7 +652,7 @@ fn lower_sql(
         return Err(unsupported("SQL text without a SQL front end", origin));
     };
     let source = SourceId(u32::try_from(b.sql.len()).unwrap_or(u32::MAX));
-    let lowered = Arc::clone(frontend.lower(query, source)?.root());
+    let lowered = super::time_window::rewrite(Arc::clone(frontend.lower(query, source)?.root()))?;
     // SQL text follows the session's CTE precedence like the plan around it.
     let policy = super::legacy::CtePolicy {
         precedence: ctx.conf.cte_precedence,
@@ -759,7 +774,17 @@ async fn authorize_as(
     {
         return Ok(*i);
     }
-    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
+    // A policy that decides columns is asked only whether the schema may be seen here; the rows
+    // are asked per referenced column once the query is resolved (`authorize_columns`).
+    let asked = if privilege == Privilege::Select
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && ctx.policy.column_level()
+    {
+        Privilege::Browse
+    } else {
+        privilege
+    };
+    super::access::authorize_reported(&*ctx.policy, &ctx.principal, &securable, asked, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
@@ -907,7 +932,17 @@ async fn load(
             for first in [ident.clone(), fold(&ident, cs)] {
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
-            let failed = |_| {
+            let failed = |e: krishiv_common::error::KrishivError| {
+                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as
+                // they are.
+                if matches!(
+                    e.error_class(),
+                    krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
+                        | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                ) {
+                    return AnalysisError::new(e, origin);
+                }
                 AnalysisError::new(
                     KrishivCatalogFailure {
                         catalog: quoted(std::slice::from_ref(&ident.catalog)),
@@ -1125,32 +1160,23 @@ async fn bind_files(
     if server_scoped(options) {
         authorize_store_options(ctx, b, checked, origin).await?;
     }
-    let columns = if let Some(schema) = schema {
-        // A declared schema replaces inference. The nullability rule is the
-        // inferred one: every file column nullable, nested elements, values
-        // and fields too (Spark builds the relation over
-        // `dataSchema.asNullable`, declared or inferred).
-        schema
-            .fields()
-            .iter()
-            .map(|f| TableColumn::new(f.name(), f.data_type().as_nullable(), true))
-            .collect()
-    } else {
-        files
-            .infer(format, &qualified, options)
-            .await
-            .map_err(fail)?
-            .into_iter()
-            // Spark reads every file column as nullable, nested elements,
-            // values and fields too (`HadoopFsRelation` over
-            // `dataSchema.asNullable`), as the scan's rows are typed.
-            .map(|c| TableColumn {
-                nullable: true,
-                data_type: c.data_type.as_nullable(),
-                ..c
-            })
-            .collect()
-    };
+    // A user schema is never checked against inference: the files are read
+    // as it says (Spark's `userSpecifiedSchema`). Either way every file
+    // column is nullable, nested elements, values and fields too
+    // (`HadoopFsRelation` over `dataSchema.asNullable`), as the scan's rows
+    // are typed.
+    let columns = match schema {
+        Some(schema) => files.with_schema(format, &qualified, options, schema).await,
+        None => files.infer(format, &qualified, options).await,
+    }
+    .map_err(fail)?
+    .into_iter()
+    .map(|c| TableColumn {
+        nullable: true,
+        data_type: c.data_type.as_nullable(),
+        ..c
+    })
+    .collect();
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {

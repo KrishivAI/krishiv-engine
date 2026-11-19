@@ -17,6 +17,20 @@ ignore = [
     # below); paste is a proc macro, so nothing of it is linked. Drop this with
     # the skip-tree, when iceberg-rust releases on the workspace Arrow major.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade" },
+    # chrono is declared unmaintained (chronotope/chrono#1768); all versions are
+    # affected and there is no successor release. Every Arrow crate depends on it
+    # (arrow-array, arrow-arith, ... at both workspace and iceberg majors), and the
+    # workspace uses it directly too, so it cannot be dropped until Arrow moves off
+    # it. Unmaintained, not a vulnerability. Revisit when Arrow switches.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained; required by every Arrow crate; no safe upgrade" },
+    # humantime was declared unmaintained in the same announcement as chrono
+    # (chronotope/chrono#1768); it has no dependencies of its own. It is in default
+    # builds through krishiv-store's `cloud` feature (HTTP client duration
+    # settings), object_store 0.14's cloud features and sqllogictest 0.29
+    # (krishiv-testkit), and with all features also through console-subscriber
+    # behind krishiv-exec's `tokio-console`. Unmaintained, not a vulnerability.
+    # Revisit when those drop it and krishiv-store moves to a maintained parser.
+    { id = "RUSTSEC-2026-0542", reason = "unmaintained; through krishiv-store (cloud), object_store 0.14, sqllogictest 0.29 and console-subscriber; no safe upgrade" },
 ]
 
 [licenses]

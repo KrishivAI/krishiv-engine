@@ -14,6 +14,134 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let warehouse = self.warehouse_dir()?;
+        let Some(new) = self.new_table(t, &env)? else {
+            return self.empty_frame().await;
+        };
+        let NewTable {
+            name,
+            mode,
+            partition_names,
+            typed_partitions,
+            provider,
+            provider_written,
+        } = new;
+        let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
+        // Stored store options redirect every later read of the table: a server-scoped key
+        // (endpoint, region, account, key file) is `Manage` on the cluster, asked before the
+        // table is stored (P3-T067b); readers are not asked again.
+        self.authorize_store_options(
+            krishiv_sql::StatementClass::Ddl,
+            &self.state.conf.snapshot(),
+            options.keys().map(String::as_str),
+        )
+        .await?;
+        let properties = options_of(&t.tblproperties, original);
+        #[cfg(feature = "delta")]
+        let located =
+            t.location.is_some() || options.keys().any(|k| k.eq_ignore_ascii_case("path"));
+        let (external, location) = new_table_location(t, &mut options, &warehouse, &name)?;
+        let mut table = CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: !external,
+            provider,
+            provider_written,
+            location,
+            columns: Vec::new(),
+            options,
+            properties,
+            comment: t.comment.clone(),
+            created_ms: now_ms(),
+            root: warehouse.clone(),
+            view: None,
+            layout: TableLayout::default(),
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
+            stamp: 0,
+        };
+        #[cfg(feature = "delta")]
+        if is_delta_table(&table) && t.as_query.is_none() {
+            // delta-spark compares the whole declared schema, typed partition columns and
+            // `NOT NULL` included, with the log's.
+            let mut declared = self.declared_columns(t, original, &typed_partitions)?;
+            super::delta::keep_not_null(&mut declared, t, &typed_partitions);
+            self.create_delta_table(table, t, &declared, &name, &partition_names, mode, located)
+                .await?;
+            return self.empty_frame().await;
+        }
+        let layout = LayoutRequest {
+            partition_by: &partition_names,
+            bucket: t.bucket.as_ref(),
+        };
+        match &t.as_query {
+            Some(query) => {
+                self.create_table_as(table, query, mode, &layout, ids)
+                    .await?;
+            }
+            None => {
+                table.columns = self.declared_columns(t, original, &typed_partitions)?;
+                // `CREATE TABLE t USING fmt LOCATION 'dir'` without columns: Spark reads the schema, and the partition
+                // columns of `key=value` directories, from the files (SQL-19).
+                let discovered: Vec<String> = if table.columns.is_empty() {
+                    check_inferable(&layout, external, &table.provider_written)?;
+                    let unable = || -> KrishivError {
+                        krishiv_common::error::UnableToInferSchema {
+                            format: table.provider_written.clone(),
+                        }
+                        .into()
+                    };
+                    let location = table.location.to_string_lossy().into_owned();
+                    // Spark ignores a location that does not exist and finds no files to infer from.
+                    table.columns = match self
+                        .infer_file_columns(&table.provider, &[location.as_str()], &table.options)
+                        .await
+                    {
+                        Ok(columns) => columns,
+                        Err(e)
+                            if e.error_class()
+                                == krishiv_common::error::ErrorClass::PathNotFound =>
+                        {
+                            return Err(unable());
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    if table.columns.is_empty() {
+                        return Err(unable());
+                    }
+                    // The partition columns of `key=value` directories (hidden and `_`-prefixed entries are not).
+                    crate::partition_keys::partition_keys(&table.location)?
+                } else {
+                    Vec::new()
+                };
+                let partition_by: &[String] = if discovered.is_empty() {
+                    layout.partition_by
+                } else {
+                    &discovered
+                };
+                table.layout = layout_of(
+                    &name,
+                    &table.provider,
+                    &mut table.columns,
+                    partition_by,
+                    layout.bucket,
+                    env.analysis.conf.case_sensitive,
+                )?;
+                self.add_table(table, mode, false).await?;
+            }
+        }
+        self.empty_frame().await
+    }
+
+    /// The checks of a `CREATE TABLE` up to the location of the new table, which change nothing: the
+    /// name, provider and layout clauses Krishiv refuses, the namespace, `OR REPLACE` (refused), and
+    /// whether the table exists (`TABLE_OR_VIEW_ALREADY_EXISTS`; `None` with `IF NOT EXISTS`, the
+    /// statement does nothing). The run's first steps, and analyze's (`questions.rs`).
+    pub(super) fn new_table<'t>(
+        &self,
+        t: &'t CreateTable,
+        env: &QueryEnv,
+    ) -> Result<Option<NewTable<'t>>, KrishivError> {
         if t.temporary {
             return Err(unsupported("CREATE TEMPORARY TABLE"));
         }
@@ -41,7 +169,7 @@ impl Session {
         });
         let provider_written = self.written_provider(using.clone());
         let provider = self.provider_of(using)?;
-        let name = self.table_name(&t.name, &env)?;
+        let name = self.table_name(&t.name, env)?;
         self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -74,7 +202,7 @@ impl Session {
             // A name taken by a temporary view is not a table; the table is
             // created beside it in its namespace, as in Spark.
         } else if mode == CreateMode::IfNotExists {
-            return self.empty_frame().await;
+            return Ok(None);
         } else {
             // Before anything is written (a CTAS writes first).
             return Err(krishiv_common::error::TableOrViewAlreadyExists {
@@ -82,149 +210,49 @@ impl Session {
             }
             .into());
         }
-        let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
-        // Stored store options redirect every later read of the table: a server-scoped key
-        // (endpoint, region, account, key file) is `Manage` on the cluster, asked before the
-        // table is stored (P3-T067b); readers are not asked again.
-        self.authorize_store_options(
-            krishiv_sql::StatementClass::Ddl,
-            &self.state.conf.snapshot(),
-            options.keys().map(String::as_str),
-        )
-        .await?;
-        let properties = options_of(&t.tblproperties, original);
-        // A `path` option is the table's location, as in Spark.
-        let path_key = options
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case("path"))
-            .cloned();
-        let location_text = match (&t.location, path_key) {
-            (Some(l), _) => Some(l.clone()),
-            (None, Some(k)) => options.remove(&k),
-            (None, None) => None,
-        };
-        let external = t.external || location_text.is_some();
-        let location = match &location_text {
-            Some(l) if l.is_empty() => {
-                return Err(krishiv_common::error::InvalidEmptyLocation {
-                    location: l.clone(),
-                }
-                .into());
-            }
-            Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
-            None => managed_location(&warehouse, &name.namespace, &name.name),
-        };
-        let mut table = CatalogTable {
-            namespace: name.namespace.clone(),
-            name: name.name.clone(),
-            managed: !external,
+        Ok(Some(NewTable {
+            name,
+            mode,
+            partition_names,
+            typed_partitions,
             provider,
             provider_written,
-            location,
-            columns: Vec::new(),
-            options,
-            properties,
-            comment: t.comment.clone(),
-            created_ms: now_ms(),
-            root: warehouse.clone(),
-            view: None,
-            layout: TableLayout::default(),
-            column_stats: BTreeMap::new(),
-            incarnation: 0,
-            data_version: 0,
-            stamp: 0,
-        };
-        #[cfg(feature = "delta")]
-        if is_delta_table(&table) && t.as_query.is_none() {
-            let located = location_text.is_some();
-            // delta-spark compares the whole declared schema, typed partition columns and
-            // `NOT NULL` included, with the log's.
-            let mut declared = self.declared_columns(t, original, &typed_partitions)?;
-            super::delta::keep_not_null(&mut declared, t, &typed_partitions);
-            self.create_delta_table(table, t, &declared, &name, &partition_names, mode, located)
-                .await?;
-            return self.empty_frame().await;
+        }))
+    }
+
+    /// The declared columns of a `CREATE TABLE` without a query: its column elements, then its typed
+    /// partition columns, checked for duplicates together.
+    pub(super) fn declared_columns(
+        &self,
+        t: &CreateTable,
+        original: &str,
+        typed_partitions: &[&krishiv_sql::ast::PartitionColumn],
+    ) -> Result<Vec<StoreColumn>, KrishivError> {
+        let mut columns = self.columns_of(t, original)?;
+        let mut typed = Vec::with_capacity(typed_partitions.len());
+        for c in typed_partitions {
+            let ColumnName::Ident(ident) = &c.name else {
+                return Err(unsupported("IDENTIFIER() column names"));
+            };
+            typed.push(ident);
         }
-        let layout = LayoutRequest {
-            partition_by: &partition_names,
-            bucket: t.bucket.as_ref(),
-        };
-        match &t.as_query {
-            Some(query) => {
-                self.create_table_as(table, query, mode, &layout, ids)
-                    .await?;
-            }
-            None => {
-                table.columns = self.declared_columns(t, original, &typed_partitions)?;
-                // `CREATE TABLE t USING fmt LOCATION 'dir'` without columns: Spark reads the schema, and the partition
-                // columns of `key=value` directories, from the files (SQL-19).
-                let discovered: Vec<String> = if table.columns.is_empty() {
-                    // Spark infers the partitioning and the bucketing of a table without a column list; naming them is an error.
-                    if !layout.partition_by.is_empty() {
-                        return Err(krishiv_common::error::SpecifyPartitionIsNotAllowed {}.into());
-                    }
-                    if layout.bucket.is_some() {
-                        return Err(krishiv_common::error::SpecifyBucketingIsNotAllowed {}.into());
-                    }
-                    let unable = || -> KrishivError {
-                        krishiv_common::error::UnableToInferSchema {
-                            format: table.provider_written.clone(),
-                        }
-                        .into()
-                    };
-                    // A managed table has no files to read a schema from.
-                    if !external {
-                        return Err(unable());
-                    }
-                    let location = table.location.to_string_lossy().into_owned();
-                    // Spark ignores a location that does not exist and finds no files to infer from.
-                    table.columns = match self
-                        .infer_file_columns(&table.provider, &[location.as_str()], &table.options)
-                        .await
-                    {
-                        Ok(columns) => columns,
-                        Err(e)
-                            if e.error_class()
-                                == krishiv_common::error::ErrorClass::PathNotFound =>
-                        {
-                            return Err(unable());
-                        }
-                        Err(e) => return Err(e),
-                    };
-                    if table.columns.is_empty() {
-                        return Err(unable());
-                    }
-                    // The partition columns of `key=value` directories (hidden and `_`-prefixed entries are not).
-                    crate::partition_keys::partition_keys(&table.location)?
-                } else {
-                    Vec::new()
-                };
-                let partition_by: &[String] = if discovered.is_empty() {
-                    layout.partition_by
-                } else {
-                    &discovered
-                };
-                krishiv_io::check_declared_schema(
-                    &table.provider,
-                    &arrow_schema::Schema::new(
-                        table
-                            .columns
-                            .iter()
-                            .map(|c| c.data_type.to_arrow_field(&c.name, true))
-                            .collect::<Vec<_>>(),
-                    ),
-                )?;
-                table.layout = crate::partitions::table_layout(
-                    &name,
-                    &mut table.columns,
-                    partition_by,
-                    layout.bucket,
-                    env.analysis.conf.case_sensitive,
-                )?;
-                self.add_table(table, mode, false).await?;
-            }
+        // A typed partition column is a column of the table's schema: checked with the others.
+        check_column_name_duplication(
+            columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .chain(typed.iter().map(|i| i.value.as_str())),
+            self.query_env().analysis.conf.case_sensitive,
+        )?;
+        for (c, ident) in typed_partitions.iter().zip(typed) {
+            columns.push(StoreColumn::declared(
+                ident.value.clone(),
+                &c.data_type,
+                None,
+                c.comment.clone(),
+            )?);
         }
-        self.empty_frame().await
+        Ok(columns)
     }
 
     /// The provider as written in `using`, or `spark.sql.sources.default`'s
@@ -300,41 +328,6 @@ impl Session {
         Ok(columns)
     }
 
-    /// The declared columns of `t`: its column list, then its typed `PARTITIONED BY` columns
-    /// (columns of the table's schema, checked for duplicates with the others). Every column is
-    /// nullable, as Spark makes a file source's columns.
-    pub(super) fn declared_columns(
-        &self,
-        t: &CreateTable,
-        original: &str,
-        typed_partitions: &[&krishiv_sql::ast::PartitionColumn],
-    ) -> Result<Vec<StoreColumn>, KrishivError> {
-        let mut columns = self.columns_of(t, original)?;
-        let mut typed = Vec::with_capacity(typed_partitions.len());
-        for c in typed_partitions {
-            let ColumnName::Ident(ident) = &c.name else {
-                return Err(unsupported("IDENTIFIER() column names"));
-            };
-            typed.push(ident);
-        }
-        check_column_name_duplication(
-            columns
-                .iter()
-                .map(|c| c.name.as_str())
-                .chain(typed.iter().map(|i| i.value.as_str())),
-            self.query_env().analysis.conf.case_sensitive,
-        )?;
-        for (c, ident) in typed_partitions.iter().zip(typed) {
-            columns.push(StoreColumn::declared(
-                ident.value.clone(),
-                &c.data_type,
-                None,
-                c.comment.clone(),
-            )?);
-        }
-        Ok(columns)
-    }
-
     /// Adds `table` to the store, creating its directory first. A replaced
     /// managed table's directory is deleted after the metadata changed.
     pub(super) async fn add_table(
@@ -368,6 +361,9 @@ impl Session {
                 location: table.location.display().to_string(),
             }
             .into());
+        }
+        if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &table.location);
         }
         let checked = self
             .authorize_location(&table.location, table.managed)
@@ -468,6 +464,7 @@ impl Session {
         // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
         // the table directory on the way to being refused (the writer asks again for the files it writes).
         let owned = if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &table.location);
             let checked = self
                 .authorize_path(
                     &table.location,
@@ -543,7 +540,7 @@ impl Session {
                     properties: table.properties.clone(),
                 },
                 krishiv_exec::planner::WriteMode::Append,
-                BTreeMap::new(),
+                super::delta_writes::writer_options(&table.options),
                 &quoted(&table.namespace, &table.name),
             )
             .await?;
@@ -791,7 +788,7 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.table, &env)?;
-        let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
+        let table = self.table_for_read_command(&name, "ANALYZE TABLE", &env)?;
         if let Some(spec) = &a.partition {
             if !matches!(a.columns, AnalyzeColumns::All) {
                 return Err(unsupported("ANALYZE TABLE ... PARTITION ... FOR COLUMNS"));
@@ -1016,4 +1013,100 @@ impl Session {
             .cache
             .invalidate_table(&format!("{}.{}", name.namespace, name.name));
     }
+}
+
+/// A `CREATE TABLE` past [`Session::new_table`]'s checks: the table to add.
+pub(super) struct NewTable<'t> {
+    /// The new table's name.
+    pub(super) name: TableName,
+    /// `IF NOT EXISTS` or not.
+    pub(super) mode: CreateMode,
+    /// The `PARTITIONED BY` column names.
+    pub(super) partition_names: Vec<String>,
+    /// The typed `PARTITIONED BY` columns (declared there, not among the columns).
+    pub(super) typed_partitions: Vec<&'t krishiv_sql::ast::PartitionColumn>,
+    /// The provider's short name.
+    pub(super) provider: String,
+    /// The provider as written.
+    pub(super) provider_written: String,
+}
+
+/// Whether the new table `name` is external and its location: `LOCATION`, else a `path` option (removed
+/// from `options`: it is the location, as in Spark), else the managed location under `warehouse`.
+///
+/// # Errors
+/// `INVALID_EMPTY_LOCATION` for an empty location.
+pub(super) fn new_table_location(
+    t: &CreateTable,
+    options: &mut BTreeMap<String, String>,
+    warehouse: &Path,
+    name: &TableName,
+) -> Result<(bool, PathBuf), KrishivError> {
+    // A `path` option is the table's location, as in Spark.
+    let path_key = options
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("path"))
+        .cloned();
+    let location_text = match (&t.location, path_key) {
+        (Some(l), _) => Some(l.clone()),
+        (None, Some(k)) => options.remove(&k),
+        (None, None) => None,
+    };
+    let external = t.external || location_text.is_some();
+    let location = match &location_text {
+        Some(l) if l.is_empty() => {
+            return Err(krishiv_common::error::InvalidEmptyLocation {
+                location: l.clone(),
+            }
+            .into());
+        }
+        Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+        None => managed_location(warehouse, &name.namespace, &name.name),
+    };
+    Ok((external, location))
+}
+
+/// The refusals of a `CREATE TABLE` without columns before its schema is read from the files: Spark infers
+/// the partitioning and the bucketing of such a table, so naming them is an error, and a managed table has
+/// no files to read a schema from.
+pub(super) fn check_inferable(
+    layout: &LayoutRequest<'_>,
+    external: bool,
+    provider_written: &str,
+) -> Result<(), KrishivError> {
+    if !layout.partition_by.is_empty() {
+        return Err(krishiv_common::error::SpecifyPartitionIsNotAllowed {}.into());
+    }
+    if layout.bucket.is_some() {
+        return Err(krishiv_common::error::SpecifyBucketingIsNotAllowed {}.into());
+    }
+    if !external {
+        return Err(krishiv_common::error::UnableToInferSchema {
+            format: provider_written.to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// The layout of a new table with `columns` (the provider's schema check first), partitioned by
+/// `partition_by` and bucketed by `bucket`.
+pub(super) fn layout_of(
+    name: &TableName,
+    provider: &str,
+    columns: &mut Vec<StoreColumn>,
+    partition_by: &[String],
+    bucket: Option<&krishiv_sql::ast::BucketSpec>,
+    case_sensitive: bool,
+) -> Result<TableLayout, KrishivError> {
+    krishiv_io::check_declared_schema(
+        provider,
+        &arrow_schema::Schema::new(
+            columns
+                .iter()
+                .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                .collect::<Vec<_>>(),
+        ),
+    )?;
+    crate::partitions::table_layout(name, columns, partition_by, bucket, case_sensitive)
 }

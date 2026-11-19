@@ -16,6 +16,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "from_avro",
+        "PySpark has it in `pyspark.sql.avro.functions`, not `pyspark.sql.functions`",
+    ),
+    (
+        "to_avro",
+        "PySpark has it in `pyspark.sql.avro.functions`, not `pyspark.sql.functions`",
+    ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
     ("current_time", "TIME has no Python mapping yet (P2-T181)"),
@@ -68,6 +76,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (
         "__collation_array_set",
         "internal: array_distinct, union, intersect and except by collation keys",
+    ),
+    (
+        "__window_time",
+        "internal: `window_time(w)`, which the analyzer renames the calls to",
+    ),
+    (
+        "__time_windows",
+        "internal: the windows of a row, built by the analyzer for `window(ts, ...)`",
     ),
     (
         "__collation_key",

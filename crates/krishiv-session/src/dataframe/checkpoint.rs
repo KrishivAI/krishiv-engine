@@ -12,20 +12,26 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use krishiv_common::config::CHECKPOINT_DIR;
-use krishiv_common::error::{KrishivError, LegacyErrorTemp3016};
+use krishiv_common::error::{InternalError, KrishivError, LegacyErrorTemp3016};
 use krishiv_memory::{ConsumerId, MemoryPool, Reservation, SpillConfig, SpillFile, SpillManager};
-use krishiv_plan::{LogicalPlan, Origin, PlanId};
+use krishiv_plan::{LogicalPlan, Origin, PlanId, PlanNode, ReadSource};
 use krishiv_types::batch::Batch;
 
 use super::{DataFrame, StorageLevel};
 use crate::cache::{CacheDisk, batch_bytes};
 use crate::session::Session;
 
+/// The table name of the leaf that stands for a lazy checkpoint until its rows are taken; it is
+/// replaced before any analysis, so it is never looked up. It starts with the reserved cache prefix: no
+/// table of a user's can have its name.
+const LAZY_LEAF: &str = "__krishiv_cache_lazy_checkpoint";
+
 /// A checkpoint whose rows are not taken yet: `marker` is the plan id of the node standing in for
 /// the snapshot in the result's plan, `source` the frame that produces the rows.
 #[derive(Debug)]
 pub(super) struct LazyCheckpoint {
-    source: DataFrame,
+    /// Released once the rows are taken: the snapshot stands on its own then.
+    source: Mutex<Option<DataFrame>>,
     dir: Option<PathBuf>,
     marker: PlanId,
     taken: futures::lock::Mutex<Option<DataFrame>>,
@@ -43,13 +49,6 @@ pub(crate) fn stands_on_materializing_checkpoint(
             .downcast::<LazyCheckpoint>()
             .is_ok_and(|c| c.materializing.load(std::sync::atomic::Ordering::SeqCst))
     })
-}
-
-/// Whether `keep` holds a lazy checkpoint: the plan beside it stands for a snapshot, not for what
-/// its sources show now.
-pub(crate) fn has_lazy_checkpoint(keep: &[Arc<dyn std::any::Any + Send + Sync>]) -> bool {
-    keep.iter()
-        .any(|k| Arc::clone(k).downcast::<LazyCheckpoint>().is_ok())
 }
 
 /// Clears `materializing` when the rows are taken, fail or the future is dropped.
@@ -79,8 +78,22 @@ impl LazyCheckpoint {
         self.materializing
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let _flag = Materializing(&self.materializing);
-        let frame = self.source.take_snapshot(self.dir.clone()).await?;
+        let source = self
+            .source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                KrishivError::from(InternalError {
+                    message: "a lazy checkpoint lost its source before taking its rows".to_owned(),
+                })
+            })?;
+        let frame = source.take_snapshot(self.dir.clone()).await?;
         *taken = Some(frame.clone());
+        self.source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         Ok(frame)
     }
 }
@@ -142,15 +155,24 @@ impl DataFrame {
             .on_executor(async move { df.analysis().await.map(|_| ()) })
             .await?;
         let marker = self.session.next_plan_id();
-        let plan = LogicalPlan::clone(&self.plan).with_origin(Origin::plan(marker));
+        // A leaf, not the source's plan: the lineage stays with `LazyCheckpoint::source` until the
+        // rows are taken, so frames built on this one (a loop of joins) do not carry it along.
+        let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+            name: vec![LAZY_LEAF.to_owned()],
+            options: std::collections::BTreeMap::new(),
+        }))
+        .with_origin(Origin::plan(marker));
         let mut out = Self {
             plan: Arc::new(plan),
             analysis: Arc::default(),
             trace: None,
             ..self.clone()
         };
+        // The source's own `keep` stays with `LazyCheckpoint::source`: carried here too it would
+        // double at every join of a frame with one derived from it.
+        out.keep.clear();
         out.keep.push(Arc::new(LazyCheckpoint {
-            source: self.clone(),
+            source: Mutex::new(Some(self.clone())),
             dir,
             marker,
             taken: futures::lock::Mutex::new(None),

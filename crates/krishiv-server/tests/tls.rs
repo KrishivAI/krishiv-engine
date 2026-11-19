@@ -146,7 +146,8 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     token: Option<&str>,
 ) -> String {
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
-    let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n");
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n");
     s.write_all(request.as_bytes()).await.expect("write");
     let mut out = Vec::new();
     // A server that closes without `close_notify` ends the read with an error; keep what came.
