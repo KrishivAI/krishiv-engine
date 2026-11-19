@@ -1321,6 +1321,7 @@ impl UdfHost for ArtifactSpy {
         &self,
         _: &str,
         _: Option<&str>,
+        _: bool,
         session: &str,
         _: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime> {

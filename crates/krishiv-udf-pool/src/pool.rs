@@ -154,16 +154,30 @@ pub struct Owner {
     /// The principal's tenant (multi-tenant servers). Workers are never shared across tenants, and the
     /// tenant's workers and running calls are bounded together (`krishiv.python.worker.maxPerTenant`).
     pub tenant: Option<String>,
+    /// The principal is one of several the server tells apart (authentication on). With authentication off
+    /// every session has the one local principal, so there is nothing to cap it against: such an owner
+    /// without a tenant is in no cap group, and only `maxTotal` and `maxPerSession` bound it.
+    pub capped: bool,
 }
 
 impl Owner {
     /// What the per-tenant caps count by: the tenant, or the principal when it has none (so a principal of a
     /// single-tenant server cannot take the whole pool either). Prefixed, so a tenant and a principal of the
     /// same name are two groups.
-    pub(crate) fn group(&self) -> String {
+    pub(crate) fn group(&self) -> Option<String> {
         match &self.tenant {
-            Some(t) => format!("t:{t}"),
-            None => format!("p:{}", self.principal),
+            Some(t) => Some(format!("t:{t}")),
+            None if self.capped => Some(format!("p:{}", self.principal)),
+            None => None,
+        }
+    }
+
+    /// Whether both are in the same cap group (no allocation).
+    pub(crate) fn same_group(&self, other: &Owner) -> bool {
+        match (&self.tenant, &other.tenant) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => self.capped && other.capped && self.principal == other.principal,
+            _ => false,
         }
     }
 }
@@ -188,7 +202,7 @@ struct State {
     live: usize,
     per_owner: HashMap<Owner, usize>,
     /// Live workers per cap group ([`Owner::group`]).
-    per_tenant: HashMap<String, usize>,
+    per_group: HashMap<String, usize>,
     /// Owners whose session ended while some of their workers were busy: those are stopped on return.
     released: HashSet<Owner>,
 }
@@ -386,7 +400,7 @@ impl Pool {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
     /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
@@ -394,23 +408,30 @@ impl Pool {
         self.inner
             .calls
             .submit_task(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
-    fn refused(&self, refused: Refused) -> KrishivError {
+    fn refused(&self, refused: Refused, owner: &Owner) -> KrishivError {
         match refused {
             Refused::NoThread(why) => internal(why),
-            Refused::Reserve => {
-                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
-            }
+            Refused::Reserve => self.worker_limit(
+                "A scalar Python UDF call beside an open Python UDF task",
+                2,
+                owner,
+            ),
         }
     }
 
     /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
     /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
-    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+    pub(crate) fn worker_limit(
+        &self,
+        operation: &str,
+        needed: usize,
+        owner: &Owner,
+    ) -> KrishivError {
         let config = &self.inner.config;
-        let (setting, value) = if self.inner.calls.tenant_bound() {
+        let (setting, value) = if self.inner.calls.tenant_bound(owner) {
             ("krishiv.python.worker.maxPerTenant", config.max_per_tenant)
         } else if self.inner.calls.threads_bound() {
             ("krishiv.python.worker.maxTotal", config.max_total)
@@ -423,7 +444,7 @@ impl Pool {
         KrishivPythonWorkerLimit {
             operation: operation.to_owned(),
             needed: needed.to_string(),
-            available: self.inner.calls.slot_limit_for().to_string(),
+            available: self.inner.calls.slot_limit_for(owner).to_string(),
             setting: setting.to_owned(),
             value: value.to_string(),
         }
@@ -471,13 +492,15 @@ impl Pool {
             let mine = state.per_owner.get(owner).copied().unwrap_or(0);
             {
                 let group = owner.group();
-                let theirs = state.per_tenant.get(&group).copied().unwrap_or(0);
-                if theirs >= self.inner.config.max_per_tenant {
+                let theirs = group
+                    .as_ref()
+                    .map_or(0, |g| state.per_group.get(g).copied().unwrap_or(0));
+                if group.is_some() && theirs >= self.inner.config.max_per_tenant {
                     // At the tenant's cap: stop its longest-idle worker of another key (another session,
                     // interpreter or artifact set) rather than wait for the idle timeout; never another
                     // tenant's.
                     if let Some(victim) =
-                        state.take_oldest_idle(|k| k.owner.group() == group && *k != key)
+                        state.take_oldest_idle(|k| k.owner.same_group(owner) && *k != key)
                     {
                         drop(state);
                         drop(victim);
@@ -497,7 +520,9 @@ impl Pool {
                 if state.live < self.inner.config.max_total {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
-                    *state.per_tenant.entry(owner.group()).or_default() += 1;
+                    if let Some(g) = owner.group() {
+                        *state.per_group.entry(g).or_default() += 1;
+                    }
                     drop(state);
                     return match self.start(interpreter, artifacts, owner, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
@@ -918,11 +943,12 @@ impl State {
     /// One worker of `owner` is gone.
     fn forget(&mut self, owner: &Owner) {
         self.live = self.live.saturating_sub(1);
-        let group = owner.group();
-        if let Some(n) = self.per_tenant.get_mut(&group) {
+        if let Some(group) = owner.group()
+            && let Some(n) = self.per_group.get_mut(&group)
+        {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                self.per_tenant.remove(&group);
+                self.per_group.remove(&group);
             }
         }
         if let Some(n) = self.per_owner.get_mut(owner) {

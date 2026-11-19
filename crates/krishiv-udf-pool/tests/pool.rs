@@ -80,6 +80,7 @@ fn owner(session: &str) -> Owner {
         principal: "alice".to_owned(),
         session: session.to_owned(),
         tenant: None,
+        capped: true,
     }
 }
 
@@ -967,6 +968,7 @@ fn the_session_cap_stops_an_idle_worker_of_another_interpreter() {
 fn tenant_owner(tenant: &str, session: &str) -> Owner {
     Owner {
         tenant: Some(tenant.to_owned()),
+        capped: true,
         ..owner(session)
     }
 }
@@ -1048,6 +1050,7 @@ fn a_principal_without_a_tenant_is_capped_like_a_tenant() {
         principal: name.to_owned(),
         session: session.to_owned(),
         tenant: None,
+        capped: true,
     };
     let m1 = SessionUdfs::new(pool.clone(), principal("mallory", "s1"));
     let m2 = SessionUdfs::new(pool.clone(), principal("mallory", "s2"));

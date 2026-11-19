@@ -164,7 +164,7 @@ pub static PYTHON_WORKER_MAX_PER_TENANT: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(32)),
     doc: "Most Python UDF worker processes one tenant runs at once, over all its sessions, and \
           most calls it runs at once; further calls wait, so one tenant cannot take every worker \
-          or call thread. Sessions without a tenant count per principal. A tenant's workers are \
+          or call thread. Sessions without a tenant count per principal; with authentication off there is no such cap. A tenant's workers are \
           never shared with another tenant.",
     scope: Scope::Cluster,
     version_added: "0.3.0",

@@ -268,6 +268,7 @@ impl crate::UdfHost for CountingHost {
         &self,
         _: &str,
         _: Option<&str>,
+        _: bool,
         _: &str,
         _: crate::RunnerConf,
     ) -> Arc<dyn crate::SessionUdfRuntime> {

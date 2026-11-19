@@ -83,6 +83,7 @@ fn udfs(python: &Path) -> (Pool, SessionUdfs) {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
             tenant: None,
+            capped: true,
         },
     );
     (pool, udfs)

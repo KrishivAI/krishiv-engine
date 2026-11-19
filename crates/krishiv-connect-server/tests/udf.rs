@@ -684,6 +684,7 @@ impl UdfHost for Spy {
         &self,
         _: &str,
         _: Option<&str>,
+        _: bool,
         _: &str,
         _: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime> {

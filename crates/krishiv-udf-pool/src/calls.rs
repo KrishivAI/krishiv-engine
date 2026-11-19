@@ -188,12 +188,14 @@ impl Queue {
 
 /// Adds `n` to `group`'s count.
 fn group_add(counts: &mut HashMap<String, usize>, owner: &Owner, n: usize) {
-    *counts.entry(owner.group()).or_default() += n;
+    if let Some(g) = owner.group() {
+        *counts.entry(g).or_default() += n;
+    }
 }
 
 /// Takes one from `group`'s count, removing it at zero.
 fn group_sub(counts: &mut HashMap<String, usize>, owner: &Owner) {
-    let g = owner.group();
+    let Some(g) = owner.group() else { return };
     if let Some(n) = counts.get_mut(&g) {
         *n = n.saturating_sub(1);
         if *n == 0 {
@@ -203,7 +205,9 @@ fn group_sub(counts: &mut HashMap<String, usize>, owner: &Owner) {
 }
 
 fn group_total(counts: &HashMap<String, usize>, owner: &Owner) -> usize {
-    counts.get(&owner.group()).copied().unwrap_or(0)
+    owner
+        .group()
+        .map_or(0, |g| counts.get(&g).copied().unwrap_or(0))
 }
 
 impl CallThreads {
@@ -309,14 +313,18 @@ impl CallThreads {
         self.owner_calls().saturating_sub(1).max(1)
     }
 
-    /// [`Self::slot_limit`] for `owner`: within its tenant's share when it has a tenant.
-    pub(crate) fn slot_limit_for(&self) -> usize {
-        self.slot_limit().min(self.tenant_slot_limit())
+    /// [`Self::slot_limit`] for `owner`: within its cap group's share when it is in one.
+    pub(crate) fn slot_limit_for(&self, owner: &Owner) -> usize {
+        if owner.group().is_some() {
+            self.slot_limit().min(self.tenant_slot_limit())
+        } else {
+            self.slot_limit()
+        }
     }
 
-    /// Whether the tenant's cap, not the owner's share or the threads, bounds [`Self::slot_limit_for`].
-    pub(crate) fn tenant_bound(&self) -> bool {
-        self.tenant_slot_limit() < self.slot_limit()
+    /// Whether the group's cap, not the owner's share or the threads, bounds [`Self::slot_limit_for`].
+    pub(crate) fn tenant_bound(&self, owner: &Owner) -> bool {
+        owner.group().is_some() && self.tenant_slot_limit() < self.slot_limit()
     }
 
     /// The most relation task slots one tenant's owners hold together: one less than its calls, so a tenant's
@@ -351,7 +359,7 @@ impl CallThreads {
         ticket: &mut Option<TaskTicket>,
         waker: &Waker,
     ) -> (SlotTake, Vec<TaskSlot>) {
-        if n > self.slot_limit_for() {
+        if n > self.slot_limit_for(owner) {
             return (SlotTake::TooMany, Vec::new());
         }
         let mut queue = self.shared.lock();
@@ -451,13 +459,14 @@ impl CallThreads {
         let limit = self.slot_limit();
         let tenant_limit = self.tenant_slot_limit();
         let held_by = |o: &Owner| queue.slots.get(o).copied().unwrap_or(0);
-        let tenant_room =
-            |o: &Owner, n: usize| group_total(&queue.slots_by_group, o) + n <= tenant_limit;
+        let tenant_room = |o: &Owner, n: usize| {
+            o.group().is_none() || group_total(&queue.slots_by_group, o) + n <= tenant_limit
+        };
         // A waiter ahead holds this request back if it is the same owner's, or if its owner has room (it waits
         // for room in all, which this request would take).
         let held_back = queue.waiting_slots.iter().take(ahead).any(|w| {
             &w.owner == owner
-                || w.owner.group() == owner.group()
+                || w.owner.same_group(owner)
                 || (held_by(&w.owner) + w.n <= limit && tenant_room(&w.owner, w.n))
         });
         // With one thread, no task is granted while another owner's call that arrived before the request waits
@@ -513,7 +522,8 @@ impl Shared {
     /// Whether `owner` is under its share and its tenant under the tenant's.
     fn may_run(&self, queue: &Queue, owner: &Owner) -> bool {
         queue.running.get(owner).copied().unwrap_or(0) < self.max_per_owner
-            && group_total(&queue.running_by_group, owner) < self.max_per_tenant
+            && (owner.group().is_none()
+                || group_total(&queue.running_by_group, owner) < self.max_per_tenant)
     }
 
     /// Makes sure a thread will take a runnable queued call: wakes a waiting one, else starts one under the
@@ -610,12 +620,14 @@ mod tests {
             principal: format!("p-{session}"),
             session: session.to_owned(),
             tenant: None,
+            capped: true,
         }
     }
 
     fn tenant_owner(tenant: &str, session: &str) -> Owner {
         Owner {
             tenant: Some(tenant.to_owned()),
+            capped: true,
             ..owner(session)
         }
     }
@@ -713,10 +725,12 @@ mod tests {
         let calls = CallThreads::with_tenant_cap(8, 8, 3, Duration::from_secs(60));
         let waker = futures::task::noop_waker();
         // Owners with a tenant: one less than the tenant's calls, over all its sessions.
-        assert_eq!(calls.slot_limit_for(), 2);
-        // Without a tenant the principal is the cap group.
-        assert_eq!(calls.slot_limit_for(), 2);
-        assert!(calls.tenant_bound());
+        assert_eq!(calls.slot_limit_for(&tenant_owner("t", "a")), 2);
+        // Without a tenant the principal is the cap group; with authentication off there is none.
+        assert_eq!(calls.slot_limit_for(&owner("a")), 2);
+        assert_eq!(calls.slot_limit_for(&uncapped_owner("a")), 7);
+        assert!(calls.tenant_bound(&owner("a")));
+        assert!(!calls.tenant_bound(&uncapped_owner("a")));
         let (take, first) = calls.take_slots(&tenant_owner("t", "a"), 2, &mut None, &waker);
         assert_eq!((take, first.len()), (SlotTake::Taken, 2));
         // The tenant's other session finds none, though its own share is free; another tenant does.
@@ -749,6 +763,42 @@ mod tests {
             principal: principal.to_owned(),
             ..owner(session)
         }
+    }
+
+    fn uncapped_owner(session: &str) -> Owner {
+        Owner {
+            capped: false,
+            ..owner(session)
+        }
+    }
+
+    #[test]
+    fn with_authentication_off_the_sessions_of_the_one_principal_reach_the_thread_bound() {
+        // maxPerTenant 2, but every session is the one local principal: eight run at once (the threads).
+        let calls = CallThreads::with_tenant_cap(8, 8, 2, Duration::from_secs(60));
+        let running = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Barrier::new(9));
+        for i in 0..8 {
+            let (running, gate) = (Arc::clone(&running), Arc::clone(&gate));
+            calls
+                .submit(
+                    Owner {
+                        principal: "local".to_owned(),
+                        ..uncapped_owner(&format!("s{i}"))
+                    },
+                    Box::new(move || {
+                        running.fetch_add(1, Ordering::SeqCst);
+                        gate.wait();
+                    }),
+                )
+                .expect("submitted");
+        }
+        // All eight are running together (the barrier opens only when they are); a cap of 2 would deadlock it.
+        gate.wait();
+        assert_eq!(running.load(Ordering::SeqCst), 8);
+        let waker = futures::task::noop_waker();
+        let (take, held) = calls.take_slots(&uncapped_owner("x"), 7, &mut None, &waker);
+        assert_eq!((take, held.len()), (SlotTake::Taken, 7));
     }
 
     #[test]

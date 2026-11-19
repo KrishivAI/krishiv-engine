@@ -147,7 +147,7 @@ Paths are relative to this crate.
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
 - **Tenants (P3-T072).** `Owner.tenant` (the principal's tenant, from Connect's `SessionOwner`; `None` in single-tenant
-  servers) is part of the key, so a worker never serves two tenants (nor two sessions). The cap group is `Owner::group()`: the tenant, or the principal when it has no tenant (so one principal of a
+  servers) is part of the key, so a worker never serves two tenants (nor two sessions). The cap group is `Owner::group()`: the tenant, or the principal when it has no tenant and `Owner.capped` (authentication on; with it off every session is the one local principal and is in no group, so only `maxTotal`/`maxPerSession` bound it) (so one principal of a
   single-tenant server cannot take the pool either; threat model T-U4/T-D10). A group's live workers
   (`State::per_tenant`) and running calls (`calls.rs` `running_by_group`/`slots_by_group`, O(1) counters,
   `with_tenant_cap`) are capped by

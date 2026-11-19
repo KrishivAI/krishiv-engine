@@ -50,7 +50,7 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_session::auth::{Authenticated, Role, Surface};
+use krishiv_session::auth::{Authenticated, Method, Role, Surface};
 use krishiv_session::{DataFrame, QueryId, Session, Transport};
 
 use crate::artifacts::SessionArtifacts;
@@ -562,6 +562,7 @@ impl SessionManager {
             self.udfs.as_ref(),
             &caller.principal.name,
             caller.principal.tenant.as_deref(),
+            caller.method != Method::None,
             &session,
         );
         let entry = self.new_entry(
