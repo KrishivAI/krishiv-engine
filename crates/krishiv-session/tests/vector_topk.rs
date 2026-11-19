@@ -229,7 +229,7 @@ fn brute_force(n: i32, dim: usize, ks: &[usize]) {
             .enumerate()
             .map(|(i, v)| (i32::try_from(i).unwrap(), kernel(v, &q).to_bits()))
             .collect();
-        // Spark's order: the sort is stable on the row order, so ties keep the lower id first.
+        // Ties are not guaranteed to keep row order in Spark; the random distances here never tie.
         expected.sort_by(|a, b| {
             let (x, y) = (f32::from_bits(a.1), f32::from_bits(b.1));
             let o = if order == "ASC" {
@@ -264,7 +264,7 @@ fn top_k_brute_force_at_100k_by_768() {
     brute_force(100_000, 768, &[1, 10, 1000]);
 }
 
-/// A NULL query vector gives a NULL distance for every row, so the top-k is the first k rows' worth of NULLs and the
+/// query still runs (design 8.1; golden: tests/spark-golden/v4.2.0/inputs/vector-distance.sql:59).
 /// query still runs (design 8.1).
 #[test]
 fn a_null_query_vector_gives_null_distances() {
