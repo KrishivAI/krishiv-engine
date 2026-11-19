@@ -353,8 +353,26 @@ fn cell(column: &dyn Array, row: usize) -> Value {
                 .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
                 .value(row),
         ),
+        // `system.queries.hints` is a list of structs: the advisor's hints reach the query page through this.
+        DataType::List(_) => list_cells(&column.as_list::<i32>().value(row)),
+        DataType::LargeList(_) => list_cells(&column.as_list::<i64>().value(row)),
+        DataType::Struct(fields) => {
+            let st = column.as_struct();
+            Value::Object(
+                fields
+                    .iter()
+                    .zip(st.columns())
+                    .map(|(f, c)| (f.name().clone(), cell(c.as_ref(), row)))
+                    .collect(),
+            )
+        }
         _ => Value::Null,
     }
+}
+
+/// The elements of one list value as a JSON array.
+fn list_cells(values: &dyn Array) -> Value {
+    Value::Array((0..values.len()).map(|i| cell(values, i)).collect())
 }
 
 /// The rows of `batches` as JSON objects.
