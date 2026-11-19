@@ -17,7 +17,7 @@ _CLUSTER_MASTER_PREFIXES = ("yarn", "k8s", "mesos", "spark://")
 _CLUSTER_KEY_PREFIXES = ("spark.executor.", "spark.submit.", "spark.driver.", "spark.dynamicAllocation.")
 
 
-def warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None:
+def _warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None:
     """Warns that ``key=value`` has no effect when it chooses a cluster deployment. ``stacklevel`` counts
     from the caller of this function (1 is the caller), so the warning points at the user's line."""
     ignored = key.startswith(_CLUSTER_KEY_PREFIXES) or (
@@ -54,7 +54,7 @@ class RuntimeConfig:
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
-        warn_if_cluster_setting(key, text, stacklevel=2)
+        _warn_if_cluster_setting(key, text, stacklevel=2)
         self._set(key, text)
 
     def _set(self, key: str, text: str) -> None:

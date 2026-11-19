@@ -20,7 +20,7 @@ from krishiv.errors import (
     unsupported_feature,
 )
 from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
-from krishiv.sql.conf import RuntimeConfig, warn_if_cluster_setting
+from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
@@ -63,7 +63,7 @@ class SparkSession:
             """Stores one option. Every public setter calls this directly, so the cluster-setting
             warning is raised at the same depth (the user's line) for each of them."""
             self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
-            warn_if_cluster_setting(key, self._config[key], stacklevel=3)
+            _warn_if_cluster_setting(key, self._config[key], stacklevel=3)
 
         def appName(self, name: str) -> SparkSession.Builder:
             self._put("spark.app.name", name)

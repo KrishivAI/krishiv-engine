@@ -1264,7 +1264,6 @@ RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
 RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
 RuntimeConfig.def unset(self, key: str) -> None
 class RuntimeConfig()
-def warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None
 ## sql/dataframe.py
 ColumnOrName
 ColumnsOrNames

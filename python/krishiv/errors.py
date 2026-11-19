@@ -528,9 +528,4 @@ def unsupported_feature(feature: str) -> UnsupportedOperationException:
     (``KRISHIV_UNSUPPORTED_FEATURE``, SQLSTATE ``0A000``): for a PySpark method
     whose plan the engine cannot build or run yet, where emulating it is out
     of scope. Raised eagerly, as there is no plan to attach it to."""
-    return UnsupportedOperationException(
-        f"[KRISHIV_UNSUPPORTED_FEATURE] The feature {feature} is not supported by Krishiv yet. SQLSTATE: 0A000",
-        errorClass="KRISHIV_UNSUPPORTED_FEATURE",
-        messageParameters={"feature": feature},
-        sqlState="0A000",
-    )
+    return UnsupportedOperationException(_unsupported_text(feature), **_unsupported_args(feature))
