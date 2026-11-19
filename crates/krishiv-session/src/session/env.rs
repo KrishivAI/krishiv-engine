@@ -137,9 +137,57 @@ pub(crate) struct QueryEnv {
     /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
     pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
     /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
-    /// `krishiv::audit` record ([`crate::access::audit_read`]). Only a caller that falls back to
-    /// an analysis of its own, which is audited, sets it.
-    pub(crate) quiet_denials: bool,
+    /// `krishiv::audit` record ([`crate::access::audit_read`]) and the policy is not told of them.
+    /// Built [`QuietDenials::default`] (off); only [`Self::set_quiet_denials`] turns it on, together
+    /// with the quiet `analysis.policy`, and only a caller that falls back to an analysis of its own,
+    /// which is audited, calls it (T063 review R2-1 Q1).
+    pub(crate) quiet: QuietDenials,
+    /// The session's table functions, as `analysis.table_functions` holds them: asking the analysis's
+    /// policy ([`Self::set_quiet_denials`]), so a trial's `Usage` check before a Python UDTF's `analyze`
+    /// tells the policy nothing either.
+    pub(crate) udtfs: Arc<crate::python_udfs::SessionTableFunctions>,
+}
+
+/// Whether a [`QueryEnv`] is a trial analysis; its flag is private to this module, so it is set only
+/// through [`QueryEnv::set_quiet_denials`], with the policy to match.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct QuietDenials(bool);
+
+impl QueryEnv {
+    /// Whether this is a trial analysis ([`Self::set_quiet_denials`]).
+    pub(crate) fn quiet_denials(&self) -> bool {
+        self.quiet.0
+    }
+
+    /// Whether this analysis is an ordinary one that asks `policy` itself (the session's): what a kept
+    /// analysis must be, so the checks made with it later are audited and told to the policy.
+    pub(crate) fn asks_policy(
+        &self,
+        policy: &Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> bool {
+        !self.quiet.0 && std::ptr::addr_eq(Arc::as_ptr(&self.analysis.policy), Arc::as_ptr(policy))
+    }
+
+    /// Makes this analysis a trial (`quiet`, P3 PR-14d) or an ordinary one: [`Self::quiet_denials`],
+    /// and the policy every read check of the analysis asks (`analysis.policy`, Bind's and the
+    /// session's alike): `policy` itself, or for a trial `policy` behind
+    /// [`crate::access::QuietPolicy`], which decides as `policy` does but is never told of a refusal
+    /// (T063 review R2-1), so the provider counts and audits nothing for a trial either.
+    pub(crate) fn set_quiet_denials(
+        &mut self,
+        quiet: bool,
+        policy: &Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) {
+        self.quiet = QuietDenials(quiet);
+        self.analysis.policy = if quiet {
+            Arc::new(crate::access::QuietPolicy::new(Arc::clone(policy)))
+        } else {
+            Arc::clone(policy)
+        };
+        let udtfs = Arc::new(self.udtfs.with_policy(&self.analysis.policy));
+        self.analysis.table_functions = Arc::clone(&udtfs) as _;
+        self.udtfs = udtfs;
+    }
 }
 
 impl QueryEnv {
@@ -213,5 +261,96 @@ impl Session {
         .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config));
         self.with_python_runtime(worker)
+    }
+}
+
+#[cfg(test)]
+mod quiet_tests {
+    use std::sync::{Arc, Mutex};
+
+    use futures::executor::block_on;
+    use krishiv_common::error::{ErrorClass, KrishivError};
+    use krishiv_common::secret::OptionValue;
+    use krishiv_plan::analyzer::{
+        AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
+    };
+    use krishiv_plan::{LogicalPlan, PlanNode, ReadSource};
+
+    /// Denies `USAGE` on every secret scope; records each refusal it is told of.
+    #[derive(Default)]
+    struct NoSecrets(Mutex<Vec<String>>);
+
+    impl AccessPolicy for NoSecrets {
+        fn version(&self) -> PolicyVersion {
+            PolicyVersion(1)
+        }
+
+        fn check<'a>(
+            &'a self,
+            _: &'a Principal,
+            securable: &'a Securable,
+            privilege: Privilege,
+        ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+            let d =
+                if matches!(securable, Securable::Secret { .. }) && privilege == Privilege::Usage {
+                    AccessDecision::Deny {
+                        reason: "private".to_owned(),
+                    }
+                } else {
+                    AccessDecision::Allow
+                };
+            Box::pin(std::future::ready(Ok(d)))
+        }
+
+        fn denied(&self, _: &Principal, securable: &Securable, privilege: Privilege) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("{privilege} {securable}"));
+        }
+    }
+
+    /// Review Q3: a trial analysis refused by a secret's `USAGE` (asked by Bind, through the
+    /// analysis' policy) tells the policy nothing; the ordinary analysis of the same frame does.
+    #[test]
+    fn a_trials_secret_usage_refusal_is_not_told() {
+        let policy = Arc::new(NoSecrets::default());
+        let s = crate::Session::builder()
+            .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+            .build()
+            .unwrap();
+        let read = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+            "parquet",
+            vec![OptionValue::from_user("path", "/data/x")],
+            [("token".to_owned(), OptionValue::reference("prod", "key"))]
+                .into_iter()
+                .collect(),
+        )));
+        let df = crate::DataFrame::new(s, Arc::new(read));
+        let denied = |r: Result<_, KrishivError>| matches!(r, Err(e) if e.error_class() == ErrorClass::KrishivInsufficientPermissions);
+        assert!(denied(block_on(df.trial_analysis())));
+        assert!(policy.0.lock().unwrap().is_empty());
+        assert!(denied(block_on(df.analysis())));
+        assert_eq!(policy.0.lock().unwrap().len(), 1);
+    }
+
+    /// T063 review R2-1 Q2: a trial analysis that passes is kept as the frame's ordinary one, which
+    /// asks the session's own policy again (not the trial's `QuietPolicy`), so a later check made
+    /// with it is told to the policy.
+    #[test]
+    fn a_kept_trial_analysis_asks_the_sessions_policy() {
+        let s = crate::Session::new().unwrap();
+        let policy = &s.state.policy;
+        // A fresh env is ordinary and asks the session's policy; made a trial, it is quiet and asks a
+        // `QuietPolicy` instead.
+        let mut env = s.query_env();
+        assert!(env.asks_policy(policy) && !env.quiet_denials());
+        env.set_quiet_denials(true, policy);
+        assert!(env.quiet_denials() && !env.asks_policy(policy));
+        // A frame never analyzed, analyzed as a trial, keeps an ordinary analysis.
+        let df = s.range(0, 3, 1, None);
+        let kept = block_on(df.trial_analysis()).unwrap();
+        assert!(kept.env.asks_policy(policy));
+        assert!(block_on(df.analysis()).unwrap().env.asks_policy(policy));
     }
 }

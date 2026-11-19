@@ -573,6 +573,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
+        "spark.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     ),
@@ -595,6 +599,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "krishiv.sql.execution.pythonUDTF.arrow.enabled",
+        &PYTHON_UDTF_ARROW_ENABLED,
     ),
     (
         "krishiv.connect.execute.senderMaxStreamDuration",

@@ -473,6 +473,15 @@ impl Worker {
 
     /// `PYTHON_EXCEPTION` from an `error` message: a Python error the worker reported.
     fn python_error(&mut self, msg: &Message) -> KrishivError {
+        if msg.str_field("kind") == "spark" {
+            if let Some(e) = spark_error(msg.str_field("message")) {
+                return e;
+            }
+            return self.protocol(&format!(
+                "the worker reported an unknown Spark error: {}",
+                msg.str_field("message")
+            ));
+        }
         if msg.str_field("kind") != "python" {
             return self.protocol(&format!(
                 "the worker reported: {}",
@@ -874,10 +883,51 @@ fn check_frames(bytes: &[u8]) -> Result<usize, String> {
     Ok(first.unwrap_or(0))
 }
 
+/// The error Spark's JVM raises converting a 300 UDTF's row (`EvaluatePython.makeFromJava`, v4.2.0), from a
+/// worker's `spark` error (`{class, parameters}`): only the classes that conversion raises; `None` for others.
+fn spark_error(text: &str) -> Option<KrishivError> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let p = |k: &str| v["parameters"][k].as_str().map(str::to_owned);
+    match v["class"].as_str()? {
+        "STRUCT_ARRAY_LENGTH_MISMATCH" => Some(
+            krishiv_common::error::StructArrayLengthMismatch {
+                expected: p("expected")?,
+                actual: p("actual")?,
+            }
+            .into(),
+        ),
+        "NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION" => Some(
+            krishiv_common::error::NumericValueOutOfRangeWithoutSuggestion {
+                rounded_value: p("roundedValue")?,
+                original_value: p("originalValue")?,
+                precision: p("precision")?,
+                scale: p("scale")?,
+            }
+            .into(),
+        ),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::{Int64Array, StringViewArray};
+
+    /// A 300 UDTF row the JVM refuses comes back as Spark's class; an unknown class is no error here.
+    #[test]
+    fn a_spark_error_from_the_worker_is_its_class() {
+        let e = spark_error(r#"{"class":"STRUCT_ARRAY_LENGTH_MISMATCH","parameters":{"expected":"2","actual":"1"}}"#)
+            .expect("known");
+        assert_eq!(e.error_class(), ErrorClass::StructArrayLengthMismatch);
+        assert!(
+            e.to_string()
+                .contains("2 fields are required while 1 values are provided"),
+            "{e}"
+        );
+        assert!(spark_error(r#"{"class":"NOPE","parameters":{}}"#).is_none());
+        assert!(spark_error("not json").is_none());
+    }
     use arrow_schema::{Field, Schema};
     use krishiv_common::error::ErrorClass;
 
