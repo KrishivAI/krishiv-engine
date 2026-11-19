@@ -728,3 +728,22 @@ Results and Spark goldens stay tied to the dataset they were produced from (reco
   DuckDB counts characters; the byte mean must be larger for at least one key, and at most 4 times the character mean). ClickBench q04 (`avg` of an
   int64 column) stays a plain `mismatch` until the overflow can be checked against an independent expected value. Checked on TPC-H SF1 (all 22: 21 `ok`, q08 `mismatch-dialect`) and a 2M-row slice of
   `hits.parquet` (40 of 43 `ok`, q28/q29 `mismatch-dialect`, q04 `mismatch`); the full 100M-row file needs the benchmark server.
+
+## db-benchmark's own scripts (P3-T094 step 1)
+
+`krishiv_bench.dbbench_solution` writes the `krishiv/` solution directory of a checkout of
+<https://github.com/duckdblabs/db-benchmark> (`groupby-krishiv.py`, `join-krishiv.py`, `setup-`, `upg-` and
+`ver-krishiv.sh`), so the benchmark's own runner (`run.sh`, `_run/partitioned_run.sh`) runs Krishiv through the Python
+session and writes `time.csv` / `logs.csv` rows the way every other solution does. The question SQL and the checksum
+columns are the ones of the `h2o-*` suites above (one text for both harnesses); the CSV is loaded once to Parquet in
+`$SPILL_DIR` (untimed), each question is run twice (the benchmark's `run` 1 and 2) and its result is consumed through the
+Arrow stream, never materialised. Nothing here has been run against the real checkout yet: the first run needs a
+Krishiv wheel (`KRISHIV_WHEEL`) and the bench lock.
+
+```bash
+uv run python -m krishiv_bench.dbbench_solution --out ~/db-benchmark/krishiv
+uv run python -m krishiv_bench.dbbench_report --ours time.csv --published upstream/time.csv --data G1_1e7_1e2_0_0
+```
+
+`dbbench_report` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
+Krishiv's ratio to each. Step 2 (the PR to the benchmark repository) waits for the owner's go.
