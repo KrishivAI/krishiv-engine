@@ -91,7 +91,6 @@ pub(super) fn two_file_table(env: &Env, partitions: &[&str]) {
     clippy::too_many_arguments,
     reason = "test helper: the request's parts"
 )]
-#[expect(clippy::needless_pass_by_value, reason = "test helper")]
 fn rewrite(
     env: &Env,
     rl: &Arc<dyn RowLevelTable>,
@@ -101,6 +100,36 @@ fn rewrite(
     condition: Option<(&str, Expr)>,
     affected: u64,
     write_id: &str,
+) -> Result<(), KrishivError> {
+    rewrite_with(
+        env,
+        rl,
+        op,
+        touched,
+        batches,
+        condition,
+        affected,
+        write_id,
+        &[],
+    )
+}
+
+/// [`rewrite`] with `extra` options on the request.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper: the request's parts"
+)]
+#[expect(clippy::needless_pass_by_value, reason = "test helper")]
+fn rewrite_with(
+    env: &Env,
+    rl: &Arc<dyn RowLevelTable>,
+    op: RowLevelOperation,
+    touched: Vec<Vec<u8>>,
+    batches: Vec<RecordBatch>,
+    condition: Option<(&str, Expr)>,
+    affected: u64,
+    write_id: &str,
+    extra: &[(&str, &str)],
 ) -> Result<(), KrishivError> {
     let mut request = RowLevelWrite::new(
         op,
@@ -123,6 +152,9 @@ fn rewrite(
         request
             .options
             .insert(ROW_LEVEL_CONDITION_OPTION.to_owned(), text.to_owned());
+    }
+    for (k, v) in extra {
+        request.options.insert((*k).to_owned(), (*v).to_owned());
     }
     let sink = rl.rewriter(&request)?;
     let input = krishiv_exec::planner::MemoryTable::new(
@@ -808,5 +840,43 @@ fn a_concurrent_remove_of_an_untouched_candidate_file_conflicts() {
             out.unwrap();
             assert_eq!(env.latest(), after + 1);
         }
+    }
+}
+
+#[test]
+fn a_row_level_commit_carries_the_user_metadata_option() {
+    for (op, batches) in [
+        (
+            RowLevelOperation::Delete,
+            rows(&[(1, "a", Some("x")), (3, "c", Some("y"))]),
+        ),
+        (
+            RowLevelOperation::Update,
+            rows(&[
+                (1, "a", Some("x")),
+                (2, "z", Some("x")),
+                (3, "c", Some("y")),
+            ]),
+        ),
+    ] {
+        let env = Env::new();
+        two_file_table(&env, &[]);
+        let table = env.open().unwrap();
+        let files = row_files(&env, &table, op);
+        let rl = table.row_level(op).unwrap();
+        rewrite_with(
+            &env,
+            &rl,
+            op,
+            vec![the_file_of(&files, 2)],
+            batches,
+            Some(("id = 2", eq("id", Literal::Long(2)))),
+            1,
+            "dml-user-metadata",
+            &[(crate::write::dml::USER_METADATA_OPTION, "m")],
+        )
+        .unwrap();
+        let info = commit_info(&env.log(env.latest()));
+        assert_eq!(info["userMetadata"], "m", "{op:?}: {info}");
     }
 }

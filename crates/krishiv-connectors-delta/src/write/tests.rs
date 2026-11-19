@@ -1037,7 +1037,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
                 env.write(&new, WriteMode::Append, rows(&[(1, "a", Some("x"))]), &[])
                     .unwrap_err()
             } else {
-                env.rt.block_on(new.create_empty("w")).unwrap_err()
+                env.rt.block_on(new.create_empty("w", None)).unwrap_err()
             };
             assert_eq!(
                 e.error_class(),
@@ -1070,7 +1070,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
         None,
     )
     .unwrap();
-    env.rt.block_on(new.create_empty("w")).unwrap();
+    env.rt.block_on(new.create_empty("w", None)).unwrap();
     assert_eq!(env.latest(), 0);
 }
 

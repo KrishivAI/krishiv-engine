@@ -185,7 +185,7 @@ impl Session {
         };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
-        request.options = with_conf_user_metadata(options, &analysis.env.config);
+        request.options = super::row_level::with_conf_user_metadata(options, &analysis.env.config);
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
@@ -523,26 +523,6 @@ impl Session {
         )
         .await
     }
-}
-
-/// The session configuration delta-spark reads a commit's `userMetadata` from when the write
-/// has no `userMetadata` option (`DeltaSQLConf.DELTA_USER_METADATA`).
-const USER_METADATA_CONF: &str = "spark.databricks.delta.commitInfo.userMetadata";
-
-/// `options` with the session's [`USER_METADATA_CONF`] as `userMetadata` when they name none:
-/// the option wins, as in delta-spark (`CATALOG-OPTIONS.json` `option_and_conf_user_metadata`).
-fn with_conf_user_metadata(
-    mut options: BTreeMap<String, String>,
-    conf: &krishiv_common::config::Config,
-) -> BTreeMap<String, String> {
-    if !options
-        .keys()
-        .any(|k| k.eq_ignore_ascii_case("userMetadata"))
-        && let Some(v) = crate::conf::get(conf, USER_METADATA_CONF)
-    {
-        options.insert("userMetadata".to_owned(), v);
-    }
-    options
 }
 
 /// Whether `df`'s plan reads the Delta table at `path`.

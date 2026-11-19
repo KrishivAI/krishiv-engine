@@ -30,7 +30,7 @@ Reads with the reader allow-list; writes (append, truncate, `replaceWhere` on pa
 CTAS/new tables) with the writer allow-list, the commit loop and conflict checker, checkpoints; copy-on-write
 `DELETE`/`UPDATE`/`MERGE` (37b-37c); merge-on-read with deletion vectors and DV-only `DELETE` on change-data-feed tables
 (37d); Delta's write options (37e: `userMetadata` and `mergeSchema` reach the commit through `UserOptions` in
-`write/sink.rs`; the session checks the values as delta-spark does and refuses the ones Krishiv does not implement,
+`write/sink.rs`; `DELETE`/`UPDATE`/`MERGE` commits take it from the request's `USER_METADATA_OPTION`, `NewDeltaTable::create_empty` as an argument: the session fills both from `spark.databricks.delta.commitInfo.userMetadata`, `DML-USER-METADATA.json`; the session checks the values as delta-spark does and refuses the ones Krishiv does not implement,
 krishiv-session `table_commands/delta_options.rs`); the change-data-feed refusals of design 6.2, one case each
 (krishiv-session `tests/delta_dml.rs` `delta_cdf_dml_refused`, `tests/delta_merge.rs` `delta_cdf_merge_refused`); the
 oracle-wide no-`INTERNAL_ERROR`, coordinated-commits and kernel-gap tests (krishiv-session `tests/delta_gaps.rs`).

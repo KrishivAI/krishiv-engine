@@ -290,7 +290,7 @@ fn a_create_finds_its_own_version_zero() {
         };
         let txn = take_create(&create).unwrap();
         env.rt
-            .block_on(new_table(&env, &schema, &["k"]).create_empty(winner))
+            .block_on(new_table(&env, &schema, &["k"]).create_empty(winner, None))
             .unwrap();
         let name = new_name(new);
         let out = env

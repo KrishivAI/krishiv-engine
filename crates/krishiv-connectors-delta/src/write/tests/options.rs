@@ -65,3 +65,27 @@ fn user_metadata_and_merge_schema_reach_the_commit() {
         "{info}"
     );
 }
+
+#[test]
+fn an_empty_create_carries_its_user_metadata() {
+    for (user_metadata, want) in [(Some("m"), Value::from("m")), (None, Value::Null)] {
+        let env = Env::new();
+        let table = NewDeltaTable::new(
+            env.engine.clone(),
+            &modes_schema(),
+            vec!["p".to_owned()],
+            BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+        env.rt
+            .block_on(table.create_empty("w", user_metadata))
+            .unwrap();
+        let info = commit_info(&env.log(0));
+        assert_eq!(
+            info.get("userMetadata").cloned().unwrap_or(Value::Null),
+            want,
+            "{info}"
+        );
+    }
+}

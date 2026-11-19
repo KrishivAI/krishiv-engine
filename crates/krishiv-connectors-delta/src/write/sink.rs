@@ -135,17 +135,29 @@ impl NewDeltaTable {
     }
 
     /// Creates the table with no rows (`CREATE TABLE .. USING delta` without a query): version
-    /// 0 with the protocol and metadata only, carrying `write_id`.
+    /// 0 with the protocol and metadata only, carrying `write_id` and `user_metadata` as
+    /// `commitInfo.userMetadata`.
     ///
     /// # Errors
     /// The kernel's create errors (a table already at the root); storage errors.
-    pub async fn create_empty(&self, write_id: &str) -> Result<(), KrishivError> {
+    pub async fn create_empty(
+        &self,
+        write_id: &str,
+        user_metadata: Option<&str>,
+    ) -> Result<(), KrishivError> {
         let new = Arc::clone(&self.table);
         let write_id = write_id.to_owned();
+        let user_metadata = user_metadata.map(str::to_owned);
         new.engine
             .clone()
             .delta_blocking(move |e| -> Result<(), KrishivError> {
-                match plan_create(e, &new, &write_id, None, FileLimits::default())? {
+                match plan_create(
+                    e,
+                    &new,
+                    &write_id,
+                    user_metadata.as_deref(),
+                    FileLimits::default(),
+                )? {
                     Planned::Landed => Ok(()),
                     Planned::Ready { create, .. } => {
                         let txn = take_create(&create)?;

@@ -12,6 +12,12 @@
 //!   catalog-options`) records them: `saveAsTable` append and `writeTo(..).append()` check and
 //!   honour them as a `save` does, `insertInto` ignores them, and every writer takes
 //!   `userMetadata` from `spark.databricks.delta.commitInfo.userMetadata` when no option names it;
+//! - `delta_dml_commits_take_the_conf_user_metadata`: `DELETE`, `UPDATE`, `MERGE` (with and
+//!   without deletion vectors) and an empty `CREATE TABLE` take `commitInfo.userMetadata` from
+//!   `spark.databricks.delta.commitInfo.userMetadata`, as `DML-USER-METADATA.json`
+//!   (`gen_delta_fixtures.py /out dml-user-metadata`) records (its `insert_into_extra` cases,
+//!   `DELTA_METADATA_MISMATCH` where Krishiv raises `INSERT_COLUMN_ARITY_MISMATCH`, are not
+//!   checked yet);
 //! - `delta_no_internal_error_on_oracle_tables`: every oracle table under
 //!   `tests/fixtures/delta-4.4.1/` read, and every write and DML statement kind tried on its own
 //!   copy, never raises `INTERNAL_ERROR`, and every refusal carries a documented class;
@@ -374,6 +380,81 @@ fn delta_catalog_writer_options_match_spark() {
         checked += 1;
     }
     assert_eq!(checked, 32);
+}
+
+/// The oracle's `DML-USER-METADATA.json` (`gen_delta_fixtures.py /out dml-user-metadata`).
+fn dml_user_metadata_oracle() -> Value {
+    serde_json::from_slice(&std::fs::read(fixtures().join("DML-USER-METADATA.json")).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn delta_dml_commits_take_the_conf_user_metadata() {
+    let oracle = dml_user_metadata_oracle();
+    let mut checked = 0;
+    for (name, case) in oracle["cases"].as_object().unwrap() {
+        if name.starts_with("insert_into_extra") {
+            continue;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("dut");
+        let s = Session::new().unwrap();
+        run(
+            &s,
+            "CREATE TEMPORARY VIEW s AS SELECT CAST(2 AS BIGINT) AS id, 5 AS p",
+        )
+        .unwrap();
+        let set_conf = || {
+            for (k, v) in case["conf"].as_object().unwrap() {
+                run(&s, &format!("SET {k} = {}", v.as_str().unwrap())).unwrap();
+            }
+        };
+        if name.starts_with("create_empty") {
+            set_conf();
+            run(
+                &s,
+                &format!(
+                    "CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION '{}'",
+                    dir.display()
+                ),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        } else {
+            let props = if case["deletion_vectors"].as_bool().unwrap() {
+                " TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
+            } else {
+                ""
+            };
+            run(
+                &s,
+                &format!(
+                    "CREATE TABLE dut (id BIGINT, p INT) USING delta PARTITIONED BY (p) \
+                     LOCATION '{}'{props}",
+                    dir.display()
+                ),
+            )
+            .unwrap();
+            run(&s, "INSERT INTO dut VALUES (1, 1), (2, 2), (3, 3)").unwrap();
+            set_conf();
+            run(&s, case["sql"].as_str().unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        assert!(case["error"].is_null(), "{name}");
+        assert_eq!(
+            versions(&dir) as u64,
+            case["versions"].as_u64().unwrap(),
+            "{name}"
+        );
+        let info = last_commit_info(&dir);
+        let want = &case["commit"];
+        assert_eq!(info["operation"], want["operation"], "{name}");
+        assert_eq!(
+            info.get("userMetadata").cloned().unwrap_or(Value::Null),
+            want["userMetadata"],
+            "{name}"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 30);
 }
 
 /// Every Delta table under the fixtures: a directory holding `_delta_log`.

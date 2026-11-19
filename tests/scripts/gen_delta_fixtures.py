@@ -44,6 +44,10 @@ Delta write options delta-spark reads from the DataFrame writers of a catalog ta
 (``insertInto``, ``saveAsTable`` append, ``writeTo(..).append()``), and the session's
 ``spark.databricks.delta.commitInfo.userMetadata`` against the option.
 
+``... /out dml-user-metadata`` writes ``DML-USER-METADATA.json`` (``dml_user_metadata``): the
+``commitInfo.userMetadata`` delta-spark gives ``DELETE``, ``UPDATE`` and ``MERGE`` commits from that
+session conf, and ``insertInto``'s error for a frame with an extra column.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -2535,8 +2539,128 @@ def catalog_write_options(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+#: ``DML-USER-METADATA.json`` statements: (name, SQL on ``dut`` with ``s`` the one-row source).
+DML_USER_METADATA_STEPS: list[tuple[str, str]] = [
+    ("delete_where", "DELETE FROM dut WHERE id = 1"),
+    ("delete_all", "DELETE FROM dut"),
+    ("delete_partition", "DELETE FROM dut WHERE p = 1"),
+    ("update", "UPDATE dut SET p = 9 WHERE id = 2"),
+    ("merge_update", "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = s.p"),
+    (
+        "merge_insert_only",
+        "MERGE INTO dut t USING (SELECT CAST(7 AS BIGINT) AS id, 7 AS p) s ON t.id = s.id "
+        "WHEN NOT MATCHED THEN INSERT *",
+    ),
+    (
+        "merge_all",
+        "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+    ),
+]
+
+#: ``DML-USER-METADATA.json`` session confs: unset, and set.
+DML_USER_METADATA_CONFS: list[tuple[str, dict[str, str]]] = [
+    ("no_conf", {}),
+    ("conf", {"spark.databricks.delta.commitInfo.userMetadata": "from-conf"}),
+]
+
+
+def dml_user_metadata(spark: SparkSession, out: str) -> None:
+    """``DML-USER-METADATA.json``: the ``commitInfo.userMetadata`` of each ``DELETE``, ``UPDATE``
+    and ``MERGE`` (``DML_USER_METADATA_STEPS``) with and without
+    ``spark.databricks.delta.commitInfo.userMetadata`` set (``DML_USER_METADATA_CONFS``), on a
+    table partitioned by ``p`` holding ``(1, 1), (2, 2), (3, 3)`` (``dv``: with
+    ``delta.enableDeletionVectors``; the source ``s`` is ``(2, 5)``). Also ``insert_into_extra``:
+    ``insertInto`` of a frame with one column more than the table, with and without
+    ``mergeSchema``; ``create_empty``: ``CREATE TABLE`` without a query, under each conf."""
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "generator": "gen_delta_fixtures.py dml-user-metadata",
+        "cases": {},
+    }
+    base = "/tmp/krishiv-dml-user-metadata"
+    spark.sql("SELECT CAST(2 AS BIGINT) AS id, 5 AS p").createOrReplaceTempView("s")
+    for kind, props in [("plain", ""), ("dv", " TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')")]:
+        for step, sql in DML_USER_METADATA_STEPS:
+            for conf_name, conf in DML_USER_METADATA_CONFS:
+                key = f"{kind}.{step}.{conf_name}"
+                path = os.path.join(base, key)
+                shutil.rmtree(path, ignore_errors=True)
+                spark.sql("DROP TABLE IF EXISTS dut")
+                spark.sql(
+                    f"CREATE TABLE dut (id BIGINT, p INT) USING delta PARTITIONED BY (p) LOCATION '{path}'{props}"
+                )
+                spark.sql("INSERT INTO dut VALUES (1, 1), (2, 2), (3, 3)")
+                case: dict = {"sql": sql, "conf": conf, "deletion_vectors": kind == "dv"}
+                for k, v in conf.items():
+                    spark.conf.set(k, v)
+                try:
+                    spark.sql(sql)
+                    case["error"] = None
+                    info = commits(path)[-1]["commitInfo"]
+                    case["commit"] = {
+                        "operation": info.get("operation"),
+                        "userMetadata": info.get("userMetadata"),
+                    }
+                except Exception as e:  # the oracle records every failure
+                    case["error"] = oracle_error(e, path)
+                finally:
+                    for k in conf:
+                        spark.conf.unset(k)
+                case["versions"] = len(commits(path))
+                record["cases"][key] = case
+    for conf_name, conf in DML_USER_METADATA_CONFS:
+        key = f"create_empty.{conf_name}"
+        path = os.path.join(base, key)
+        shutil.rmtree(path, ignore_errors=True)
+        spark.sql("DROP TABLE IF EXISTS dut")
+        for k, v in conf.items():
+            spark.conf.set(k, v)
+        try:
+            spark.sql(f"CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION '{path}'")
+        finally:
+            for k in conf:
+                spark.conf.unset(k)
+        info = commits(path)[-1]["commitInfo"]
+        record["cases"][key] = {
+            "sql": "CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION <path>",
+            "conf": conf,
+            "error": None,
+            "commit": {"operation": info.get("operation"), "userMetadata": info.get("userMetadata")},
+            "versions": len(commits(path)),
+        }
+    for name, options in [("insert_into_extra", {}), ("insert_into_extra_merge_schema", {"mergeSchema": "true"})]:
+        path = os.path.join(base, name)
+        shutil.rmtree(path, ignore_errors=True)
+        spark.sql("DROP TABLE IF EXISTS dut")
+        spark.sql(f"CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION '{path}'")
+        spark.sql("INSERT INTO dut VALUES (1, 1)")
+        case = {"options": options}
+        w = spark.sql("SELECT CAST(2 AS BIGINT) AS id, 2 AS p, 'x' AS extra").write.mode("append")
+        for k, v in options.items():
+            w = w.option(k, v)
+        try:
+            w.insertInto("dut")
+            case["error"] = None
+        except Exception as e:  # the oracle records every failure
+            case["error"] = oracle_error(e, path)
+        case["versions"] = len(commits(path))
+        case["schema"] = [f.name for f in spark.table("dut").schema.fields]
+        record["cases"][name] = case
+    spark.sql("DROP TABLE IF EXISTS dut")
+    shutil.rmtree(base, ignore_errors=True)
+    with open(os.path.join(out, "DML-USER-METADATA.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
+    if which == "dml-user-metadata":
+        dml_user_metadata(spark, out)
+        spark.stop()
+        return
     if which == "catalog-options":
         catalog_write_options(spark, out)
         spark.stop()
