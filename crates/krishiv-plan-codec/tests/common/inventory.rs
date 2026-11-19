@@ -2490,6 +2490,22 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     ];
     let mut variants = file_scan();
     variants.scan.output = vec![column(3, "v", DataType::Variant, true)];
+    let mut udts = file_scan();
+    let point_storage = DataType::Array(std::sync::Arc::new(krishiv_types::ArrayType::new(
+        DataType::Double,
+        false,
+    )));
+    udts.scan.output = vec![column(
+        3,
+        "p",
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::new(
+            point_storage,
+            Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+            Some("org.apache.spark.sql.test.ExamplePointUDT".to_owned()),
+            None,
+        ))),
+        true,
+    )];
     let geometry = col(
         5,
         "g3857",
@@ -2760,6 +2776,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
+        ("udt_scan", PhysNode::Scan(udts)),
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),

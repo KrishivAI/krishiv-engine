@@ -1712,6 +1712,14 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::Udt(_) => {
+            // Spark's JSON form: the class names and the storage type.
+            return Ok(pb::DataType {
+                kind: Kind::Udt as i32,
+                json: t.json(),
+                ..pb::DataType::default()
+            });
+        }
         DataType::CollatedString(c) => {
             // By canonical name: ids index an ICU build's table. INDETERMINATE is `null`.
             if c.is_utf8_binary() {

@@ -1422,6 +1422,8 @@ message DataType {
     KIND_COLLATED_STRING = 22;
     // feature: variant_type
     KIND_VARIANT = 23;
+    // feature: udt_type
+    KIND_UDT = 24;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -1429,8 +1431,10 @@ message DataType {
   // `KIND_DECIMAL` only.
   uint32 scale = 3;
   // feature: nested_types
-  // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+  // `KIND_NESTED`: an array, map or struct type as Spark's JSON form
   // (`DataType.json`), which keeps nullability and field metadata.
+  // `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+  // the storage type).
   string json = 4;
   // feature: geo_types
   // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
