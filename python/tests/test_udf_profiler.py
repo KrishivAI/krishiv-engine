@@ -193,9 +193,11 @@ def test_two_sessions_profiling_at_once_do_not_raise(spark: SparkSession) -> Non
     plus_one = _plus_one()
     errors: list[BaseException] = []
 
+    # The UDF expression reads the active session's mode when it is built: set it before any thread.
+    spark.conf.set("spark.sql.pyspark.udf.profiler", "perf")
+
     def run(session: SparkSession) -> None:
         try:
-            session.conf.set("spark.sql.pyspark.udf.profiler", "perf")
             session.range(30).select(plus_one("id")).collect()
         except BaseException as e:  # collect any failure for the assert
             errors.append(e)

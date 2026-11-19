@@ -320,7 +320,14 @@ fn directories(config: &Config) -> Check {
             continue;
         };
         seen.push(entry.key);
-        if let Err(e) = writable_dir(Path::new(dir)) {
+        // The spill root must also be one the spill manager accepts (owner, mode, lock-safe file
+        // system), or the server refuses it at start.
+        let accepted = if entry.key == SPILL_DIR.key {
+            krishiv_memory::check_spill_root(Path::new(dir))
+        } else {
+            Ok(())
+        };
+        if let Err(e) = accepted.and_then(|()| writable_dir(Path::new(dir))) {
             problems.push(format!("{} = {dir}: {e}", entry.key));
         }
     }
@@ -368,7 +375,18 @@ fn writable_dir(dir: &Path) -> Result<(), String> {
     // The spill manager creates missing ancestors, so the nearest existing one must take a file.
     match dir.parent() {
         Some(parent) if parent.as_os_str().is_empty() => writable_dir(Path::new(".")),
-        Some(parent) => match parent.ancestors().find(|p| p.exists()) {
+        Some(parent) => match parent
+            .ancestors()
+            // A relative path ends in the empty ancestor: the working directory.
+            .map(|p| {
+                if p.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    p
+                }
+            })
+            .find(|p| p.exists())
+        {
             Some(ancestor) if ancestor.is_dir() => writable_dir(ancestor),
             Some(ancestor) => Err(format!("{} is not a directory", ancestor.display())),
             None => Err("no parent directory of it exists".to_owned()),
@@ -558,6 +576,37 @@ mod tests {
         std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         let checks = diagnose(&args(&conf));
         assert_eq!(find(&checks, "authentication").status, Status::Ok);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_spill_root_the_server_refuses_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::set_permissions(
+            dir.path(),
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o777),
+        )
+        .expect("chmod");
+        let conf = [("krishiv.spill.dir", dir.path().to_str().expect("utf8"))];
+        let checks = diagnose(&args(&conf));
+        let c = find(&checks, "directories");
+        assert_eq!(c.status, Status::Fail, "{}", render_text(&checks));
+        assert!(c.detail.contains("group or others"), "{}", c.detail);
+        std::fs::set_permissions(
+            dir.path(),
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .expect("chmod");
+        assert_eq!(
+            find(&diagnose(&args(&conf)), "directories").status,
+            Status::Ok
+        );
+    }
+
+    #[test]
+    fn a_relative_spill_dir_under_the_working_directory_passes() {
+        let checks = diagnose(&args(&[("krishiv.spill.dir", "no-such-dir/nested/spill")]));
+        assert_eq!(find(&checks, "directories").status, Status::Ok);
     }
 
     #[test]
