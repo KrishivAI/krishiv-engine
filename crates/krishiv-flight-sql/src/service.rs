@@ -31,6 +31,7 @@ use crate::metadata::{Listing, batch_stream, fixed_info};
 use crate::metrics::Command;
 use crate::prepared::ActionStream;
 use crate::server::FlightSqlServer;
+use crate::session_options::SetSessionOptionsRequest;
 use crate::statement::{DoGetStream, internal};
 use crate::status::flight_status;
 use crate::update::DoPutStream;
@@ -145,6 +146,35 @@ impl FlightSqlServer {
     ) -> Result<Response<ActionStream>, Status> {
         let caller = self.admit(request)?;
         self.prepared_close(close, &caller)
+    }
+
+    /// `SetSessionOptions` after the gate (design §3.2).
+    pub(crate) async fn do_action_set_options(
+        &self,
+        set: SetSessionOptionsRequest,
+        request: &Request<Action>,
+    ) -> Result<Response<ActionStream>, Status> {
+        let caller = self.admit(request)?;
+        self.set_session_options(set, request.metadata(), &caller)
+            .await
+    }
+
+    /// `GetSessionOptions` after the gate (design §3.2).
+    pub(crate) async fn do_action_get_options(
+        &self,
+        request: &Request<Action>,
+    ) -> Result<Response<ActionStream>, Status> {
+        let caller = self.admit(request)?;
+        self.get_session_options(request.metadata(), &caller).await
+    }
+
+    /// `CloseSession` after the gate (design §3.2).
+    pub(crate) fn do_action_close_session(
+        &self,
+        request: &Request<Action>,
+    ) -> Result<Response<ActionStream>, Status> {
+        let caller = self.admit(request)?;
+        Ok(self.close_session(request.metadata(), &caller))
     }
 
     /// Cancels the statement whose ticket is `info`'s first endpoint's (design §4.5): a missing
