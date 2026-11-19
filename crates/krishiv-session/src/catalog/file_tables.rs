@@ -59,7 +59,7 @@ impl QueryCatalog {
             if crate::delta::is_delta(source) {
                 // The table's log is read once per query, never listed as files.
                 self.delta
-                    .open_scanned(source, delta_name(key), table)
+                    .open_scanned(source, self.delta_name(key), table)
                     .await?;
                 continue;
             }
@@ -74,21 +74,6 @@ impl QueryCatalog {
                 continue;
             };
             let listing = match key {
-                // A declared schema is the table: nothing is inferred. Which
-                // directories a declared-schema read descends into (partition
-                // discovery per format) is golden-pending, so none beyond the
-                // root files, as a catalog table without partitions.
-                FilesKey::Read(_) if schema.is_some() => {
-                    self.files
-                        .listing_known(
-                            format,
-                            paths,
-                            options,
-                            Arc::clone(table),
-                            &krishiv_exec::files::KnownPartitions::default(),
-                        )
-                        .await?
-                }
                 FilesKey::Table(_) | FilesKey::Reference { known: true, .. } => {
                     let Some(partitions) = partitions else {
                         return Err(krishiv_common::error::KrishivUnsupportedFeature {
@@ -100,6 +85,14 @@ impl QueryCatalog {
                     };
                     self.files
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
+                        .await?
+                }
+                // A user schema: its columns, then the partition columns under
+                // the paths (Spark 4.2.0's `userSpecifiedSchema`); nothing is
+                // inferred from the files' contents.
+                _ if schema.is_some() => {
+                    self.files
+                        .listing_with_schema(format, paths, options, schema.as_ref())
                         .await?
                 }
                 _ => match self.files.listing(format, paths, options).await {
@@ -133,7 +126,8 @@ impl QueryCatalog {
                 listing.options.clone(),
             )
             .await?
-            .with_partition_columns(listing.partition_columns.to_vec());
+            .with_partition_columns(listing.partition_columns.to_vec())
+            .with_path_roots(listing.path_roots.clone());
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -195,6 +189,29 @@ impl QueryCatalog {
         Ok(())
     }
 
+    /// How Delta errors name the table a scan of `key` reads: a permanent table by its
+    /// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path,
+    /// a back-quoted view name holding a `.` included. Decided by the entry's kind, never by
+    /// the spelling of the key.
+    #[cfg(feature = "delta")]
+    fn delta_name(&self, key: &FilesKey) -> Option<String> {
+        let (FilesKey::View(k) | FilesKey::Table(k) | FilesKey::Reference { key: k, .. }) = key
+        else {
+            return None;
+        };
+        self.loaded(k)
+            .is_some_and(|t| {
+                matches!(
+                    &*t,
+                    TempTable::Files {
+                        permanent: true,
+                        ..
+                    }
+                )
+            })
+            .then(|| k.clone())
+    }
+
     /// The scans of files in `plan`: what each reads, and the columns the
     /// analyzer bound (the view's, for a view), which the files map to by
     /// name.
@@ -240,18 +257,6 @@ impl QueryCatalog {
                 Some((key, source, table, ids, partitions))
             })
             .collect()
-    }
-}
-
-/// How Delta errors name the table a scan of `key` reads: a permanent table by its
-/// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path.
-#[cfg(feature = "delta")]
-fn delta_name(key: &FilesKey) -> Option<String> {
-    match key {
-        FilesKey::Table(k) | FilesKey::Reference { key: k, .. } if k.contains('.') => {
-            Some(k.clone())
-        }
-        _ => None,
     }
 }
 

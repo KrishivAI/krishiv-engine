@@ -42,7 +42,7 @@ use krishiv_types::StructType;
 use super::provider::IcebergTableProvider;
 use super::storage::{KrishivStorageFactory, StorageRegistration};
 use super::table::IcebergTable;
-use super::tests::local;
+use super::tests::local_on;
 use crate::plan::VersionSpec;
 
 /// A runtime for the I/O side, a registration over the local file system and
@@ -56,6 +56,16 @@ pub(super) struct Env {
 }
 
 pub(super) fn env() -> Env {
+    let store = Arc::new(object_store::local::LocalFileSystem::new());
+    env_on(store, krishiv_io::IoConfig::default())
+}
+
+/// [`env`] over `store` (a wrapper of the local file system) with the
+/// scheduler's settings `config`.
+pub(super) fn env_on(
+    store: Arc<dyn object_store::ObjectStore>,
+    config: krishiv_io::IoConfig,
+) -> Env {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -64,7 +74,7 @@ pub(super) fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = {
         let _entered = rt.enter();
-        local(dir.path())
+        local_on(dir.path(), store, config)
     };
     let factory = Arc::new(KrishivStorageFactory {
         name: reg.name().to_owned(),
@@ -231,6 +241,14 @@ pub(super) fn session(tables: Vec<(&str, StructType, Arc<dyn TableProvider>)>) -
 impl Session {
     /// Runs `sql` (joins in the optimizer's default order) to completion.
     pub(super) fn run(&self, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
+        Ok(self.run_metrics(sql)?.0)
+    }
+
+    /// [`Self::run`] with the query's metrics.
+    pub(super) fn run_metrics(
+        &self,
+        sql: &str,
+    ) -> Result<(Vec<RecordBatch>, krishiv_exec::QueryMetrics), KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
@@ -261,8 +279,25 @@ impl Session {
                 out.push(b?.into_parts().0);
             }
             query.finished().await;
-            Ok(out)
+            Ok((out, query.metrics()))
         })
+    }
+
+    /// The physical plan of `sql` as `EXPLAIN` prints it.
+    pub(super) fn explain(&self, sql: &str) -> String {
+        let plan =
+            krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .unwrap();
+        let plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))
+            .unwrap()
+            .plan;
+        let plan = krishiv_optimizer::optimize(&plan).unwrap();
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner
+            .plan(&plan, &cx)
+            .unwrap()
+            .explain_all()
+            .to_string()
     }
 
     /// [`Self::run`]'s rows rendered as `a|b|c`.
@@ -705,7 +740,8 @@ fn a_snapshot_whose_delete_file_is_missing_fails() {
         .unwrap();
     // The delete file was never written: the read fails naming it, never
     // returns the rows it deletes.
-    let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
+    let p = env.provider(&table, &VersionSpec::Current).unwrap();
+    let e = provider_session(p).run("SELECT name FROM t").unwrap_err();
     assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
     assert!(e.message().contains("deletes.parquet"), "{e}");
     // The snapshot before it has no deletes and reads.

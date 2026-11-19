@@ -395,6 +395,14 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
+            PlanNode::CollectMetrics { name, metrics, .. } => {
+                write!(
+                    f,
+                    "CollectMetrics {} ({})",
+                    Name(std::slice::from_ref(name)),
+                    List(metrics)
+                )
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }
@@ -597,9 +605,17 @@ impl Display for NodeLine<'_> {
                 table_arg,
                 udf,
                 output,
+                lateral,
+                analyzed,
             } => {
                 write!(f, "PythonTableFunction {}({}), ", UdfRef(udf), List(args))?;
                 columns(f, output)?;
+                if lateral.is_some() {
+                    write!(f, ", lateral")?;
+                }
+                if let Some(a) = analyzed {
+                    write!(f, ", analyzed ({} bytes)", a.len())?;
+                }
                 if let Some(t) = table_arg {
                     write!(
                         f,
@@ -610,6 +626,9 @@ impl Display for NodeLine<'_> {
                         write!(f, "{}{o}", sep(i))?;
                     }
                     write!(f, "], single={}", t.single_partition)?;
+                    if !t.select.is_empty() {
+                        write!(f, ", SELECT [{}]", List(&t.select))?;
+                    }
                 }
                 Ok(())
             }
@@ -1035,6 +1054,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 list(values, out);
                 out.push(Piece::Str(") IN (list-query))"));
             }
+            SubqueryKind::Table(_) => out.push(Piece::Str("table-argument")),
         },
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
             out.push(Piece::Owned(format!("{}#{}", c.name, c.id.0)));

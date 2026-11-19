@@ -46,8 +46,56 @@ CSP = (
 )
 
 
+XSS = '<img src=x onerror="window.__xss=1"><script>window.__xss=1</script>'
+DATA["live"].append(
+    {
+        "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa99",
+        "state": "running",
+        "principal": XSS,
+        "query_text": f"SELECT '{XSS}'",
+        "submitted_at": 1,
+    }
+)
+# Settings as the real server sends them: a sensitive key shows `***` (the planted values never leave the fixture).
+ENVIRONMENT = {
+    "version": "fixture",
+    "settings": [
+        {"key": "krishiv.auth.token", "value": "***", "redacted": True},
+        {"key": "spark.sql.shuffle.partitions", "value": "200", "redacted": False},
+        {"key": "db.password", "value": "***", "redacted": True},
+        {"key": "spark.hadoop.fs.s3a.secret.key", "value": "***", "redacted": True},
+    ],
+}
+CATALOG = {
+    "catalogs": [{"name": "spark_catalog"}, {"name": XSS}],
+    "spark_catalog": {"schemas": [{"name": "default"}]},
+    "default": {"tables": [{"name": "orders"}, {"name": "lineitem"}]},
+    "orders": {
+        "columns": [
+            {"name": "o_orderkey", "data_type": "bigint"},
+            {"name": "o_comment", "data_type": "string", "comment": XSS},
+        ]
+    },
+}
+# Editor runs: a statement containing `sleep` stays running until it is cancelled.
+RUNS: dict[str, dict] = {}
+
+
 def route(path: str) -> object | None:
     d = DATA
+    parts = path.split("/")
+    if path == "/api/internal/environment":
+        return ENVIRONMENT
+    if path == "/api/internal/catalog/catalogs":
+        return {"catalogs": CATALOG["catalogs"]}
+    if len(parts) == 6 and parts[5] == "schemas":
+        return {"schemas": CATALOG["spark_catalog"]["schemas"]}
+    if len(parts) == 7 and parts[6] == "tables":
+        return {"tables": CATALOG["default"]["tables"]}
+    if len(parts) == 8 and parts[7] == "columns":
+        return {"columns": CATALOG["orders"]["columns"]}
+    if path.startswith("/api/internal/sql/") and parts[-1] in RUNS:
+        return RUNS[parts[-1]]
     if path == "/api/internal/health":
         return d["health"]
     if path == "/api/internal/queries":
@@ -83,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
             authorised = (
                 self.headers.get("Authorization") == f"Bearer {TOKEN}"
                 or f"token={TOKEN}" in url.query
+                or f"krishiv_ui_token={TOKEN}" in self.headers.get("Cookie", "")
             )
             if not authorised:
                 return self.send_json(
@@ -99,6 +148,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 try:
                     while True:
+                        self.wfile.write(
+                            f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
+                        )
                         self.wfile.write(
                             f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
                         )
@@ -126,6 +178,46 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/api/internal/session":
+            if self.headers.get("Authorization") != f"Bearer {TOKEN}":
+                return self.send_json(401, {"error": "unauthorized"})
+            self.send_response(204)
+            self.send_header(
+                "Set-Cookie",
+                f"krishiv_ui_token={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        if self.headers.get("X-Krishiv-Csrf") != "1":
+            return self.send_json(403, {"error": "forbidden"})
+        if path == "/api/internal/sql":
+            raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            sql = json.loads(raw).get("sql", "")
+            run_id = f"run{len(RUNS)}"
+            if "sleep" in sql:
+                RUNS[run_id] = {"state": "running"}
+            elif "boom" in sql:
+                RUNS[run_id] = {
+                    "state": "failed",
+                    "error": f"cannot parse {XSS}",
+                    "error_class": "PARSE_SYNTAX_ERROR",
+                }
+            else:
+                RUNS[run_id] = {
+                    "state": "finished",
+                    "columns": ["a", XSS],
+                    "rows": [[1, XSS], [2, None]],
+                    "truncated": False,
+                }
+            return self.send_json(202, {"run_id": run_id})
+        if path.startswith("/api/internal/sql/") and path.endswith("/cancel"):
+            run_id = path.split("/")[-2]
+            if RUNS.get(run_id, {}).get("state") == "running":
+                RUNS[run_id] = {"state": "cancelled", "error": "cancelled"}
+                return self.send_json(200, {"cancelled": True})
+            return self.send_json(404, {"error": "not_running"})
         self.send_json(200, {"cancelled": True})
 
 

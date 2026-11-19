@@ -77,7 +77,7 @@ impl Errors {
 
 /// Table statistics by table name, read off the data.
 #[derive(Debug)]
-struct DataStats(HashMap<String, TableStats>);
+pub(crate) struct DataStats(HashMap<String, TableStats>);
 
 impl Statistics for DataStats {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -98,7 +98,7 @@ fn bound(v: &V) -> Option<Literal> {
 }
 
 /// The statistics a table of `db` would report after `ANALYZE`.
-fn stats_of(db: &Db) -> DataStats {
+pub(crate) fn stats_of(db: &Db) -> DataStats {
     let tables = db.tables.iter().map(|(name, (cols, rows))| {
         let columns = cols.iter().enumerate().map(|(i, c)| {
             let present: Vec<&V> = rows
@@ -126,7 +126,7 @@ fn stats_of(db: &Db) -> DataStats {
 }
 
 /// A suite's tables: names and typed columns.
-type Schemas = Vec<(String, Vec<(String, DataType)>)>;
+pub(crate) type Schemas = Vec<(String, Vec<(String, DataType)>)>;
 
 fn parse_type(ty: &str) -> DataType {
     let upper = ty.to_ascii_uppercase();
@@ -138,7 +138,7 @@ fn parse_type(ty: &str) -> DataType {
     krishiv_types::parse_data_type(ty).unwrap()
 }
 
-fn tpch_schemas() -> Schemas {
+pub(crate) fn tpch_schemas() -> Schemas {
     let path = support::root().join("tests/fixtures/spark-4.2.0/analyzer-goldens.json");
     let g: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut out: Schemas = g["tables"]
@@ -164,7 +164,7 @@ fn tpch_schemas() -> Schemas {
     out
 }
 
-fn tpcds_schemas() -> Schemas {
+pub(crate) fn tpcds_schemas() -> Schemas {
     let path = support::root().join("tests/fixtures/spark-4.2.0/golden-tables/tpcds-schemas.json");
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     doc["tables"]
@@ -228,7 +228,7 @@ fn decimal(text: &str) -> V {
 
 /// The tables of `schemas` read from `dir/<table>.<ext>`: one row per line,
 /// fields separated by `|` (with the trailing `|` the generators write).
-fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
+pub(crate) fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
     let mut db = Db::default();
     for (name, cols) in schemas {
         let path = dir.join(format!("{name}.{ext}"));
@@ -254,7 +254,7 @@ fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
 /// row number; every other `_sk` column a draw from the dimensions' keys;
 /// facts (the `sales`, `returns` and `inventory` tables) have `rows` rows,
 /// dimensions a tenth of that; other columns draw from small domains.
-fn synthetic_tpcds(schemas: &Schemas, seed: u64, rows: i64) -> Db {
+pub(crate) fn synthetic_tpcds(schemas: &Schemas, seed: u64, rows: i64) -> Db {
     let mut r = Rng(seed | 1);
     let mut db = Db::default();
     let dims = (rows / 10).max(8);
@@ -384,7 +384,7 @@ fn report(suite: &str, on: &Errors, off: &Errors) {
     }
 }
 
-fn suites() -> HashSet<String> {
+pub(crate) fn suites() -> HashSet<String> {
     std::env::var("KRISHIV_QERROR_SUITES")
         .unwrap_or_else(|_| "tpch,tpcds".to_owned())
         .split(',')
@@ -392,7 +392,7 @@ fn suites() -> HashSet<String> {
         .collect()
 }
 
-fn scale() -> i64 {
+pub(crate) fn scale() -> i64 {
     std::env::var("KRISHIV_QERROR_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())

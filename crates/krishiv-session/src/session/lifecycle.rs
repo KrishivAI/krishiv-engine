@@ -29,6 +29,21 @@ use crate::sql_functions::SqlFunctions;
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
+/// What [`Session::sql_command`] ran.
+#[cfg(feature = "unstable-ir")]
+#[expect(
+    missing_debug_implementations,
+    reason = "a `DataFrame` has no `Debug`; neither has what holds one"
+)]
+#[non_exhaustive]
+pub enum SqlOutcome {
+    /// A query: analyzed, not run; its rows come from the frame.
+    Query(DataFrame),
+    /// A command (`SET`, `CREATE VIEW`, `INSERT`, `SHOW`, ...), already run; the frame holds its
+    /// result rows.
+    Command(DataFrame),
+}
+
 impl Session {
     /// A session on `runtime` with configuration `config`.
     pub(super) fn on_runtime(
@@ -40,8 +55,18 @@ impl Session {
             Arc::clone(&runtime.catalog_store),
             Arc::clone(&runtime.warehouse),
         );
+        // `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`): a new session starts in
+        // it when its principal sees it (design P3-T067 §2.4), else in `spark_catalog`.
+        if let Some(default) = runtime.catalogs.default_catalog()
+            && runtime
+                .catalogs
+                .catalog(default, parts.principal.tenant.as_deref())
+                .is_some()
+        {
+            catalog.use_catalog(default);
+        }
         let seed = Seed {
-            conf: ConfStore::new(config),
+            conf: ConfStore::new(config).with_profile(parts.profile),
             catalog,
             variables: SessionVariables::default(),
             udfs: Arc::new(UdfLibrary::new()),
@@ -59,7 +84,10 @@ impl Session {
     }
 
     /// A session of `parts` on `runtime` starting from `seed`'s state.
-    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
+    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, mut seed: Seed) -> Self {
+        // A server runtime's catalogs are declared at startup only (design P3-T067 §2.2).
+        seed.conf.static_catalogs =
+            runtime.catalogs.mode() == crate::catalog_decl::DeclMode::Server;
         let config = seed.conf.snapshot();
         let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
@@ -110,9 +138,11 @@ impl Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            query_start: None,
             request_tags: Arc::from([]),
             inbound_trace: None,
             inbound_baggage: Arc::from([]),
+            request_inbound: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -122,6 +152,7 @@ impl Session {
                 profile: parts.profile,
                 principal: parts.principal,
                 policy: parts.policy,
+                grants: parts.grants,
                 functions,
                 base_functions,
                 udfs,
@@ -149,8 +180,12 @@ impl Session {
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
                 denials: std::sync::OnceLock::new(),
+                inbound: Mutex::new(None),
             }),
         };
+        if let Some(grants) = &session.state.grants {
+            grants.bind_catalog(&session.state.catalog.store);
+        }
         session
             .state
             .runtime
@@ -184,6 +219,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -209,6 +245,10 @@ impl Session {
             profile: state.profile,
             principal: Arc::new(principal),
             policy,
+            // The base session's grants policy is its own principal's: never the caller's. Without
+            // one, the grant statements are refused and nothing created gets an owner (the admins'
+            // until granted), which fails closed.
+            grants: None,
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -258,6 +298,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -451,6 +492,45 @@ impl Session {
         self.with_options(options)?.sql(query).await
     }
 
+    /// Runs `query` as [`Self::sql`] does and says what it was: a lazy query, or a command (any
+    /// statement other than a query, which `sql` runs at once, as Spark's eager `Command`s).
+    ///
+    /// Spark Connect's `SqlCommand` needs the difference: a command's result is returned to the
+    /// client as a local relation, a query's as the `SQL` relation to send again.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// use krishiv_session::SqlOutcome;
+    /// let q = futures::executor::block_on(session.sql_command("SELECT 1"))?;
+    /// assert!(matches!(q, SqlOutcome::Query(_)));
+    /// let c = futures::executor::block_on(session.sql_command("SET a.b = 1"))?;
+    /// assert!(matches!(c, SqlOutcome::Command(_)));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::sql`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_command(&self, query: &str) -> Result<crate::SqlOutcome, KrishivError> {
+        Ok(match self.sql_kind(query).await? {
+            (df, false) => crate::SqlOutcome::Query(df),
+            (df, true) => crate::SqlOutcome::Command(df),
+        })
+    }
+
+    /// As [`Self::sql_command`], with per-statement options (as [`Self::sql_with`]).
+    ///
+    /// # Errors
+    /// As [`Self::sql_with`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_command_with(
+        &self,
+        query: &str,
+        options: crate::QueryOptions,
+    ) -> Result<crate::SqlOutcome, KrishivError> {
+        self.with_options(options)?.sql_command(query).await
+    }
+
     /// A handle of this session that runs its queries under `options` (the
     /// operation id taken now, held while the handle or a clone lives).
     pub(crate) fn with_options(
@@ -491,9 +571,16 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            query_start: options.query_start_micros.or(self.query_start),
             request_tags: options.request_tags.into(),
             inbound_trace,
             inbound_baggage,
+            request_inbound: options
+                .inbound_credential
+                .map(|(method, credential)| {
+                    crate::catalog_registry::Inbound::new(method, credential)
+                })
+                .or_else(|| self.request_inbound.clone()),
         };
         Ok(handle)
     }

@@ -19,24 +19,31 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+# Theta sketches of the Puffin NDV statistics (single user of the crate).
+datasketches = { workspace = true }
+# Equality delete key sets (hash table of row indices, fast hasher).
+foldhash = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true }
 iceberg = { workspace = true }
 krishiv-arrow-bridge = { path = "../krishiv-arrow-bridge" }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
+# The optimizer's statistics (`TableStats`, `Literal` bounds) from manifests.
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
 # Deletion vectors (the portable roaring64 layout); already built for iceberg.
 roaring = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 typetag = { workspace = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
-krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 object_store = { workspace = true }
@@ -45,3 +52,7 @@ parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[features]
+# Cloud object stores through `krishiv-exec/cloud` (S3, GCS, Azure); the Azurite Iceberg scan test needs it.
+cloud = ["krishiv-exec/cloud"]

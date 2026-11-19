@@ -4,6 +4,7 @@
 //! (P3-T026; commits are T027).
 
 use std::fmt;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::TryStreamExt;
@@ -13,16 +14,22 @@ use iceberg::table::Table;
 use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
+use super::commit::CommitTable;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
+use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
-use krishiv_common::config::{CATALOG_MAX_METADATA_BYTES, Config, ConfigValue};
+use krishiv_common::config::{
+    CATALOG_MAX_METADATA_BYTES, Config, ConfigValue, ICEBERG_MANIFEST_CACHE_BYTES,
+};
 
 /// `krishiv.catalog.maxMetadataBytes`'s default (256 MiB).
 const DEFAULT_MAX_METADATA_BYTES: u64 = 256 << 20;
+/// The default of `krishiv.iceberg.manifestCache.bytes`.
+const DEFAULT_MANIFEST_CACHE_BYTES: u64 = 64 << 20;
 use krishiv_io::PushdownExpr;
 
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
@@ -33,6 +40,11 @@ pub struct IcebergTable {
     /// The catalog parse limit on each metadata file, manifest list and
     /// manifest (`krishiv.catalog.maxMetadataBytes`).
     pub(super) max_metadata_bytes: u64,
+    /// `krishiv.iceberg.manifestCache.bytes` (0: no manifest cache).
+    pub(super) manifest_cache_bytes: u64,
+    /// The catalog's commit endpoint, when the table was loaded through one
+    /// that can commit: providers opened over it accept appends.
+    pub(super) committer: Option<Arc<dyn CommitTable>>,
 }
 
 impl fmt::Debug for IcebergTable {
@@ -75,6 +87,10 @@ impl IcebergTable {
         name: &str,
         config: &Config,
     ) -> Result<Self, KrishivError> {
+        let manifest_cache_bytes = config
+            .get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+            .unwrap_or(DEFAULT_MANIFEST_CACHE_BYTES);
         let max_metadata_bytes = config
             .get(&CATALOG_MAX_METADATA_BYTES)
             .and_then(ConfigValue::as_size)
@@ -106,7 +122,22 @@ impl IcebergTable {
             table,
             registered,
             max_metadata_bytes,
+            manifest_cache_bytes,
+            committer: None,
         })
+    }
+
+    /// The same table committing through `committer`: providers opened over
+    /// it declare `BATCH_WRITE` and append ([`super::sink`]). Crate-private
+    /// until the catalog clients (PR-17) build a `CommitTable`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "PR-17's catalog clients attach their committer")
+    )]
+    #[must_use]
+    pub(crate) fn with_committer(mut self, committer: Arc<dyn CommitTable>) -> Self {
+        self.committer = Some(committer);
+        self
     }
 
     /// The current schema as Spark's Iceberg integration shows it.
@@ -153,6 +184,7 @@ impl IcebergTable {
         let env = scan::PlanEnv {
             max_metadata_bytes: self.max_metadata_bytes,
             metrics: &metrics,
+            cache: Some((&self.registered.manifests, self.manifest_cache_bytes)),
         };
         scan::plan(
             self.table.file_io(),
@@ -160,6 +192,33 @@ impl IcebergTable {
             predicate,
             filter,
             options,
+            env,
+        )
+        .await
+    }
+
+    /// The data files of `snapshot` and the index of its delete files,
+    /// unassigned ([`scan::plan_files`]): the provider assigns deletes to the
+    /// files a scan reads.
+    ///
+    /// # Errors
+    /// As [`Self::plan`], except the errors of assigning deletes to one file.
+    pub(super) async fn plan_files(
+        &self,
+        snapshot: &TableSnapshot,
+    ) -> Result<(ScanPlan, DeleteIndex), KrishivError> {
+        let metrics = self.writer_metrics(snapshot);
+        let env = scan::PlanEnv {
+            max_metadata_bytes: self.max_metadata_bytes,
+            metrics: &metrics,
+            cache: Some((&self.registered.manifests, self.manifest_cache_bytes)),
+        };
+        scan::plan_files(
+            self.table.file_io(),
+            snapshot,
+            None,
+            ManifestFilter::All,
+            PruneOptions::default(),
             env,
         )
         .await

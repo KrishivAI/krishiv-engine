@@ -16,7 +16,11 @@ Krishiv: a Rust-native, Spark-compatible batch and streaming engine.
 def build_info() -> dict[str, str]
 ```
 
-Return how this build was made, e.g. `{"version": "0.1.0", "allocator": "mimalloc"}`.
+Return how this build was made.
+
+`commit` is the git commit of the build, or `"unknown"` when the build was not
+stamped with one (a plain `cargo build` or a source archive). For example
+`{"version": "0.2.1", "allocator": "mimalloc", "commit": "969250ca2aa8..."}`.
 
 ### `metrics`
 

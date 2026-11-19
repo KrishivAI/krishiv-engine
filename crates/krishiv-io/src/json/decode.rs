@@ -702,7 +702,8 @@ enum Source {
     Whole {
         reader: WholeReader,
         text: Option<String>,
-        pos: usize,
+        /// The file's one record has gone out.
+        done: bool,
     },
 }
 
@@ -741,6 +742,8 @@ pub(crate) struct JsonDecoder {
     rows: usize,
     held_text: usize,
     done: bool,
+    /// A reader error held back while the rows read before it are returned.
+    failed: Option<FormatError>,
     metrics: ScanUnitMetrics,
 }
 
@@ -798,7 +801,7 @@ impl JsonDecoder {
             Source::Whole {
                 reader: WholeReader::new(m.size, split).compressed(m.codec),
                 text: None,
-                pos: 0,
+                done: false,
             }
         } else {
             Source::Lines(
@@ -836,6 +839,7 @@ impl JsonDecoder {
             rows: 0,
             held_text: 0,
             done: units.units.is_empty(),
+            failed: None,
             metrics,
         })
     }
@@ -887,7 +891,15 @@ impl JsonDecoder {
                         return Ok(Next::Record(parsed, line));
                     }
                 },
-                Source::Whole { reader, text, pos } => {
+                Source::Whole { reader, text, done } => {
+                    // The file is one record: its first value, as Spark's
+                    // `JacksonParser` reads one root from the whole stream;
+                    // whatever follows it is not read. The record's text
+                    // (the corrupt column) is the whole file, as Spark's:
+                    // the text moves into the record, never copied.
+                    if *done {
+                        return Ok(Next::End);
+                    }
                     if text.is_none() {
                         if let Some(r) = reader.need() {
                             return Ok(Next::NeedData(r));
@@ -896,30 +908,19 @@ impl JsonDecoder {
                             Some(bytes) => {
                                 let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
                                 *text = Some(self.o.charset.decode(bytes).into_owned());
-                                *pos = 0;
                             }
                             None => return Ok(Next::End),
                         }
                     }
-                    let Some(t) = text.as_deref() else {
+                    let Some(t) = text.take() else {
                         return Ok(Next::End);
                     };
-                    let (top, raw, next) = match parse_next(t, *pos, self.syntax) {
-                        // A truncated tail is one malformed record, then
-                        // the end: no bytes are skipped silently.
-                        Err(reason) => {
-                            let raw = t.get(*pos..).unwrap_or("").to_owned();
-                            *pos = t.len();
-                            return Ok(Next::Record(Err(reason), raw));
-                        }
-                        Ok(None) => return Ok(Next::End),
-                        Ok(Some((top, end))) => {
-                            let raw = t.get(*pos..end).unwrap_or("").to_owned();
-                            (top, raw, end)
-                        }
-                    };
-                    *pos = next;
-                    return Ok(Next::Record(Ok(top), raw));
+                    *done = true;
+                    return Ok(match parse_next(&t, 0, self.syntax) {
+                        Ok(None) => Next::End,
+                        Ok(Some((top, _))) => Next::Record(Ok(top), t),
+                        Err(reason) => Next::Record(Err(reason), t),
+                    });
                 }
             }
         }
@@ -1160,6 +1161,10 @@ enum Builder {
 
 impl Decoder for JsonDecoder {
     fn step(&mut self) -> FormatResult<Step> {
+        if let Some(e) = self.failed.take() {
+            self.done = true;
+            return Err(e);
+        }
         if self.done {
             return Ok(Step::Done);
         }
@@ -1168,7 +1173,18 @@ impl Decoder for JsonDecoder {
             if self.rows >= BATCH_ROWS {
                 return Ok(Step::Batch(self.batch()?));
             }
-            match self.next()? {
+            let next = match self.next() {
+                Ok(next) => next,
+                // The rows read before a reader error (a compressed stream
+                // that breaks) are returned first, as Spark's scan has handed
+                // them on before the error reaches it.
+                Err(e) if self.rows > 0 => {
+                    self.failed = Some(e);
+                    return Ok(Step::Batch(self.batch()?));
+                }
+                Err(e) => return Err(e),
+            };
+            match next {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Record(parsed, raw) => {
                     self.add(&raw, &parsed)?;

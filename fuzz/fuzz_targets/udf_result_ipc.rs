@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The Python UDF pool's reader of a worker's result stream (`krishiv_udf_pool::decode_result`, design
-//! P3-T014 §3.3) on arbitrary bytes: a worker is untrusted, so any stream must give a column or an error,
-//! never panic, abort on an allocation or take super-linear time or memory (run with `-timeout` and
-//! `-rss_limit_mb`). The first byte picks the declared return type and the expected row count; the rest is
-//! the stream.
+//! The Python UDF pool's readers of a worker's result stream (`krishiv_udf_pool::decode_result` for a scalar
+//! call, `decode_batch` for a relation task's result; design P3-T014 §3.3) on arbitrary bytes: a worker is
+//! untrusted, so any stream must give a column (a batch) or an error, never panic, abort on an allocation or
+//! take super-linear time or memory (run with `-timeout` and `-rss_limit_mb`). The first byte picks the reader,
+//! the declared type and the expected row count; the rest is the stream.
 #![no_main]
 
-use arrow_schema::{DataType, Field};
+use arrow_array::Array;
+use arrow_schema::{DataType, Field, Schema};
 use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
 
@@ -20,7 +21,19 @@ fuzz_target!(|data: &[u8]| {
         2 => DataType::Float64,
         _ => DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
     };
-    let rows = usize::from(pick >> 2);
+    if pick & 0x80 != 0 {
+        // A relation task's result: two columns, the second non-nullable.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", return_type, true),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        if let Ok(batch) = krishiv_udf_pool::decode_batch(stream.to_vec(), &schema) {
+            assert_eq!(batch.schema(), schema);
+            assert_eq!(batch.column(1).null_count(), 0);
+        }
+        return;
+    }
+    let rows = usize::from((pick >> 2) & 0x1f);
     if let Ok(column) = krishiv_udf_pool::decode_result(stream.to_vec(), &return_type, rows) {
         assert_eq!(column.data_type(), &return_type);
         assert_eq!(column.len(), rows);

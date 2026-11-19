@@ -3,11 +3,6 @@
     "divergence-avro-not-loaded": [
       6,
       7
-    ],
-    "fn-url-xml-csv": [
-      3,
-      4,
-      5
     ]
   },
   "file": "to_from_avro",

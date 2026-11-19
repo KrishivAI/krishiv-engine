@@ -540,3 +540,372 @@ fn a_new_table_round_trips() {
         serde_json::json!([[2]])
     );
 }
+
+/// An `INSERT` whose rows read a file table (a frame analyzed afresh by each action) writes into
+/// the Delta table it opened: the target is opened in the analysis that is planned. An append of
+/// no rows commits nothing.
+#[test]
+fn an_insert_from_a_file_table_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("d").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE src (a INT) USING parquet").unwrap();
+    run(&s, "INSERT INTO src VALUES (5), (6)").unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE d (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO d SELECT a FROM src").unwrap();
+    run(&s, "CREATE TABLE m USING delta AS SELECT 1 AS a").unwrap();
+    run(&s, "INSERT INTO m SELECT a FROM src").unwrap();
+    run(&s, "INSERT OVERWRITE TABLE d SELECT a + 1 FROM src").unwrap();
+    // An append of no rows writes no version, as delta-spark 4.4.1 (an empty overwrite commits).
+    let dir = tmp.path().join("d");
+    let before = versions(&dir);
+    run(&s, "INSERT INTO d SELECT a FROM src WHERE a > 100").unwrap();
+    assert_eq!(versions(&dir), before);
+    assert_eq!(
+        query(&s, "SELECT a FROM d ORDER BY a"),
+        serde_json::json!([[6], [7]])
+    );
+    assert_eq!(
+        query(&s, "SELECT a FROM m ORDER BY a"),
+        serde_json::json!([[1], [5], [6]])
+    );
+}
+
+/// Writes of no rows, as delta-spark 4.4.1 records them (probe 2026-11-18, krishiv-internal
+/// `ops/reports/2026-11-18-o2-empty-append.md`): an append (SQL, reading its own target, or a
+/// DataFrame `save`) and a dynamic partition overwrite write no version; a static overwrite and
+/// a `replaceWhere` commit one version that removes the files.
+#[test]
+fn empty_writes_commit_as_delta_spark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("e");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (a INT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO e VALUES (1, 'x')").unwrap();
+    let base = versions(&dir);
+    run(&s, "INSERT INTO e SELECT a, p FROM e WHERE a > 100").unwrap();
+    assert_eq!(versions(&dir), base, "self-reading append");
+    let empty = block_on(s.sql("SELECT 1 AS a, 'x' AS p WHERE false")).unwrap();
+    block_on(empty.write().format("delta").mode("append").save(&path)).unwrap();
+    assert_eq!(versions(&dir), base, "DataFrame append");
+    run(&s, "SET spark.sql.sources.partitionOverwriteMode = dynamic").unwrap();
+    run(
+        &s,
+        "INSERT OVERWRITE TABLE e SELECT a, p FROM e WHERE a > 100",
+    )
+    .unwrap();
+    run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
+    assert_eq!(versions(&dir), base, "dynamic overwrite");
+    assert_eq!(query(&s, "SELECT a FROM e"), serde_json::json!([[1]]));
+    block_on(
+        empty
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "p = 'x'")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(versions(&dir), base + 1, "replaceWhere");
+    assert_eq!(count(&last_commit(&dir), "remove"), 1);
+    run(&s, "INSERT INTO e VALUES (2, 'y')").unwrap();
+    run(
+        &s,
+        "INSERT OVERWRITE TABLE e SELECT a, p FROM e WHERE a > 100",
+    )
+    .unwrap();
+    assert_eq!(versions(&dir), base + 3, "static overwrite");
+    assert_eq!(count(&last_commit(&dir), "remove"), 1);
+    assert_eq!(count(&last_commit(&dir), "add"), 0);
+    assert_eq!(
+        query(&s, "SELECT count(*) FROM e"),
+        serde_json::json!([[0]])
+    );
+}
+
+/// A NULL into a `NOT NULL` column of a Delta table, through SQL and the DataFrame writer, at
+/// the top level and in a nested struct field, fails as delta-spark does (`WRITE-EDGES.json`
+/// `not_null`) and commits nothing.
+#[test]
+fn a_null_in_a_not_null_column_fails_as_delta_spark() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["not_null"].as_array().unwrap().clone();
+    let theirs = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["error"]
+            .clone()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE nn (id BIGINT, a INT NOT NULL, s STRUCT<x: INT NOT NULL, y: INT>) \
+             USING delta LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(
+        &s,
+        "INSERT INTO nn VALUES (1, 1, named_struct('x', 1, 'y', 1))",
+    )
+    .unwrap();
+    let check = |name: &str, e: KrishivError| {
+        let t = theirs(name);
+        assert_eq!(
+            e.error_class().name(),
+            t["condition"].as_str().unwrap(),
+            "{name}: {e}"
+        );
+        assert_eq!(e.sql_state(), t["sqlstate"].as_str(), "{name}");
+        assert!(
+            e.to_string().contains(t["message"].as_str().unwrap()),
+            "{name}: {e}"
+        );
+        assert_eq!(versions(&dir), 2, "{name}: nothing committed");
+    };
+    let df = |sql: &str| block_on(s.sql(sql)).unwrap();
+    for (name, select) in [
+        (
+            "dataframe_null_top_level",
+            "SELECT CAST(2 AS BIGINT) AS id, CAST(NULL AS INT) AS a, named_struct('x', 2, 'y', 2) AS s",
+        ),
+        (
+            "dataframe_null_nested",
+            "SELECT CAST(3 AS BIGINT) AS id, 3 AS a, named_struct('x', CAST(NULL AS INT), 'y', 3) AS s",
+        ),
+        (
+            "dataframe_null_struct",
+            "SELECT CAST(4 AS BIGINT) AS id, 4 AS a, CAST(NULL AS STRUCT<x: INT, y: INT>) AS s",
+        ),
+    ] {
+        let e = block_on(
+            df(select)
+                .write()
+                .format("delta")
+                .mode("append")
+                .save(&path),
+        )
+        .unwrap_err();
+        check(name, e);
+    }
+    let e = run(
+        &s,
+        "INSERT INTO nn VALUES (5, NULL, named_struct('x', 5, 'y', 5))",
+    )
+    .unwrap_err();
+    check("sql_null_top_level", e);
+    assert_eq!(query(&s, "SELECT id FROM nn"), serde_json::json!([[1]]));
+}
+
+/// `maxRecordsPerFile` reaches the Delta writer from `df.write.format("delta")`: the files roll
+/// over at it, on a new table and an existing one, `0` is no limit (`WRITE-EDGES.json`
+/// `max_records`), and a value that is not a number is refused (delta-spark raises the JVM's
+/// unclassed `NumberFormatException`; Krishiv names the option).
+#[test]
+fn max_records_per_file_reaches_the_writer() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["max_records"].as_array().unwrap().clone();
+    let adds = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["commits"][0]["adds"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let save = |value: &str, mode: &str| {
+        block_on(
+            block_on(s.sql(
+                "SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)",
+            ))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode(mode)
+            .option("maxRecordsPerFile", value)
+            .save(&path),
+        )
+    };
+    save("2", "errorifexists").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("create_two"));
+    save("1", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_one"));
+    let before = versions(&dir);
+    let e = save("abc", "append").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(versions(&dir), before);
+    save("0", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_zero"));
+    // A value below 0 is no limit too: delta-spark reads a long and limits only above 0.
+    save("-1", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_negative"));
+}
+
+/// A write to an existing Delta catalog table takes `maxRecordsPerFile` from the writer, as
+/// the path write does (`WRITE-EDGES.json` `max_records_table`): `insertInto` (append and
+/// overwrite), `saveAsTable` append and `writeTo(..).append()`, and a value that is not a
+/// number is refused there too.
+#[test]
+fn max_records_per_file_reaches_a_catalog_append() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["max_records_table"].as_array().unwrap().clone();
+    let step = |name: &str| {
+        steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    let adds = |name: &str| step(name)["commits"][0]["adds"].as_array().unwrap().len();
+    let rows_after = |name: &str| step(name)["rows"].as_array().unwrap().len();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE mr (id BIGINT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    let writer = |value: &str, mode: &str| {
+        block_on(
+            s.sql("SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)"),
+        )
+        .unwrap()
+        .write()
+        .format("delta")
+        .mode(mode)
+        .option("maxRecordsPerFile", value)
+    };
+    let rows =
+        || usize::try_from(query(&s, "SELECT count(*) FROM mr")[0][0].as_u64().unwrap()).unwrap();
+    block_on(writer("1", "append").insert_into("mr")).unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("insert_into_one"));
+    assert_eq!(rows(), rows_after("insert_into_one"));
+    block_on(writer("1", "overwrite").insert_into("mr")).unwrap();
+    assert_eq!(
+        count(&last_commit(&dir), "add"),
+        adds("insert_into_overwrite_one")
+    );
+    assert_eq!(rows(), rows_after("insert_into_overwrite_one"));
+    let before = versions(&dir);
+    let e = block_on(writer("abc", "append").insert_into("mr")).unwrap_err();
+    assert!(step("insert_into_not_a_number")["error"].is_object());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(versions(&dir), before);
+    block_on(writer("1", "append").save_as_table("mr")).unwrap();
+    assert_eq!(
+        count(&last_commit(&dir), "add"),
+        adds("save_as_table_append_one")
+    );
+    assert_eq!(rows(), rows_after("save_as_table_append_one"));
+    block_on(
+        block_on(
+            s.sql("SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)"),
+        )
+        .unwrap()
+        .write_to_table("mr")
+        .option("maxRecordsPerFile", "1")
+        .append(),
+    )
+    .unwrap();
+    assert_eq!(
+        count(&last_commit(&dir), "add"),
+        adds("save_as_table_append_one")
+    );
+    let e = block_on(writer("abc", "append").save_as_table("mr")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(rows(), 15);
+}
+
+/// `insertInto` overwrite of a partitioned Delta catalog table ignores a
+/// `partitionOverwriteMode` writer option: the session configuration alone makes it dynamic,
+/// as in delta-spark (`WRITE-EDGES.json` `insert_into_overwrite_mode`).
+#[test]
+fn insert_into_overwrite_mode_follows_the_session_config_only() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["insert_into_overwrite_mode"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let rows_after = |name: &str| {
+        let step = steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"));
+        assert!(step["error"].is_null(), "{name}");
+        step["rows"].clone()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE iom (id BIGINT, p STRING) USING delta PARTITIONED BY (p) \
+             LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO iom VALUES (1, 'a'), (2, 'b')").unwrap();
+    let overwrite = |id: i64, option: &str| {
+        let df = block_on(s.sql(&format!("SELECT CAST({id} AS BIGINT) AS id, 'a' AS p"))).unwrap();
+        block_on(
+            df.write()
+                .mode("overwrite")
+                .option("partitionOverwriteMode", option)
+                .insert_into("iom"),
+        )
+        .unwrap();
+    };
+    let rows = || query(&s, "SELECT id, p FROM iom ORDER BY id");
+    overwrite(3, "dynamic");
+    assert_eq!(rows(), rows_after("option_dynamic_conf_unset"));
+    run(&s, "INSERT INTO iom VALUES (4, 'b')").unwrap();
+    assert_eq!(rows(), rows_after("insert_b"));
+    run(&s, "SET spark.sql.sources.partitionOverwriteMode = dynamic").unwrap();
+    overwrite(5, "static");
+    run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
+    assert_eq!(rows(), rows_after("option_static_conf_dynamic"));
+}

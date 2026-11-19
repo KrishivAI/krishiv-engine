@@ -17,9 +17,11 @@ from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
     PySparkAttributeError,
+    PySparkException,
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
+    unsupported_attribute,
     unsupported_feature,
 )
 from krishiv.sql import _convert
@@ -27,6 +29,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.observation import Observation, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
@@ -167,6 +170,11 @@ class DataFrame:
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
+        # As in Spark, `rdd` is the RDD even when a column has that name. It is answered here, not by
+        # a property: a property that raises `AttributeError` falls through to this method, which
+        # would then hide the message.
+        if name == "rdd":
+            raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
         return Column(self._df.col(name))
@@ -425,6 +433,29 @@ class DataFrame:
         return self._new(self._df.order_by(ordered))
 
     sort = orderBy
+
+    def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame:
+        """Observes named metrics (aggregate expressions) of this DataFrame as the first action runs
+        (``DataFrame.observe``). With an :class:`~krishiv.sql.Observation` they are read from
+        ``observation.get``; with a name only, the metrics are computed with the query."""
+        if not isinstance(observation, Observation | str):
+            raise not_expected_type("observation", "Observation or str", observation)
+        if len(exprs) == 0:
+            raise PySparkValueError(errorClass="CANNOT_BE_EMPTY", messageParameters={"item": "exprs"})
+        if not all(isinstance(c, Column) for c in exprs):
+            raise PySparkTypeError(
+                errorClass="NOT_LIST_OF_COLUMN", messageParameters={"arg_name": "exprs", "arg_type": "tuple"}
+            )
+        try:
+            if isinstance(observation, str):
+                # The engine's analysis refuses an empty name (INVALID_OBSERVED_METRICS.MISSING_NAME, as
+                # classic Spark's string form does), so no client-side check here.
+                named = Observation.__new__(Observation)
+                named._native = _native.Observation(observation)
+                observation = named
+            return self._new(self._df.observe(observation._native, [c._c for c in exprs]))
+        except PySparkException as e:
+            raise _pyspark_error(e) from e
 
     def limit(self, num: int) -> DataFrame:
         if not isinstance(num, int):
@@ -1846,8 +1877,12 @@ class DataFrame:
         """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
+        stream.use_placeholder_names()
         try:
             table = pa.table(stream)
+            # A column name with a NUL cannot cross the C data interface: the stream exports a placeholder name.
+            if table.column_names != (names := stream.names()):
+                table = table.rename_columns(names)
         except Exception:
             # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
             stream.check_error()

@@ -503,6 +503,32 @@ fn an_implied_filter_already_held_keeps_the_input_shared() {
     );
 }
 
+/// Seed 13405315040370503962 of `random_queries_reach_the_lowest_operator`:
+/// nothing above a cross join's side reads its aggregate, so pruning keeps one
+/// column for the row count. After common-subexpression elimination replaced
+/// the filter's `c0 IS NOT NULL`, the next run saw `c0` read by no one and
+/// kept another column, so the plan was not a fixed point.
+#[test]
+fn the_column_kept_for_the_row_count_is_stable() {
+    let seed = 13_405_315_040_370_503_962_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
 /// Seed 3574806867649217214 of `random_queries_reach_the_lowest_operator`:
 /// the aggregate's input is already a semi join on its key (the `LEFT SEMI
 /// JOIN` the query writes, its right side a shifted instance of `u`). The

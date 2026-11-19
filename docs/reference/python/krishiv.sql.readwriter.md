@@ -31,6 +31,14 @@ def csv(self, path: str | list[str], **options: object) -> DataFrame
 def format(self, source: str) -> DataFrameReader
 ```
 
+### `jdbc`
+
+```python
+def jdbc(self, *args: object, **kwargs: object) -> DataFrame
+```
+
+Not supported: Krishiv has no JDBC source (`KRISHIV_UNSUPPORTED_FEATURE`).
+
 ### `json`
 
 ```python
@@ -64,11 +72,13 @@ def parquet(self, *paths: str) -> DataFrame
 ### `schema`
 
 ```python
-def schema(self, schema: object) -> DataFrameReader
+def schema(self, schema: StructType | str) -> DataFrameReader
 ```
 
-Refused with `KRISHIV_UNSUPPORTED_FEATURE`: reads do not carry a
-user schema yet, and dropping it would read every column as text.
+The input schema: a `StructType` or a DDL string (`"a INT,
+b STRING"`). The files are read as its columns, never inferred; as in
+Spark, partition columns found under the path come last (one the schema
+names takes its type) and every column reads as nullable.
 
 ## `DataFrameWriter`
 
@@ -117,6 +127,14 @@ def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
 ```
 
 Inserts the rows into the existing table `tableName` by position.
+
+### `jdbc`
+
+```python
+def jdbc(self, *args: object, **kwargs: object) -> None
+```
+
+Not supported: Krishiv has no JDBC sink (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 

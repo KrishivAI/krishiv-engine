@@ -150,7 +150,7 @@ fn coalescing_waste_depends_on_the_store() {
         "S3A://b",
         "gs://b",
         "az://c",
-        "abfss://c@a",
+        "abfss://c@a.dfs.core.windows.net",
         "https://h",
     ] {
         assert!(StoreId::new(remote).is_remote(), "{remote}");
@@ -170,6 +170,39 @@ fn coalescing_waste_depends_on_the_store() {
     };
     assert_eq!(c.waste(&StoreId::new("file")), w);
     assert_eq!(c.waste(&StoreId::new("s3://bucket")), w);
+}
+
+#[test]
+fn a_printed_object_path_re_parses_to_its_store_and_key() {
+    for input in [
+        "s3a://bucket/dir/k.parquet",
+        "gs://bucket/k",
+        "abfss://c@acct.dfs.core.windows.net/dir/k",
+        "abfs://c@Acct.blob.core.windows.net/dir/k",
+        "abfss://ws@onelake.blob.fabric.microsoft.com/lh/k",
+        "abfss://ws@wsid.z28.dfs.fabric.microsoft.com/lh/k",
+        "abfss://ws@wsid.z28.blob.fabric.microsoft.com/lh/k",
+        "az://c/k",
+    ] {
+        let url = parse_object_url(input).unwrap();
+        let file = FileRef {
+            store: url.store_id.clone(),
+            path: url.key.clone(),
+            size: 1,
+            version: VersionToken::Modified(0),
+            modified_micros: None,
+        };
+        let printed = file.display_path();
+        let again = parse_object_url(&printed).unwrap();
+        assert_eq!(again.store_id, url.store_id, "{input} -> {printed}");
+        assert_eq!(again.key, url.key, "{input} -> {printed}");
+    }
+    // An Azure Storage id names the account's `dfs` host, whichever name the path used.
+    let blob = parse_object_url("abfs://c@acct.blob.core.windows.net/k").unwrap();
+    assert_eq!(
+        blob.store_id.to_string(),
+        "abfss://c@acct.dfs.core.windows.net"
+    );
 }
 
 #[test]

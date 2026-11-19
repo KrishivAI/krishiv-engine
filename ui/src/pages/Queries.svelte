@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, token, type Query } from "../api";
+  import { api, type Query } from "../api";
   import { bytes, count, elapsed, oneLine } from "../format";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
@@ -13,7 +13,7 @@
 
   $effect(() => {
     const tick = setInterval(() => (now = Date.now()), 1000);
-    const source = new EventSource(`/api/internal/events?token=${encodeURIComponent(token() ?? "")}`);
+    const source = new EventSource("/api/internal/events");
     source.addEventListener("queries", (e) => {
       const body = JSON.parse((e as MessageEvent).data);
       if (body.error) {

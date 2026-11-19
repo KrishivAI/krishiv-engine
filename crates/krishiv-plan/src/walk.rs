@@ -200,6 +200,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
+                | PlanNode::CollectMetrics { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::Sample { .. }
@@ -440,6 +441,11 @@ impl Teardown {
             | PlanNode::Repartition {
                 input,
                 exprs: params,
+            }
+            | PlanNode::CollectMetrics {
+                input,
+                metrics: params,
+                ..
             } => {
                 self.plans.push(input);
                 self.exprs.extend(params);
@@ -462,14 +468,19 @@ impl Teardown {
                 self.exprs.extend(right_keys);
             }
             PlanNode::PythonTableFunction {
-                args, table_arg, ..
+                args,
+                table_arg,
+                lateral,
+                ..
             } => {
                 self.exprs.extend(args);
+                self.plans.extend(lateral);
                 if let Some(t) = table_arg {
                     self.plans.push(t.input);
                     self.exprs.extend(t.partition_by);
                     self.exprs
                         .extend(t.order_by.into_iter().map(|SortOrder { expr, .. }| expr));
+                    self.exprs.extend(t.select);
                 }
             }
             PlanNode::Union { inputs, .. } => self.plans.extend(inputs),
@@ -535,6 +546,11 @@ impl Teardown {
                 self.plans.push(plan);
                 match kind {
                     SubqueryKind::In(values) => self.exprs.extend(values),
+                    SubqueryKind::Table(t) => {
+                        self.exprs.extend(t.partition_by);
+                        self.exprs
+                            .extend(t.order_by.into_iter().map(|SortOrder { expr, .. }| expr));
+                    }
                     SubqueryKind::Scalar | SubqueryKind::Exists => {}
                 }
             }

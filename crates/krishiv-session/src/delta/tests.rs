@@ -121,6 +121,134 @@ fn dropped_reads_cancel_their_kernel_calls() {
     );
 }
 
+/// An interrupt during analysis reaches the planning-time kernel calls of reads built inside the
+/// action, even while something (a frame) still holds the reads: their drop is not needed.
+#[test]
+fn an_interrupted_action_cancels_its_reads_kernel_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let s = Arc::new(Session::new().unwrap());
+    let actions = Arc::new(crate::action::Actions::default());
+    let guard = actions.begin(1, Some("op"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let running = {
+        let s = Arc::clone(&s);
+        std::thread::spawn(move || {
+            block_on(guard.run(async move {
+                let query = s.query_env();
+                let reads = Arc::clone(&query.catalog.delta);
+                let (store, root) = reads.root_of(&read(&path))?;
+                let engine = reads.engine(store, root)?;
+                tx.send((reads, engine)).ok();
+                std::future::pending::<Result<(), krishiv_common::error::KrishivError>>().await
+            }))
+        })
+    };
+    let (held, engine) = rx.recv().unwrap();
+    assert!(block_on(engine.delta_blocking(|_| ())).is_ok());
+    actions.cancel_where(crate::cancel::CancelReason::User, &|_, _| true);
+    assert!(
+        running.join().unwrap().is_err(),
+        "the action ends with the cancel"
+    );
+    // The watcher runs on the I/O runtime: give it a moment, never forever.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let e = loop {
+        match block_on(engine.delta_blocking(|_| ())) {
+            Err(e) => break e,
+            Ok(()) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(()) => panic!("the interrupt never reached the planning engine"),
+        }
+    };
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+    drop(held);
+}
+
+/// Reads built inside an action start their interrupt watcher only at the first planning
+/// kernel call: an env that opens no Delta table spawns nothing (review 940176301 N1).
+#[test]
+fn the_interrupt_watcher_starts_at_the_first_kernel_call() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let s = Arc::new(Session::new().unwrap());
+    let outside = s.query_env();
+    assert!(
+        !outside.catalog.delta.watcher_pending(),
+        "no watcher outside an action"
+    );
+    let actions = Arc::new(crate::action::Actions::default());
+    let guard = actions.begin(1, Some("op"));
+    let r: Result<(), krishiv_common::error::KrishivError> = block_on(guard.run(async move {
+        let unused = s.query_env();
+        assert!(
+            unused.catalog.delta.watcher_pending(),
+            "not started by building the env"
+        );
+        drop(unused);
+        let query = s.query_env();
+        let reads = Arc::clone(&query.catalog.delta);
+        let (store, root) = reads.root_of(&read(&path))?;
+        assert!(reads.watcher_pending());
+        let _engine = reads.engine(store.clone(), root.clone())?;
+        assert!(!reads.watcher_pending(), "started by the first kernel call");
+        let _again = reads.engine(store, root)?;
+        Ok(())
+    }));
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// An action interrupted before its reads' first kernel call: that call's engine is cancelled
+/// already, with no wait for the watcher task (review of a77e1ba21, N1/N2).
+#[test]
+fn an_interrupt_before_the_first_kernel_call_cancels_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let s = Arc::new(Session::new().unwrap());
+    let actions = Arc::new(crate::action::Actions::default());
+    let guard = actions.begin(1, Some("op"));
+    let (built_tx, built_rx) = std::sync::mpsc::channel();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let running = std::thread::spawn(move || {
+        block_on(guard.run(async move {
+            let query = s.query_env();
+            let reads = Arc::clone(&query.catalog.delta);
+            built_tx.send(()).ok();
+            go_rx.recv().ok();
+            let (store, root) = reads.root_of(&read(&path))?;
+            // Built after the interrupt, within the same poll of the action's work (nothing
+            // above awaits), so the action itself has not seen the cancel yet.
+            let engine = reads.engine(store, root)?;
+            // On this thread, at once: the token fired inside `engine`, not on the watcher task.
+            Ok((engine, reads.cancelled()))
+        }))
+    });
+    built_rx.recv().unwrap();
+    actions.cancel_where(crate::cancel::CancelReason::User, &|_, _| true);
+    go_tx.send(()).unwrap();
+    let (engine, cancelled) = running
+        .join()
+        .unwrap()
+        .expect("the work ends in its first poll");
+    assert!(cancelled, "the token fired before engine() returned");
+    // At once: no sleep, no retry; the watcher task need not have run.
+    let e = block_on(engine.delta_blocking(|_| ()))
+        .expect_err("the interrupt reaches the first kernel call");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+}
+
 /// `krishiv.delta.snapshotCache.maxBytes` reaches the runtime's cache: under a bound that holds
 /// a snapshot but not its listing, the table is cached without its files (re-review N6).
 #[test]

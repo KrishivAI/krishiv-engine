@@ -500,12 +500,10 @@ _ENGINE_UNSUPPORTED = (
     "bitmap_or_agg",
     "collate",
     "count_min_sketch",
-    "histogram_numeric",
     "hll_sketch_agg",
     "hll_sketch_estimate",
     "hll_union",
     "hll_union_agg",
-    "is_valid_variant",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -1343,8 +1341,8 @@ def hex(col: ColumnOrName) -> Column:
 
 
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("histogram_numeric")
+    """Calls the registry function ``histogram_numeric``."""
+    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:
@@ -1418,8 +1416,8 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
 
 
 def is_valid_variant(v: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("is_valid_variant")
+    """Calls the registry function ``is_valid_variant``."""
+    return _call("is_valid_variant", _named(v, "v"))
 
 
 def is_variant_null(v: ColumnOrName) -> Column:

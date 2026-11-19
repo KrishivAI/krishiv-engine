@@ -128,6 +128,9 @@ pub struct PipelineBuilder {
     nodes: Vec<u32>,
     /// The pipelines of shared plans built so far: the sink ending each and its draft, by plan number.
     shared: HashMap<u64, (OperatorId, usize)>,
+    /// The most drivers one pipeline of this plan runs at once, when the
+    /// runner knows it (see [`Self::parallelism`]).
+    parallelism: Option<usize>,
 }
 
 impl std::fmt::Debug for PipelineBuilder {
@@ -149,6 +152,7 @@ impl PipelineBuilder {
             names: Vec::new(),
             nodes: Vec::new(),
             shared: HashMap::new(),
+            parallelism: None,
         };
         let id = b.id(result.name(), OperatorRole::Sink);
         b.drafts.push(Draft {
@@ -165,6 +169,24 @@ impl PipelineBuilder {
             preserve_order: false,
         });
         b
+    }
+
+    /// The same builder for a plan whose pipelines run at most
+    /// `parallelism` drivers at once.
+    #[must_use]
+    pub(crate) fn with_parallelism(mut self, parallelism: usize) -> Self {
+        self.parallelism = Some(parallelism);
+        self
+    }
+
+    /// The most drivers one pipeline runs at once: the executor's slots, or
+    /// 1 under `krishiv.deterministicOrder` (one driver per pipeline there,
+    /// and a plan chosen from it never follows the machine or thread
+    /// timing). It is the slot count, not a pipeline's own driver count,
+    /// which its source's `max_parallelism` decides only once it runs.
+    /// `None` when the builder was made outside a runner.
+    pub(crate) fn parallelism(&self) -> Option<usize> {
+        self.parallelism
     }
 
     fn id(&mut self, name: &'static str, role: OperatorRole) -> OperatorId {

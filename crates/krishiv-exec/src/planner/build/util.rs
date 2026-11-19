@@ -38,6 +38,50 @@ pub(super) fn max_id(root: &LogicalPlan) -> u64 {
     max
 }
 
+/// The attributes `root` reads: every column an expression of any node (subquery plans included) refers
+/// to, the output of the root, and the whole input of a node that reads its input positionally (a union,
+/// a set operation, a `DISTINCT`). A scan's carrier column (kept only to count rows) is not among them.
+/// A node that renumbers or renames attributes (`Shift`, a CTE reference) can hide a reference, which is
+/// the safe side for its one use, `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: it never refuses a valid query.
+pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
+    let mut out: HashSet<AttrId> = HashSet::new();
+    if let Some(o) = root.resolved_output() {
+        out.extend(o.iter().map(|c| c.id));
+    }
+    let mut stack = vec![root];
+    let mut seen = HashSet::new();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(p)) {
+            continue;
+        }
+        if matches!(
+            p.node,
+            PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::Distinct { .. }
+        ) {
+            p.for_each_child(&mut |c| {
+                if let Some(o) = c.resolved_output() {
+                    out.extend(o.iter().map(|c| c.id));
+                }
+            });
+        }
+        p.for_each_child(&mut |c| stack.push(c));
+        p.for_each_expr(&mut |e| {
+            let mut exprs = vec![e.as_ref()];
+            while let Some(e) = exprs.pop() {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                        out.insert(c.id);
+                    }
+                    ExprNode::Subquery { plan, .. } => stack.push(plan),
+                    _ => {}
+                }
+                e.for_each_child(&mut |c| exprs.push(c));
+            }
+        });
+    }
+    out
+}
+
 /// The Arrow type each column of a union has in every input, and whether
 /// every branch converts to it: the type the inputs all store it in (kept
 /// as is), or, where they differ, the canonical Arrow type of its Spark
@@ -201,7 +245,7 @@ pub(super) fn range_node(
 }
 
 /// One row without columns (`SELECT` without `FROM`).
-pub(super) fn one_row() -> Planned {
+pub(crate) fn one_row() -> Planned {
     Planned {
         ordering: Vec::new(),
         schema: Arc::new(Schema::empty()),
@@ -304,4 +348,67 @@ pub(super) fn loop_limits(
         rows: u64::try_from(bound(conf(&CTE_RECURSION_ROW_LIMIT), 1_000_000)).unwrap_or(u64::MAX),
         pushed_limit: None,
     }
+}
+
+/// The input columns `exprs` read, or `None` when one of them may read its input any other
+/// way than by a resolved column (a subquery, whose correlated columns hide in its own plan; an
+/// unresolved name or star; a window; an aggregate's state input), so nothing can be dropped.
+pub(super) fn columns_read<'e>(
+    exprs: impl IntoIterator<Item = &'e Expr>,
+) -> Option<HashSet<AttrId>> {
+    let mut out = HashSet::new();
+    let mut stack: Vec<&Expr> = exprs.into_iter().collect();
+    while let Some(e) = stack.pop() {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                out.insert(c.id);
+            }
+            ExprNode::Resolved(ResolvedExpr::StateInput { .. })
+            | ExprNode::Subquery { .. }
+            | ExprNode::Column(_)
+            | ExprNode::Star(_)
+            | ExprNode::MultiAlias { .. }
+            | ExprNode::Pipe { .. }
+            | ExprNode::Window(_) => return None,
+            _ => {}
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    Some(out)
+}
+
+/// `demand` with the columns `predicate` reads added; `None` when there is no demand or the
+/// predicate may read its input otherwise ([`columns_read`]).
+pub(crate) fn with_columns_of(
+    demand: Option<HashSet<AttrId>>,
+    predicate: &Expr,
+) -> Option<HashSet<AttrId>> {
+    let mut demand = demand?;
+    demand.extend(columns_read([predicate])?);
+    Some(demand)
+}
+
+/// The columns a node's own expressions read from its input, as the demand it puts on that
+/// input (see the planner's `demand`), or `None` when they cannot be told.
+pub(crate) fn node_demand(node: &LogicalPlan) -> Option<HashSet<AttrId>> {
+    let mut exprs = Vec::new();
+    node.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+    columns_read(exprs.iter().map(AsRef::as_ref))
+}
+
+/// `scan` reading only the columns in `demand`, or `None` when that is every column or none.
+pub(super) fn narrow_scan(
+    scan: &krishiv_plan::Scan,
+    demand: &HashSet<AttrId>,
+) -> Option<krishiv_plan::Scan> {
+    let output: Vec<BoundColumn> = scan
+        .output
+        .iter()
+        .filter(|c| demand.contains(&c.id))
+        .cloned()
+        .collect();
+    (!output.is_empty() && output.len() < scan.output.len()).then(|| krishiv_plan::Scan {
+        output,
+        ..scan.clone()
+    })
 }

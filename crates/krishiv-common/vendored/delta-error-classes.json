@@ -214,6 +214,13 @@
     ],
     "sqlState" : "0AKDC"
   },
+  "DELTA_NOT_NULL_CONSTRAINT_VIOLATED" : {
+    "message" : [
+      "NOT NULL constraint violated for column: <columnName>.",
+      ""
+    ],
+    "sqlState" : "23502"
+  },
   "DELTA_PATH_EXISTS" : {
     "message" : [
       "Cannot write to already existent path <path> without setting OVERWRITE = 'true'."

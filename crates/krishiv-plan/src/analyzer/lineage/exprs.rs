@@ -17,9 +17,9 @@ use crate::{
     SubqueryKind, WindowSpecRef,
 };
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// The lineage of the value of `e` under `offset`.
-    pub(super) fn value(&mut self, e: &Arc<Expr>, offset: u64) -> Result<Info, KrishivError> {
+    pub(super) fn value(&mut self, e: &'a Arc<Expr>, offset: u64) -> Result<Info, KrishivError> {
         // A bare column is one map lookup and a literal has no leaf: no children, so no memo (most expressions
         // of a plan are these, and a memo entry costs more than the rule).
         match &e.node {
@@ -41,7 +41,7 @@ impl Walker<'_> {
 
     /// The rule of `e`'s kind.
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn expr(&mut self, e: &Expr, offset: u64) -> Result<Info, KrishivError> {
+    fn expr(&mut self, e: &'a Expr, offset: u64) -> Result<Info, KrishivError> {
         match &e.node {
             ExprNode::Literal(_) => Ok(literal()),
             ExprNode::Cast { expr, .. } => {
@@ -52,6 +52,8 @@ impl Walker<'_> {
             ExprNode::Subquery { kind, plan } => {
                 let out = self.subquery(plan, offset)?;
                 match kind {
+                    // Resolved plans hold no `TABLE` argument expression.
+                    SubqueryKind::Table(_) => Err(internal("a TABLE argument in a resolved plan")),
                     SubqueryKind::Scalar => out
                         .first()
                         .cloned()
@@ -127,7 +129,7 @@ impl Walker<'_> {
 
     /// The rule of a resolved expression's kind.
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn resolved(&mut self, r: &ResolvedExpr, offset: u64) -> Result<Info, KrishivError> {
+    fn resolved(&mut self, r: &'a ResolvedExpr, offset: u64) -> Result<Info, KrishivError> {
         match r {
             ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c) => {
                 self.column(shifted(c.id, offset)?)
@@ -150,7 +152,7 @@ impl Walker<'_> {
     /// A call: the sources of its arguments (a `CASE WHEN` or `IF` condition decides the value, so it is a
     /// source and a `conditional` filter), a lambda's variables bound to the call's other arguments, and the
     /// step of its kind.
-    fn function(&mut self, f: &ResolvedFunction, offset: u64) -> Result<Info, KrishivError> {
+    fn function(&mut self, f: &'a ResolvedFunction, offset: u64) -> Result<Info, KrishivError> {
         // A lambda's variables read the other arguments (the array, map or initial value).
         if f.args.iter().any(|a| is_lambda(a)) {
             let mut inputs = literal();
@@ -203,12 +205,12 @@ impl Walker<'_> {
     }
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// The strongest transform the arguments of the window function `function` bring (memoized: the
     /// function's own walk read them already).
     fn window_arguments(
         &mut self,
-        function: &Arc<Expr>,
+        function: &'a Arc<Expr>,
         offset: u64,
     ) -> Result<Transform, KrishivError> {
         match &function.node {
@@ -239,7 +241,7 @@ fn over(v: &Info, step: Transform) -> Info {
     })
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// A field `name` of `v`: when `v` is a file scan's `_metadata` column as read (an `identity` whose leaves
     /// are path leaves `_metadata.<field>`), only that field's leaves. A struct rebuilt of `_metadata` fields
     /// (`named_struct('file_name', _metadata.file_path)`) is an `expression`: its field names say nothing of

@@ -325,6 +325,35 @@ pub trait TableFunctionRegistry: Send + Sync {
     /// Changes whenever a lookup could answer differently; part of the
     /// context fingerprint.
     fn version(&self) -> u64;
+
+    /// The Python UDTF the session registered as `name` (any case), which
+    /// a call resolves to when no built-in table function has the name
+    /// (Spark's `spark.udtf.register` makes a temporary table function, which
+    /// 4.2.0's `sessionOrder` default resolves after the built-ins). `name` is
+    /// the call's name as [`PlanNode::TableFunction`](crate::PlanNode)
+    /// carries it. The default has none.
+    fn python_udtf(&self, _name: &str) -> Option<crate::udtf::ResolvedUdtf> {
+        None
+    }
+
+    /// Runs the static `analyze` of a Python UDTF registered without a
+    /// return type, for one call (design P3-T085 §3.3 "UDTF analyze").
+    /// The default runs none.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` without a runtime that runs it;
+    /// `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON` when `analyze`
+    /// fails or returns something Spark refuses.
+    fn analyze_python_udtf(
+        &self,
+        spec: &crate::udtf::UdtfAnalyzeSpec,
+    ) -> Result<crate::udtf::UdtfAnalysis, KrishivError> {
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
 }
 
 /// The built-in table functions: `range` and `sql_keywords`, plus the
@@ -409,6 +438,15 @@ pub enum Securable {
     },
     /// A named connection (credentials plus endpoint) a statement uses.
     Connection(String),
+    /// One column of a table or view (P3-T062): asked per referenced column after analysis, only
+    /// of a policy that [decides columns](AccessPolicy::column_level). A grant on the table
+    /// covers all its columns.
+    Column {
+        /// The table or view.
+        table: TableIdent,
+        /// The column, in the catalog's spelling.
+        column: String,
+    },
 }
 
 impl fmt::Display for Securable {
@@ -422,6 +460,11 @@ impl fmt::Display for Securable {
             Self::System(n) => write!(f, "system {}", quoted(std::slice::from_ref(n))),
             Self::Secret { scope } => write!(f, "secret {}", quoted(std::slice::from_ref(scope))),
             Self::Connection(n) => write!(f, "connection {}", quoted(std::slice::from_ref(n))),
+            Self::Column { table, column } => write!(
+                f,
+                "column {} of table {table}",
+                quoted(std::slice::from_ref(column))
+            ),
         }
     }
 }
@@ -525,12 +568,32 @@ pub trait AccessPolicy: Send + Sync {
     /// The policy version.
     fn version(&self) -> PolicyVersion;
     /// The decision for `principal` on `securable`.
+    ///
+    /// It may also be asked speculatively: `analyze` and `EXPLAIN FORMAT JSON` of a write ask the run's target
+    /// checks quietly ([`super::authorize_quietly`]: no audit record, no denial count, no [`Self::denied`]
+    /// call) to decide whether to list the target's directories, and a plain `EXPLAIN` first tries the ordinary
+    /// analysis of a read, which asks the session's policy behind the session's `QuietPolicy` (its `check`
+    /// answers, but its `denied` is never called). A policy that logs or counts its own `check` answers sees
+    /// those trial questions too.
     fn check<'a>(
         &'a self,
         principal: &'a Principal,
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>>;
+    /// Whether the policy decides reads per column (P3-T062 grants): analysis then asks
+    /// [`Privilege::Browse`] on each table and view it binds (to see its schema) and, once the
+    /// query is resolved, [`Privilege::Select`] on a [`Securable::Column`] per referenced column
+    /// (on the table itself when none is). The default, `false`, asks `Select` on the table.
+    /// A wrapper that forwards `check` forwards this too; one that does not stays at the
+    /// stricter table-level question.
+    fn column_level(&self) -> bool {
+        false
+    }
+    /// Told once per refusal [`super::authorize`] returns (after any `Browse` fallback), so a
+    /// provider can write its audit record and count the denial; never for a trial
+    /// ([`super::authorize_quietly`]). The default does nothing.
+    fn denied(&self, _principal: &Principal, _securable: &Securable, _privilege: Privilege) {}
 }
 
 /// The embedded default policy: everything is allowed.
@@ -648,6 +711,32 @@ pub trait FileSchemaResolver: Send + Sync {
         paths: &'a [OptionValue],
         options: &'a BTreeMap<String, OptionValue>,
     ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>>;
+    /// The columns of reading `paths` as `format` with `options` and the
+    /// user's `schema` (`spark.read.schema(..)`): nothing is inferred from
+    /// the files' contents. As Spark, the data columns are the schema's in
+    /// its order and the partition columns found under the paths come last,
+    /// typed as the schema names them (inferred when it does not). The
+    /// default refuses the read.
+    ///
+    /// # Errors
+    /// As [`Self::infer`], except that no files is not an error, plus
+    /// `INVALID_PARTITION_VALUE` for a partition value that is not of the
+    /// schema's type and the format's checks of the schema.
+    fn with_schema<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        options: &'a BTreeMap<String, OptionValue>,
+        schema: &'a krishiv_types::StructType,
+    ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>> {
+        let _ = (format, paths, options, schema);
+        Box::pin(async {
+            Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "a user schema on a read by path".to_owned(),
+            }
+            .into())
+        })
+    }
 }
 
 /// Tables in memory, by namespace and name, stored lower-case like Spark's
