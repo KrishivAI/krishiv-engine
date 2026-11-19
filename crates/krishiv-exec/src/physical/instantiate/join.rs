@@ -79,6 +79,10 @@ pub(crate) fn hash_join(
             let mut options = f.options;
             if values.producers(ValueId::Filter(f.id)) == 1 {
                 options.bloom_bytes = None;
+            } else {
+                // Several builds (a broadcast join's probe tasks) would each
+                // reserve the whole tier, and fixed filters do not merge.
+                options.bloom_spill_bytes = None;
             }
             Ok(JoinRuntimeFilter {
                 key: f.key,

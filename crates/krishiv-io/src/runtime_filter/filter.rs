@@ -57,7 +57,9 @@ pub struct KeyFilterOptions {
     /// hashes (past `bloom_max_items`, or a build that spills): its hashes
     /// are then [drained](KeyFilterBuilder::drain_hashes) into that filter
     /// as they come, and [`KeyFilterBuilder::finish_with`] publishes it.
-    /// `None`: the Bloom form is lost then (q09 SF1000, perf-1 2026-11-19).
+    /// Only a producer that keeps such a filter acts on it
+    /// ([`KeyFilterBuilder::keep_hashes_past_cap`]); `None`: the Bloom form
+    /// is lost then (TPC-H q09 at SF1000).
     pub bloom_spill_bytes: Option<u32>,
 }
 
@@ -143,6 +145,10 @@ pub struct KeyFilterBuilder {
     /// this builder: it keeps collecting hashes past `bloom_max_items`, and
     /// its own hashes alone are no Bloom ([`Self::finish_with`]).
     drained: bool,
+    /// The owner keeps a fixed filter to drain into
+    /// ([`Self::keep_hashes_past_cap`]): past `bloom_max_items` it, not
+    /// this builder, drains or drops the hashes.
+    owned: bool,
     nulls: bool,
     rows: u64,
 }
@@ -159,6 +165,7 @@ impl KeyFilterBuilder {
             class: Class::of(&key_type)?,
             hashes: options.bloom.then(Vec::new),
             drained: false,
+            owned: false,
             distinct: Some(Distinct::default()),
             key_type,
             options,
@@ -224,7 +231,7 @@ impl KeyFilterBuilder {
         // With a fixed filter to drain into, the owner decides past the cap.
         if self.hashes.is_some()
             && !self.drained
-            && self.options.bloom_spill_bytes.is_none()
+            && !self.owned
             && self.rows > self.options.bloom_max_items
         {
             self.hashes = None;
@@ -382,12 +389,26 @@ impl KeyFilterBuilder {
 
     /// Whether the rows collected exceed `bloom_max_items`. Past it a
     /// builder drops its hashes at its next [`Self::add`] or merge, unless
-    /// it has a fixed filter to drain into
-    /// ([`KeyFilterOptions::bloom_spill_bytes`]): its owner then drains
-    /// or [drops](Self::drop_hashes) them.
+    /// its owner [keeps a fixed filter](Self::keep_hashes_past_cap) and
+    /// then drains or [drops](Self::drop_hashes) them.
     #[must_use]
     pub fn past_bloom_cap(&self) -> bool {
         self.rows > self.options.bloom_max_items
+    }
+
+    /// Non-null keys added, duplicates included.
+    #[must_use]
+    pub fn rows(&self) -> u64 {
+        self.rows
+    }
+
+    /// Called by an owner that keeps the fixed filter of
+    /// [`KeyFilterOptions::bloom_spill_bytes`]: past `bloom_max_items`
+    /// this builder keeps its hashes for the owner to drain or drop. A
+    /// builder without the option, or whose owner never calls this, drops
+    /// them past the cap as before (an exchange's collected filter).
+    pub fn keep_hashes_past_cap(&mut self) {
+        self.owned = self.options.bloom_spill_bytes.is_some();
     }
 
     /// Whether some hashes went to a filter outside this builder.
@@ -448,9 +469,8 @@ impl KeyFilterBuilder {
             _ => None,
         };
         let drained = self.drained || other.drained;
-        let keep = drained
-            || self.options.bloom_spill_bytes.is_some()
-            || self.rows <= self.options.bloom_max_items;
+        self.owned |= other.owned;
+        let keep = drained || self.owned || self.rows <= self.options.bloom_max_items;
         self.hashes = match (self.hashes.take(), other.hashes) {
             (Some(mut a), Some(b)) if keep => {
                 a.extend(b);

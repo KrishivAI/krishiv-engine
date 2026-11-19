@@ -401,7 +401,13 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
                     id: f.id,
                     column,
                     key_type: key_type.clone(),
-                    options: f.options,
+                    // An exchange keeps no fixed Bloom: its hashes stop at
+                    // the cap (the join build's `bloom_spill_bytes` is the
+                    // join's own).
+                    options: krishiv_io::KeyFilterOptions {
+                        bloom_spill_bytes: None,
+                        ..f.options
+                    },
                     null_safe: null_safe.get(f.key).copied().unwrap_or(false),
                 });
                 moved.insert(f.id);

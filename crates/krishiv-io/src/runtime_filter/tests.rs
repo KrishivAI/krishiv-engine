@@ -469,9 +469,26 @@ mod unit {
         .unwrap_or_else(|| panic!());
         plain.add(&keys(0), None).unwrap_or_else(|e| panic!("{e}"));
         assert!(plain.past_bloom_cap() && !plain.has_hashes());
+        // With the option but no owner keeping the filter (an exchange's
+        // collected filter), the hashes still go past the cap, and in a
+        // merge past it.
+        let mut unowned = new();
+        unowned
+            .add(&keys(0), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!unowned.has_hashes(), "an unowned builder kept its hashes");
+        let (mut m1, mut m2) = (new(), new());
+        m1.add(&keys(0).slice(0, 600), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        m2.add(&keys(0).slice(600, 600), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        m1.merge(m2);
+        assert!(!m1.has_hashes(), "an unowned merge kept its hashes");
         let mut owned = new();
+        owned.keep_hashes_past_cap();
         owned.add(&keys(0), None).unwrap_or_else(|e| panic!("{e}"));
         assert!(owned.past_bloom_cap() && owned.has_hashes() && !owned.is_drained());
+        assert_eq!(owned.rows(), 4000);
         // Drained before the cap: hashes are kept past it.
         let (mut a, mut b) = (new(), new());
         a.add(&keys(0).slice(0, 500), None)

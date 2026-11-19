@@ -773,9 +773,10 @@ fn spill_bloom_sizes(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<Opti
 
 /// TPC-H q09's shape at SF1000, scaled down: a build cut by a `LIKE` holds
 /// far more keys than `bloom.maxItems` (2,800 rows against a cap of 400).
-/// Under `bloom.memoryTier` it gets a fixed Bloom of the tier (1/64 of the
-/// memory limit) and keeps the Bloom form past the cap, so it drops more
-/// probe rows than the range alone does without the tier; results match.
+/// Under `bloom.memoryTier` it gets a fixed Bloom sized for a quarter of the
+/// scan's 40,000 rows (well under the tier, 1/64 of the memory limit) and
+/// keeps the Bloom form past the cap, so it drops more probe rows than the
+/// range alone does without the tier; results match.
 #[test]
 fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -784,7 +785,7 @@ fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut rng = 43;
-    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 0));
+    write(dir.path(), "big.parquet", &table(&mut rng, 40_000, 4000, 0));
     write(
         dir.path(),
         "small.parquet",
@@ -821,7 +822,13 @@ fn a_guessed_build_past_the_cap_keeps_a_fixed_bloom() {
     let plan = t.plan_sql(q).unwrap();
     let mut sizes = Vec::new();
     spill_bloom_sizes(plan.plan.root(), &mut sizes);
-    assert!(sizes.contains(&Some(4 << 20)), "{sizes:?}\n{plan}");
+    // 10,000 keys at 1%: about 12 KiB, not the 4 MiB tier.
+    assert!(
+        sizes
+            .iter()
+            .any(|s| s.is_some_and(|b| b > 4096 && b < 64 << 10)),
+        "{sizes:?}\n{plan}"
+    );
     let (got, c) = run(&plan);
     assert_eq!(sorted(&got), want);
     // The range keeps [1, 1999], half of `big`; the Bloom about 28% of it.
