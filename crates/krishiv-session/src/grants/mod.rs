@@ -206,6 +206,8 @@ impl std::fmt::Debug for GrantsPolicy {
 }
 
 impl GrantsPolicy {
+    /// The policy of a session over `grants`.
+    ///
     /// The policy of a session over `grants`, with `system` deciding `System(..)` securables (the
     /// session's `RolePolicy` in server mode) and `admin` for a principal whose role is admin.
     #[must_use]

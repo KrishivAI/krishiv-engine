@@ -100,7 +100,62 @@ fn tidy(text: &str) -> String {
         }
         out.push(fix_signature(&drop_item_links(l)));
     }
-    format!("{}\n", out.join("\n").trim())
+    format!("{}\n", unhide_examples(&out).join("\n").trim())
+}
+
+/// Makes each Rust example valid for a reader who copies it: rustdoc hides lines that start with
+/// `# ` (setup lines and a closing `Ok::<(), E>(())`), but the Markdown shows them literally. The
+/// marker is removed, and an example that ends in `Ok::<_, E>(())` is wrapped in a function
+/// returning that `Result`, so its `?` operators compile.
+fn unhide_examples(lines: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        out.push(lines[i].clone());
+        if lines[i] != "```rust" && lines[i] != "```" {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let end = lines[start..]
+            .iter()
+            .position(|l| l.starts_with("```"))
+            .map_or(lines.len(), |n| start + n);
+        let body: Vec<&str> = lines[start..end]
+            .iter()
+            .map(|l| {
+                if l == "#" {
+                    ""
+                } else {
+                    l.strip_prefix("# ").unwrap_or(l)
+                }
+            })
+            .collect();
+        let hidden = lines[start..end]
+            .iter()
+            .any(|l| l == "#" || l.starts_with("# "));
+        let ok_err = body.last().and_then(|l| {
+            l.strip_prefix("Ok::<(), ")
+                .and_then(|r| r.strip_suffix(">(())"))
+        });
+        match (hidden, ok_err) {
+            (true, Some(err)) => {
+                out.push(format!("fn example() -> Result<(), {err}> {{"));
+                for l in &body[..body.len() - 1] {
+                    out.push(if l.is_empty() {
+                        String::new()
+                    } else {
+                        format!("    {l}")
+                    });
+                }
+                out.push("    Ok(())".to_owned());
+                out.push("}".to_owned());
+            }
+            _ => out.extend(body.iter().map(|l| (*l).to_owned())),
+        }
+        i = end;
+    }
+    out
 }
 
 /// Repairs what the converter renders in signatures: a lifetime comes out doubled (`''a`, one
@@ -113,8 +168,9 @@ fn fix_signature(line: &str) -> String {
     let Some(at) = line.find(marker) else {
         return line;
     };
-    // The synthetic parameter runs up to the signature's argument list, which never occurs inside it.
-    let Some(paren) = line[at..].find('(').map(|i| at + i) else {
+    // The synthetic parameter ends at the `>` that closes the parameter list, so the argument list
+    // is the first `>(` after the marker (a `(` alone also occurs inside it, in a tuple type).
+    let Some(paren) = line[at..].find(">(").map(|i| at + i + 1) else {
         return line;
     };
     if line[..at].ends_with(", ") {
@@ -266,6 +322,22 @@ mod tests {
             fix_signature("pub fn plain<T>(x: T)"),
             "pub fn plain<T>(x: T)"
         );
+        // A tuple type inside the synthetic parameter does not end the parameter list early.
+        assert_eq!(
+            fix_signature(
+                "pub fn parse<'a, /* synthetic */ impl IntoIterator<Item = (&'a str, &'a str)>: IntoIterator<Item = (&'a str, &'a str)>>(s: impl IntoIterator<Item = (&'a str, &'a str)>) -> u8"
+            ),
+            "pub fn parse<'a>(s: impl IntoIterator<Item = (&'a str, &'a str)>) -> u8"
+        );
+        // A marker with no argument list after it, or with an unexpected prefix, is left as it is.
+        assert_eq!(
+            fix_signature("pub trait T</* synthetic */ impl Foo"),
+            "pub trait T</* synthetic */ impl Foo"
+        );
+        assert_eq!(
+            fix_signature("fn f where /* synthetic */ impl Foo()"),
+            "fn f where /* synthetic */ impl Foo()"
+        );
     }
 
     #[test]
@@ -319,5 +391,44 @@ mod tests {
             .err()
             .unwrap_or_default();
         assert!(err.contains("stale"), "{err}");
+    }
+
+    #[test]
+    fn unhide_examples_wraps_a_result_example_and_unhides_setup() {
+        let lines: Vec<String> = [
+            "```rust",
+            "# use a::B;",
+            "let x = B::new()?;",
+            "#",
+            "# Ok::<(), a::Error>(())",
+            "```",
+            "```rust",
+            "# use a::B;",
+            "B::run();",
+            "```",
+            "```rust",
+            "plain();",
+            "```",
+        ]
+        .map(String::from)
+        .to_vec();
+        let want = [
+            "```rust",
+            "fn example() -> Result<(), a::Error> {",
+            "    use a::B;",
+            "    let x = B::new()?;",
+            "",
+            "    Ok(())",
+            "}",
+            "```",
+            "```rust",
+            "use a::B;",
+            "B::run();",
+            "```",
+            "```rust",
+            "plain();",
+            "```",
+        ];
+        assert_eq!(unhide_examples(&lines), want);
     }
 }

@@ -331,6 +331,8 @@ impl Catalog<'_> {
         }
     }
 
+    /// The namespaces of the current catalog, sorted by name.
+    ///
     /// The namespaces of the current catalog, sorted by name, optionally only those matching the
     /// `*`/`|` pattern.
     ///
@@ -675,6 +677,8 @@ impl Catalog<'_> {
             .collect())
     }
 
+    /// The functions visible to the session, sorted by name.
+    ///
     /// The functions: the built-ins, the session's temporary functions and the current namespace's
     /// stored ones, sorted by name.
     ///

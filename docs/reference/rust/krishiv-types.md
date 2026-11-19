@@ -334,25 +334,27 @@ weight into a column, except [`Batch::concat`] of batches whose constants
 differ.
 
 ```
-use std::sync::Arc;
+fn example() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
 
-use arrow_array::{BooleanArray, Int64Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use krishiv_types::batch::{Batch, Weights};
+    use arrow_array::{BooleanArray, Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_types::batch::{Batch, Weights};
 
-let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
-let data = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])?;
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+    let data = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])?;
 
-// A batch query's rows: weight 1 each, no weight column.
-let batch = Batch::new(data.clone());
-assert!(batch.is_unweighted());
+    // A batch query's rows: weight 1 each, no weight column.
+    let batch = Batch::new(data.clone());
+    assert!(batch.is_unweighted());
 
-// A change stream: insert row 0, retract row 1, insert row 2 twice.
-let change = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1, -1, 2])))?;
-let kept = change.filter(&BooleanArray::from(vec![false, true, true]))?;
-assert_eq!(kept.num_rows(), 2);
-assert_eq!(kept.weights(), &Weights::Column(Int64Array::from(vec![-1, 2])));
-# Ok::<(), Box<dyn std::error::Error>>(())
+    // A change stream: insert row 0, retract row 1, insert row 2 twice.
+    let change = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1, -1, 2])))?;
+    let kept = change.filter(&BooleanArray::from(vec![false, true, true]))?;
+    assert_eq!(kept.num_rows(), 2);
+    assert_eq!(kept.weights(), &Weights::Column(Int64Array::from(vec![-1, 2])));
+    Ok(())
+}
 ```
 
 ```rust
@@ -1112,7 +1114,7 @@ pub fn null_calendar_array(len: usize) -> arrow_array::ArrayRef { /* ... */ }
 
 `a` (a calendar interval column) as Arrow's `Interval(MonthDayNano)`, for the session edges.
 
-# Errors
+Errors
 The first row whose microseconds overflow `i64` nanoseconds.
 
 ```rust
@@ -1470,7 +1472,7 @@ assert_eq!(ndr[..5], [1, 1, 0, 0, 0]);
 assert!(rewrite(&[1], SpatialKind::Geometry, ByteOrder::Ndr).is_err());
 ```
 
-# Errors
+Errors
 `WKB_PARSE_ERROR` with Spark's message and position (see the module
 docs for the rules).
 
@@ -1483,7 +1485,7 @@ pub fn rewrite(wkb: &[u8], kind: SpatialKind, order: ByteOrder) -> crate::error:
 A value of `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)` cast to a geography must carry a geographic
 SRID of Spark's registry (`STUtils.geometryToGeography`).
 
-# Errors
+Errors
 `ST_INVALID_SRID_VALUE` for an SRID that is unknown or not geographic.
 
 ```rust
@@ -1498,7 +1500,7 @@ must be a name of Spark's registry exactly (`OGC:CRS84`, `EPSG:4326`, `EPSG:3857
 `SRID:0`, ...; case-sensitive, so `srid:0` and PROJJSON are refused), and a geography needs a
 geographic system.
 
-# Errors
+Errors
 `ST_INVALID_CRS_VALUE` for any other CRS.
 
 ```rust
@@ -1521,7 +1523,7 @@ assert_eq!(to_ewkt(4326, &ndr).unwrap(), "SRID=4326;POINT(1 2)");
 assert_eq!(to_ewkt(0, &ndr).unwrap(), "POINT(1 2)");
 ```
 
-# Errors
+Errors
 `WKB_PARSE_ERROR` for a value that is not well-formed ISO WKB.
 
 ```rust
@@ -1862,7 +1864,7 @@ pub struct Named {
 
 `CAST(string AS <year-month type>)`, in months.
 
-# Errors
+Errors
 `INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING` for another form, and
 `.INTERVAL_PARSING` for a field out of range or a value past the `int` range.
 
@@ -1879,7 +1881,7 @@ field other than seconds wraps, as Spark's `Long` arithmetic does
 (`CAST('106751992' AS INTERVAL DAY)` is negative); seconds and a range of
 fields fail past the `long` range instead.
 
-# Errors
+Errors
 `INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE` for another
 form, and `.INTERVAL_PARSING` for a field or a sum out of range. For most of
 those Spark raises a bare `IllegalArgumentException` or `ArithmeticException`;
@@ -1904,7 +1906,7 @@ Spark's `IntervalUtils.stringToInterval`, with the units the string names:
 `hour`, `minute`, `second`, `millisecond`, `microsecond` (each optionally
 plural); only seconds take a fraction (up to nanoseconds).
 
-# Errors
+Errors
 Spark's `INVALID_INTERVAL_FORMAT.*`.
 
 ```rust
@@ -1926,7 +1928,7 @@ JSON document into exactly the bytes Spark 4.2.0's `parse_json` produces
 `variant_get` re-encoding) with Spark's `VariantBuilder` byte choices.
 `DataType::Variant` stores these bytes; the kernels print and cast them.
 
-# Verified behaviour (live Spark 4.2.0 probes, 2026)
+Verified behaviour (live Spark 4.2.0 probes, 2026)
 
 * Metadata header `0x01 | (sorted_strings << 4) | ((offset_width - 1) << 6)`
   (bit 5 reserved); object headers carry
@@ -1948,7 +1950,7 @@ JSON document into exactly the bytes Spark 4.2.0's `parse_json` produces
   non-ASCII literal terminators approximate Java's
   identifier rule (ASCII, `$` included, is exact).
 
-# Unverified
+Unverified
 
 Primitive ids 17-19 (time, nanosecond timestamps) follow the encoding
 text; Spark 4.2.0 reserves them and never emits them, so they are covered

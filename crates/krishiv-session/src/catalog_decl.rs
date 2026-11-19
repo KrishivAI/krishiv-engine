@@ -76,7 +76,8 @@ pub fn is_declaration_key(key: &str) -> bool {
 /// Where the declarations come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclMode {
-    /// `krishiv server`: references only, `https` only unless `allowInsecure`.
+    /// `krishiv server`: references only; an HTTP catalog uri must be `https` unless `allowInsecure`,
+    /// and a Hive catalog takes a `thrift://` uri.
     Server,
     /// An embedded session (no principal boundary).
     Embedded,
@@ -379,7 +380,9 @@ impl CatalogDecl {
         }
     }
 
-    /// The hosts this catalog's own clients may reach at private addresses by name (§5.1): its
+    /// The hosts this catalog's own clients may reach at private addresses by name.
+    ///
+    /// The hosts this catalog's own clients may reach at private addresses by name: its
     /// `uri` and token endpoint, and nothing a catalog response names.
     #[must_use]
     pub fn declared_hosts(&self) -> Vec<String> {
@@ -461,6 +464,8 @@ struct Raw {
 }
 
 impl CatalogDeclarations {
+    /// Parses every catalog declaration key of `settings`.
+    ///
     /// Parses every catalog declaration key of `settings` (other keys, registered
     /// `krishiv.catalog.*` settings included, are ignored). `compiled` lists the catalog types
     /// this build carries; `egress`, when given, checks every declared endpoint whose host is an

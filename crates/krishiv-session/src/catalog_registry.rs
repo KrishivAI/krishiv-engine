@@ -138,6 +138,8 @@ impl CatalogCaller {
         }
     }
 
+    /// How error messages name the session's authentication.
+    ///
     /// How error messages name the session's authentication: the credential's kind when it has
     /// one, else the method (`token`, `mtls`, `none`).
     #[must_use]
@@ -218,6 +220,8 @@ pub trait CatalogFactory: fmt::Debug + Send + Sync {
     /// The type it builds.
     fn kind(&self) -> CatalogType;
 
+    /// Checks `decl` at startup without connecting.
+    ///
     /// Checks `decl` at startup without connecting (what [`Self::build`] would refuse for the
     /// declaration alone: an option this factory does not implement, a URL its client refuses).
     /// The default accepts everything.
@@ -282,6 +286,8 @@ impl fmt::Debug for CatalogDeps {
 }
 
 impl CatalogDeps {
+    /// Dependencies with the default limits and no proxy.
+    ///
     /// Dependencies with the default limits (30 s, 256 MiB, 60 and 20 exchanges a minute) and no
     /// proxy.
     #[must_use]
@@ -590,6 +596,8 @@ impl CatalogRegistry {
         self.declarations().filter(move |d| d.visible_to(tenant))
     }
 
+    /// The catalog `name` as a principal of `tenant` sees it, or `None`.
+    ///
     /// The catalog `name` (any letter case) as a principal of `tenant` sees it: `None` when it is
     /// not declared or not visible, the same answer either way (hidden means absent).
     /// It answers as the server: a `delegated` catalog fails every call for want of a user token.
