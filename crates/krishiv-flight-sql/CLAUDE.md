@@ -60,6 +60,14 @@ Paths are relative to this crate.
   `DoPut(CommandPreparedStatementUpdate)` runs once per row (all bound first; counts summed, `-1` if any run reports
   none; over `maxBatchRows` `KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS`, 07001); `ClosePreparedStatement` of a gone or
   foreign handle is OK; every call but create is handle-carrying (`handle_call`)
+- `src/metadata.rs` catalog metadata (design §5): `GetCatalogs`, `GetDbSchemas`, `GetTables`, `GetTableTypes` and the
+  key commands; `GetFlightInfo` answers the fixed schema and a ticket that is the command (no session), `DoGet` runs it
+  in the call's session (cookie-less: transient, no `set-cookie`) under `metadataTimeout`
+  (`KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT`, `DEADLINE_EXCEEDED`); reads `Session::catalog()` (`list_embedded_databases`,
+  `list_tables`: the `SHOW` checks); schemas and tables of `spark_catalog` only (declared catalogs list none yet),
+  temporary views once with the empty catalog; Flight SQL patterns (`%`, `_`, `\`) ignoring case; `include_schema`
+  over `maxSchemaTables` is `KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT` (54000), a table whose schema fails is skipped and
+  logged; key commands empty with FlightSql.proto's schemas after a `DESCRIBE TABLE` check
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or

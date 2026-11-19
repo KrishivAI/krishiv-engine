@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The arrow-rs `FlightSqlService` implementation (design P3-T101 §2, §4, §5): Handshake,
-//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `CancelFlightInfo`, `CancelQuery`. Every RPC
+//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, the metadata listings (§5), `CancelFlightInfo`, `CancelQuery`. Every RPC
 //! starts with the drain check and the caller `AuthLayer` attached (fail closed); what 65a does
 //! not serve never reaches it: [`crate::gate`] answers `UNIMPLEMENTED` first (§16 m5).
 
 use std::pin::Pin;
 
-use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
     ActionCancelQueryRequest, ActionCancelQueryResult, ActionClosePreparedStatementRequest,
-    ActionCreatePreparedStatementRequest, Any, Command as FlightCommand, CommandGetSqlInfo,
+    ActionCreatePreparedStatementRequest, Any, Command as FlightCommand, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
     CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightData,
-    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
-use futures::stream::{self, Peekable, Stream, StreamExt, TryStreamExt};
+use futures::stream::{self, Peekable, Stream};
 use krishiv_common::error::{InvalidHandleFormat, KrishivError};
 use krishiv_session::auth::Authenticated;
 use prost::Message;
@@ -26,6 +27,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::call::shutting_down;
 use crate::gate::CANCEL_FLIGHT_INFO;
+use crate::metadata::{Listing, batch_stream, fixed_info};
 use crate::metrics::Command;
 use crate::prepared::ActionStream;
 use crate::server::FlightSqlServer;
@@ -60,6 +62,33 @@ impl FlightSqlServer {
         };
         self.inner.requests.record(command, code);
         result
+    }
+
+    /// `GetFlightInfo` of a listing (design §5): no session.
+    fn listing_info_call(
+        &self,
+        listing: &Listing,
+        request: &Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let command = listing.command();
+        let result = self
+            .admit(request)
+            .and_then(|_| Self::listing_info(listing, request.get_ref().clone()));
+        self.counted(command, result)
+    }
+
+    /// `DoGet` of a listing (design §5).
+    async fn listing_call(
+        &self,
+        listing: Listing,
+        request: &Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        let command = listing.command();
+        let result = match self.admit(request) {
+            Ok(caller) => self.listing(listing, request.metadata(), &caller).await,
+            Err(s) => Err(s),
+        };
+        self.counted(command, result)
     }
 
     /// `DoPut(CommandStatementUpdate)` after the gate (design §4.3).
@@ -233,18 +262,7 @@ impl FlightSqlService for FlightSqlServer {
     ) -> Result<Response<FlightInfo>, Status> {
         let result = self.admit(&request).and_then(|_| {
             let schema = query.clone().into_builder(&self.inner.sql_info).schema();
-            let ticket = Ticket::new(query.as_any().encode_to_vec());
-            FlightInfo::new()
-                .try_with_schema(&schema)
-                .map_err(|e| internal(format!("encoding a schema: {e}")))
-                .map(|info| {
-                    Response::new(
-                        info.with_endpoint(FlightEndpoint::new().with_ticket(ticket))
-                            .with_descriptor(request.get_ref().clone())
-                            .with_total_records(-1)
-                            .with_total_bytes(-1),
-                    )
-                })
+            fixed_info(&schema, &query.as_any(), request.get_ref().clone()).map(Response::new)
         });
         self.counted(Command::SqlInfo, result)
     }
@@ -255,19 +273,146 @@ impl FlightSqlService for FlightSqlServer {
         request: Request<Ticket>,
     ) -> Result<Response<DoGetStream>, Status> {
         let result = self.admit(&request).and_then(|_| {
-            let builder = query.into_builder(&self.inner.sql_info);
-            let schema = builder.schema();
-            let batch = builder
+            query
+                .into_builder(&self.inner.sql_info)
                 .build()
-                .map_err(|e| internal(format!("the GetSqlInfo table: {e}")))?;
-            let out: DoGetStream = FlightDataEncoderBuilder::new()
-                .with_schema(schema)
-                .build(stream::iter([Ok(batch)]))
-                .map_err(Status::from)
-                .boxed();
-            Ok(Response::new(out))
+                .map(|batch| Response::new(batch_stream(batch)))
+                .map_err(|e| internal(format!("the GetSqlInfo table: {e}")))
         });
         self.counted(Command::SqlInfo, result)
+    }
+
+    async fn get_flight_info_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::Catalogs(query), &request)
+    }
+
+    async fn do_get_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::Catalogs(query), &request).await
+    }
+
+    async fn get_flight_info_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::DbSchemas(query), &request)
+    }
+
+    async fn do_get_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::DbSchemas(query), &request).await
+    }
+
+    async fn get_flight_info_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::Tables(query), &request)
+    }
+
+    async fn do_get_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::Tables(query), &request).await
+    }
+
+    async fn get_flight_info_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::TableTypes(query), &request)
+    }
+
+    async fn do_get_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::TableTypes(query), &request)
+            .await
+    }
+
+    async fn get_flight_info_primary_keys(
+        &self,
+        query: CommandGetPrimaryKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::PrimaryKeys(query), &request)
+    }
+
+    async fn do_get_primary_keys(
+        &self,
+        query: CommandGetPrimaryKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::PrimaryKeys(query), &request)
+            .await
+    }
+
+    async fn get_flight_info_exported_keys(
+        &self,
+        query: CommandGetExportedKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::ExportedKeys(query), &request)
+    }
+
+    async fn do_get_exported_keys(
+        &self,
+        query: CommandGetExportedKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::ExportedKeys(query), &request)
+            .await
+    }
+
+    async fn get_flight_info_imported_keys(
+        &self,
+        query: CommandGetImportedKeys,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::ImportedKeys(query), &request)
+    }
+
+    async fn do_get_imported_keys(
+        &self,
+        query: CommandGetImportedKeys,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::ImportedKeys(query), &request)
+            .await
+    }
+
+    async fn get_flight_info_cross_reference(
+        &self,
+        query: CommandGetCrossReference,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.listing_info_call(&Listing::CrossReference(query), &request)
+    }
+
+    async fn do_get_cross_reference(
+        &self,
+        query: CommandGetCrossReference,
+        request: Request<Ticket>,
+    ) -> Result<Response<DoGetStream>, Status> {
+        self.listing_call(Listing::CrossReference(query), &request)
+            .await
     }
 
     /// `CancelFlightInfo` (design §4.5). The crate's call gate lets no other action reach here.
