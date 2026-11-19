@@ -9,13 +9,15 @@
 //!    vector) and `cdf` (change data feed and deletion vectors) under `$KRISHIV_DELTA_RT_OUT/delta`;
 //! 2. [`krishiv_commits_on_spark_tables`] reads each table (it must read what Spark read), then commits through
 //!    [`crate::commit::commit`]: an append whose data files its Parquet handler writes (one file per partition
-//!    value), a `DELETE` removing whole files (partition `x = 2` of `part`, Krishiv's own first file elsewhere) and
-//!    a second append; after each commit it records the version and its read (`KRISHIV-RT.json`);
+//!    value), a `DELETE` removing whole files (partition `x = 2` of `part`; on `dv` Spark's files, one of them with
+//!    a deletion vector, and Krishiv's own first file; Krishiv's own first file elsewhere) and a second append; after
+//!    each commit it records the version and its read (`KRISHIV-RT.json`);
 //! 3. `gen_delta_roundtrip.py readback` (Spark) reads Krishiv's result, the history entries of Krishiv's commits,
 //!    every Krishiv version by time travel and the change feed of Krishiv's versions on `cdf`, then runs `DELETE`,
-//!    `UPDATE` and `MERGE` on top and appends;
+//!    `UPDATE` and `MERGE` on top (each doing work on Krishiv's files, a DV on `dv` and `cdf`) and appends;
 //! 4. [`krishiv_reads_spark_on_top`] compares: Spark read what Krishiv read at each of its versions, Spark's history
-//!    names Krishiv's operations, read versions and isolation level, the change feed holds Krishiv's rows, and
+//!    names Krishiv's operations, read versions and isolation level, the change feed holds Krishiv's rows, Spark's
+//!    DML metrics are non-zero, and
 //!    Krishiv reads Spark's last version (deletion vectors on Krishiv's files included) and its own versions again.
 //!
 //! The data files are Krishiv's (its Parquet handler, as PR-37a's writer uses it); the writer itself and its
@@ -233,13 +235,14 @@ fn write_files(env: &Env, tag: &str, ids: &[Option<i64>], partitioned: bool) -> 
         .collect()
 }
 
-/// The scan metadata rows of `table`'s snapshot, with the live files whose path starts with `prefix` selected.
-fn removes(env: &Env, table: &DeltaTable, prefix: &str) -> Vec<StagedRemoves> {
+/// The scan metadata rows of `table`'s snapshot, with the live files whose path `pick` accepts selected, and how
+/// many of the selected files carry a deletion vector.
+fn removes(env: &Env, table: &DeltaTable, pick: fn(&str) -> bool) -> (Vec<StagedRemoves>, usize) {
     let snapshot = Arc::clone(table.snapshot());
-    let prefix = prefix.to_owned();
     env.block_on(env.engine.delta_blocking(move |e| {
         let scan = snapshot.scan_builder().build().unwrap();
         let mut out = Vec::new();
+        let mut with_dv = 0;
         for m in scan.scan_metadata(e).unwrap() {
             let (data, selection) = m.unwrap().scan_files.into_parts();
             let batch = KrishivEngineData::from_engine_data(data)
@@ -251,8 +254,13 @@ fn removes(env: &Env, table: &DeltaTable, prefix: &str) -> Vec<StagedRemoves> {
                 _ => paths.as_string::<i32>().value(i).to_owned(),
             };
             let selection: Vec<bool> = (0..batch.num_rows())
-                .map(|i| selection.get(i).copied().unwrap_or(true) && path(i).starts_with(&prefix))
+                .map(|i| selection.get(i).copied().unwrap_or(true) && pick(&path(i)))
                 .collect();
+            if let Some(dv) = batch.column_by_name("deletionVector") {
+                with_dv += (0..batch.num_rows())
+                    .filter(|i| selection[*i] && dv.is_valid(*i))
+                    .count();
+            }
             if selection.iter().any(|s| *s) {
                 out.push(StagedRemoves {
                     scan_rows: batch,
@@ -260,9 +268,16 @@ fn removes(env: &Env, table: &DeltaTable, prefix: &str) -> Vec<StagedRemoves> {
                 });
             }
         }
-        out
+        (out, with_dv)
     }))
     .unwrap()
+}
+
+/// Whether `path` is a data file Krishiv wrote here (Spark's names also start with `part-00000-`).
+fn krishiv_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|f| f.starts_with("part-00000-krishiv-"))
 }
 
 fn staged(
@@ -365,19 +380,28 @@ fn krishiv_commits_on_spark_tables() {
         });
         step(&env, "append", v);
 
-        // DELETE by whole files: partition x = 2 of `part` (Spark's files and Krishiv's), else Krishiv's first file
-        // (ids 100 to 103).
-        let (prefix, predicate) = if partitioned {
-            ("x=2/", "[\"(x = 2)\"]")
-        } else {
-            (
-                "part-00000-krishiv-a1",
+        // DELETE by whole files: partition x = 2 of `part` (Spark's files and Krishiv's); on `dv` Spark's files (one
+        // carries Spark's deletion vector, and Delta matches a remove by path and DV id) and Krishiv's first file (ids
+        // 100 to 103); elsewhere Krishiv's first file.
+        let (pick, predicate): (fn(&str) -> bool, &str) = match name {
+            "part" => (|p| p.starts_with("x=2/"), "[\"(x = 2)\"]"),
+            "dv" => (
+                |p| !krishiv_file(p) || p.starts_with("part-00000-krishiv-a1"),
+                "[\"((id < 100) OR (id IN (100, 101, 102, 103)))\"]",
+            ),
+            _ => (
+                |p| p.starts_with("part-00000-krishiv-a1"),
                 "[\"(id IN (100, 101, 102, 103))\"]",
-            )
+            ),
         };
         let v = commit_on(&env, |t| {
-            let r = removes(&env, t, prefix);
-            assert!(!r.is_empty(), "{name}: files under {prefix}");
+            let (r, with_dv) = removes(&env, t, pick);
+            assert!(!r.is_empty(), "{name}: files to remove");
+            assert_eq!(
+                with_dv > 0,
+                name == "dv",
+                "{name}: a removed file carries a deletion vector"
+            );
             staged(
                 name,
                 CommitOperation::Delete,
@@ -518,6 +542,34 @@ fn krishiv_reads_spark_on_top() {
                 diff(&rows_at(2), &rows_at(1)),
                 "cdf: second append"
             );
+        }
+        // Spark's DML did work on Krishiv's files: each commit's own metrics (delta-spark's names) are non-zero.
+        let dml = s["dml"].as_object().unwrap();
+        let metric = |op: &str, key: &str| -> u64 {
+            let found: Vec<u64> = dml
+                .values()
+                .filter(|h| h["operation"] == op)
+                .map(|h| {
+                    h["operationMetrics"][key]
+                        .as_str()
+                        .and_then(|m| m.parse().ok())
+                        .unwrap_or(0)
+                })
+                .collect();
+            assert_eq!(found.len(), 1, "{name}: one {op} commit of Spark's");
+            found[0]
+        };
+        let mut expected = vec![
+            ("DELETE", "numDeletedRows"),
+            ("UPDATE", "numUpdatedRows"),
+            ("MERGE", "numTargetRowsDeleted"),
+            ("MERGE", "numTargetRowsInserted"),
+        ];
+        if name == "dv" || name == "cdf" {
+            expected.push(("DELETE", "numDeletionVectorsAdded"));
+        }
+        for (op, key) in expected {
+            assert!(metric(op, key) > 0, "{name}: Spark's {op} {key}");
         }
         // Krishiv reads Spark's DML on top of its commits.
         assert_eq!(

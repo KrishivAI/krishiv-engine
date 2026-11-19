@@ -134,9 +134,10 @@ fn krishiv_meets_spark_tables() {
             .unwrap();
         steps.push(step(&env, &catalog, name, "delete"));
 
-        // UPDATE of one row of Spark's and one of Krishiv's.
+        // UPDATE of one row of Spark's and one of Krishiv's. Id 8 sits in Spark's x = 2 file, the one with Spark's
+        // delete of id 5, so the rewrite replaces a second Spark file that has deletes.
         Dml::open(&env, &catalog, RowLevelOperation::Update)
-            .update("id IN (7, 101)", "'k'")
+            .update("id IN (8, 101)", "'k'")
             .unwrap();
         steps.push(step(&env, &catalog, name, "update"));
 
@@ -211,11 +212,17 @@ fn krishiv_reads_spark_on_top() {
                 st["what"]
             );
         }
-        // History: Spark's snapshots end with Krishiv's, in order, with the same parents and counts.
-        let ks = k["snapshots"].as_array().unwrap();
-        let ss = s["before"]["snapshots"].as_array().unwrap();
+        // History: Spark's snapshots are Krishiv's, with the same parents and counts. Both sides are keyed by
+        // snapshot id, since Spark orders by commit time (two commits can share a millisecond) and Krishiv by
+        // sequence number; the parent ids carry the order.
+        let by_id = |v: &Value| -> Vec<Value> {
+            let mut v = v.as_array().unwrap().clone();
+            v.sort_by_key(|r| text(&r["snapshot_id"]));
+            v
+        };
+        let (ks, ss) = (by_id(&k["snapshots"]), by_id(&s["before"]["snapshots"]));
         assert_eq!(ks.len(), ss.len(), "{name}: snapshot count");
-        for (a, b) in ks.iter().zip(ss) {
+        for (a, b) in ks.iter().zip(&ss) {
             for f in [
                 "snapshot_id",
                 "parent_id",
@@ -233,13 +240,13 @@ fn krishiv_reads_spark_on_top() {
             spark_created.len() + steps.len(),
             "{name}: one snapshot per Krishiv step on top of Spark's"
         );
-        // Krishiv's delete replaced a Spark file that had deletes: on v3 its DV goes with it
-        // (`removeDanglingDeletesFor`); on v2 the partition's position delete file stays live, as Java keeps it.
+        // Krishiv's DELETE and UPDATE each replaced a Spark file that had deletes: on v3 each file's DV goes with it
+        // (`removeDanglingDeletesFor`); on v2 the partitions' position delete files stay live, as Java keeps them.
         if name != "evolved" {
             let deletes = |v: &Value| v["delete_files"].as_array().unwrap().len();
             let (now, was) = (deletes(&s["before"]), deletes(&created[name]["spark"]));
             if name == "mor3" {
-                assert_eq!(now, was - 1, "{name}: the rewritten file's DV is gone");
+                assert_eq!(now, was - 2, "{name}: the rewritten files' DVs are gone");
             } else {
                 assert_eq!(now, was, "{name}: position delete files stay");
             }

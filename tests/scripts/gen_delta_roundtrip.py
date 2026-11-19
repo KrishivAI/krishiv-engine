@@ -8,11 +8,13 @@ Spark starts each table and has the last word; Krishiv commits in between:
    what it reads, each table's version and protocol (``SPARK-CREATE.json``).
 2. Krishiv (``roundtrip_tests::krishiv_commits_on_spark_tables`` in krishiv-connectors-delta) reads each table,
    commits an append (data files written by its Parquet handler, one per partition value), a ``DELETE`` that removes
-   whole files (a partition of ``part``; its own first file elsewhere) and a second append, and records the version
+   whole files (a partition of ``part``; on ``dv`` Spark's files, one with a deletion vector, and its own first file;
+   its own first file elsewhere) and a second append, and records the version
    and its read after each commit (``KRISHIV-RT.json``).
 3. ``readback``: Spark reads Krishiv's result, its history entries of Krishiv's commits, each Krishiv version by time
    travel and, on ``cdf``, the change feed of Krishiv's versions; then runs ``DELETE``, ``UPDATE`` and ``MERGE`` on
-   top (deletion vectors against Krishiv's files on ``dv`` and ``cdf``) and an append (``SPARK-READBACK.json``).
+   top (deletion vectors against Krishiv's files on ``dv`` and ``cdf``) and an append, and records the metrics of
+   those commits (``SPARK-READBACK.json``).
 4. Krishiv (``roundtrip_tests::krishiv_reads_spark_on_top``) reads Spark's last version and its own versions again.
 
 No expected value is written by hand: every comparison is between the two engines' records. Run through
@@ -129,7 +131,8 @@ def readback(spark, out_dir):
                 .selectExpr("id", "x", "name", "_change_type", "_commit_version")
                 .orderBy("_commit_version", "_change_type", "id")
             )
-        spark.sql(f"DELETE FROM {t} WHERE id = 102")
+        # Id 110 is live in Krishiv's last file on every table (a DV on it on ``dv`` and ``cdf``).
+        spark.sql(f"DELETE FROM {t} WHERE id = 110")
         spark.sql(f"UPDATE {t} SET name = 's' WHERE id IN (0, 104)")
         spark.sql(
             f"MERGE INTO {t} d USING (SELECT * FROM VALUES (105L, 0, 'm'), (300L, 0, 'n300') AS s(id, x, name)) s "
@@ -137,6 +140,15 @@ def readback(spark, out_dir):
         )
         spark.sql(f"INSERT INTO {t} VALUES {values([400])}")
         entry["after"] = state(spark, t)
+        # Spark's own DML commits and their metrics, so step 4 can see that each did work on Krishiv's files.
+        entry["dml"] = {
+            str(h["version"]): {
+                "operation": h["operation"],
+                "operationMetrics": dict(h["operationMetrics"] or {}),
+            }
+            for h in spark.sql(f"DESCRIBE HISTORY {t}").collect()
+            if h["version"] > entry["before"]["version"]
+        }
         result[name] = entry
     return result
 

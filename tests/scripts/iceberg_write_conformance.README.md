@@ -23,12 +23,13 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    `identity(x)`).
 2. `roundtrip_tests::krishiv_meets_spark_tables`: Krishiv reads each table as Spark did, then appends (two drivers,
    a NULL id), runs a copy-on-write `DELETE` of a row in a Spark file carrying Spark's deletes, an `UPDATE` of a
-   Spark row and a Krishiv row, and appends again; its last metadata becomes the Hadoop catalog's next version.
+   Spark row in another Spark file carrying deletes and of a Krishiv row, and appends again; its last metadata becomes the Hadoop catalog's next version.
 3. `gen_iceberg_roundtrip.py readback`: Spark reads Krishiv's result and snapshots, time travels to each Krishiv
    snapshot, then runs merge-on-read `DELETE`, `UPDATE`, `MERGE` (position deletes and DVs on Krishiv's files) and an
    append.
 4. `roundtrip_tests::krishiv_reads_spark_on_top`: Spark read what Krishiv read at every snapshot; Spark's history is
-   Spark's snapshots then Krishiv's, with the same parents and counts; the rewritten file's deletes are gone; v3 row
+   Spark's snapshots then Krishiv's, with the same parents and counts; the rewritten files' v3 DVs are gone (v2 position
+   delete files stay, as Java keeps them); v3 row
    ids survive Krishiv's rewrite; Krishiv reads Spark's last metadata and time travels back to its own snapshots.
 
 ## `delta_roundtrip.sh` (Spark first, Spark last)
@@ -37,13 +38,17 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    `cdf` (change data feed and deletion vectors).
 2. `roundtrip_tests::krishiv_commits_on_spark_tables` (krishiv-connectors-delta): Krishiv reads each table as Spark
    did, then commits through its commit loop an append (data files from its Parquet handler, one per partition
-   value), a whole-file `DELETE` (partition `x = 2` of `part`, its own first file elsewhere) and a second append.
+   value), a whole-file `DELETE` (partition `x = 2` of `part`; on `dv` Spark's files, one carrying Spark's DV, and its
+   own first file; its own first file elsewhere) and a second append.
 3. `gen_delta_roundtrip.py readback`: Spark reads Krishiv's result, the history entries of its commits, each Krishiv
-   version by time travel and the change feed of Krishiv's versions on `cdf`; then `DELETE`, `UPDATE`, `MERGE` (DVs
-   on Krishiv's files on `dv` and `cdf`) and an append.
+   version by time travel and the change feed of Krishiv's versions on `cdf`; then `DELETE`, `UPDATE`, `MERGE` (each on rows in
+   Krishiv's files; the `DELETE` leaves a DV on Krishiv's last file on `dv` and `cdf`) and an append, recording each
+   commit's `operationMetrics`.
 4. `roundtrip_tests::krishiv_reads_spark_on_top`: Krishiv's versions follow Spark's and leave the protocol alone;
    Spark's history names Krishiv's operation, `readVersion`, `isBlindAppend` and `Serializable`; Spark's time travel
-   and change feed agree with Krishiv's reads; Krishiv reads Spark's last version and its own versions again.
+   and change feed agree with Krishiv's reads; Spark's DML metrics are non-zero (`numDeletedRows`,
+   `numUpdatedRows`, MERGE's deleted and inserted rows, `numDeletionVectorsAdded` on `dv` and `cdf`); Krishiv reads
+   Spark's last version and its own versions again.
 
 ## Pending (not written, not stubbed)
 

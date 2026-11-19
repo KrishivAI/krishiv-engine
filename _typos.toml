@@ -62,3 +62,5 @@ sesion = "sesion"           # invalid qualifier in the session-variable golden (
 sesson = "sesson"           # invalid qualifier in the session-variable golden (`b.sesson.var1`)
 WRONLY = "WRONLY"           # `OFlags::WRONLY` (write-only open flag) in the anchored store
 selct = "selct"             # intentional misspelling in the syntax-error golden (error is at EXECUTE, not inside)
+mor = "mor"                 # Iceberg merge-on-read tables `mor2`, `mor3` in the PR-53b round trip
+MOR = "MOR"                 # the merge-on-read table properties in gen_iceberg_roundtrip.py
