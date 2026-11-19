@@ -183,7 +183,7 @@ pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
           is measured. Read when the write is planned.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.2.0",
+    version_added: "0.3.0",
     spark_alias: None,
 };
 
