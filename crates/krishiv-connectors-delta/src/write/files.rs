@@ -799,6 +799,10 @@ pub(crate) fn null_empty_partition_values(
         };
         let nulled = arrow_select::nullif::nullif(c.as_ref(), &empty)
             .map_err(|e| internal(&format!("the partition column {p}: {e}")))?;
+        // The NOT NULL check sees the stored value: delta-spark converts first, so `''` into a
+        // NOT NULL partition column is `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` naming it
+        // (`WRITE-EDGES.json` `not_null_partition`).
+        check_not_null(nulled.as_ref(), batch.schema().field(at), p, None)?;
         columns.get_or_insert_with(|| batch.columns().to_vec())[at] = nulled;
     }
     match columns {

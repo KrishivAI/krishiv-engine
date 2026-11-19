@@ -9,7 +9,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-abffeb5f-aacd-489f-8450-f9986018137e.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-633b238c-63ac-4eb8-8626-48810e0c0daa.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3,
@@ -48,7 +48,7 @@
      "removes": [
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-db32d642-5aca-4851-8bc7-4988cd91d28e.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-8221b022-29e2-4afd-a19c-3b084addc640.c000.snappy.parquet"
       }
      ],
      "version": 2
@@ -77,7 +77,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0560f13d-3339-4b07-8dfd-5394b51ce24e.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-1c234fa4-fb4b-47d6-973f-bea60d524d6b.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 5,
@@ -183,7 +183,7 @@
        "partitionValues": {
         "p": null
        },
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-2c2b032c-2a5e-4ca7-a968-22ffe51a28e5.c000.snappy.parquet",
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-f4c3fc7b-3599-4e59-913d-b5f4138ad87d.c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 7,
@@ -225,11 +225,11 @@
      "removes": [
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0560f13d-3339-4b07-8dfd-5394b51ce24e.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-633b238c-63ac-4eb8-8626-48810e0c0daa.c000.snappy.parquet"
       },
       {
        "partitionValues": {},
-       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-abffeb5f-aacd-489f-8450-f9986018137e.c000.snappy.parquet"
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-1c234fa4-fb4b-47d6-973f-bea60d524d6b.c000.snappy.parquet"
       }
      ],
      "version": 4
@@ -260,7 +260,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-07968cd3-76d2-4ff7-b864-795a55724425-c000.snappy.parquet",
+       "path": "part-00000-dbafbd56-97c0-47a1-b24d-7e9226d4667b-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 1
@@ -276,7 +276,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-605aecc8-03be-4a6b-ab52-bc24d62f4b0f-c001.snappy.parquet",
+       "path": "part-00000-fb74f733-b07e-4e8e-811c-2bbe3ff628af-c001.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3
@@ -292,7 +292,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-3e6e1cca-d81a-4e0f-ab10-6cc54a9217f3-c002.snappy.parquet",
+       "path": "part-00000-ab7957f6-da10-4fed-9d1d-f5a00b0650aa-c002.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -356,7 +356,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-11e10c2f-8b7e-4ebe-a06d-eea4b4fe79a1-c000.snappy.parquet",
+       "path": "part-00000-407f4633-5df6-429f-bd50-e166ad75de0f-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 0
@@ -372,7 +372,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-cccac9f4-7621-40f0-84c0-d4f449b70000-c001.snappy.parquet",
+       "path": "part-00000-12914f75-f891-4076-9abf-fdb5e4ef4959-c001.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 1
@@ -388,7 +388,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-dac90809-cb27-42f8-977c-ebed346e9e28-c002.snappy.parquet",
+       "path": "part-00000-20382a4a-06fb-43a5-b090-65023026e56b-c002.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 2
@@ -404,7 +404,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-5296aa74-4f44-4894-b432-b2317c035c24-c003.snappy.parquet",
+       "path": "part-00000-7406cd02-76f3-409b-89c4-d34eeafcee2b-c003.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 3
@@ -420,7 +420,7 @@
       },
       {
        "partitionValues": {},
-       "path": "part-00000-72ab7362-260e-4147-b579-6369f1c199ca-c004.snappy.parquet",
+       "path": "part-00000-dc7c4096-6521-4808-83c3-349edbc54e17-c004.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -537,7 +537,7 @@
      "adds": [
       {
        "partitionValues": {},
-       "path": "part-00000-c0700a26-da8e-4a1a-a3d5-56edd11f870e-c000.snappy.parquet",
+       "path": "part-00000-d4d1e5cf-2fb6-4965-bdb0-9fc6cf6d1608-c000.snappy.parquet",
        "stats": {
         "maxValues": {
          "id": 4
@@ -620,6 +620,111 @@
     ]
    ],
    "step": "append_zero"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-8f0744a8-0df2-4c98-a10f-30bad7c18c27-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 5
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "502",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "append_negative"
   }
  ],
  "not_null": [
@@ -723,6 +828,47 @@
    ],
    "sql": "INSERT INTO delta.`<path>` VALUES (5, NULL, named_struct('x', 5, 'y', 5))",
    "step": "sql_null_top_level"
+  }
+ ],
+ "not_null_partition": [
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: p.",
+    "parameters": {
+     "columnName": "p"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     "x"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (2, '')",
+   "step": "sql_empty_partition"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: p.",
+    "parameters": {
+     "columnName": "p"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     "x"
+    ]
+   ],
+   "step": "dataframe_empty_partition"
   }
  ],
  "spark": "4.2.0"

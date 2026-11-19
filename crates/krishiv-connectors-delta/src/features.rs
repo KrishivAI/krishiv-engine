@@ -362,6 +362,10 @@ pub fn check_create(
             && let Some(known) = CREATE_FEATURES.iter().find(|f| **f == name)
         {
             add(known);
+            // The kernel's create adds Variant support beside shredding.
+            if name == "variantShredding" {
+                add("variantType");
+            }
         }
     }
     if enabled("delta.enableRowTracking") {

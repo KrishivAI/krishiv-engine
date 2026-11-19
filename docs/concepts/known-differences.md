@@ -540,7 +540,8 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   that `-0.0` sorts below `0.0`: a file holding both keeps the other one as its bound (both are
   written as `0.0`).
 - **Files.** Data files are named `part-00000-<uuid>.c000.snappy.parquet` for every task and roll
-  over at the `maxRecordsPerFile` write option (`0` is no limit) and at a fixed 128 MiB. A value
+  over at the `maxRecordsPerFile` write option (a value not above `0` is no limit) and at a fixed
+  128 MiB, on every write, an append to a catalog table included. A value
   that is not a number fails with `KRISHIV_INVALID_FORMAT_OPTION_VALUE`, where delta-spark raises
   Java's `NumberFormatException`.
 - **Checkpoints.** A checkpoint after a commit is written without the `.crc` file, and a V2

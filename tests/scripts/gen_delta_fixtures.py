@@ -856,7 +856,8 @@ def write_edges(spark: SparkSession, out: str) -> None:
     """``WRITE-EDGES.json``: write edge cases next to ``WRITES.json`` (review of PR-37a part 2):
     an empty-string partition value (stored as null) under a dynamic overwrite, an append and
     ``replaceWhere``; a NULL written into a ``NOT NULL`` column (top level and nested) through
-    the DataFrame writer and SQL; ``maxRecordsPerFile`` (a number, and a value that is not one)."""
+    the DataFrame writer and SQL; a ``''`` into a ``NOT NULL`` partition column;
+    ``maxRecordsPerFile`` (a number, ``0``, ``-1`` and a value that is not one)."""
     record: dict = {
         "format_version": FORMAT_VERSION,
         "generator": "tests/scripts/gen_delta_fixtures.py",
@@ -923,6 +924,24 @@ def write_edges(spark: SparkSession, out: str) -> None:
             ("sql_null_top_level", f"INSERT INTO {n} VALUES (5, NULL, named_struct('x', 5, 'y', 5))"),
         ],
     )
+    # An empty string into a NOT NULL partition column: delta-spark stores it as NULL first, so
+    # the NOT NULL check sees the NULL (review of 48ad1876d, finding 1).
+    np_ = os.path.join(out, "write-not-null-partition")
+    q = f"delta.`{np_}`"
+    spark.sql(f"CREATE TABLE {q} (id BIGINT, p STRING NOT NULL) USING delta PARTITIONED BY (p)")
+    spark.sql(f"INSERT INTO {q} VALUES (1, 'x')")
+
+    def append_empty_df(s: SparkSession) -> None:
+        s.sql("SELECT CAST(3 AS BIGINT) AS id, '' AS p").write.format("delta").mode("append").save(np_)
+
+    record["not_null_partition"] = run_steps(
+        spark,
+        np_,
+        [
+            ("sql_empty_partition", f"INSERT INTO {q} VALUES (2, '')"),
+            ("dataframe_empty_partition", append_empty_df),
+        ],
+    )
     mr = os.path.join(out, "write-max-records")
 
     def max_records(value: str, mode: str):
@@ -941,9 +960,10 @@ def write_edges(spark: SparkSession, out: str) -> None:
             ("append_one", max_records("1", "append")),
             ("append_not_a_number", max_records("abc", "append")),
             ("append_zero", max_records("0", "append")),
+            ("append_negative", max_records("-1", "append")),
         ],
     )
-    for d in (empty, nn, mr):
+    for d in (empty, nn, np_, mr):
         shutil.rmtree(d, ignore_errors=True)
     with open(os.path.join(out, "WRITE-EDGES.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)

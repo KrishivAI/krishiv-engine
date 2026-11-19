@@ -765,4 +765,69 @@ fn max_records_per_file_reaches_the_writer() {
     assert_eq!(versions(&dir), before);
     save("0", "append").unwrap();
     assert_eq!(count(&last_commit(&dir), "add"), adds("append_zero"));
+    // A value below 0 is no limit too: delta-spark reads a long and limits only above 0.
+    save("-1", "append").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), adds("append_negative"));
+}
+
+/// An append to an existing Delta catalog table takes `maxRecordsPerFile` from the writer, as
+/// the path write does (`WRITE-EDGES.json` `max_records` `append_one`): `saveAsTable` append
+/// and `writeTo(..).append()`, and a value that is not a number is refused there too.
+#[test]
+fn max_records_per_file_reaches_a_catalog_append() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["max_records"].as_array().unwrap().clone();
+    let one = steps.iter().find(|s| s["step"] == "append_one").unwrap()["commits"][0]["adds"]
+        .as_array()
+        .unwrap()
+        .len();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE mr (id BIGINT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    let rows = || {
+        block_on(
+            s.sql("SELECT CAST(id AS BIGINT) AS id FROM VALUES (0), (1), (2), (3), (4) AS v(id)"),
+        )
+        .unwrap()
+    };
+    let save_as_table = |value: &str| {
+        block_on(
+            rows()
+                .write()
+                .format("delta")
+                .mode("append")
+                .option("maxRecordsPerFile", value)
+                .save_as_table("mr"),
+        )
+    };
+    save_as_table("1").unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), one);
+    block_on(
+        rows()
+            .write_to_table("mr")
+            .option("maxRecordsPerFile", "1")
+            .append(),
+    )
+    .unwrap();
+    assert_eq!(count(&last_commit(&dir), "add"), one);
+    let before = versions(&dir);
+    let e = save_as_table("abc").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivInvalidFormatOptionValue,
+        "{e}"
+    );
+    assert_eq!(versions(&dir), before);
+    assert_eq!(
+        query(&s, "SELECT count(*) FROM mr"),
+        serde_json::json!([[10]])
+    );
 }

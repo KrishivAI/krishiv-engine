@@ -192,6 +192,7 @@ impl Session {
                 overwrite: c.overwrite,
                 statics: &statics,
                 dry,
+                options: None,
             },
         )
         .await
@@ -213,6 +214,7 @@ impl Session {
             overwrite,
             statics,
             dry,
+            ..
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
@@ -339,7 +341,7 @@ impl Session {
                 return Ok(());
             }
             let written = self
-                .insert_delta(name, table, &df, overwrite, statics, reads_target)
+                .insert_delta(name, table, &df, target, reads_target)
                 .await;
             self.state.catalog.store.bump();
             self.forget_column_stats(name);
@@ -683,6 +685,7 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
+            options: None,
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -715,6 +718,7 @@ impl Session {
                     overwrite: false,
                     statics: &[],
                     dry: false,
+                    options: Some(&spec.options),
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }

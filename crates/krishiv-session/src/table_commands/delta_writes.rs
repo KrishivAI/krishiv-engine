@@ -408,16 +408,21 @@ impl Session {
     /// columns, in its order): an append; an overwrite of the static partition `statics`
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
     /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic`; else a truncate.
-    pub(crate) async fn insert_delta(
+    /// The target's writer options give the files' `maxRecordsPerFile`.
+    pub(super) async fn insert_delta(
         &self,
         name: &super::TableName,
         table: &crate::store::CatalogTable,
         df: &DataFrame,
-        overwrite: bool,
-        statics: &[(String, String)],
+        target: &super::InsertTarget<'_>,
         reads_target: bool,
     ) -> Result<(), KrishivError> {
-        let mut options = BTreeMap::new();
+        let (overwrite, statics) = (target.overwrite, target.statics);
+        // `maxRecordsPerFile` of a DataFrame append (`writeTo(..).append()`, `saveAsTable`).
+        let mut options = match target.options {
+            Some(o) => writer_options(plain_options(o)?.iter().map(|(k, v)| (k, v))),
+            None => BTreeMap::new(),
+        };
         let mode = if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {

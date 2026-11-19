@@ -1568,6 +1568,13 @@ struct InsertTarget<'a> {
     statics: &'a [(String, String)],
     /// Checked through to the rows it would write, not written.
     dry: bool,
+    /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
+    /// `maxRecordsPerFile` from them; `None` for SQL.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    options: Option<&'a BTreeMap<String, OptionValue>>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
