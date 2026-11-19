@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 12 done, 13 partial, 33 missing, 4 out of scope.
+62 arms: 12 done, 14 partial, 32 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -73,12 +73,12 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |
 | 200 | catalog | missing |  | the 36 catalog operations | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
-| 998 | extension | missing |  | the krishiv.v1 extension handler; a message no handler claims is refused | P3-T015 | 10 |
+| 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |
 | 999 | unknown | out of scope |  | Spark falls to case other and answers 56K00 with UNKNOWN(999) |  | 0 |
 
 ## Expression.expr_type
 
-22 arms: 4 done, 6 partial, 11 missing, 1 out of scope.
+22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -103,11 +103,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 20 | typed_aggregate_expression | out of scope |  | Scala typed Dataset aggregation; unsupported row |  | 0 |
 | 21 | subquery_expression | missing |  | Subquery (scalar, EXISTS, IN) referencing with_relations | P3-T012 | 4 |
 | 22 | direct_shuffle_partition_id | missing |  | partition id passed through for repartition_by_expression (expressions.proto §DirectShufflePartitionID); Repartition by explicit id | P3-T012 | 3 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a string Literal | P3-T015 | 10 |
 
 ## Command.command_type
 
-20 arms: 2 done, 2 partial, 10 missing, 6 out of scope.
+20 arms: 2 done, 3 partial, 9 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -130,7 +130,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 17 | ml_command | out of scope |  | machine learning is out of scope; a client may send it for cache cleanup when a session ends |  | 0 |
 | 18 | execute_external_command | missing |  | refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3 | P3-T012 | 4 |
 | 19 | pipeline_command | out of scope |  | pipelines are out of scope until P4 |  | 0 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message: none is registered for a command yet (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); the server runs a command extension when one is registered | P3-T015 | 10 |
 
 ## Catalog.cat_type
 

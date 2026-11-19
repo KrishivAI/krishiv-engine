@@ -156,7 +156,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     SampleBy => ("sample_by", 107, Missing, "", "lowering: Filter with a seeded rand() against the per-stratum fraction", "P3-T012", 5),
     Catalog => ("catalog", 200, Missing, "", "the 36 catalog operations", "P3-T082", 9),
     MlRelation => ("ml_relation", 300, OutOfScope, "", "machine learning is out of scope", "", 0),
-    Extension => ("extension", 998, Missing, "", "the krishiv.v1 extension handler; a message no handler claims is refused", "P3-T015", 10),
+    Extension => ("extension", 998, Partial, "every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation", "P3-T015", 10),
     Unknown => ("unknown", 999, OutOfScope, "", "Spark falls to case other and answers 56K00 with UNKNOWN(999)", "", 0),
 }
 
@@ -182,7 +182,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
     TypedAggregateExpression => ("typed_aggregate_expression", 20, OutOfScope, "", "Scala typed Dataset aggregation; unsupported row", "", 0),
     SubqueryExpression => ("subquery_expression", 21, Missing, "", "Subquery (scalar, EXISTS, IN) referencing with_relations", "P3-T012", 4),
     DirectShufflePartitionId => ("direct_shuffle_partition_id", 22, Missing, "", "partition id passed through for repartition_by_expression (expressions.proto §DirectShufflePartitionID); Repartition by explicit id", "P3-T012", 3),
-    Extension => ("extension", 999, Missing, "", "T015", "P3-T015", 10),
+    Extension => ("extension", 999, Partial, "every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); Echo is a string Literal", "P3-T015", 10),
 }
 
 oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
@@ -205,7 +205,7 @@ oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
     MlCommand => ("ml_command", 17, OutOfScope, "", "machine learning is out of scope; a client may send it for cache cleanup when a session ends", "", 0),
     ExecuteExternalCommand => ("execute_external_command", 18, Missing, "", "refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3", "P3-T012", 4),
     PipelineCommand => ("pipeline_command", 19, OutOfScope, "", "pipelines are out of scope until P4", "", 0),
-    Extension => ("extension", 999, Missing, "", "T015", "P3-T015", 10),
+    Extension => ("extension", 999, Partial, "every krishiv.v1 message: none is registered for a command yet (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); the server runs a command extension when one is registered", "P3-T015", 10),
 }
 
 oneof! { catalog, CATALOG_ROWS, catalog::CatType, "Catalog.cat_type";
