@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pstats
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -150,7 +151,13 @@ def test_profiled_calls_from_many_threads_do_not_clash(spark: SparkSession) -> N
     for t in threads:
         t.join()
     assert errors == []
-    assert _plus_one_calls(spark) == 4 * 20
+    calls = _plus_one_calls(spark)
+    if sys._is_gil_enabled():  # ty: ignore[unresolved-attribute]
+        assert calls == 4 * 20
+    else:
+        # `cProfile` on free-threaded CPython can count a call or two extra even with every enable/disable under one
+        # lock (reproduced with a bare `cProfile.Profile` and no Krishiv code): none may be lost.
+        assert calls >= 4 * 20
 
 
 def test_two_sessions_profiling_at_once_do_not_raise(spark: SparkSession) -> None:
