@@ -6,8 +6,9 @@
 //!   `namespace-separator` are taken from it, after a check that neither can leave `/v1/` (they go into the path as
 //!   the server wrote them, as in Java's `ResourcePaths`). A `uri` it returns is ignored and logged: the client
 //!   only ever talks to the declared host, so the caller's token never goes anywhere else.
-//! - **Tokens.** One source per catalog, asked per request (`auth`); a 401 with a client-credentials token drops it
-//!   and retries once.
+//! - **Tokens.** One source per catalog, asked per request (`auth`) for the call's [`RestCaller`] (only a delegated
+//!   source reads it; the `*_as` methods take it, the others call as the server); a 401 with a client-credentials or
+//!   exchanged token drops it and retries once.
 //! - **Locations.** `metadata-location`, the metadata's `location` and every storage credential's `prefix` pass
 //!   [`check_location`] before the table is returned.
 //! - **Refusals.** A table whose `read-restrictions` impose anything is refused (`KRISHIV_UNSUPPORTED_FEATURE`, T067
@@ -27,7 +28,7 @@
 //!
 //! Calls block the caller (the `Catalog` trait is synchronous); see the `transport` module.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -38,6 +39,7 @@ use url::Url;
 
 use super::auth::Tokens;
 use super::config::RestConfig;
+use super::delegated::RestCaller;
 use super::encode::{
     DEFAULT_NAMESPACE_SEPARATOR, namespace_path, namespace_query, path_segment, prefix_is_safe,
     separator_is_safe,
@@ -130,6 +132,52 @@ fn check_prefix(
     }
 }
 
+/// Most `/v1/config` answers one catalog keeps (one per principal and claims on a delegated
+/// catalog).
+pub(crate) const MAX_CONFIGS: usize = 4096;
+
+/// The `/v1/config` answers of one catalog, least recently used out past [`MAX_CONFIGS`].
+#[derive(Debug, Default)]
+pub(crate) struct ConfigCache {
+    entries: HashMap<Option<String>, (Arc<Server>, u64)>,
+    tick: u64,
+}
+
+impl ConfigCache {
+    fn get(&mut self, key: &Option<String>) -> Option<Arc<Server>> {
+        self.tick += 1;
+        let tick = self.tick;
+        self.entries.get_mut(key).map(|(s, used)| {
+            *used = tick;
+            Arc::clone(s)
+        })
+    }
+
+    /// Stores `fetched` unless a racing caller stored one first (that one wins), evicting the
+    /// least recently used entry when full.
+    fn insert(&mut self, key: Option<String>, fetched: Arc<Server>) -> Arc<Server> {
+        if let Some(s) = self.get(&key) {
+            return s;
+        }
+        if self.entries.len() >= MAX_CONFIGS
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(k, _)| k.clone())
+        {
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(key, (Arc::clone(&fetched), self.tick));
+        fetched
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// What the server's `/v1/config` settled.
 #[derive(Debug)]
 struct Server {
@@ -145,7 +193,11 @@ pub struct RestClient {
     http: Transport,
     tokens: Tokens,
     policy: Arc<dyn LocationPolicy + Send + Sync>,
-    server: Mutex<Option<Arc<Server>>>,
+    /// `/v1/config` by who fetched it: `None` for the catalog's own identity (every mode but
+    /// delegated), else the caller's principal key and claims fingerprint, so one user's answer
+    /// never shapes another user's calls (T067 §3.5); least recently used out past
+    /// [`MAX_CONFIGS`].
+    server: Mutex<ConfigCache>,
 }
 
 impl std::fmt::Debug for RestClient {
@@ -190,10 +242,10 @@ impl RestClient {
                 config.limits.request_timeout,
                 config.limits.max_response_bytes,
             )?;
-            Ok((
-                http,
-                Tokens::new(&config.auth, &config.uri, config.limits.max_depth)?,
-            ))
+            let mut tokens =
+                Tokens::new(&name, &config.auth, &config.uri, config.limits.max_depth)?;
+            tokens.set_actor_timeout(config.limits.request_timeout);
+            Ok((http, tokens))
         };
         let (http, tokens) =
             start().map_err(|e| e.into_error(&name, "the catalog client", &config.limits))?;
@@ -203,7 +255,7 @@ impl RestClient {
             http,
             tokens,
             policy,
-            server: Mutex::new(None),
+            server: Mutex::new(ConfigCache::default()),
         })
     }
 
@@ -232,6 +284,20 @@ impl RestClient {
     /// every 404 of a table call as "no such table".
     fn get(
         &self,
+        caller: &RestCaller,
+        url: &Url,
+        headers: &[(&'static str, String)],
+        deadline: Instant,
+        absent: &[&str],
+    ) -> Result<Option<Value>, RestError> {
+        self.get_with(&self.tokens, caller, url, headers, deadline, absent)
+    }
+
+    /// [`Self::get`] with the token of `tokens`.
+    fn get_with(
+        &self,
+        tokens: &Tokens,
+        caller: &RestCaller,
         url: &Url,
         headers: &[(&'static str, String)],
         deadline: Instant,
@@ -241,14 +307,14 @@ impl RestClient {
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            let bearer = self.tokens.token(&self.http, deadline)?;
+            let bearer = tokens.token(caller, &self.http, deadline)?;
             request.bearer.clone_from(&bearer);
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
                 200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
-                401 if !retried && self.tokens.refreshable() => {
+                401 if !retried && tokens.refreshable() => {
                     if let Some(refused) = &bearer {
-                        self.tokens.invalidate(refused);
+                        tokens.invalidate(refused);
                     }
                     retried = true;
                     continue;
@@ -273,15 +339,29 @@ impl RestClient {
         }
     }
 
-    /// The server's configuration, fetched on first use.
-    fn server(&self, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
+    /// The server's configuration, fetched on first use. For every mode but `delegated` it is the
+    /// catalog's own, fetched with the catalog's token. A delegated catalog has no identity of its
+    /// own at the catalog (the server's actor token is for the IdP only and never reaches the
+    /// catalog host): `/v1/config` is fetched with the caller's own delegated token (exchanged or
+    /// forwarded), as the Iceberg REST spec authenticates it like any call, and kept per
+    /// principal (without groups) and exchange claims.
+    fn server(&self, caller: &RestCaller, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
+        let key = if self.tokens.is_delegated() {
+            match (&caller.principal, &caller.subject) {
+                (Some(p), Some(s)) => Some(format!("{}:{p}|{:02x?}", p.len(), s.claims)),
+                // Refused by the token source before anything is sent.
+                _ => caller.identity.clone(),
+            }
+        } else {
+            None
+        };
         let slot = || {
             self.server
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         };
-        if let Some(s) = slot().as_ref() {
-            return Ok(Arc::clone(s));
+        if let Some(s) = slot().get(&key) {
+            return Ok(s);
         }
         // Fetched without the lock, so a stalled `/v1/config` holds no other caller; when two callers race, the
         // first answer stored wins.
@@ -292,7 +372,7 @@ impl RestClient {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
             let value = self
-                .get(&url, &[], deadline, &[])?
+                .get(caller, &url, &[], deadline, &[])?
                 .ok_or(RestError::Status {
                     status: 404,
                     kind: Some("NoSuchWarehouseException".to_owned()),
@@ -331,7 +411,7 @@ impl RestClient {
             })
         };
         let fetched = Arc::new(fetch().map_err(fail)?);
-        Ok(Arc::clone(slot().get_or_insert(fetched)))
+        Ok(slot().insert(key, fetched))
     }
 
     /// The server's merged configuration (after the first call).
@@ -339,7 +419,10 @@ impl RestClient {
     /// # Errors
     /// The `/v1/config` call failed.
     pub fn catalog_config(&self) -> Result<CatalogConfig, KrishivError> {
-        Ok(self.server(self.deadline())?.config.clone())
+        Ok(self
+            .server(&RestCaller::server(), self.deadline())?
+            .config
+            .clone())
     }
 
     fn url(&self, server: &Server, tail: &[&str]) -> Result<Url, RestError> {
@@ -354,6 +437,7 @@ impl RestClient {
     /// Every page of a listing, within the page and entry limits. `Ok(None)` is a 404 on the first page.
     fn pages<T>(
         &self,
+        caller: &RestCaller,
         base: &Url,
         parse: impl Fn(Value) -> Result<Page<T>, RestError>,
         deadline: Instant,
@@ -367,7 +451,7 @@ impl RestClient {
             if let Some(t) = &token {
                 url.query_pairs_mut().append_pair("pageToken", t);
             }
-            let Some(value) = self.get(&url, &[], deadline, NO_SUCH_NAMESPACE)? else {
+            let Some(value) = self.get(caller, &url, &[], deadline, NO_SUCH_NAMESPACE)? else {
                 return if token.is_none() {
                     Ok(None)
                 } else {
@@ -410,9 +494,22 @@ impl RestClient {
         &self,
         parent: &[String],
     ) -> Result<Option<Vec<Vec<String>>>, KrishivError> {
+        self.list_namespaces_as(&RestCaller::server(), parent)
+    }
+
+    /// [`list_namespaces`](Self::list_namespaces) for `caller`.
+    ///
+    /// # Errors
+    /// As [`list_namespaces`](Self::list_namespaces); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated
+    /// catalog has no usable token for `caller`.
+    pub fn list_namespaces_as(
+        &self,
+        caller: &RestCaller,
+        parent: &[String],
+    ) -> Result<Option<Vec<Vec<String>>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(parent, None);
         let run = || -> Result<Option<Vec<Vec<String>>>, RestError> {
             check_names(parent, None)?;
@@ -422,7 +519,7 @@ impl RestClient {
                     namespace_query(parent, &server.separator).map_err(RestError::Protocol)?;
                 url.query_pairs_mut().append_pair("parent", &value);
             }
-            self.pages(&url, types::namespaces_page, deadline)
+            self.pages(caller, &url, types::namespaces_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -435,15 +532,28 @@ impl RestClient {
         &self,
         namespace: &[String],
     ) -> Result<Option<Vec<TableIdent>>, KrishivError> {
+        self.list_tables_as(&RestCaller::server(), namespace)
+    }
+
+    /// [`list_tables`](Self::list_tables) for `caller`.
+    ///
+    /// # Errors
+    /// As [`list_tables`](Self::list_tables); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated catalog has
+    /// no usable token for `caller`.
+    pub fn list_tables_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+    ) -> Result<Option<Vec<TableIdent>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, None);
         let run = || -> Result<Option<Vec<TableIdent>>, RestError> {
             check_namespace(namespace, None)?;
             let ns = namespace_path(namespace, &server.separator);
             let url = self.url(&server, &["namespaces", &ns, "tables"])?;
-            self.pages(&url, types::tables_page, deadline)
+            self.pages(caller, &url, types::tables_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -459,9 +569,23 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
+        self.load_table_as(&RestCaller::server(), namespace, table)
+    }
+
+    /// [`load_table`](Self::load_table) for `caller`.
+    ///
+    /// # Errors
+    /// As [`load_table`](Self::load_table); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated catalog has no
+    /// usable token for `caller`.
+    pub fn load_table_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<LoadedTable>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, Some(table));
         let run = || -> Result<Option<LoadedTable>, RestError> {
             check_namespace(namespace, Some(table))?;
@@ -476,7 +600,7 @@ impl RestClient {
             } else {
                 Vec::new()
             };
-            self.get(&url, &headers, deadline, NO_SUCH_TABLE)?
+            self.get(caller, &url, &headers, deadline, NO_SUCH_TABLE)?
                 .map(LoadedTable::from_json)
                 .transpose()
         };
@@ -526,9 +650,23 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
+        self.load_credentials_as(&RestCaller::server(), namespace, table)
+    }
+
+    /// [`load_credentials`](Self::load_credentials) for `caller`.
+    ///
+    /// # Errors
+    /// As [`load_credentials`](Self::load_credentials); `KRISHIV_CATALOG_DELEGATION_UNAVAILABLE` when a delegated
+    /// catalog has no usable token for `caller`.
+    pub fn load_credentials_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
-        let server = self.server(deadline)?;
+        let server = self.server(caller, deadline)?;
         let what = relation(namespace, Some(table));
         if !server.config.supports(LOAD_CREDENTIALS) {
             return Err(KrishivUnsupportedFeature {
@@ -547,7 +685,7 @@ impl RestClient {
                 &server,
                 &["namespaces", &ns, "tables", &name, "credentials"],
             )?;
-            self.get(&url, &[], deadline, NO_SUCH_TABLE)?
+            self.get(caller, &url, &[], deadline, NO_SUCH_TABLE)?
                 .map(types::credentials)
                 .transpose()
         };
@@ -589,6 +727,29 @@ mod tests {
             join(&base, &["v1", "config"]).unwrap().as_str(),
             "http://127.0.0.1:8181/v1/config"
         );
+    }
+
+    /// Review 58b1-r2 N3: past the cap the least recently used answer goes, not all of them.
+    #[test]
+    fn the_config_cache_evicts_the_least_recently_used() {
+        let server = || {
+            Arc::new(Server {
+                prefix: None,
+                separator: DEFAULT_NAMESPACE_SEPARATOR.to_owned(),
+                config: CatalogConfig::default(),
+            })
+        };
+        let mut cache = ConfigCache::default();
+        for i in 0..MAX_CONFIGS {
+            cache.insert(Some(i.to_string()), server());
+        }
+        // Touch the oldest: the second oldest is the one evicted.
+        assert!(cache.get(&Some("0".to_owned())).is_some());
+        cache.insert(Some("new".to_owned()), server());
+        assert_eq!(cache.len(), MAX_CONFIGS);
+        assert!(cache.get(&Some("0".to_owned())).is_some());
+        assert!(cache.get(&Some("1".to_owned())).is_none());
+        assert!(cache.get(&Some("new".to_owned())).is_some());
     }
 
     #[test]

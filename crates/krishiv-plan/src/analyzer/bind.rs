@@ -932,7 +932,17 @@ async fn load(
             for first in [ident.clone(), fold(&ident, cs)] {
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
-            let failed = |_| {
+            let failed = |e: krishiv_common::error::KrishivError| {
+                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as
+                // they are.
+                if matches!(
+                    e.error_class(),
+                    krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
+                        | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                ) {
+                    return AnalysisError::new(e, origin);
+                }
                 AnalysisError::new(
                     KrishivCatalogFailure {
                         catalog: quoted(std::slice::from_ref(&ident.catalog)),

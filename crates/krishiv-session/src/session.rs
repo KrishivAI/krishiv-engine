@@ -127,6 +127,8 @@ pub struct Session {
     pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
     /// The baggage that came with it (empty without a valid `traceparent`).
     pub(crate) inbound_baggage: Arc<[(String, String)]>,
+    /// The authentication of the request that started the statement, for delegated catalogs.
+    pub(crate) request_inbound: Option<crate::catalog_registry::Inbound>,
 }
 
 impl fmt::Debug for Session {
@@ -204,6 +206,8 @@ pub(crate) struct SessionState {
     sql_sources: AtomicU32,
     /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
     pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
+    /// How the latest RPC authenticated and its user token, for delegated catalogs (P3-T067).
+    pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
 }
 
 impl Drop for SessionState {
