@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use arrow_schema::{FieldRef, SchemaRef};
 use krishiv_common::config::{
     Config, ConfigValue, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED,
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{
@@ -57,6 +58,7 @@ use super::eq_deletes::{self, EqProjection, FILE_ORDINAL};
 use super::lazy::{self, DeleteEnv, DeleteSource, DeleteState, LazySelections, Locate, ScanTask};
 use super::lineage::{self, LineageSource, LineageSplit};
 use super::sink::{IcebergWriteSink, WriteTarget};
+use super::statistics_file::enabled as statistics_enabled;
 use super::table::IcebergTable;
 use super::types::arrow_schema;
 use super::write::DEFAULT_MAX_OPEN_FILES;
@@ -118,9 +120,21 @@ impl IcebergTableProvider {
                 .and_then(ConfigValue::as_int)
                 .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(DEFAULT_MAX_OPEN_FILES);
+            let statistics = config
+                .get(&ICEBERG_WRITE_STATISTICS_ENABLED)
+                .and_then(ConfigValue::as_bool)
+                .or_else(|| {
+                    ICEBERG_WRITE_STATISTICS_ENABLED
+                        .default
+                        .as_ref()
+                        .and_then(ConfigValue::as_bool)
+                })
+                .unwrap_or(false);
+            let base = table.table.metadata();
             provider.write = Some(Arc::new(WriteTarget {
                 committer: Arc::clone(committer),
-                base: table.table.metadata().clone(),
+                statistics: statistics_enabled(statistics, base.properties()),
+                base: base.clone(),
                 registered: table.registered.clone(),
                 file_io: table.table.file_io().clone(),
                 max_metadata_bytes: table.max_metadata_bytes,

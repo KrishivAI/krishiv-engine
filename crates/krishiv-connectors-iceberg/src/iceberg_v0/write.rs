@@ -61,6 +61,13 @@
 //!   file (in no manifest); an open upload dropped outside a runtime is not
 //!   aborted (`Upload`'s drop).
 //!
+//! - **Sketches** (PR-54b): with [`DataFileWriter::with_sketches`], every
+//!   batch also updates the task's Theta sketch of each sketched column
+//!   (`statistics_file.rs`), before it is split by partition; a column
+//!   that cannot be sketched drops the task's sketches (and so the write's
+//!   statistics), never the write. [`DataFileWriter::take_sketches`] hands
+//!   them out before [`DataFileWriter::finish`].
+//!
 //! Columns of type `uuid` or `fixed` are refused: Java writes them as
 //! `FIXED_LEN_BYTE_ARRAY`, the Spark schema carries them as string and
 //! binary. Files carry no `split_offsets` (the writer's statistics have no
@@ -91,6 +98,7 @@ use krishiv_memory::Reservation;
 use super::data_file::{DataLocations, WrittenDataFile, file_name, partition_tuple};
 use super::lineage;
 use super::scan::{iceberg_type, plan_transform, schema_fields};
+use super::statistics_file::{TaskSketches, task_dropped};
 use super::storage::Registered;
 #[cfg(test)]
 use super::storage::StorageRegistration;
@@ -192,6 +200,8 @@ pub(crate) struct DataFileWriter {
     open: Vec<OpenFile>,
     finished: Vec<Finished>,
     mem: Reservation,
+    /// The task's column sketches, when the write has statistics.
+    sketches: Option<TaskSketches>,
     /// Set once the files were handed out or deleted.
     done: bool,
 }
@@ -291,8 +301,21 @@ impl DataFileWriter {
             open: Vec::new(),
             finished: Vec::new(),
             mem,
+            sketches: None,
             done: false,
         })
+    }
+
+    /// The writer updating `sketches` with every batch (module docs).
+    #[must_use]
+    pub(crate) fn with_sketches(mut self, sketches: Option<TaskSketches>) -> Self {
+        self.sketches = sketches;
+        self
+    }
+
+    /// The task's sketches; `None` when it has none or dropped them.
+    pub(crate) fn take_sketches(&mut self) -> Option<TaskSketches> {
+        self.sketches.take()
     }
 
     /// This writer for a copy-on-write rewrite of a v3 table (design note §8
@@ -347,6 +370,12 @@ impl DataFileWriter {
         let batch = self.conform(batch)?;
         if batch.num_rows() == 0 {
             return Ok(());
+        }
+        if let Some(s) = &mut self.sketches
+            && !s.update(&batch)
+        {
+            self.sketches = None;
+            task_dropped("a column could not be sketched");
         }
         if self.fields.iter().all(|f| f.source.is_none()) {
             let values = vec![None; self.fields.len()];
