@@ -83,7 +83,7 @@ impl PoolSlots {
 
 impl RelationSlots for PoolSlots {
     fn limit(&self) -> usize {
-        self.pool.calls().slot_limit_for(&self.owner)
+        self.pool.calls().slot_limit_for()
     }
 
     fn poll_take(
@@ -110,7 +110,6 @@ impl RelationSlots for PoolSlots {
             (SlotTake::TooMany, _) => Poll::Ready(Err(self.pool.worker_limit(
                 "A Python UDF relation operator (one task per UDF of a driver)",
                 n,
-                &self.owner,
             ))),
         }
     }

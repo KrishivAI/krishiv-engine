@@ -1037,3 +1037,26 @@ fn a_tenant_at_its_worker_cap_replaces_its_idle_worker_and_never_another_tenants
     assert_eq!(pool.live_workers(), 2, "one per tenant");
     assert_eq!(pid_and_limit(&g1, &py), other, "globex's worker was kept");
 }
+
+#[test]
+fn a_principal_without_a_tenant_is_capped_like_a_tenant() {
+    let Some(py) = python() else { return };
+    let mut config = config(&py);
+    config.max_per_tenant = 1;
+    let pool = Pool::new(config).expect("pool");
+    let principal = |name: &str, session: &str| Owner {
+        principal: name.to_owned(),
+        session: session.to_owned(),
+        tenant: None,
+    };
+    let m1 = SessionUdfs::new(pool.clone(), principal("mallory", "s1"));
+    let m2 = SessionUdfs::new(pool.clone(), principal("mallory", "s2"));
+    let a1 = SessionUdfs::new(pool.clone(), principal("alice", "s1"));
+    let first = pid_and_limit(&m1, &py);
+    let other = pid_and_limit(&a1, &py);
+    assert_eq!(pool.live_workers(), 2);
+    // mallory's second session finds her at the cap: her idle worker goes, alice's stays.
+    assert_ne!(first, pid_and_limit(&m2, &py));
+    assert_eq!(pool.live_workers(), 2, "one per principal");
+    assert_eq!(pid_and_limit(&a1, &py), other, "alice's worker was kept");
+}

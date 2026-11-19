@@ -156,6 +156,18 @@ pub struct Owner {
     pub tenant: Option<String>,
 }
 
+impl Owner {
+    /// What the per-tenant caps count by: the tenant, or the principal when it has none (so a principal of a
+    /// single-tenant server cannot take the whole pool either). Prefixed, so a tenant and a principal of the
+    /// same name are two groups.
+    pub(crate) fn group(&self) -> String {
+        match &self.tenant {
+            Some(t) => format!("t:{t}"),
+            None => format!("p:{}", self.principal),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Key {
     owner: Owner,
@@ -175,7 +187,7 @@ struct State {
     /// Live workers (idle, busy or starting).
     live: usize,
     per_owner: HashMap<Owner, usize>,
-    /// Live workers per tenant (owners without a tenant are not counted).
+    /// Live workers per cap group ([`Owner::group`]).
     per_tenant: HashMap<String, usize>,
     /// Owners whose session ended while some of their workers were busy: those are stopped on return.
     released: HashSet<Owner>,
@@ -374,7 +386,7 @@ impl Pool {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(|r| self.refused(r, owner))
+            .map_err(|r| self.refused(r))
     }
 
     /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
@@ -382,30 +394,23 @@ impl Pool {
         self.inner
             .calls
             .submit_task(owner.clone(), job)
-            .map_err(|r| self.refused(r, owner))
+            .map_err(|r| self.refused(r))
     }
 
-    fn refused(&self, refused: Refused, owner: &Owner) -> KrishivError {
+    fn refused(&self, refused: Refused) -> KrishivError {
         match refused {
             Refused::NoThread(why) => internal(why),
-            Refused::Reserve => self.worker_limit(
-                "A scalar Python UDF call beside an open Python UDF task",
-                2,
-                owner,
-            ),
+            Refused::Reserve => {
+                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
+            }
         }
     }
 
     /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
     /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
-    pub(crate) fn worker_limit(
-        &self,
-        operation: &str,
-        needed: usize,
-        owner: &Owner,
-    ) -> KrishivError {
+    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
         let config = &self.inner.config;
-        let (setting, value) = if self.inner.calls.tenant_bound(owner) {
+        let (setting, value) = if self.inner.calls.tenant_bound() {
             ("krishiv.python.worker.maxPerTenant", config.max_per_tenant)
         } else if self.inner.calls.threads_bound() {
             ("krishiv.python.worker.maxTotal", config.max_total)
@@ -418,7 +423,7 @@ impl Pool {
         KrishivPythonWorkerLimit {
             operation: operation.to_owned(),
             needed: needed.to_string(),
-            available: self.inner.calls.slot_limit_for(owner).to_string(),
+            available: self.inner.calls.slot_limit_for().to_string(),
             setting: setting.to_owned(),
             value: value.to_string(),
         }
@@ -464,14 +469,15 @@ impl Pool {
                 return Ok(self.lease(key, idle.worker));
             }
             let mine = state.per_owner.get(owner).copied().unwrap_or(0);
-            if let Some(t) = &owner.tenant {
-                let theirs = state.per_tenant.get(t).copied().unwrap_or(0);
+            {
+                let group = owner.group();
+                let theirs = state.per_tenant.get(&group).copied().unwrap_or(0);
                 if theirs >= self.inner.config.max_per_tenant {
                     // At the tenant's cap: stop its longest-idle worker of another key (another session,
                     // interpreter or artifact set) rather than wait for the idle timeout; never another
                     // tenant's.
                     if let Some(victim) =
-                        state.take_oldest_idle(|k| k.owner.tenant.as_ref() == Some(t) && *k != key)
+                        state.take_oldest_idle(|k| k.owner.group() == group && *k != key)
                     {
                         drop(state);
                         drop(victim);
@@ -491,9 +497,7 @@ impl Pool {
                 if state.live < self.inner.config.max_total {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
-                    if let Some(t) = &owner.tenant {
-                        *state.per_tenant.entry(t.clone()).or_default() += 1;
-                    }
+                    *state.per_tenant.entry(owner.group()).or_default() += 1;
                     drop(state);
                     return match self.start(interpreter, artifacts, owner, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
@@ -914,12 +918,11 @@ impl State {
     /// One worker of `owner` is gone.
     fn forget(&mut self, owner: &Owner) {
         self.live = self.live.saturating_sub(1);
-        if let Some(t) = &owner.tenant
-            && let Some(n) = self.per_tenant.get_mut(t)
-        {
+        let group = owner.group();
+        if let Some(n) = self.per_tenant.get_mut(&group) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                self.per_tenant.remove(t);
+                self.per_tenant.remove(&group);
             }
         }
         if let Some(n) = self.per_owner.get_mut(owner) {
