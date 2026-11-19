@@ -29,7 +29,15 @@ fn tpch_sf1_plan_only_timing() {
     for t in [
         "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
     ] {
-        let batches = block_on(s.read().parquet([format!("{dir}/{t}.parquet")]).collect()).unwrap();
+        // The limit goes below the collect, so only the sample's rows are read, not the whole SF1 table.
+        let n = i32::try_from(rows).unwrap_or(i32::MAX);
+        let batches = block_on(
+            s.read()
+                .parquet([format!("{dir}/{t}.parquet")])
+                .limit(n)
+                .collect(),
+        )
+        .unwrap();
         let schema = batches[0].schema();
         let (mut kept, mut left) = (Vec::new(), rows);
         for b in batches {

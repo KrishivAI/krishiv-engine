@@ -787,3 +787,61 @@ fn only_a_finished_query_keeps_its_hints() {
         assert!(kept_hints(state, vec![hint()]).is_empty(), "{state}");
     }
 }
+
+#[test]
+fn stored_keeps_hints_only_for_a_finished_entry() {
+    use krishiv_exec::physical::{ExprEnv, PhysNode, PhysicalPlan};
+    use krishiv_exec::planner::ExplainNode;
+    use krishiv_exec::profile::{Hint, HintCode, ProfileIdentity};
+
+    let entry = |state: &'static str| super::HistoryEntry {
+        query_id: "q".to_owned(),
+        finished_at_ms: 1,
+        state,
+        error_class: None,
+        sql: None,
+        detailed: false,
+        duration_ns: 1,
+        plan: PhysicalPlan::new(
+            PhysNode::OneRow,
+            Arc::new(arrow_schema::Schema::empty()),
+            ExplainNode::leaf("OneRowRelation", ""),
+            ExprEnv {
+                ansi: true,
+                legacy_statistical_aggregate: false,
+                zone: None,
+                zone_name: None,
+                query_start_micros: 0,
+                user: Arc::from("u"),
+                map_key_dedup_last_win: false,
+                legacy_java_charsets: false,
+                legacy_coding_error_action: false,
+                legacy_time_parser: false,
+                binary_output_style: None,
+            },
+        ),
+        metrics: krishiv_exec::QueryMetrics::default(),
+        identity: ProfileIdentity::default(),
+        trace: None,
+        scans: Vec::new(),
+        hints: vec![Hint {
+            code: HintCode::Skew,
+            node: Some(1),
+            operator: None,
+            message: "skew".to_owned(),
+            evidence: Vec::new(),
+        }],
+    };
+    for (state, kept) in [
+        ("finished", 1),
+        ("failed", 0),
+        ("cancelled", 0),
+        ("denied", 0),
+    ] {
+        for mask in [false, true] {
+            let row = super::stored(entry(state), mask).unwrap();
+            let back = QueryProfile::from_json(&row.profile).unwrap();
+            assert_eq!(back.hints.len(), kept, "{state}, mask {mask}");
+        }
+    }
+}
