@@ -12,7 +12,7 @@ Krishiv 0.2 is on PyPI (you can also build the wheel from the repository with `m
 pip install krishiv
 ```
 
-The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli`. Prebuilt `krishiv` CLI binaries on the GitHub Release are not published yet (the release upload is not wired); install the CLI from source with that command.
+The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli`. Prebuilt `krishiv` CLI binaries are not available yet.
 
 Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` and `toArrow()` return Arrow data.
 

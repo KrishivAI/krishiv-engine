@@ -1024,7 +1024,10 @@ impl FileReads {
         }
         // `hf://` cannot be asked whether a directory exists (the store has no listing, and the
         // probe answers 403 with an HTML page): a named file that is not there is not found.
-        let hf = at.display.starts_with("hf://");
+        let hf = at
+            .display
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("hf://"));
         if hf || !self.io.is_directory(&at.store, &at.path).await? {
             // A catalog table whose location is not made yet (an external
             // table's first write makes it) holds no rows.

@@ -33,14 +33,15 @@ impl QuerySpill {
             } => krishiv_common::error::KrishivSpillIoError {
                 operation: (*operation).to_owned(),
                 path: path.display().to_string(),
-                reason: format!(
-                    "{}; set `krishiv.spill.dir` to a writable local directory",
-                    if source.kind() == std::io::ErrorKind::StorageFull {
-                        format!("the spill disk is full ({source})")
-                    } else {
-                        source.to_string()
-                    }
-                ),
+                reason: if source.kind() == std::io::ErrorKind::StorageFull {
+                    format!(
+                        "the spill disk is full ({source}); set `krishiv.spill.dir` to a directory with free space"
+                    )
+                } else {
+                    format!(
+                        "{source}; set `krishiv.spill.dir` to a writable local directory"
+                    )
+                },
             }
             .into(),
             other => KrishivError::from(other),
@@ -67,15 +68,20 @@ impl SpillScopes for QuerySpill {
             })?;
             *slot = Some(manager);
         }
-        // The directory is open: a failure an earlier run of this statement recorded is stale.
-        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = None;
         slot.as_ref().map_or_else(
             || Err(internal("the spill directory is not open".to_owned())),
-            |m| {
-                m.scope().map_err(|e| {
+            |m| match m.scope() {
+                Ok(scope) => {
+                    // The directory works: a failure an earlier run of this statement recorded is stale.
+                    *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                    Ok(scope)
+                }
+                Err(e) => {
                     self.record(&e);
-                    internal(format!("cannot create the query's spill directory: {e}"))
-                })
+                    Err(internal(format!(
+                        "cannot create the query's spill directory: {e}"
+                    )))
+                }
             },
         )
     }
