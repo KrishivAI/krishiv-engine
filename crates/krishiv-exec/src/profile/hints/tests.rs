@@ -140,11 +140,7 @@ fn hint_skew_raised_at_the_boundary() {
     let h = skewed("Window", 1000, 1000, 4);
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].code, HintCode::Skew);
-    assert!(
-        h[0].message.contains("the key [k#1] is skewed"),
-        "{}",
-        h[0].message
-    );
+    assert!(!h[0].message.contains("k#1"), "{}", h[0].message);
     // Under the time floor, or one driver: quiet.
     assert!(skewed("Window", 199, 199, 4).is_empty());
     assert!(skewed("Window", 1000, 1000, 1).is_empty());
@@ -421,10 +417,23 @@ fn settings_read_the_config_keys() {
 }
 
 #[test]
-fn a_key_with_a_literal_is_left_out_of_the_hint_text() {
-    use super::only_column_refs;
-    assert!(only_column_refs("k#1, o_orderkey#12"));
-    assert!(!only_column_refs("k#1, 5"));
-    assert!(!only_column_refs("substr(name#3, 'secret')"));
-    assert!(!only_column_refs(""));
+fn a_skew_hint_never_carries_text_from_the_node_detail() {
+    // `SELECT 'acme_corp', x ... PARTITION BY` names the column after the literal: the detail holds it.
+    let plan = node(0, "Window", "[acme_corp#7]", None, vec![]);
+    let mut m = QueryMetrics::default();
+    op(
+        &mut m,
+        1,
+        "Window",
+        0,
+        OperatorMetrics {
+            drivers: 4,
+            compute_time: Duration::from_millis(1000),
+            max_driver_compute_time: Duration::from_millis(1000),
+            ..OperatorMetrics::default()
+        },
+    );
+    let h = hints(&plan, &m, &HintSettings::default());
+    assert_eq!(h.len(), 1);
+    assert!(!h[0].message.contains("acme_corp"), "{}", h[0].message);
 }

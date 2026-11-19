@@ -74,15 +74,6 @@
     <p class="mt-3 text-error">Failed with <code>{d.query.error_class}</code></p>
   {/if}
 
-  {#if d.warnings.length}
-    <h2 class="mt-6 mb-2">Warnings</h2>
-    <div class="grid gap-2">
-      {#each d.warnings as w}
-        <Alert variant={w.kind === "skew" ? "warning" : "error"} icon={w.kind === "skew" ? "▲" : "✕"} title={`${w.operator} · ${w.kind}`}>{w.hint}</Alert>
-      {/each}
-    </div>
-  {/if}
-
   {#if d.query.hints?.length}
     <h2 class="mt-6 mb-2">Advisor hints</h2>
     <div class="grid gap-2" data-testid="advisor-hints">

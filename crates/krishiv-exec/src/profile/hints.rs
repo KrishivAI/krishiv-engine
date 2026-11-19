@@ -27,7 +27,7 @@ use crate::planner::{FilterGapReason, NodeFacts};
 pub enum HintCode {
     /// An operator wrote a large share of the query's memory to disk.
     Spill,
-    /// A table without statistics made the planner mis-estimate a join input.
+    /// A table without statistics made the planner misestimate a join input.
     MissingStatistics,
     /// One driver of a key-partitioned operator did most of the work.
     Skew,
@@ -336,13 +336,12 @@ fn skew(
     } else {
         ratio(m.max_driver_rows_out.saturating_mul(100), m.rows_out)
     };
-    let keys = node_keys(plan, e.node);
     out.push(Hint {
         code: HintCode::Skew,
         node: e.node,
         operator: Some(id),
         message: format!(
-            "One of {drivers} drivers of {} did {share:.0}% of the work{keys}. Salting the key or filtering the hot values may help.",
+            "One of {drivers} drivers of {} did {share:.0}% of the work. Salting the key or filtering the hot values may help.",
             at(plan, e.node),
         ),
         evidence: ev(&[
@@ -353,35 +352,6 @@ fn skew(
             ("rows_out", m.rows_out),
         ]),
     });
-}
-
-/// `; the key [..] is skewed`, from the node's detail (the join or grouping keys).
-fn node_keys(plan: &ProfileNode, node: Option<u32>) -> String {
-    let Some(n) = node.and_then(|id| find(plan, id)) else {
-        return String::new();
-    };
-    match (n.detail.find('['), n.detail.find(']')) {
-        (Some(a), Some(b)) if a < b && only_column_refs(&n.detail[a + 1..b]) => {
-            format!("; the key {} is skewed", &n.detail[a..=b])
-        }
-        _ => String::new(),
-    }
-}
-
-/// True when every comma-separated key is a bare column reference (`name#id`): an expression key could carry a
-/// literal, and the stored profile must not (the hint text is not masked).
-fn only_column_refs(keys: &str) -> bool {
-    !keys.trim().is_empty()
-        && keys.split(',').all(|k| {
-            k.trim().split_once('#').is_some_and(|(name, id)| {
-                !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-                    && !id.is_empty()
-                    && id.chars().all(|c| c.is_ascii_digit())
-            })
-        })
 }
 
 fn operator_at<'a>(

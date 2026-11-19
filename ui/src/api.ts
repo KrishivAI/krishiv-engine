@@ -84,18 +84,10 @@ export interface Operator {
   spilled_bytes?: number;
 }
 
-export interface Warning {
-  operator_id: number;
-  operator: string;
-  kind: "spill" | "skew" | "memory";
-  hint: string;
-}
-
 export interface QueryDetail {
   query: Query;
   operators: Operator[];
   hot_operator: { operator_id: number; operator: string; compute_ns: number } | null;
-  warnings: Warning[];
 }
 
 export interface CacheRow {

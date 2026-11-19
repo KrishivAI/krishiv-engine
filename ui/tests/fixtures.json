@@ -215,21 +215,7 @@
       "operator_id": 2,
       "operator": "HashJoin",
       "compute_ns": 1700000000
-    },
-    "warnings": [
-      {
-        "operator_id": 2,
-        "operator": "HashJoin",
-        "kind": "spill",
-        "hint": "HashJoin spilled 128.0 MiB to disk. Give the query more memory, or reduce the rows it holds at once (a filter or an earlier aggregation)."
-      },
-      {
-        "operator_id": 2,
-        "operator": "HashJoin",
-        "kind": "skew",
-        "hint": "One of 4 parallel drivers of HashJoin did most of the work, so the others waited. A few keys probably hold most of the rows; check the join or group-by keys for skew."
-      }
-    ]
+    }
   },
   "resources": {
     "memory": [

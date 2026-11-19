@@ -126,3 +126,7 @@ required-features = ["row-table-prototype"]
 [[example]]
 name = "agg_table_matrix"
 required-features = ["row-table-prototype"]
+
+[[bench]]
+name = "advisor_hints"
+harness = false
