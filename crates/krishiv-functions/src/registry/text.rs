@@ -44,20 +44,23 @@ fn locate_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// argument is an array.
 fn concat_ws_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let strings = DataType::Array(ArrayType::new(DataType::String, true).into());
+    // Spark's `TypeCollection(AbstractArrayType(StringType), StringType)`: a refusal names both.
+    let array_or_string = || InputType::StrictOneOf(vec![strings.clone(), DataType::String]);
     (0..c.args().len().max(1))
         .map(|i| match c.data_type(i) {
             // Atomic elements are cast to strings; arrays, maps and structs
-            // are refused, as Spark refuses them.
+            // (as elements, or as the argument) are refused, as Spark refuses them.
             Some(DataType::Array(a)) if i > 0 => {
                 if matches!(
                     a.element_type(),
                     DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
                 ) {
-                    InputType::Strict(strings.clone())
+                    array_or_string()
                 } else {
                     exact(strings.clone())
                 }
             }
+            Some(DataType::Map(_) | DataType::Struct(_)) if i > 0 => array_or_string(),
             _ => exact(DataType::String),
         })
         .collect()
