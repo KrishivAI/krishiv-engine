@@ -49,7 +49,7 @@ pub(crate) type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Statu
 
 /// An `Operation` registered in a session for one run or fetch (design §4.1, "operation per
 /// fetch"): not reattachable, so `busy()` waits for it at shutdown and a drop cancels its query.
-struct OpGuard {
+pub(crate) struct OpGuard {
     entry: Arc<SessionEntry>,
     op: Arc<Operation>,
     /// The handle's live set, which holds `op` until the guard drops.
@@ -58,7 +58,7 @@ struct OpGuard {
 
 impl OpGuard {
     /// Registers a fresh operation for `sql` in `entry`'s session, live on the handle `live`.
-    fn register(
+    pub(crate) fn register(
         entry: &Arc<SessionEntry>,
         live: &Arc<LiveOps>,
         sql: &str,
@@ -85,12 +85,12 @@ impl OpGuard {
         Ok(guard)
     }
 
-    fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         self.op.id().as_str()
     }
 
     /// The run or fetch ended as it should.
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         self.op.finish();
     }
 
@@ -278,7 +278,7 @@ impl Stream for Guarded {
     }
 }
 
-fn now_micros() -> i64 {
+pub(crate) fn now_micros() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX))
@@ -295,6 +295,21 @@ fn time_zone(session: &Session) -> Option<Arc<str>> {
 /// `schema` in the Spark-to-Arrow form the stream sends (design §4.1, m11).
 fn spark_schema(schema: &SchemaRef, tz: Option<&Arc<str>>) -> Result<SchemaRef, KrishivError> {
     Ok(empty_batch(schema, tz)?.schema())
+}
+
+/// `maxStatementBytes` (design §4.1): a statement's text over it is `INVALID_ARGUMENT`
+/// (`KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE`) before parsing.
+pub(crate) fn check_statement_bytes(sql: &str, max: usize) -> Result<(), Status> {
+    if sql.len() > max {
+        return Err(flight_status(
+            &KrishivFlightSqlStatementTooLarge {
+                bytes: sql.len().to_string(),
+                limit: max.to_string(),
+            }
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The handle of a ticket's or `FlightInfo`'s `TicketStatementQuery`.
@@ -347,16 +362,8 @@ impl FlightSqlServer {
         caller: &Authenticated,
     ) -> Result<Response<FlightInfo>, Status> {
         let inner = &self.inner;
+        check_statement_bytes(&query.query, inner.config.max_statement_bytes)?;
         let sql: Arc<str> = Arc::from(query.query.as_str());
-        if sql.len() > inner.config.max_statement_bytes {
-            return Err(flight_status(
-                &KrishivFlightSqlStatementTooLarge {
-                    bytes: sql.len().to_string(),
-                    limit: inner.config.max_statement_bytes.to_string(),
-                }
-                .into(),
-            ));
-        }
         // A session this call created is released when the call ends, by an error or a dropped
         // future, unless the answer naming it goes out (`kept`, review M4).
         let mut call = self.call_session(metadata, caller)?;
@@ -710,7 +717,7 @@ impl FlightSqlServer {
 /// §16 m2): `Session` and `Admin` statements, any script and any `EXECUTE IMMEDIATE` (their
 /// class is their parts', which may hide a `SET`; checked on the text, erring towards keeping
 /// the session). Plain `Read`, `Write` and `Ddl` statements leave it unchanged.
-fn marks_changed(class: StatementClass, sql: &str) -> bool {
+pub(crate) fn marks_changed(class: StatementClass, sql: &str) -> bool {
     if matches!(class, StatementClass::Session | StatementClass::Admin) {
         return true;
     }
@@ -773,7 +780,7 @@ pub(crate) fn internal(message: String) -> Status {
 
 /// A failure after `op` was registered: the operation ends failed, not cancelled (review m10),
 /// and the error goes out as its Flight status.
-fn op_failed(op: &OpGuard, e: &KrishivError) -> Status {
+pub(crate) fn op_failed(op: &OpGuard, e: &KrishivError) -> Status {
     op.fail();
     flight_status(e)
 }

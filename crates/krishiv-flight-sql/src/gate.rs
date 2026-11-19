@@ -7,12 +7,15 @@
 
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::{
-    Any, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, TicketStatementQuery,
+    Any, CommandGetSqlInfo, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, PollInfo, SchemaResult, Ticket,
 };
+use futures::StreamExt;
+use futures::stream::Peekable;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -39,6 +42,8 @@ pub(crate) enum FlightRpc {
     CancelFlightInfo,
     /// The deprecated `CancelQuery` action.
     CancelQuery,
+    /// `DoPut(CommandStatementUpdate)`.
+    Update,
     /// A command whose `Any` could not be decoded.
     Malformed(&'static str),
     /// Anything else: the RPC, and the command type or action named in the answer.
@@ -66,6 +71,18 @@ impl FlightRpc {
         }
     }
 
+    /// A `DoPut`, from the descriptor of its first message (`None`: the stream sent none).
+    fn of_put(first: Option<&FlightData>) -> Self {
+        let Some(descriptor) = first.and_then(|d| d.flight_descriptor.as_ref()) else {
+            return Self::Malformed("a DoPut without a FlightDescriptor");
+        };
+        match Any::decode(descriptor.cmd.as_ref()) {
+            Ok(any) if any.type_url == CommandStatementUpdate::type_url() => Self::Update,
+            Ok(any) => Self::Unsupported(format!("DoPut of {:?}", any.type_url)),
+            Err(_) => Self::Malformed("a DoPut command"),
+        }
+    }
+
     /// A `DoAction` action.
     fn of_action(action: &Action) -> Self {
         match action.r#type.as_str() {
@@ -85,7 +102,8 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::Fetch
         | FlightRpc::SqlInfo
         | FlightRpc::CancelFlightInfo
-        | FlightRpc::CancelQuery => Ok(()),
+        | FlightRpc::CancelQuery
+        | FlightRpc::Update => Ok(()),
         FlightRpc::Malformed(what) => Err(Status::invalid_argument(format!(
             "{what} is not a Flight SQL command"
         ))),
@@ -197,12 +215,40 @@ impl FlightService for FlightGate {
         FlightService::do_get(&self.0, request).await
     }
 
-    /// `DoPut` (updates, prepared binds, ingest) is 65b (design §4.3).
+    /// `DoPut` is dispatched here, not by arrow-rs (whose dispatch takes the stream and decodes
+    /// the command before any gate could see it): the first message is peeked and classified, a
+    /// refused command answers before any session work, and the served ones go to their handlers
+    /// with the stream, its first message still unread (design §4.3, §4.4, §16 m5).
     async fn do_put(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        self.refuse("DoPut")
+        let (metadata, extensions, stream) = request.into_parts();
+        let mut stream: Peekable<Streaming<FlightData>> = stream.peekable();
+        let first = match std::pin::Pin::new(&mut stream).peek().await {
+            Some(Ok(data)) => Some(data.clone()),
+            Some(Err(s)) => return Err(s.clone()),
+            None => None,
+        };
+        let rpc = FlightRpc::of_put(first.as_ref());
+        self.gate(&rpc)?;
+        let request = Request::from_parts(metadata, extensions, ());
+        let command = first
+            .and_then(|d| d.flight_descriptor)
+            .and_then(|d| Any::decode(d.cmd.as_ref()).ok());
+        match rpc {
+            FlightRpc::Update => {
+                let update = command
+                    .and_then(|any| any.unpack::<CommandStatementUpdate>().ok().flatten())
+                    .ok_or_else(|| Status::invalid_argument("a malformed CommandStatementUpdate"));
+                let result = match update {
+                    Ok(update) => self.0.do_put_update(update, &request).await,
+                    Err(s) => Err(s),
+                };
+                self.0.counted(Command::StatementUpdate, result)
+            }
+            _ => self.refuse("DoPut"),
+        }
     }
 
     async fn do_exchange(
@@ -303,6 +349,27 @@ mod tests {
             let rpc = FlightRpc::of_action(&Action::new(kind.clone(), Vec::new()));
             assert!(check_flight(&rpc).is_ok(), "{kind}");
         }
+    }
+
+    #[test]
+    fn doput_is_classified_by_its_first_message() {
+        let put = |m: Vec<u8>| FlightData::new().with_descriptor(FlightDescriptor::new_cmd(m));
+        let update = put(any_of(&CommandStatementUpdate::default()));
+        assert_eq!(FlightRpc::of_put(Some(&update)), FlightRpc::Update);
+        let ingest = put(any_of(&arrow_flight::sql::CommandStatementIngest::default()));
+        assert!(matches!(
+            FlightRpc::of_put(Some(&ingest)),
+            FlightRpc::Unsupported(_)
+        ));
+        assert!(matches!(
+            FlightRpc::of_put(Some(&FlightData::new())),
+            FlightRpc::Malformed(_)
+        ));
+        assert!(matches!(FlightRpc::of_put(None), FlightRpc::Malformed(_)));
+        assert!(matches!(
+            FlightRpc::of_put(Some(&put(vec![0xff, 0xff]))),
+            FlightRpc::Malformed(_)
+        ));
     }
 
     #[test]
