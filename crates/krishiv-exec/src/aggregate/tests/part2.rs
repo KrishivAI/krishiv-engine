@@ -587,6 +587,48 @@ async fn row_merge_flushes_then_spills() {
     assert_eq!(m.groups, 90_000);
 }
 
+/// Final-phase tasks presize their row pages and accumulators when the
+/// pool grants them at the start, and merge as before when it does not:
+/// the same groups at every limit, no memory left after the query, every
+/// task presized with ample memory and fewer under a tight limit.
+#[tokio::test]
+async fn row_merge_presizes_pages_when_granted() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let mut presized = Vec::new();
+    for limit in [1 << 30, 24 << 20, 12 << 20] {
+        let agg = HashAggregate::with_row_mode(sp.clone(), rowtable::Mode::Append).unwrap();
+        let o = Opts {
+            limit,
+            both_layouts: false,
+            ..Opts::default()
+        };
+        let (out, m) = exec_with(AggregateNode::new(scan(&s, b.clone()), agg), o, true)
+            .await
+            .unwrap();
+        assert_eq!(rows(&out), expected, "limit {limit}");
+        let tasks = extra(&m, "HashAggregate", "row_final_tasks");
+        presized.push((tasks, extra(&m, "HashAggregate", "row_final_presized")));
+    }
+    // Never more presized tasks than tasks, at any limit (a task that stalls
+    // and runs again counts once).
+    for &(t, p) in &presized {
+        assert!(p <= t, "presized {p} > tasks {t}: {presized:?}");
+    }
+    let (tasks, all) = presized[0];
+    assert!(tasks > 1);
+    assert_eq!(all, tasks, "every task presized with ample memory");
+    // A tight limit that still reaches the final phase (tasks > 0)
+    // refuses some presizing.
+    assert!(
+        presized.iter().any(|&(t, p)| t > 0 && p < t),
+        "a tight limit refuses some presizing: {presized:?}"
+    );
+}
+
 /// The final phase frees each driver partition once merged: with every key
 /// distinct (the merged tables are as large as the inputs), the peak stays
 /// well below holding the inputs and the merged tables together.

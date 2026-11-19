@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A query that needs no column of a Parquet file reads no column: `COUNT(*)`
 //! counts the rows the footers declare instead of decoding a column (plan B,
-//! ClickBench q01). Other formats still read one column.
+//! ClickBench q01). CSV and JSON have no footer: their scans read every record
+//! but decode no column.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
 use arrow_array::{Array, Int64Array, RecordBatch};
@@ -25,11 +26,10 @@ fn one_long(batches: &[RecordBatch]) -> i64 {
     rows[0]
 }
 
-/// Whether the plan's (one) scan reads no column: its line ends `[]`.
+/// Whether the plan has a scan and every scan reads no column: its line ends `[]`.
 fn scans_no_column(plan: &str) -> bool {
-    plan.lines()
-        .filter(|l| l.contains("Scan "))
-        .all(|l| l.trim_end().ends_with("[]"))
+    let mut scans = plan.lines().filter(|l| l.contains("Scan ")).peekable();
+    scans.peek().is_some() && scans.all(|l| l.trim_end().ends_with("[]"))
 }
 
 fn count(s: &Session, sql: &str) -> (i64, String) {
@@ -97,15 +97,22 @@ fn count_star_over_a_partitioned_directory() {
 }
 
 #[test]
-fn other_formats_count_as_before() {
+fn csv_and_json_counts_read_no_column() {
+    // CSV and JSON have no footer: the scan reads every record but decodes
+    // no column (PY-013).
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("c").display().to_string();
     let s = Session::new().unwrap();
     let df = block_on(s.sql("SELECT id FROM range(42)")).unwrap();
-    block_on(df.write().csv(&path)).unwrap();
-    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM csv.`{path}`"));
+    let csv = dir.path().join("c").display().to_string();
+    block_on(df.write().csv(&csv)).unwrap();
+    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM csv.`{csv}`"));
     assert_eq!(n, 42);
-    assert!(!scans_no_column(&plan), "{plan}");
+    assert!(scans_no_column(&plan), "{plan}");
+    let json = dir.path().join("j").display().to_string();
+    block_on(df.write().json(&json)).unwrap();
+    let (n, plan) = count(&s, &format!("SELECT COUNT(*) FROM json.`{json}`"));
+    assert_eq!(n, 42);
+    assert!(scans_no_column(&plan), "{plan}");
 }
 
 #[test]

@@ -43,6 +43,7 @@ arrow-buffer.workspace = true
 arrow-data = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
 krishiv-common = { path = "../krishiv-common" }
+krishiv-connect-server = { path = "../krishiv-connect-server" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-session = { path = "../krishiv-session" }

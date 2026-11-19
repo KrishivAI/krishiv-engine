@@ -574,21 +574,12 @@ pub(crate) fn infer<'a>(
                 let text = whole_text(&ctx)
                     .await
                     .map_err(|e| e.at(&ctx.file.display_path()))?;
-                let mut pos = 0;
-                loop {
-                    match parse_next(&text, pos, syntax) {
-                        Ok(None) => break,
-                        Ok(Some((top, end))) => {
-                            pos = end;
-                            root = rm.absorb(&inf, root, &Ok(top))?;
-                        }
-                        // A tail that does not parse is one malformed
-                        // record, as the reader sees it.
-                        Err(reason) => {
-                            root = rm.absorb(&inf, root, &Err(reason))?;
-                            break;
-                        }
-                    }
+                // One record per file, its first value, as the reader
+                // sees it (Spark's `JsonInferSchema` over one root).
+                match parse_next(&text, 0, syntax) {
+                    Ok(None) => {}
+                    Ok(Some((top, _))) => root = rm.absorb(&inf, root, &Ok(top))?,
+                    Err(reason) => root = rm.absorb(&inf, root, &Err(reason))?,
                 }
             }
         } else {

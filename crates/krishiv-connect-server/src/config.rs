@@ -46,11 +46,12 @@ use krishiv_session::RuntimeConf;
 use crate::manager::SessionEntry;
 
 /// A `Startup` key cannot change in a running session, for anyone. The key is looked up as
-/// `Session::authorize_set_key` looks it up (its Spark alias or legacy alternative too).
+/// `Session::authorize_set_key` looks it up (its Spark alias or legacy alternative too). Public
+/// so Flight SQL's `SetSessionOptions` refuses the same keys as `Config` (P3-T101 §2 H4, §3.2).
 ///
 /// # Errors
 /// `CANNOT_MODIFY_STATIC_CONFIG` for a `Startup` key.
-pub(crate) fn check_static(key: &str) -> Result<(), KrishivError> {
+pub fn check_static(key: &str) -> Result<(), KrishivError> {
     let entry = lookup(key).or_else(|| lookup(resolve_alternative(key)));
     if entry.is_some_and(|e| e.settable_by == SettableBy::Startup) {
         return Err(CannotModifyStaticConfig {

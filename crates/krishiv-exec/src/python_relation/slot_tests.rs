@@ -1475,6 +1475,8 @@ struct Case {
     /// Keys whose groups may span two batches ([`keys`]); round 4's cases
     /// keep its keys.
     spanning: bool,
+    /// A map shaped as a UDTF's (PR-26c-4): a `TABLE` row struct computed per frame, then a carried column.
+    udtf: bool,
 }
 
 /// A session's relation slots: its `maxPerSession`, within `maxTotal`, less
@@ -1509,6 +1511,7 @@ impl Case {
             aligned: false,
             by_query: false,
             spanning: false,
+            udtf: false,
         };
         if original {
             return case;
@@ -1533,6 +1536,7 @@ impl Case {
                 _ => rng.pick(1, limit),
             };
         }
+        case.udtf = !case.aggregate && !case.aligned && rng.below(2) == 0;
         case
     }
 
@@ -1614,12 +1618,16 @@ fn session(case: &Case, owner: usize, state: &Arc<SlotState>, root: &Arc<TreePoo
                 fails_after_results: std::sync::atomic::AtomicBool::new(false),
                 per_row: case.aligned,
             }) as Arc<dyn PreparedRelationUdf>,
-            sides: vec![vec![Arc::new(InputColumn {
-                index: 1,
-                data_type: ArrowType::Int64,
-                nullable: true,
-            }) as Arc<dyn ScalarExpr>]],
-            names: vec![vec!["v".to_owned()]],
+            sides: vec![if case.udtf {
+                vec![Arc::new(RowOf) as Arc<dyn ScalarExpr>, column(1)]
+            } else {
+                vec![column(1)]
+            }],
+            names: vec![if case.udtf {
+                vec!["_0".to_owned(), "_1".to_owned()]
+            } else {
+                vec!["v".to_owned()]
+            }],
             client: vec![ArrowType::Int64],
         })
         .collect();
@@ -1951,4 +1959,31 @@ async fn a_combined_driver_s_backlog_is_framed_by_the_driver_waiting_for_its_slo
     assert!(c.aligned && c.total == 1, "{c:?}");
     let o = run_case(19, c).await;
     assert_eq!(o.completed, 1);
+}
+
+/// Input column `index` (`v`: 1).
+fn column(index: usize) -> Arc<dyn ScalarExpr> {
+    Arc::new(InputColumn {
+        index,
+        data_type: ArrowType::Int64,
+        nullable: true,
+    })
+}
+
+/// A UDTF's `TABLE` row: the struct of `k` and `v`, computed per frame (`StructOf` in instantiation).
+#[derive(Debug)]
+struct RowOf;
+
+impl ScalarExpr for RowOf {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Struct(input().fields().clone())
+    }
+
+    fn nullable(&self) -> bool {
+        false
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        Ok(Arc::new(arrow_array::StructArray::from(batch.clone())))
+    }
 }

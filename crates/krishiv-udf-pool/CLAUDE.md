@@ -89,6 +89,13 @@ Paths are relative to this crate.
 - `tests/window_iter_goldens.rs` PySpark 4.2.0's goldens for window aggregates and scalar iterators
   (`python/tests/pyspark_udf/window_iter/goldens.json`) replayed as SQL on a `krishiv_session::Session` over the
   pool, and grouped-aggregate UDFs in SQL `GROUP BY` with the shapes Spark refuses
+- `tests/udtf_goldens.rs` (PR-26c-4) PySpark 4.2.0's UDTF goldens (`python/tests/pyspark_udf/udtf/goldens.json`)
+  replayed as SQL on a `krishiv_session::Session` over the pool: `export_cases.py` (run by
+  `KRISHIV_TEST_PYSPARK_PYTHON`, a full PySpark 4.2.0) records each case's UDTFs, cloudpickled, and its SQL;
+  `KNOWN_GAPS` and `INCOMPATIBLE` (recorded in known-differences) must still differ. A 300 UDTF's rows are
+  converted as Spark's JVM converts them (`udtf.py` `_from_java`); the JVM's own errors come back as the worker
+  error kind `spark` (`worker.rs` `spark_error`: `STRUCT_ARRAY_LENGTH_MISMATCH`,
+  `NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION`)
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
 
