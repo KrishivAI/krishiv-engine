@@ -292,12 +292,20 @@ impl RestClient {
         deadline: Instant,
         absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
-        self.get_with(&self.tokens, caller, None, url, headers, deadline, absent)
+        self.get_with(
+            &self.tokens,
+            caller,
+            &mut None,
+            url,
+            headers,
+            deadline,
+            absent,
+        )
     }
 
     /// [`Self::get`] with the token of `tokens`, or first with `table_token` (a catalog-supplied table token, design
     /// P3-T067 §4.1: it replaces the caller's token for that table's requests). A 401 for the table token (it
-    /// expired) retries once with the caller's token.
+    /// expired) retries once with the caller's token and sets `table_token` to `None`, so the caller can drop it.
     #[expect(
         clippy::too_many_arguments,
         reason = "one GET: its token source, caller, table token, URL, headers, deadline and absent kinds"
@@ -306,18 +314,17 @@ impl RestClient {
         &self,
         tokens: &Tokens,
         caller: &RestCaller,
-        table_token: Option<&SecretString>,
+        table_token: &mut Option<&SecretString>,
         url: &Url,
         headers: &[(&'static str, String)],
         deadline: Instant,
         absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
         let mut retried = false;
-        let mut table_token = table_token;
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            let bearer = match table_token {
+            let bearer = match *table_token {
                 Some(t) => Some(t.clone()),
                 None => tokens.token(caller, &self.http, deadline)?,
             };
@@ -326,7 +333,7 @@ impl RestClient {
             let result = match response.status {
                 200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
                 401 if table_token.is_some() => {
-                    table_token = None;
+                    *table_token = None;
                     wipe_bytes(&mut response.body);
                     continue;
                 }
@@ -601,15 +608,15 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
-        self.load_table_for(caller, None, namespace, table)
+        self.load_table_for(caller, &mut None, namespace, table)
     }
 
     /// [`load_table_as`](Self::load_table_as), sent with the catalog-supplied `table_token` of this table when given
-    /// (design P3-T067 §4.1; a 401 for it falls back to the caller's token).
+    /// (design P3-T067 §4.1; a 401 for it falls back to the caller's token and sets `table_token` to `None`).
     pub(crate) fn load_table_for(
         &self,
         caller: &RestCaller,
-        table_token: Option<&SecretString>,
+        table_token: &mut Option<&SecretString>,
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
@@ -617,7 +624,7 @@ impl RestClient {
         let deadline = self.deadline();
         let server = self.server(caller, deadline)?;
         let what = relation(namespace, Some(table));
-        let run = || -> Result<Option<LoadedTable>, RestError> {
+        let mut run = || -> Result<Option<LoadedTable>, RestError> {
             check_namespace(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
@@ -633,7 +640,7 @@ impl RestClient {
             self.get_with(
                 &self.tokens,
                 caller,
-                table_token,
+                &mut *table_token,
                 &url,
                 &headers,
                 deadline,
@@ -705,15 +712,16 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
-        self.load_credentials_for(caller, None, namespace, table)
+        self.load_credentials_for(caller, &mut None, namespace, table)
     }
 
     /// [`load_credentials_as`](Self::load_credentials_as), sent with the catalog-supplied `table_token` of this table
-    /// when given (design P3-T067 §4.1; a 401 for it falls back to the caller's token).
+    /// when given (design P3-T067 §4.1; a 401 for it falls back to the caller's token and sets `table_token` to
+    /// `None`).
     pub(crate) fn load_credentials_for(
         &self,
         caller: &RestCaller,
-        table_token: Option<&SecretString>,
+        table_token: &mut Option<&SecretString>,
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
@@ -730,7 +738,7 @@ impl RestClient {
             }
             .into());
         }
-        let run = || -> Result<Option<Vec<StorageCredential>>, RestError> {
+        let mut run = || -> Result<Option<Vec<StorageCredential>>, RestError> {
             check_namespace(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
@@ -741,7 +749,7 @@ impl RestClient {
             self.get_with(
                 &self.tokens,
                 caller,
-                table_token,
+                &mut *table_token,
                 &url,
                 &[],
                 deadline,

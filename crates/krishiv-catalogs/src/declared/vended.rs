@@ -144,7 +144,14 @@ impl State {
         if self.dead.contains(&key.0) {
             return;
         }
-        self.drop_expired(SystemTime::now());
+        let now = SystemTime::now();
+        self.drop_expired(now);
+        if expires <= now {
+            // Already expired: the next `get` would drop it, so it must not evict a live entry when full. It still
+            // supersedes what the key held.
+            self.entries.remove(&key);
+            return;
+        }
         self.tick += 1;
         // The least-recently-used scan is O(entries) under the lock once full; fine at the default 10,000 (it runs
         // once per query-table open that missed), revisit if `maxEntries` grows by orders of magnitude.
@@ -278,22 +285,32 @@ impl Refetch {
 
     /// A new answer: `loadCredentials`, or the table reloaded when the catalog does not advertise it or answers it
     /// 404 (the reload tells whether the table is really gone). Both are sent with the table's own `token` when the
-    /// last answer carried one; a `loadCredentials` answer keeps that token.
+    /// last answer carried one; a `loadCredentials` answer keeps that token unless the catalog refused it (401), in
+    /// which case neither the reload nor the new answer carries it.
     fn fetch_blocking(&self, token: Option<&SecretString>) -> Result<VendedAnswer, KrishivError> {
         let (ns, t) = (&self.namespace, self.table.as_str());
-        let reload = || match self.client.load_table_for(&self.caller, token, ns, t)? {
+        let mut token = token;
+        let reload = |mut token: Option<&SecretString>| match self.client.load_table_for(
+            &self.caller,
+            &mut token,
+            ns,
+            t,
+        )? {
             Some(table) => Ok(VendedAnswer::of_table(&table)),
             None => Err(self.refused(LocationRule::NoVendedCredential)),
         };
-        match self.client.load_credentials_for(&self.caller, token, ns, t) {
+        match self
+            .client
+            .load_credentials_for(&self.caller, &mut token, ns, t)
+        {
             Ok(Some(credentials)) => {
                 let mut answer =
                     VendedAnswer::new(credentials, BTreeMap::new(), self.location.clone());
                 answer.table_token = token.cloned();
                 Ok(answer)
             }
-            Ok(None) => reload(),
-            Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => reload(),
+            Ok(None) => reload(token),
+            Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => reload(token),
             Err(e) => Err(e),
         }
     }

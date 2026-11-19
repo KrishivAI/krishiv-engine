@@ -213,6 +213,81 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
     }
 }
 
+/// Design §4.1: the table's `token` expired before its vended credential. The catalog answers 401 to that token on
+/// `loadCredentials` and 200 to the caller's own (none here: the catalog has no auth), so the refresh falls back to
+/// the caller's token once. The refused token is not kept with the new answer, so the next refresh goes straight to
+/// the caller's token.
+#[test]
+fn vended_table_token_refused_falls_back_to_caller_token() {
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    let load = load_body(
+        &table,
+        r#"{"token": "table-token"}"#,
+        &[vended(
+            "s3://bucket/wh",
+            "AKIAOLDKEY",
+            Duration::from_secs(60),
+        )],
+    );
+    let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+        "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
+    // The first credential answered is itself inside the refresh skew, so the read refreshes a second time.
+    let mut answered = 0_usize;
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, config.into()),
+        "/v1/namespaces/db/tables/t" => Reply::Json(200, load.clone()),
+        "/v1/namespaces/db/tables/t/credentials" => {
+            if r.header("authorization") == Some("Bearer table-token") {
+                return Reply::Json(
+                    401,
+                    r#"{"error": {"message": "expired", "type": "NotAuthorizedException", "code": 401}}"#
+                        .into(),
+                );
+            }
+            answered += 1;
+            let (key, ttl) = if answered == 1 {
+                ("AKIAMIDKEY", Duration::from_secs(60))
+            } else {
+                ("AKIANEWKEY", Duration::from_secs(3600))
+            };
+            Reply::Json(
+                200,
+                format!(
+                    r#"{{"storage-credentials": [{}]}}"#,
+                    vended("s3://bucket/wh", key, ttl)
+                ),
+            )
+        }
+        _ => Reply::Json(
+            404,
+            r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#.into(),
+        ),
+    });
+    let s = session(&server, &s3);
+    s3.deny(WRITER);
+    s3.deny("AKIAOLDKEY");
+    s3.clear_seen();
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert!(
+        s3.key_ids().contains(&Some("AKIANEWKEY".to_owned())),
+        "{:?}",
+        s3.seen()
+    );
+    let bearers: Vec<Option<String>> = server
+        .seen()
+        .iter()
+        .filter(|r| path(r) == "/v1/namespaces/db/tables/t/credentials")
+        .map(|r| r.header("authorization").map(str::to_owned))
+        .collect();
+    // The table token once (refused), then the caller's token for this refresh and the next one.
+    assert_eq!(
+        bearers,
+        vec![Some("Bearer table-token".to_owned()), None, None],
+        "{bearers:?}"
+    );
+}
+
 /// An S3 credential for `prefix` signed as `key_id` without an expiry key (valid for `vendedDefaultTtl`).
 fn vended_no_expiry(prefix: &str, key_id: &str) -> String {
     format!(

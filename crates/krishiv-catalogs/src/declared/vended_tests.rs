@@ -163,6 +163,27 @@ fn vended_cache_drops_expired_entries() {
     assert!(cache.get(&id("ttl")).is_some());
 }
 
+/// An answer that is already expired is not inserted, so on a full cache it evicts no live entry; it still replaces
+/// what its own key held.
+#[test]
+fn vended_cache_full_keeps_live_entries_over_an_expired_answer() {
+    let cache = VendedCache::default();
+    let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
+    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    let future = ms(SystemTime::now() + Duration::from_secs(3600));
+    cache.put(id("a"), s3_answer(Some(future)), TTL, 2);
+    cache.put(id("b"), s3_answer(Some(future)), TTL, 2);
+    cache.put(id("late"), s3_answer(Some(past)), TTL, 2);
+    assert_eq!(cache.len(), 2);
+    assert!(cache.get(&id("a")).is_some() && cache.get(&id("b")).is_some());
+    cache.put(id("a"), s3_answer(Some(past)), TTL, 2);
+    assert!(
+        cache.get(&id("a")).is_none(),
+        "superseded by its expired answer"
+    );
+    assert!(cache.get(&id("b")).is_some());
+}
+
 /// An answer fetched for a dropped catalog instance (a query running across the drop) is never kept.
 #[test]
 fn vended_cache_keeps_nothing_for_a_dropped_instance() {
