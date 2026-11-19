@@ -10,7 +10,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::MemoryScan;
 use krishiv_exec::ScanPushdown;
 use krishiv_exec::planner::TableProvider;
-use krishiv_memory::{ConsumerId, MemoryPool, Reservation};
+use krishiv_memory::{MemoryPool, Reservation};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
@@ -67,11 +67,12 @@ struct SourceTable {
     label: String,
     schema: SchemaRef,
     source: BatchSource,
-    pool: Arc<dyn MemoryPool>,
-    consumer: ConsumerId,
-    /// The bytes of the latest plan's batches, counted in the session's pool until the next plan
+    /// The session's pool; every scan counts its bytes in a child group of its own, so an abort of
+    /// one scan's group never reaches a later plan.
+    memory: Arc<dyn MemoryPool>,
+    /// The bytes of the latest scan's batches, counted in the session's pool until the next scan
     /// replaces them or the table is dropped (a plan's scan cannot hold them itself).
-    held: std::sync::Mutex<Option<Reservation>>,
+    held: std::sync::Mutex<Option<(Arc<dyn MemoryPool>, Reservation)>>,
 }
 
 /// The most bytes of batches one plan of a [`SourceTable`] may hold: the interim embedded path
@@ -98,12 +99,18 @@ impl TableProvider for SourceTable {
             }
             .into());
         }
-        let mut reservation = Reservation::new(Arc::clone(&self.pool), self.consumer);
-        reservation.try_grow(bytes).map_err(KrishivError::from)?;
-        *self
+        // The previous scan's bytes go back first: a re-plan needs one copy of the source, not two.
+        let mut held = self
             .held
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reservation);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *held = None;
+        let pool = self.memory.child("python_source", None);
+        let consumer = pool.register("python_source", None);
+        let mut reservation = Reservation::new(Arc::clone(&pool), consumer);
+        reservation.try_grow(bytes).map_err(KrishivError::from)?;
+        *held = Some((pool, reservation));
+        drop(held);
         let batches = batches
             .into_iter()
             .map(|b| {
@@ -157,8 +164,6 @@ impl Session {
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         let schema = crate::carrier::canonical_schema(schema);
-        let pool = self.state.memory.child("python_source", None);
-        let consumer = pool.register("python_source", None);
         self.state.catalog.put(
             name,
             TempTable::Provider {
@@ -167,8 +172,7 @@ impl Session {
                     label: label.to_owned(),
                     schema,
                     source,
-                    pool,
-                    consumer,
+                    memory: Arc::clone(&self.state.memory),
                     held: std::sync::Mutex::new(None),
                 }),
             },

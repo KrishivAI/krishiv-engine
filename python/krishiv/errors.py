@@ -124,6 +124,9 @@ _TEMPLATES = {
     ),
     # JVM classes the Python data source API raises itself (the engine's registry has them too).
     "PYTHON_DATA_SOURCE_ERROR": "Failed to <action> Python data source <type>: <msg>",
+    "NO_ACTIVE_SESSION": (
+        "No active or default Spark session found. Please create a new Spark session before running the code."
+    ),
     "PYTHON_EXCEPTION": "<msg>: <traceback>",
     "KRISHIV_PYTHON_DATA_SOURCE_LIMIT": (
         "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read "

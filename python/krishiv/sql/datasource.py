@@ -561,7 +561,7 @@ def load(session: SparkSession, entry: _Registered, options: dict[str, str], use
     def read() -> Any:
         owner = ref()
         if owner is None:
-            raise PySparkRuntimeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": "a closed session"})
+            raise PySparkRuntimeError(errorClass="NO_ACTIVE_SESSION", messageParameters={})
         return _plan_and_read(owner, source, schema, entry.name)
 
     native = session._native.register_python_source(entry.name, empty, read)

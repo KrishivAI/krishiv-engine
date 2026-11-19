@@ -143,8 +143,39 @@ fn the_batches_of_a_plan_count_against_the_memory_limit() {
             .await
     })
     .unwrap_err();
+    assert_ne!(
+        error.error_class().name(),
+        "KRISHIV_PYTHON_DATA_SOURCE_LIMIT",
+        "the pool, not the cap, refused it: {error}"
+    );
     assert!(
         error.to_string().to_lowercase().contains("memory"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn a_second_plan_of_the_table_needs_one_copy_not_two() {
+    // 600,000 ints (about 2.4 MB) against a 4 MiB limit: one copy fits, two do not
+    let session = Session::builder()
+        .config("krishiv.memory.limit", "4m")
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+    let s = Arc::clone(&schema);
+    let source: BatchSource = Arc::new(move || {
+        Ok(vec![
+            RecordBatch::try_new(
+                Arc::clone(&s),
+                vec![Arc::new(Int32Array::from(vec![7; 600_000]))],
+            )
+            .unwrap(),
+        ])
+    });
+    session
+        .register_batch_source("twice", "twice", schema, source)
+        .unwrap();
+    assert_eq!(count(&session, "SELECT count(*) FROM twice"), 600_000);
+    assert_eq!(count(&session, "SELECT count(*) FROM twice"), 600_000);
+    assert_eq!(count(&session, "SELECT count(*) FROM twice"), 600_000);
 }
