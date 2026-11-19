@@ -497,6 +497,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_TOMBSTONES,
     ),
     (
+        "krishiv.iceberg.write.statistics.enabled",
+        &ICEBERG_WRITE_STATISTICS_ENABLED,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
