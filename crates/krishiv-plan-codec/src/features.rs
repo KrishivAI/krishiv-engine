@@ -124,6 +124,7 @@ registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
+    (bitmap_aggregates, BitmapAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The bitmap aggregates (`bitmap_construct_agg`, `bitmap_or_agg`, `bitmap_and_agg`): a 4,096-byte bitmap per group."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
     (captured_eval_mode, CapturedEvalMode, POST_MIGRATION_READER_VERSION, Semantic, "An expression evaluated in a fixed ANSI mode whatever the query's: the body of a SQL function created under the other mode (T184). A reader without it would evaluate the body in the query's mode."),
     (collated_min_max, CollatedMinMax, POST_MIGRATION_READER_VERSION, Semantic, "`max` and `min` of a collated string (`MAX_BY_KEY_FIRST`, `MIN_BY_KEY_FIRST`): the value of the largest or smallest collation key, the first of equal keys kept."),
@@ -139,6 +140,7 @@ registry! {
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (histogram_numeric, HistogramNumeric, POST_MIGRATION_READER_VERSION, Semantic, "The `histogram_numeric` aggregate (Spark's `NumericHistogram`, with its folded number of bins)."),
+    (hll_sketch_aggregates, HllSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches HLL aggregates (`hll_sketch_agg` with its folded lgConfigK, `hll_union_agg` with its folded allowDifferentLgConfigK): a sketch per group."),
     (indeterminate_collation, IndeterminateCollation, POST_MIGRATION_READER_VERSION, Semantic, "STRING types of the INDETERMINATE collation (`string collate null`: a mixed expression's operands' collations conflict), by its name `null`, alone or inside a nested type."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -688,6 +690,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::PercentileDisc { .. }
             | AggregateFunction::ApproxCountDistinct { .. } => Some(Feature::PercentileAggregates),
             AggregateFunction::HistogramNumeric { .. } => Some(Feature::HistogramNumeric),
+            AggregateFunction::BitmapConstructAgg
+            | AggregateFunction::BitmapOrAgg
+            | AggregateFunction::BitmapAndAgg => Some(Feature::BitmapAggregates),
+            AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
+                Some(Feature::HllSketchAggregates)
+            }
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a

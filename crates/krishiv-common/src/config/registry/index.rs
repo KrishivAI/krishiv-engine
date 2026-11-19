@@ -336,6 +336,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     ),
     (
+        "krishiv.exec.scan.instanceProjection",
+        &EXEC_SCAN_INSTANCE_PROJECTION,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
@@ -514,6 +518,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.session.closedTombstones",
         &CONNECT_SESSION_TOMBSTONES,
+    ),
+    (
+        "krishiv.iceberg.write.statistics.enabled",
+        &ICEBERG_WRITE_STATISTICS_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",

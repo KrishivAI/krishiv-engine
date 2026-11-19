@@ -187,7 +187,7 @@ def test_missing_engine_functions_raise_not_implemented(name: str, args: tuple[A
 
 def test_catalog_only_functions_raise_unsupported_when_called() -> None:
     with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        F.bitmap_count("n")
+        F.count_min_sketch("n", 0.01, 0.99, 1)
 
 
 def test_udtf_stubs_take_pysparks_keywords() -> None:

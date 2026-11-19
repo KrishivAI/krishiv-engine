@@ -167,6 +167,33 @@ fn bounds_decode_by_stored_width() {
     assert_eq!(bounds::min_be_bytes(-128), vec![0x80]);
 }
 
+/// PR-54b (review of PR-54a, S2): the stack form of `min_be_bytes` gives the same bytes without allocating.
+#[test]
+fn min_be_slice_equals_min_be_bytes() {
+    let mut buf = [0_u8; 16];
+    for v in [
+        0i128,
+        1,
+        -1,
+        127,
+        128,
+        -128,
+        -129,
+        255,
+        256,
+        1 << 70,
+        -(1 << 70),
+        i128::MAX,
+        i128::MIN,
+    ] {
+        assert_eq!(
+            bounds::min_be_slice(v, &mut buf),
+            bounds::min_be_bytes(v),
+            "{v}"
+        );
+    }
+}
+
 /// The #3482 shape: a file written while the column was `int` (4-byte bounds
 /// 10..=20), read after promotion to `long`; every comparison that a row of the
 /// file satisfies keeps it, and only the ones no row can satisfy prune it.
