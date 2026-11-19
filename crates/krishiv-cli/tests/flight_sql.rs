@@ -15,6 +15,9 @@ use tonic::transport::Channel;
 struct Running {
     child: Child,
     connect: String,
+    /// The admin listener's address and its token, when `start_with_admin_token` asked for them.
+    admin: String,
+    admin_token: String,
     _stdout: std::io::Lines<BufReader<std::process::ChildStdout>>,
 }
 
@@ -27,6 +30,16 @@ impl Drop for Running {
 
 /// A loopback server without authentication; `flight` is what it printed about Flight SQL.
 fn start(spill: &std::path::Path, conf: &[&str]) -> (Running, bool) {
+    start_inner(spill, conf, false)
+}
+
+/// [`start`], also reading the admin address and the token the server prints once (only with
+/// `krishiv.metrics.enabled=true` or the `ui` feature: pass the former).
+fn start_with_admin_token(spill: &std::path::Path, conf: &[&str]) -> (Running, bool) {
+    start_inner(spill, conf, true)
+}
+
+fn start_inner(spill: &std::path::Path, conf: &[&str], want_token: bool) -> (Running, bool) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_krishiv"))
         .args([
             "server",
@@ -45,17 +58,28 @@ fn start(spill: &std::path::Path, conf: &[&str]) -> (Running, bool) {
         .expect("spawn krishiv server");
     let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
     let (mut connect, mut flight, mut admin) = (None, false, false);
-    while connect.is_none() || !admin {
+    let (mut admin_addr, mut token) = (String::new(), String::new());
+    while connect.is_none() || !admin || (want_token && token.is_empty()) {
         let line = lines.next().expect("server output").expect("utf-8");
         if let Some(a) = line.strip_prefix("krishiv server: Spark Connect on sc://") {
             connect = Some(a.to_owned());
         }
         flight |= line == "krishiv server: Arrow Flight SQL on the same port";
-        admin |= line.starts_with("krishiv server: admin on ");
+        if let Some(a) = line.strip_prefix("krishiv server: admin on http://") {
+            admin = true;
+            a.clone_into(&mut admin_addr);
+        }
+        if let Some(t) = line.strip_prefix("krishiv server: admin token ") {
+            t.clone_into(&mut token);
+        } else if let Some((_, t)) = line.split_once("/?token=") {
+            t.clone_into(&mut token);
+        }
     }
     let running = Running {
         child,
         connect: connect.expect("connect"),
+        admin: admin_addr,
+        admin_token: token,
         _stdout: lines,
     };
     (running, flight)
@@ -109,6 +133,90 @@ async fn flight_sql_disabled_answers_unimplemented() {
     let msg = e.to_string();
     // tonic renders `Code::Unimplemented` as its description.
     assert!(msg.contains("not implemented"), "{msg}");
+}
+
+/// `method path` of the admin API with the admin token; the status line and the body.
+fn admin_call(server: &Running, method: &str, path: &str, body: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(&server.admin).expect("connect admin");
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("timeout");
+    write!(
+        s,
+        "{method} /api/admin/v1{path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        server.admin_token,
+        body.len()
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
+/// Design P3-T066 §5.1, Flight SQL row, through the admin API: after `Drain` a new statement is
+/// refused with `KRISHIV_SERVER_DRAINING` (not `UNAVAILABLE`); a stored command result issued
+/// before is still fetched; a query ticket that has not started is a query "admitted when it
+/// runs" (§5.1), so its first `DoGet` is refused the same way; after `ResumeServing` new statements run.
+#[tokio::test(flavor = "multi_thread")]
+async fn flight_sql_follows_the_admin_drain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (server, _) = start_with_admin_token(dir.path(), &["krishiv.metrics.enabled=true"]);
+    let mut c = client(&server.connect).await;
+    let stored = c
+        .execute("SHOW TABLES".to_owned(), None)
+        .await
+        .expect("a command before the drain");
+    let stored = stored.endpoint[0].ticket.clone().expect("ticket");
+    let unstarted = c
+        .execute("SELECT 7 AS x".to_owned(), None)
+        .await
+        .expect("a query before the drain");
+    let unstarted = unstarted.endpoint[0].ticket.clone().expect("ticket");
+    let reply = admin_call(&server, "POST", "/drain", "{}");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    let refused = |msg: String| {
+        assert!(msg.contains("KRISHIV_SERVER_DRAINING"), "{msg}");
+        assert!(!msg.contains("Unavailable"), "{msg}");
+    };
+    refused(format!(
+        "{:?}",
+        c.execute("SELECT 8".to_owned(), None)
+            .await
+            .expect_err("new work while draining")
+    ));
+    let rows: Vec<_> = c
+        .do_get(stored)
+        .await
+        .expect("a stored result is fetched while draining")
+        .try_collect()
+        .await
+        .expect("rows");
+    drop(rows);
+    let e = match c.do_get(unstarted.clone()).await {
+        Err(e) => format!("{e:?}"),
+        Ok(stream) => format!(
+            "{:?}",
+            stream.try_collect::<Vec<_>>().await.expect_err("refused")
+        ),
+    };
+    refused(e);
+    let reply = admin_call(&server, "DELETE", "/drain", "");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    // The refused fetch used up the ticket (one fetch per cookie-less ticket); the client
+    // reconnects, as the refusal says, and a new statement runs after the resume.
+    let again = c
+        .execute("SELECT 9 AS x".to_owned(), None)
+        .await
+        .expect("a statement after the resume");
+    let batches: Vec<_> = c
+        .do_get(again.endpoint[0].ticket.clone().expect("ticket"))
+        .await
+        .expect("fetch after the resume")
+        .try_collect()
+        .await
+        .expect("rows");
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
 }
 
 const ADMIN_TOKEN: &str = "adbc-admin-token-0123456789abcdef0123";

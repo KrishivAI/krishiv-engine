@@ -604,6 +604,7 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
     let (held, cookie) = info(&mut h, OPS, None, "SELECT 1 AS x")
         .await
         .expect("info before the drain");
+    let sessions_before = (h.flight.session_count(), h.manager.counts().live);
     h.draining.store(true, Release);
     let e = info(&mut h, OPS, cookie.as_deref(), "SELECT 2")
         .await
@@ -617,6 +618,11 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
         .await
         .expect_err("draining");
     assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        (h.flight.session_count(), h.manager.counts().live),
+        sessions_before,
+        "no session is created while draining"
+    );
     // The held ticket still fetches, and ListActions needs no session.
     let batches = fetch(&mut h, OPS, cookie.as_deref(), ticket(&held))
         .await

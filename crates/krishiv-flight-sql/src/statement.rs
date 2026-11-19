@@ -298,6 +298,15 @@ fn spark_schema(schema: &SchemaRef, tz: Option<&Arc<str>>) -> Result<SchemaRef, 
 }
 
 /// The handle of a ticket's or `FlightInfo`'s `TicketStatementQuery`.
+/// Whether `e`, or a cause of it, is `INVALID_HANDLE.SESSION_CLOSED`: the manager was shut
+/// (`close_all`) while a command's result was being stored. `store_command` wraps every failure in
+/// `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, and `error_class` is the outer class only.
+fn closed_by_shutdown(e: &KrishivError) -> bool {
+    std::iter::once(e)
+        .chain(e.causes())
+        .any(|c| c.error_class() == ErrorClass::InvalidHandleSessionClosed)
+}
+
 pub(crate) fn handle_of(statement_handle: &[u8]) -> Result<HandleId, KrishivError> {
     HandleId::from_bytes(statement_handle).ok_or_else(|| {
         InvalidHandleFormat {
@@ -452,11 +461,7 @@ impl FlightSqlServer {
                 // The command ran: any failure from here says so (§15 m3).
                 let stored = self.store_command(session, df).await;
                 drop(gate);
-                if stored
-                    .as_ref()
-                    .err()
-                    .is_some_and(|e| e.error_class() == ErrorClass::InvalidHandleSessionClosed)
-                {
+                if stored.as_ref().err().is_some_and(closed_by_shutdown) {
                     return Err(Status::unavailable(
                         "server shutting down; the statement ran, its result was not stored",
                     ));
@@ -792,6 +797,26 @@ fn client_reason(e: &KrishivError) -> String {
 mod tests {
     use super::*;
     use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
+
+    /// A result that was not stored because the session was closed by shutdown is told apart from
+    /// one that failed for its own reason, though `store_command` wraps both (review of d54cd33f4).
+    #[test]
+    fn a_not_stored_result_caused_by_a_closed_session_is_a_shutdown() {
+        let closed: KrishivError = krishiv_common::error::InvalidHandleSessionClosed {
+            handle: "s".to_owned(),
+        }
+        .into();
+        let wrap = |cause: KrishivError| {
+            KrishivError::from(KrishivFlightSqlResultNotStored {
+                size: stored_size(None),
+                reason: "r".to_owned(),
+            })
+            .with_cause(cause)
+        };
+        assert!(closed_by_shutdown(&closed));
+        assert!(closed_by_shutdown(&wrap(closed)));
+        assert!(!closed_by_shutdown(&wrap(not_found())));
+    }
 
     /// An operation that would join a handle after `CancelFlightInfo` took its live set is refused,
     /// so a fetch between `begin` and its registration never streams (review of 15c4ffa75, 5).
