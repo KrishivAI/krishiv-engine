@@ -1240,7 +1240,7 @@ fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
     };
     assert_eq!(exprs.len(), 3);
     assert_eq!(code(&unpivot(None)), ErrorClass::KrishivUnsupportedFeature);
-    // An id that is also a value, or a value twice, is refused rather than mis-projected.
+    // An id that is also a value, or a value twice, is refused rather than projected wrongly.
     assert_eq!(
         code(&unpivot(Some(vec![attr("ID"), attr("b")]))),
         ErrorClass::KrishivUnsupportedFeature
