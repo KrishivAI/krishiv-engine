@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Copy-on-write `DELETE` and `UPDATE` on a Delta table (design note P3-T021 sections 2.3, 6.1 and
 //! 6.2; PR-37b part 2): [`DeltaRowLevel`], the table's
-//! [`RowLevelTable`](krishiv_exec::planner::RowLevelTable). It also commits a `MERGE`
+//! [`RowLevelTable`]. It also commits a `MERGE`
 //! ([`super::merge`], PR-37c).
 //!
 //! The session plans the statement (krishiv-session `table_commands/row_level.rs`): a find query
@@ -65,7 +65,7 @@
 //!   partition-only conjunct, so a conjunct of another form makes Krishiv's read wider (safe).
 //! - On a table that takes deletion vectors, a statement whose command's
 //!   `...deletionVectors.persistent` conf is on and whose condition has a data predicate marks
-//!   rows instead of rewriting (merge-on-read, [`super::dv`], PR-37d; `RowLevelTable::
+//!   rows instead of rewriting (merge-on-read, `dv`, PR-37d; `RowLevelTable::
 //!   merge_on_read`): its rewrite receives only the rows it deletes or updates with their row
 //!   ids, the vectors are committed through the kernel's `update_deletion_vectors`, and the
 //!   metrics are delta-spark's vector path's (no bytes removed, no row copied; an `UPDATE`

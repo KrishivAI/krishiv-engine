@@ -34,7 +34,7 @@
 //! # Known differences
 //! - The predicates are the conditions as written; delta-spark prints Catalyst's
 //!   `simpleString` of the resolved expressions (expression ids, unquoted strings).
-//! - With deletion vectors (PR-37d, [`super::dv`]): only the changed and inserted rows are
+//! - With deletion vectors (PR-37d, `dv`): only the changed and inserted rows are
 //!   written, the updated and deleted target rows marked in vectors; the removed files and bytes
 //!   are the fully replaced files only, the vector counts delta-spark's
 //!   (`ClassicMergeExecutor.scala:495-573`).
