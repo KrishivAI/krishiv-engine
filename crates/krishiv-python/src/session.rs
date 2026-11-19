@@ -81,6 +81,8 @@ fn ids(ids: &[krishiv_session::QueryId]) -> Vec<String> {
 #[derive(Debug)]
 pub struct PySession {
     inner: Session,
+    /// The session's state as `errors::LIVE_SESSIONS` holds it weakly, for a Ctrl-C to cancel through.
+    live: std::sync::Arc<Session>,
     /// The session's Python UDF runtime, made by the first registration.
     udfs: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>>,
 }
@@ -96,8 +98,11 @@ impl PySession {
             builder = builder.config(key, value);
         }
         let inner = builder.build().map_err(|e| to_py(py, &e))?;
+        let live = std::sync::Arc::new(inner.clone());
+        crate::errors::register_session(&live);
         let session = Self {
             inner,
+            live,
             udfs: std::sync::Arc::default(),
         };
         // Every session runs unregistered UDFs (a DataFrame-side `udf(...)`
@@ -117,6 +122,7 @@ impl PySession {
             .map_err(|e| to_py(py, &e))?;
         Ok(Self {
             inner,
+            live: std::sync::Arc::clone(&self.live),
             udfs: std::sync::Arc::clone(&self.udfs),
         })
     }

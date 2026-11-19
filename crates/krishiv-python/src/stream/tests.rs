@@ -1441,6 +1441,44 @@ fn a_limited_step_gives_the_thread_back_while_the_future_is_pending() {
     assert_eq!(done, Some(Ok(5)));
 }
 
+/// An interrupt that comes while a later batch is awaited (the first batch has long been handed
+/// out) ends the query: the engine stream is dropped, which cancels it, and the reader ends with an
+/// error, then with nothing.
+#[test]
+fn an_interrupt_while_a_later_batch_is_awaited_ends_the_query() {
+    struct Hangs(Arc<std::sync::atomic::AtomicBool>);
+    impl futures::Stream for Hangs {
+        type Item = Result<RecordBatch, krishiv_common::error::KrishivError>;
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Pending
+        }
+    }
+    impl Drop for Hangs {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let asked = Arc::new(AtomicUsize::new(0));
+    let hook_asked = Arc::clone(&asked);
+    let mut reader = query::QueryReader::new(
+        schema(),
+        Some(batch()),
+        Box::pin(Hangs(Arc::clone(&dropped))),
+    )
+    .with_interrupt(Arc::new(move || {
+        hook_asked.fetch_add(1, Ordering::SeqCst) >= 1
+    }));
+    assert!(reader.next().unwrap().is_ok()); // the first batch
+    assert!(reader.next().unwrap().is_err()); // interrupted on the second look
+    assert!(asked.load(Ordering::SeqCst) >= 2);
+    assert!(dropped.load(Ordering::SeqCst), "the engine stream was kept");
+    assert!(reader.next().is_none());
+}
+
 fn nul_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("\u{0}b\u{0}", DataType::Utf8, true),

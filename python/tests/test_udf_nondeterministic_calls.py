@@ -25,10 +25,16 @@ def test_two_calls_of_a_nondeterministic_udf_differ(spark: krishiv.SparkSession)
     assert sum(1 for r in rows if r["a"] == r["b"]) == 0
 
 
-def test_nondeterministic_calls_in_a_filter_and_a_select_each_run(spark: krishiv.SparkSession) -> None:
+def test_nondeterministic_calls_in_one_expression_each_run(spark: krishiv.SparkSession) -> None:
     rnd = F.udf(lambda _: random.getrandbits(62), LongType()).asNondeterministic()
     df = spark.range(200).select(rnd("id").alias("a"), (rnd("id") - rnd("id")).alias("d"))
     assert all(r["d"] != 0 for r in df.collect())
+
+
+def test_nondeterministic_calls_in_a_filter_each_run(spark: krishiv.SparkSession) -> None:
+    rnd = F.udf(lambda _: random.getrandbits(62), LongType()).asNondeterministic()
+    # Two evaluations per row differ, so every row passes `!=`; one shared evaluation would pass none.
+    assert spark.range(200).filter(rnd("id") != rnd("id")).count() == 200
 
 
 def test_equal_calls_of_a_deterministic_udf_are_one_evaluation(spark: krishiv.SparkSession) -> None:
@@ -42,4 +48,4 @@ def test_equal_calls_of_a_deterministic_udf_are_one_evaluation(spark: krishiv.Sp
     rows = spark.range(4).select(plus("id").alias("a"), plus("id").alias("b")).collect()
     assert [(r["a"], r["b"]) for r in rows] == [(1, 1), (2, 2), (3, 3), (4, 4)]
     # One call per row, not two (the UDF runs in this process on a pool thread).
-    assert len(seen) in (4, 8)
+    assert len(seen) == 4

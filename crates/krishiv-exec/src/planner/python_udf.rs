@@ -45,6 +45,9 @@ fn python_call(e: &Expr) -> Option<PythonEvalType> {
 /// Whether the Python UDF calls `a` and `b` are one evaluation: the same node, or equal calls of a
 /// deterministic UDF. Two equal calls of a nondeterministic UDF are two evaluations, as Spark's
 /// `ExpressionSet` keeps them apart (`ExtractPythonUDFs`): `rnd(x)` written twice gives two values.
+/// The identity check relies on `transform_up` keeping the `Arc` of unchanged nodes (`Expr::up` /
+/// `map_children` do): a refactor that rebuilds them would make the extraction's `replaced` miss the call
+/// and the extraction loop never end.
 fn same_call(a: &Arc<Expr>, b: &Arc<Expr>) -> bool {
     if Arc::ptr_eq(a, b) {
         return true;

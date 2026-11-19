@@ -11,11 +11,11 @@
 pub(crate) mod ffi;
 mod query;
 
-pub(crate) use self::query::{ErrorSlot, QueryReader, Waiter};
+pub(crate) use self::query::{ErrorSlot, Interrupt, QueryReader, SIGNAL_POLL, Waiter};
 
 use std::ffi::CStr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatchReader;
 use arrow_array::ffi::FFI_ArrowArray;
@@ -127,6 +127,18 @@ fn detached<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     py.detach(f)
 }
 
+thread_local! {
+    /// Whether this thread was attached to Python when its [`Detaching`] read began: only then may
+    /// the read look at Python's signals ([`consumer_attached`]), as a thread without a Python
+    /// thread state is never attached.
+    static CONSUMER_ATTACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the read running on this thread began attached to Python (see [`Detaching`]).
+pub(crate) fn consumer_attached() -> bool {
+    CONSUMER_ATTACHED.with(std::cell::Cell::get)
+}
+
 impl<R: Iterator + Send> Iterator for Detaching<R>
 where
     R::Item: Send,
@@ -135,7 +147,10 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let inner = &mut self.0;
-        detached(|| inner.next())
+        CONSUMER_ATTACHED.with(|c| c.set(attached()));
+        let out = detached(|| inner.next());
+        CONSUMER_ATTACHED.with(|c| c.set(false));
+        out
     }
 }
 
@@ -156,7 +171,12 @@ pub struct ArrowStream {
     placeholders: AtomicBool,
     /// Set when the stream is a query's result: where its reader leaves the engine error.
     error: Option<ErrorSlot>,
+    /// Where the reader leaves the Python error (`KeyboardInterrupt`) of the signal that ended the query.
+    interrupted: Option<InterruptSlot>,
 }
+
+/// The Python error a reader's signal check raised, for [`ArrowStream::check_error`] to raise.
+pub(crate) type InterruptSlot = Arc<Mutex<Option<PyErr>>>;
 
 impl std::fmt::Debug for ArrowStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -174,7 +194,14 @@ impl ArrowStream {
             reader: Mutex::new(Some(reader)),
             placeholders: AtomicBool::new(false),
             error: None,
+            interrupted: None,
         }
+    }
+
+    /// This stream, raising the error in `slot` first (see [`Self::check_error`]).
+    pub(crate) fn with_interrupt_slot(mut self, slot: InterruptSlot) -> Self {
+        self.interrupted = Some(slot);
+        self
     }
 
     /// This stream, reporting engine errors through `slot` (see [`Self::check_error`]).
@@ -329,6 +356,13 @@ impl ArrowStream {
     /// Raises the engine error that ended the stream, with its Spark error class
     /// (the C stream carries only an Arrow error message); does nothing if there was none.
     fn check_error(&self, py: Python<'_>) -> PyResult<()> {
+        let raised = self
+            .interrupted
+            .as_ref()
+            .and_then(|slot| slot.lock().ok()?.take());
+        if let Some(err) = raised {
+            return Err(err);
+        }
         let taken = self
             .error
             .as_ref()

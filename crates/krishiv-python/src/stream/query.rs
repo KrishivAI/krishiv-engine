@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use futures::StreamExt as _;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, OperationCanceled};
 use krishiv_session::RecordBatchStream;
 
 /// Where a reader leaves the engine error that ended it, so the caller can raise
@@ -22,9 +22,20 @@ pub(crate) struct QueryReader {
     schema: SchemaRef,
     /// The batch read to learn the schema, handed out first.
     first: Option<RecordBatch>,
-    stream: RecordBatchStream,
+    /// `None` once an interrupt ended the query (the stream is dropped, which cancels it).
+    stream: Option<RecordBatchStream>,
     error: ErrorSlot,
+    /// Asked every [`SIGNAL_POLL`] while a batch is awaited; `true` ends the query (a Ctrl-C).
+    interrupt: Option<Interrupt>,
 }
+
+/// A check for a pending interrupt; `true` means stop the query. It leaves the Python error it
+/// raised to whoever made it.
+pub(crate) type Interrupt = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How long a wait goes before it looks at Python's signals again. Each look re-attaches the
+/// thread to Python, so the cost is a GIL re-acquire (contended by UDF threads) ten times a second.
+pub(crate) const SIGNAL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl Iterator for QueryReader {
     type Item = Result<RecordBatch, ArrowError>;
@@ -32,7 +43,7 @@ impl Iterator for QueryReader {
     fn next(&mut self) -> Option<Self::Item> {
         let batch = match self.first.take() {
             Some(batch) => batch,
-            None => match wait_for(self.stream.next())? {
+            None => match self.pull()? {
                 Ok(batch) => batch,
                 Err(e) => {
                     let arrow = ArrowError::ExternalError(e.to_string().into());
@@ -71,9 +82,37 @@ impl QueryReader {
         Self {
             schema,
             first,
-            stream,
+            stream: Some(stream),
             error: ErrorSlot::default(),
+            interrupt: None,
         }
+    }
+
+    /// This reader, asking `hook` for an interrupt while it waits for each batch.
+    pub(crate) fn with_interrupt(mut self, hook: Interrupt) -> Self {
+        self.interrupt = Some(hook);
+        self
+    }
+
+    /// The next batch of the engine stream. `None` is the end, or a query an interrupt ended; an
+    /// interrupt drops the stream (which cancels the query) and ends with an error.
+    fn pull(&mut self) -> Option<Result<RecordBatch, KrishivError>> {
+        let stream = self.stream.as_mut()?;
+        let Some(hook) = self.interrupt.clone() else {
+            return wait_for(stream.next());
+        };
+        let mut waiter = Waiter::new();
+        let mut work = std::pin::pin!(stream.next());
+        loop {
+            if let Some(out) = waiter.step(work.as_mut(), Some(SIGNAL_POLL)) {
+                return out;
+            }
+            if hook() {
+                break;
+            }
+        }
+        self.stream = None;
+        Some(Err(OperationCanceled {}.into()))
     }
 
     /// The slot the engine error that ends this reader is left in.

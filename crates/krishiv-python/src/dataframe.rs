@@ -403,11 +403,34 @@ impl PyDataFrame {
             let schema = first.as_ref().map_or(analyzed, RecordBatch::schema);
             Ok((schema, first, stream))
         })?;
-        let reader = QueryReader::new(schema, first, stream);
+        // Each later batch is awaited with the same signal check as the first: a Ctrl-C ends the
+        // query and `check_error` raises its `KeyboardInterrupt` (NB-1).
+        let raised = crate::stream::InterruptSlot::default();
+        let hook = {
+            let raised = std::sync::Arc::clone(&raised);
+            let hook: crate::stream::Interrupt = std::sync::Arc::new(move || {
+                if !crate::stream::consumer_attached() {
+                    return false;
+                }
+                Python::attach(|py| match py.check_signals() {
+                    Ok(()) => false,
+                    Err(e) => {
+                        if let Ok(mut slot) = raised.lock() {
+                            *slot = Some(e);
+                        }
+                        true
+                    }
+                })
+            });
+            hook
+        };
+        let reader = QueryReader::new(schema, first, stream).with_interrupt(hook);
         let slot = reader.error_slot();
         // A consumer reading with the GIL held must not block the Python
         // UDF calls the query waits on (design P2-T059 §2.5).
-        Ok(ArrowStream::new(Box::new(crate::stream::Detaching(reader))).with_error_slot(slot))
+        Ok(ArrowStream::new(Box::new(crate::stream::Detaching(reader)))
+            .with_error_slot(slot)
+            .with_interrupt_slot(raised))
     }
 
     /// The number of result rows (executes the query, the GIL released).
