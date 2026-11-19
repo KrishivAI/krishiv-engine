@@ -33,7 +33,8 @@ pub(crate) fn restore(schema: &Schema, kv: Option<&Vec<KeyValue>>) -> Option<Sch
         .find(|k| k.key == ROW_METADATA_KEY)?
         .value
         .as_deref()?;
-    if !json.contains("__COLLATIONS") {
+    // Collations, and user-defined types (P3-T079): Parquet holds a UDT as its storage type.
+    if !json.contains("__COLLATIONS") && !json.contains(r#""type":"udt""#) {
         return None;
     }
     let DataType::Struct(spark) = DataType::from_json(json).ok()? else {
@@ -55,9 +56,21 @@ pub(crate) fn restore(schema: &Schema, kv: Option<&Vec<KeyValue>>) -> Option<Sch
     changed.then(|| Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-/// `f` with the field tag of every collated string of `t` below it.
+/// `f` with the field tag of every collated string and user-defined type of `t` below it.
 fn tag(f: &Field, t: &DataType) -> Field {
     match (t, f.data_type()) {
+        // A UDT is tagged with its JSON when its storage type is what the file holds; a footer whose storage
+        // type does not fit the column leaves it alone.
+        (DataType::Udt(_), _) => {
+            let mut meta = f.metadata().clone();
+            meta.insert(SPARK_TYPE_METADATA_KEY.to_owned(), t.json());
+            let tagged = f.clone().with_metadata(meta);
+            if DataType::from_arrow_field(&tagged).is_ok() {
+                tagged
+            } else {
+                f.clone()
+            }
+        }
         (
             DataType::CollatedString(_),
             ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View,
@@ -109,7 +122,7 @@ fn tag(f: &Field, t: &DataType) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krishiv_types::Collation;
+    use krishiv_types::{ArrayType, Collation, UdtType};
 
     fn lcase() -> DataType {
         DataType::collated_string(Collation::parse("UTF8_LCASE").unwrap())
@@ -232,5 +245,28 @@ mod tests {
             DataType::from_arrow_field(back.field_with_name("s").unwrap()).unwrap(),
             lcase()
         );
+    }
+
+    /// A Spark footer that names a UDT tags the column, so it reads back as the UDT (P3-T079); a footer whose
+    /// storage type does not fit the column changes nothing.
+    #[test]
+    fn spark_row_metadata_restores_a_udt() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let udt = DataType::Udt(Arc::new(UdtType::new(
+            storage.clone(),
+            Some("pkg.PointUDT".to_owned()),
+            Some("org.example.PointUDT".to_owned()),
+            None,
+        )));
+        let footer = DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new("p", udt.clone(), true),
+        ]))
+        .json();
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        let restored = restore(&schema, Some(&kv(&footer))).expect("tagged");
+        assert_eq!(DataType::from_arrow_field(restored.field(0)).unwrap(), udt);
+        // A column of another storage type is left alone.
+        let other = Schema::new(vec![DataType::Integer.to_arrow_field("p", true)]);
+        assert!(restore(&other, Some(&kv(&footer))).is_none());
     }
 }
