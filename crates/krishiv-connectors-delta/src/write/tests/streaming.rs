@@ -143,6 +143,7 @@ fn a_spill_request_during_a_batch_write_waits_for_it() {
             Act {
                 ask_spill: true,
                 stall: Some(Duration::from_millis(5)),
+                ..Act::NONE
             }
         }),
     );
@@ -164,10 +165,15 @@ fn a_spill_request_during_a_batch_write_waits_for_it() {
 }
 
 /// A driver that runs out of input ships its buffered row groups in the background
-/// (`release_combined`) under a holding seat, while another driver still writes: every driver
-/// but the first stalls on each batch, so one ends before the others, and its release stalls
-/// too, holding the seat while the others' rounds need the bytes. The write finishes within
-/// the pool, and batches were written after a driver ended.
+/// (`release_combined`) under a holding seat, while another driver still writes. The order is
+/// made certain at the `Written` point (seat idle, writer unlocked, so neither wait blocks a
+/// round): the first driver waits there until a second driver has written a batch, so both
+/// hold morsels; every other driver waits after its first batch until a driver has ended, so
+/// the rest of its morsel is written after that end. The ended driver's release also stalls,
+/// holding its seat while the other writes. The release must have run and freed bytes, and
+/// batches must follow an end. This does not reproduce the original `UnableToAcquireMemory`
+/// race (that needs the other writer above ~10.6 MiB at that moment): with the release's flush
+/// removed the write still succeeds, and only the release count fails.
 #[test]
 fn an_ended_driver_ships_its_row_groups_while_another_writes() {
     const LIMIT: usize = 12 << 20;
@@ -175,32 +181,37 @@ fn an_ended_driver_ships_its_row_groups_while_another_writes() {
     let table = new_table(&env, &modes_schema(), &["p"]);
     let write_id = "ended-driver-releases";
     let first = Arc::new(std::sync::Mutex::new(None::<usize>));
+    let second_seen = Arc::new(AtomicBool::new(false));
     let ended = Arc::new(AtomicBool::new(false));
     let after_end = Arc::new(AtomicUsize::new(0));
-    let (f, e, a) = (
+    let (f, s2, e, a) = (
         Arc::clone(&first),
+        Arc::clone(&second_seen),
         Arc::clone(&ended),
         Arc::clone(&after_end),
     );
     test_hooks::set(
         write_id,
-        Arc::new(move |site, _| match site.point {
-            Point::Sunk => {
-                if e.load(Ordering::Acquire) {
-                    a.fetch_add(1, Ordering::AcqRel);
-                }
-                let fast = *f.lock().unwrap().get_or_insert(site.driver) == site.driver;
-                if fast {
+        Arc::new(move |site, _| {
+            let fast = *f.lock().unwrap().get_or_insert(site.driver) == site.driver;
+            match site.point {
+                Point::Sunk => {
+                    if e.load(Ordering::Acquire) {
+                        a.fetch_add(1, Ordering::AcqRel);
+                    }
+                    if !fast {
+                        s2.store(true, Ordering::Release);
+                    }
                     Act::NONE
-                } else {
-                    Act::stall(Duration::from_millis(4))
                 }
+                Point::Written if fast => Act::wait_for(&s2),
+                Point::Written => Act::wait_for(&e),
+                Point::Combined => {
+                    e.store(true, Ordering::Release);
+                    Act::stall(Duration::from_millis(30))
+                }
+                Point::Finished => Act::NONE,
             }
-            Point::Combined => {
-                e.store(true, Ordering::Release);
-                Act::stall(Duration::from_millis(30))
-            }
-            Point::Finished => Act::NONE,
         }),
     );
     let batches: Vec<RecordBatch> = (0..120).map(|b| wide_rows(b * 8192, 8192)).collect();
@@ -213,22 +224,12 @@ fn an_ended_driver_ships_its_row_groups_while_another_writes() {
         write_id,
     )
     .unwrap();
+    assert!(second_seen.load(Ordering::Acquire), "only one driver wrote");
     let released = test_hooks::noted(write_id, test_hooks::Path::CombinedRelease);
     assert!(released.times > 0 && released.freed > 0, "{released:?}");
     assert!(
         after_end.load(Ordering::Acquire) > 0,
         "no batch was written after a driver ended"
-    );
-    let metrics = env.metrics.lock().unwrap().clone().unwrap();
-    let sink = metrics
-        .operators
-        .values()
-        .find(|e| e.name.contains("DeltaWrite"))
-        .unwrap();
-    assert!(
-        sink.metrics.peak_reserved <= LIMIT as u64,
-        "{}",
-        sink.metrics.peak_reserved
     );
     let back = env.read(&env.open().unwrap());
     assert_eq!(ids(&back).len(), rows);

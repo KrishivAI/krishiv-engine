@@ -606,6 +606,16 @@ impl Sink for DeltaWriteSink {
             signal.set_spillable_bytes(w.reservation().size());
             // The memory a waiting round counted on is given back (or the write failed).
             drop(holding);
+            #[cfg(test)]
+            {
+                // The seat is idle and the writer free: a spill request reaches it again.
+                drop(w);
+                let site = super::test_hooks::Site {
+                    point: super::test_hooks::Point::Written,
+                    driver,
+                };
+                super::test_hooks::at(&g.write_id, site, &g.query, None).await;
+            }
         })))
     }
 

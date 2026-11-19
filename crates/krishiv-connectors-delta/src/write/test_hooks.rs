@@ -6,6 +6,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -17,6 +18,8 @@ use krishiv_memory::{SpillSignal, Spillable as _};
 pub(crate) enum Point {
     /// A driver wrote a batch; its writer is still locked.
     Sunk,
+    /// The batch's write ended: the driver's seat is idle and its writer unlocked.
+    Written,
     /// A driver ended (`combine`): its background release holds the writer, before the flush.
     Combined,
     /// `finalize` finished every writer, before the commit.
@@ -32,24 +35,37 @@ pub(crate) struct Site {
 }
 
 /// What the write does after its hook.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Act {
     /// Ask the driver to spill (its own signal) before stalling.
     pub(crate) ask_spill: bool,
     /// Stall (an async sleep, which a cancellation drops).
     pub(crate) stall: Option<Duration>,
+    /// Then wait until the flag is set, at most [`WAIT_BOUND`].
+    pub(crate) wait_for: Option<Arc<AtomicBool>>,
 }
+
+/// The longest an [`Act::wait_for`] waits.
+pub(crate) const WAIT_BOUND: Duration = Duration::from_secs(30);
 
 impl Act {
     pub(crate) const NONE: Self = Self {
         ask_spill: false,
         stall: None,
+        wait_for: None,
     };
 
     pub(crate) fn stall(d: Duration) -> Self {
         Self {
-            ask_spill: false,
             stall: Some(d),
+            ..Self::NONE
+        }
+    }
+
+    pub(crate) fn wait_for(flag: &Arc<AtomicBool>) -> Self {
+        Self {
+            wait_for: Some(Arc::clone(flag)),
+            ..Self::NONE
         }
     }
 }
@@ -109,6 +125,12 @@ pub(crate) async fn at(
     }
     if let Some(stall) = act.stall {
         tokio::time::sleep(stall).await;
+    }
+    if let Some(flag) = act.wait_for {
+        let deadline = tokio::time::Instant::now() + WAIT_BOUND;
+        while !flag.load(Ordering::Acquire) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 }
 
