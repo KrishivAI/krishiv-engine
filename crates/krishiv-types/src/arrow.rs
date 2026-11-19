@@ -420,6 +420,8 @@ impl DataType {
     /// (the canonical type or one of the alternatives in the module docs).
     pub(crate) fn is_valid_storage(&self, arrow: &ArrowType) -> bool {
         match (self, arrow) {
+            // A UDT is stored as its SQL type (P3-T079).
+            (Self::Udt(u), _) => u.sql_type().is_valid_storage(arrow),
             (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary)
             | (
                 Self::CollatedString(_),
@@ -507,7 +509,12 @@ impl DataType {
         let field = Field::new(name, storage, nullable);
         let mut metadata = HashMap::new();
         if needs_tag {
-            metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), self.catalog_string());
+            // A UDT's tag is its JSON: the class names are not in a DDL string.
+            let tag = match self {
+                Self::Udt(_) => self.json(),
+                _ => self.catalog_string(),
+            };
+            metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), tag);
         }
         if *self == Self::Variant {
             metadata.insert(
@@ -546,7 +553,11 @@ impl DataType {
             }
             None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
-                let t = crate::parse_data_type(tag)?;
+                let t = if tag.starts_with('{') {
+                    Self::from_json(tag)?
+                } else {
+                    crate::parse_data_type(tag)?
+                };
                 if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {
                     return Err(error::too_deep());
                 }
