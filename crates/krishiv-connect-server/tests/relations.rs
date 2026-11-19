@@ -256,7 +256,7 @@ async fn a_sample_fraction_above_one_is_refused() {
     assert!(
         status
             .message()
-            .contains("Sampling fraction (1.5) must be on interval [0, 1]"),
+            .contains("requirement failed: Sampling fraction (1.5) must be on interval [0, 1] without replacement"),
         "{}",
         status.message()
     );

@@ -50,7 +50,9 @@ def test_sample_with_seed_repeats_and_whole_fraction_is_everything(spark: Any) -
 
 
 def test_sample_fraction_above_one_fails(spark: Any) -> None:
-    with pytest.raises(Exception, match="Sampling fraction"):
+    from pyspark.errors import IllegalArgumentException
+
+    with pytest.raises(IllegalArgumentException, match="without replacement"):
         spark.range(10).sample(fraction=1.5, seed=1).collect()
 
 

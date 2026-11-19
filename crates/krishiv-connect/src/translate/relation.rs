@@ -159,19 +159,19 @@ impl Translator<'_> {
                 "randomSplit's deterministic order",
             ));
         }
-        // Spark's `Sample` requires `upper - lower` in [0 - 1e-6, 1 + 1e-6]; NaN fails it too.
+        // Spark translates the input first; then the `Sample` constructor requires `upper - lower`
+        // in [0 - 1e-6, 1 + 1e-6] (NaN fails it too). Its classless `IllegalArgumentException` is
+        // `KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE` here, a recorded difference.
+        let input = self.input("Sample", s.input.as_deref())?;
         let fraction = s.upper_bound - s.lower_bound;
         if !(-1e-6..=1.0 + 1e-6).contains(&fraction) {
-            return Err(krishiv_common::error::LegacyErrorTemp0064 {
-                msg: format!(
-                    "Sampling fraction ({}) must be on interval [0, 1]",
-                    krishiv_kernels::text::java_double_string(fraction)
-                ),
+            return Err(krishiv_common::error::KrishivSampleFractionOutOfRange {
+                fraction: krishiv_kernels::text::java_double_string(fraction),
             }
             .into());
         }
         Ok(PlanNode::Sample {
-            input: self.input("Sample", s.input.as_deref())?,
+            input,
             bounds: SampleBounds {
                 lower: s.lower_bound,
                 upper: s.upper_bound,

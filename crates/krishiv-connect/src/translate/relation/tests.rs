@@ -1087,15 +1087,31 @@ fn sample_bounds_must_span_at_most_the_unit_interval() {
         (0.0, f64::NAN, "NaN"),
     ] {
         let r = sample(lower, upper);
-        assert_eq!(code(&r), ErrorClass::LegacyErrorTemp0064, "{lower} {upper}");
-        assert!(
-            message(&r).contains(&format!(
-                "Sampling fraction ({shown}) must be on interval [0, 1]"
-            )),
-            "{}",
-            message(&r)
+        assert_eq!(
+            code(&r),
+            ErrorClass::KrishivSampleFractionOutOfRange,
+            "{lower} {upper}"
+        );
+        assert_eq!(
+            message(&r),
+            format!(
+                "requirement failed: Sampling fraction ({shown}) must be on interval [0, 1] without replacement"
+            )
         );
     }
+    // The input is translated first: a bad input is reported before a bad fraction.
+    let bad_input = relation(RelType::Sample(Box::new(pb::Sample {
+        input: None,
+        lower_bound: 0.0,
+        upper_bound: 1.5,
+        with_replacement: None,
+        seed: Some(1),
+        deterministic_order: false,
+    })));
+    assert_ne!(
+        code(&bad_input),
+        ErrorClass::KrishivSampleFractionOutOfRange
+    );
 }
 
 #[test]
@@ -1254,4 +1270,94 @@ fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
         node(&unpivot(Some(vec![]))),
         PlanNode::Unpivot { .. }
     ));
+}
+
+// ---- plan equality with the SQL-parsed plan (T012: `dataframe_equals_sql_plan`) ----------------
+
+/// The translated plan and the plan of `sql`, printed without origins.
+fn plans(rel: &Relation, sql: &str) -> (String, String) {
+    let translated = translate(rel).expect("translates").to_string();
+    let parsed = krishiv_sql::parse_and_lower(
+        sql,
+        &krishiv_sql::ParserOptions::default(),
+        krishiv_plan::SourceId(0),
+    )
+    .expect("parses")
+    .to_string();
+    (translated, parsed)
+}
+
+/// `SELECT * FROM t` as a Connect relation, so both sides share the SQL plan's `Project [*]`.
+fn star_input() -> Option<Box<Relation>> {
+    boxed(project(vec![expr(ExprType::UnresolvedStar(
+        Default::default(),
+    ))]))
+}
+
+#[test]
+fn dedup_over_all_columns_plans_as_select_distinct() {
+    let rel = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: star_input(),
+        column_names: vec![],
+        all_columns_as_keys: Some(true),
+        within_watermark: None,
+    })));
+    let (translated, parsed) = plans(&rel, "SELECT DISTINCT * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn a_hint_plans_as_the_sql_hint() {
+    // PySpark sends the name as the caller typed it; SQL keeps its spelling too.
+    let rel = relation(RelType::Hint(Box::new(pb::Hint {
+        input: star_input(),
+        name: "BROADCAST".into(),
+        parameters: vec![],
+    })));
+    let (translated, parsed) = plans(&rel, "SELECT /*+ BROADCAST */ * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn repartition_by_expression_plans_as_distribute_by() {
+    let rel = relation(RelType::RepartitionByExpression(Box::new(
+        pb::RepartitionByExpression {
+            input: star_input(),
+            partition_exprs: vec![attr("a")],
+            num_partitions: None,
+        },
+    )));
+    let (translated, parsed) = plans(&rel, "SELECT * FROM t DISTRIBUTE BY a");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn unpivot_plans_as_unpivot_include_nulls() {
+    let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
+        input: input(),
+        ids: vec![attr("id")],
+        values: Some(pb::unpivot::Values {
+            values: vec![attr("a"), attr("b")],
+        }),
+        variable_column_name: "k".into(),
+        value_column_name: "v".into(),
+    })));
+    let (translated, parsed) = plans(
+        &rel,
+        "SELECT * FROM (SELECT id, a, b FROM t) UNPIVOT INCLUDE NULLS (v FOR k IN (a, b))",
+    );
+    // The SQL form wraps the node in `Project [*]` and a subquery alias; the node and the
+    // projection under it are the same.
+    let line = |text: &str, prefix: &str| {
+        text.lines()
+            .find(|l| l.trim_start_matches(['+', '-', ' ']).starts_with(prefix))
+            .map(|l| l.trim_start_matches(['+', '-', ' ']).to_owned())
+    };
+    for prefix in ["UnpivotIncludeNulls", "Project [id, a, b]", "Read t"] {
+        assert!(
+            line(&translated, prefix).is_some(),
+            "{prefix}\n{translated}"
+        );
+        assert_eq!(line(&translated, prefix), line(&parsed, prefix), "{prefix}");
+    }
 }
