@@ -121,6 +121,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
+    ("spark.sql.join.asofJoin.enabled", &SQL_ASOF_JOIN_ENABLED),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
     (
         "krishiv.catalog.maxMetadataBytes",
@@ -220,6 +221,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.sql.files.openCostInBytes",
         &FILES_OPEN_COST_IN_BYTES,
     ),
+    ("krishiv.sql.join.asofJoin.enabled", &SQL_ASOF_JOIN_ENABLED),
     (
         "krishiv.sql.storeAssignmentPolicy",
         &STORE_ASSIGNMENT_POLICY,
@@ -552,6 +554,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "spark.sql.join.sortMergeAsOfJoin.enabled",
+        &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
+    ),
+    (
         "spark.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
     ),
@@ -578,6 +584,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.http2.maxConcurrentStreams",
         &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    ),
+    (
+        "krishiv.sql.join.sortMergeAsOfJoin.enabled",
+        &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
     ),
     (
         "krishiv.sql.sources.partitionOverwriteMode",
