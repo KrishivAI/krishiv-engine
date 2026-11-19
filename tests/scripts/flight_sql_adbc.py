@@ -96,7 +96,7 @@ def write_lineitem(directory: Path) -> Path:
 
 
 def connect_adbc(addr: str, token: str, ca: str | None):
-    import adbc_driver_flightsql.dbapi as flight_sql
+    import adbc_driver_flightsql.dbapi as flight_sql  # ty: ignore[unresolved-import]  # the script's own uv env
 
     kwargs = {
         "adbc.flight.sql.rpc.with_cookie_middleware": "true",
@@ -124,7 +124,7 @@ def via_adbc(addr: str, token: str, ca: str | None, q1: str):
 
 
 def via_connect(addr: str, token: str, ca: str | None, q1: str):
-    from pyspark.sql import SparkSession
+    from pyspark.sql import SparkSession  # ty: ignore[unresolved-import]  # the script's own uv env
 
     host, port = addr.rsplit(":", 1)
     if ca:
