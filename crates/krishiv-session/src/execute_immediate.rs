@@ -362,6 +362,44 @@ fn duplicate_aliases(args: &[Argument], case_sensitive: bool) -> Result<(), Kris
     .into())
 }
 
+impl Session {
+    /// `sql` with its positional parameter markers (`?`) bound, in order, to the values of row
+    /// `row` of `batch`, one column per marker, each written as a literal exactly as an
+    /// `EXECUTE IMMEDIATE ... USING` argument is (Arrow Flight SQL prepared statements, P3-T101
+    /// note §4.4). Nothing is parsed beyond the markers and nothing runs.
+    ///
+    /// # Errors
+    /// `UNBOUND_SQL_PARAMETER` for a marker without a column, `ALL_PARAMETERS_MUST_BE_NAMED`
+    /// for named markers (`:name`), `KRISHIV_UNSUPPORTED_FEATURE` for a value no literal
+    /// carries exactly (arrays, maps, structs).
+    #[cfg(feature = "unstable-ir")]
+    pub fn bind_parameters(
+        &self,
+        sql: &str,
+        batch: &RecordBatch,
+        row: usize,
+    ) -> Result<String, KrishivError> {
+        let env = self.query_env();
+        let escaped = env.parser.escaped_string_literals;
+        let mut args = Vec::with_capacity(batch.num_columns());
+        for column in 0..batch.num_columns() {
+            let (_, value) = arrow_field_value(batch, column, row)?;
+            args.push(Argument {
+                name: None,
+                explicit: false,
+                sql: render_literal(&value, escaped)?,
+                shown: batch.schema().field(column).name().clone(),
+            });
+        }
+        bind(
+            sql,
+            &args,
+            env.analysis.conf.case_sensitive,
+            env.parser.double_quoted_identifiers,
+        )
+    }
+}
+
 /// `sql` with each parameter marker replaced by its argument.
 ///
 /// Positional markers take the arguments in order (names are ignored);
@@ -576,6 +614,47 @@ mod tests {
 
     fn class(r: Result<String, KrishivError>) -> String {
         r.unwrap_err().error_class().name().to_owned()
+    }
+
+    #[cfg(feature = "unstable-ir")]
+    #[test]
+    fn bind_parameters_writes_each_column_as_a_literal() {
+        use std::sync::Arc;
+
+        use arrow_array::{Int64Array, StringArray};
+        use arrow_schema::{DataType as ArrowType, Field, Schema};
+
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", ArrowType::Int64, true),
+            Field::new("b", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7), None])),
+                Arc::new(StringArray::from(vec![Some("it's"), Some("x")])),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            session
+                .bind_parameters("SELECT ?, '?' , ? FROM t", &batch, 0)
+                .unwrap(),
+            "SELECT 7L, '?' , 'it\\'s' FROM t"
+        );
+        assert_eq!(
+            session.bind_parameters("SELECT ?+1", &batch, 1).unwrap(),
+            "SELECT CAST(NULL AS bigint)+1"
+        );
+        assert_eq!(
+            class(session.bind_parameters("SELECT ?, ?, ?", &batch, 0)),
+            "UNBOUND_SQL_PARAMETER"
+        );
+        assert_eq!(
+            class(session.bind_parameters("SELECT :a", &batch, 0)),
+            "ALL_PARAMETERS_MUST_BE_NAMED"
+        );
     }
 
     #[test]
