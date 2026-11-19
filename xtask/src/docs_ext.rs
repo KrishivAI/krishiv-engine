@@ -12,7 +12,7 @@ use std::process::Command;
 /// The nightly that produces rustdoc JSON; its format version must be one `rustdoc-md` reads.
 pub const RUSTDOC_NIGHTLY: &str = "nightly-2026-08-12";
 
-/// The crates whose public API is documented on the site: the facade, the session and the UDF SDK (the connector SDK is an empty skeleton; `krishiv-common` is mostly
+/// The crates whose public API is documented on the site: the facade, the session, the UDF SDK and the types they use (the connector SDK is an empty skeleton; `krishiv-common` is mostly
 /// registry constants, covered by the configuration reference).
 pub const RUST_CRATES: &[&str] = &[
     "krishiv",

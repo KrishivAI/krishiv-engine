@@ -13,4 +13,4 @@ The public API of the crates users build against. Published versions are also on
 | [`krishiv`](krishiv.md) | Krishiv: a Spark-compatible query engine, embedded. |
 | [`krishiv-session`](krishiv-session.md) | Krishiv sessions: Spark SQL and DataFrames over the engine. |
 | [`krishiv-udf-sdk`](krishiv-udf-sdk.md) | Native Rust scalar and aggregate UDFs (layer SDK). |
-| [`krishiv-types`](krishiv-types.md) | Internal type representations. |
+| [`krishiv-types`](krishiv-types.md) | Spark data types, DDL parsing and the Arrow-backed `Batch`: the types the session and UDF APIs speak. |

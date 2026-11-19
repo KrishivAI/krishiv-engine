@@ -1,12 +1,12 @@
 ---
-description: "Internal type representations."
+description: "Spark data types, DDL parsing and the Arrow-backed `Batch`: the types the session and UDF APIs speak."
 ---
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 # Module `krishiv_types`
 
-Internal type representations.
+Spark data types, DDL parsing and the Arrow-backed `Batch`: the types the session and UDF APIs speak.
 
 [`DataType`] models Spark SQL data types with Spark's renderings
 (`simpleString`, `catalogString`, `sql`, `typeName`, `json`), maps them to and from
@@ -35,7 +35,7 @@ Spark data type ↔ Arrow mapping.
 | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
-| `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
+| `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, `FixedSizeList` (the vector carrier, any length), any child name |
 | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 | `struct<...>` | `Struct` of the fields | |
 | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null and marked with [`VARIANT_CHILD_METADATA_KEY`]; the field also carries the Arrow extension name `arrow.parquet.variant` | |
@@ -173,6 +173,19 @@ pub fn client_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataTy
 pub fn edge_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
 ```
 
+#### Function `is_vector_carrier`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
+[`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+
+```rust
+pub fn is_vector_carrier(arrow: &arrow_schema::DataType) -> bool { /* ... */ }
+```
+
 ### Constants and Statics
 
 #### Constant `SPARK_TYPE_METADATA_KEY`
@@ -291,6 +304,15 @@ The microseconds child of a calendar interval's struct.
 
 ```rust
 pub const CALENDAR_MICROS_FIELD: &str = "microseconds";
+```
+
+#### Constant `MAX_VECTOR_LENGTH`
+
+The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+far from the `i32` offsets of the plain list it becomes at an expression input.
+
+```rust
+pub const MAX_VECTOR_LENGTH: i32 = 65_536;
 ```
 
 ## Module `batch`

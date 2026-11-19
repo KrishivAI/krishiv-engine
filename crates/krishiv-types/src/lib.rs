@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Internal type representations.
+//! Spark data types, DDL parsing and the Arrow-backed `Batch`: the types the session and UDF APIs speak.
 //!
 //! [`DataType`] models Spark SQL data types with Spark's renderings
 //! (`simpleString`, `catalogString`, `sql`, `typeName`, `json`), maps them to and from

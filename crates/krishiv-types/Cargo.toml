@@ -1,6 +1,6 @@
 [package]
 name = "krishiv-types"
-description = "Internal type representations"
+description = "Spark data types, DDL parsing and the Arrow-backed Batch"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
