@@ -33,31 +33,10 @@ fn charge(lg_k: u8) -> usize {
     (1_usize << lg_k) + OVERHEAD
 }
 
-/// Bytes a list or set table holds per coupon, with its load factor.
-const COUPON_BYTES: usize = 8;
-
-/// Bytes charged for `sketch` now: its coupons while it is below the register array, the array after.
+/// Bytes charged for `sketch` now: its header plus the memory it holds in its current mode (`estimated_size`, O(1)
+/// in every mode of `datasketches` 0.6.0: the list and set tables at their capacity, the register array after).
 fn sketch_charge(sketch: &HllSketch) -> usize {
-    let full = charge(sketch.lg_config_k());
-    // In list and set mode the estimate is the coupon count; in HLL mode it passes over the registers, but a
-    // group at the full charge is not asked again (`recharge`).
-    let est = sketch.estimate();
-    let coupons = if est.is_finite() && est >= 0.0 {
-        // Truncation is the point: a coupon count.
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a non-negative estimate"
-        )]
-        {
-            est.ceil() as usize
-        }
-    } else {
-        usize::MAX
-    };
-    OVERHEAD
-        .saturating_add(coupons.saturating_mul(COUPON_BYTES))
-        .min(full)
+    OVERHEAD.saturating_add(sketch.estimated_size())
 }
 
 /// Which HLL aggregate.
@@ -72,7 +51,7 @@ pub(crate) enum HllSketchOp {
 #[derive(Debug)]
 enum Groups {
     /// The sketches, their current charges and the sum of the charges.
-    Sketches(Vec<HllSketch>, Vec<usize>, usize),
+    Sketches(Vec<HllSketch>, Vec<usize>, usize, usize),
     Unions(Vec<Option<HllUnion>>),
 }
 
@@ -94,7 +73,7 @@ impl HllSketchAcc {
         let groups = match op {
             HllSketchOp::Sketch(k) => {
                 hll::check_lg_k(i32::from(k))?;
-                Groups::Sketches(Vec::new(), Vec::new(), 0)
+                Groups::Sketches(Vec::new(), Vec::new(), 0, 0)
             }
             HllSketchOp::Union(_) => Groups::Unions(Vec::new()),
         };
@@ -105,17 +84,19 @@ impl HllSketchAcc {
     /// leaves its group missing, which the next access reports as an internal error.
     pub(crate) fn resize(&mut self, n: usize) {
         match (&mut self.groups, self.op) {
-            (Groups::Sketches(v, charges, total), HllSketchOp::Sketch(k)) => {
+            (Groups::Sketches(v, charges, total, peak), HllSketchOp::Sketch(k)) => {
                 while v.len() < n {
                     let Ok(s) = fresh(k) else { break };
                     let c = sketch_charge(&s);
                     *total = total.saturating_add(c);
+                    *peak = (*peak).max(c);
                     charges.push(c);
                     v.push(s);
                 }
                 v.truncate(n);
                 charges.truncate(n);
                 *total = charges.iter().sum();
+                *peak = charges.iter().copied().max().unwrap_or(0);
             }
             (Groups::Unions(v), _) => v.resize_with(n, || None),
             (Groups::Sketches(..), HllSketchOp::Union(_)) => {}
@@ -125,7 +106,7 @@ impl HllSketchAcc {
     /// Room for `new` more groups.
     pub(crate) fn reserve(&mut self, new: usize) {
         match &mut self.groups {
-            Groups::Sketches(v, charges, _) => {
+            Groups::Sketches(v, charges, ..) => {
                 v.reserve(new);
                 charges.reserve(new);
             }
@@ -136,7 +117,7 @@ impl HllSketchAcc {
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
         match &self.groups {
-            Groups::Sketches(v, charges, total) => total.saturating_add(
+            Groups::Sketches(v, charges, total, _) => total.saturating_add(
                 v.capacity()
                     .saturating_mul(std::mem::size_of::<HllSketch>())
                     .saturating_add(
@@ -157,17 +138,24 @@ impl HllSketchAcc {
         }
     }
 
-    /// The size after adding `new` groups and folding `rows` input rows: a new sketch starts at its header and a
-    /// value adds at most one coupon, none of it past the full registers.
+    /// The size after adding `new` groups and folding `rows` input rows. A new sketch starts at its header. One
+    /// update at most doubles the table it grows (a set doubling adds the table's size) or promotes a set to the
+    /// registers (adds less than the registers, from a set of at least 3/8 of them), so a row adds at most
+    /// `2 * peak + header` bytes, the largest group's charge being the peak, and never more than the registers.
+    /// All of it together stays below every group at the registers.
     pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
         let per_group = match self.op {
             HllSketchOp::Sketch(k) => {
-                let groups = match &self.groups {
-                    Groups::Sketches(v, ..) => v.len().saturating_add(new),
-                    Groups::Unions(_) => new,
+                let (groups, peak) = match &self.groups {
+                    Groups::Sketches(v, _, _, peak) => (v.len().saturating_add(new), *peak),
+                    Groups::Unions(_) => (new, 0),
                 };
+                let per_row = peak
+                    .saturating_mul(2)
+                    .saturating_add(OVERHEAD)
+                    .min(charge(k));
                 let growth = rows
-                    .saturating_mul(COUPON_BYTES)
+                    .saturating_mul(per_row)
                     .min(groups.saturating_mul(charge(k)));
                 return self
                     .size()
@@ -192,27 +180,23 @@ impl HllSketchAcc {
         }
     }
 
-    /// Recomputes the charge of each sketch group in `groups`, which a fold touched. A group already at the full
-    /// registers keeps its charge without another pass over them.
+    /// Recomputes the charge of each sketch group in `groups`, which a fold touched (O(1) each).
     fn recharge(&mut self, groups: &[u32]) {
-        let HllSketchOp::Sketch(k) = self.op else {
+        if !matches!(self.op, HllSketchOp::Sketch(_)) {
+            return;
+        }
+        let Groups::Sketches(v, charges, total, peak) = &mut self.groups else {
             return;
         };
-        let Groups::Sketches(v, charges, total) = &mut self.groups else {
-            return;
-        };
-        let full = charge(k);
         for &g in groups {
             let g = g as usize;
             let (Some(s), Some(c)) = (v.get(g), charges.get_mut(g)) else {
                 continue;
             };
-            if *c >= full {
-                continue;
-            }
             let now = sketch_charge(s);
             *total = total.saturating_sub(*c).saturating_add(now);
             *c = now;
+            *peak = (*peak).max(now);
         }
     }
 

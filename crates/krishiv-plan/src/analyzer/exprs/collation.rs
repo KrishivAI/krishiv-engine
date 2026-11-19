@@ -56,7 +56,6 @@ const COMPARING: &[&str] = &[
     "collect_set",
     "listagg",
     "approx_count_distinct",
-    "hll_sketch_agg",
 ];
 
 /// Comparisons that run on collation keys when their collation has a key built from existing
@@ -111,6 +110,8 @@ const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
 /// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
 /// non-binary collation instead of matching bytes.
 const DEPENDS: &[&str] = &[
+    // Spark hashes the collation key (`HllSketchAgg.update`); Krishiv has no key hashing yet.
+    "hll_sketch_agg",
     "contains",
     "startswith",
     "endswith",

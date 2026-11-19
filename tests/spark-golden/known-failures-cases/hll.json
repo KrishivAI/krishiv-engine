@@ -1,11 +1,13 @@
 {
   "cases": {
+    "collation-key-hashing": [
+      11,
+      12
+    ],
     "fn-aggregate": [
       10
     ],
     "parser-pipe-collate": [
-      11,
-      12,
       13,
       14,
       15,

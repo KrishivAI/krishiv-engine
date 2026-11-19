@@ -484,9 +484,9 @@ fn icu_collations_stay_refused_in_every_key_position() {
 }
 
 /// `hll_sketch_agg` hashes the collation's sort key in Spark (`HllSketchAgg.update`), so a non-binary collation is
-/// refused rather than run on the raw bytes (the `hll.sql` goldens 11 and 12 count 7, not 10). The call keeps the
-/// collated type (`COMPARING`), which `hll_sketch_agg`'s strict string input does not accept: the refusal is a type
-/// mismatch, not a wrong count. Hashing the collation key would lift it.
+/// refused rather than run on the raw bytes (the `hll.sql` goldens 11 and 12 count 7, not 10). The refusal is
+/// `KRISHIV_UNSUPPORTED_FEATURE` (`DEPENDS`), not a type mismatch: Spark accepts the type. Hashing the collation key
+/// would lift it.
 #[test]
 fn hll_sketch_agg_of_a_non_binary_collation_is_refused() {
     let s = Session::new().unwrap();
@@ -496,7 +496,7 @@ fn hll_sketch_agg_of_a_non_binary_collation_is_refused() {
         );
         assert_eq!(
             rows_in(&s, &sql).unwrap_err().error_class(),
-            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            ErrorClass::KrishivUnsupportedFeature,
             "{sql}"
         );
     }

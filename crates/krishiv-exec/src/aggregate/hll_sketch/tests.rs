@@ -141,10 +141,10 @@ fn size_follows_the_coupons_not_the_full_registers() {
     assert!(before < 1000 * 4096 / 4, "{before}");
     a.update(&[0; 3], &longs(&[Some(1), Some(2), Some(3)]), |_| true)
         .unwrap();
-    assert!(a.size() > before);
+    assert!(a.size() >= before);
     assert!(a.size() < before + 1024);
-    // A new group and a row are projected at a header and a coupon.
-    assert!(a.projected(5, 10) >= a.size() + 5 * 128 + 10 * 8);
+    // A new group is projected at a header, and a row at what one update can add to the largest group.
+    assert!(a.projected(5, 10) >= a.size() + 5 * 128 + 10 * 128);
     assert!(a.projected(5, 10) < a.size() + 5 * 4096);
     // Many values in one group reach the full registers and stop there.
     let many: Vec<Option<i64>> = (0..20_000).map(Some).collect();
@@ -154,7 +154,35 @@ fn size_follows_the_coupons_not_the_full_registers() {
     a.update(&vec![1; many.len()], &longs(&many), |_| true)
         .unwrap();
     assert_eq!(a.size(), full);
-    assert!(full >= before + 4096);
+    // The group went from a list to the 4,096 registers (less the little it started with).
+    assert!(full >= before + 3800, "{full} vs {before}");
+}
+
+/// Review 552b06e8b finding 1: a set that has doubled, and a sketch just promoted to registers, are charged
+/// what they hold (`estimated_size`), at every step of a group's growth.
+#[test]
+fn a_group_is_charged_at_least_what_its_sketch_holds_in_every_mode() {
+    let mut a = HllSketchAcc::new(HllSketchOp::Sketch(12)).unwrap();
+    a.resize(2);
+    let mut next = 0_i64;
+    for step in [3_i64, 100, 90, 100, 100, 100, 1000] {
+        let vals: Vec<Option<i64>> = (next..next + step).map(Some).collect();
+        next += step;
+        a.update(&vec![1; vals.len()], &longs(&vals), |_| true)
+            .unwrap();
+        let Groups::Sketches(v, _, total, _) = &a.groups else {
+            panic!("sketches");
+        };
+        assert!(
+            *total
+                >= v.iter()
+                    .map(|s| OVERHEAD + s.estimated_size())
+                    .sum::<usize>(),
+            "after {next} values"
+        );
+        // And the charge never exceeds the registers plus the header.
+        assert!(v[1].estimated_size() <= (1 << 12) + 64);
+    }
 }
 
 #[test]
