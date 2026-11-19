@@ -6,12 +6,13 @@
 //! statement handle as §4.1; `DoPut(CommandPreparedStatementUpdate)` runs a command once per
 //! bound row, the counts summed; `ClosePreparedStatement` drops the handle. Every call but the
 //! create is handle-carrying: it runs in the handle's session, whatever cookie it presents
-//! (§3.2, v3 review M4/m10).
+//! (§3.2, v3 review M4/m10). A bind or execution is an operation on the handle: it does not
+//! expire while one runs, and its TTL runs from the end of the last (§4.1).
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_array::{ArrayRef, NullArray, RecordBatch};
+use arrow_array::{ArrayRef, Int32Array, NullArray, RecordBatch};
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use arrow_flight::sql::{
@@ -26,7 +27,7 @@ use futures::{StreamExt, TryStreamExt};
 use krishiv_common::error::{KrishivError, KrishivFlightSqlInvalidParameters};
 use krishiv_connect_server::SessionOwner;
 use krishiv_session::auth::Authenticated;
-use krishiv_session::{QueryOptions, SqlQuery};
+use krishiv_session::{QueryOptions, Session, SqlQuery};
 use prost::Message;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status, Streaming};
@@ -36,7 +37,7 @@ use crate::cookies::{SessionCookie, session_cookie};
 use crate::handles::HandleId;
 use crate::server::{FlightSqlServer, Kind, Payload, Prepared};
 use crate::statement::{
-    check_statement_bytes, flight_info, handle_of, internal, not_found, now_micros, schema_bytes,
+    FetchGuard, check_statement_bytes, flight_info, handle_of, internal, not_found, now_micros,
     spark_schema, time_zone,
 };
 use crate::status::flight_status;
@@ -70,13 +71,82 @@ fn parameter_schema(markers: usize) -> Schema {
 }
 
 /// One row binding every marker to `NULL`: the classification text of a parameterized
-/// statement (its kind and, for a query, its reads are checked at create).
+/// statement (its kind and, for a query, its reads and columns are checked at create).
 fn null_row(markers: usize) -> Result<RecordBatch, Status> {
     let columns: Vec<ArrayRef> = (0..markers)
         .map(|_| Arc::new(NullArray::new(1)) as ArrayRef)
         .collect();
     RecordBatch::try_new(Arc::new(parameter_schema(markers)), columns)
         .map_err(|e| internal(format!("a parameter row: {e}")))
+}
+
+/// One row binding every marker to the `INT` `1`: the second classification text, for a query
+/// a `NULL` cannot analyze (`LIMIT ?`, `OFFSET ?`: Spark's `INVALID_LIMIT_LIKE_EXPRESSION`).
+fn one_row(markers: usize) -> Result<RecordBatch, Status> {
+    let fields: Vec<Field> = (1..=markers)
+        .map(|i| Field::new(format!("parameter_{i}"), DataType::Int32, false))
+        .collect();
+    let columns: Vec<ArrayRef> = (0..markers)
+        .map(|_| Arc::new(Int32Array::from(vec![1])) as ArrayRef)
+        .collect();
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+        .map_err(|e| internal(format!("a parameter row: {e}")))
+}
+
+/// The record count of a prepared update's runs (design §4.4): their sum, or `-1` when any run
+/// reports none.
+fn summed(counts: impl IntoIterator<Item = i64>) -> i64 {
+    counts
+        .into_iter()
+        .try_fold(0i64, |t, c| (c >= 0).then(|| t.saturating_add(c)))
+        .unwrap_or(-1)
+}
+
+/// The refusal of row `ran + 1` of a prepared update's `of` rows after `ran` had run: its own
+/// code, class and text, saying how many ran (§15 m3: a retry of the whole batch would run them
+/// twice).
+fn partly_ran(status: &Status, ran: usize, of: usize) -> Status {
+    Status::with_metadata(
+        status.code(),
+        format!(
+            "{} ({ran} of {of} parameter rows ran before this one failed; they are not undone)",
+            status.message()
+        ),
+        status.metadata().clone(),
+    )
+}
+
+/// A statement's kind and, for a query, its columns in Spark's Arrow shapes, analyzed (nothing
+/// runs) as `text` under the session's policy.
+async fn classify(
+    session: &Session,
+    text: &str,
+    query_start: i64,
+) -> Result<(bool, Option<arrow_schema::SchemaRef>), KrishivError> {
+    match session
+        .sql_query_with(text, QueryOptions::new().query_start(query_start))
+        .await?
+    {
+        SqlQuery::Query(df) => {
+            let schema = df.schema().await?;
+            let tz = time_zone(session);
+            Ok((true, Some(spark_schema(&schema, tz.as_ref())?)))
+        }
+        SqlQuery::NotAQuery(_) => Ok((false, None)),
+        _ => Err(krishiv_common::error::InternalError {
+            message: "an unknown kind of SQL statement".to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The handle of a bind or execution: the handle is live until `_use` drops (design §4.1).
+struct InUse {
+    id: HandleId,
+    sid: String,
+    payload: Payload,
+    prepared: Arc<Prepared>,
+    _use: FetchGuard,
 }
 
 /// The bound rows of a `DoPut` stream, its first message (the descriptor) included: at most
@@ -137,6 +207,38 @@ impl FlightSqlServer {
         }
     }
 
+    /// As [`Self::prepared_of`], and starts an operation on the handle (a bind or an execution,
+    /// review of 4d7f3235f finding 1): it does not expire until the [`InUse`] drops, and its TTL
+    /// runs from then.
+    fn prepared_use(&self, caller: &Authenticated, handle: &[u8]) -> Result<InUse, Status> {
+        let owner = SessionOwner::of(caller);
+        let id = handle_of(handle).map_err(|e| flight_status(&e))?;
+        let Some((sid, payload)) = self
+            .inner
+            .handles
+            .begin(&owner.cap_key(), &id, Instant::now())
+        else {
+            return Err(flight_status(&not_found()));
+        };
+        let guard = FetchGuard {
+            server: self.clone(),
+            id,
+        };
+        match &payload.kind {
+            Kind::Prepared(p) if payload.owner == owner => {
+                let prepared = Arc::clone(p);
+                Ok(InUse {
+                    id,
+                    sid,
+                    payload,
+                    prepared,
+                    _use: guard,
+                })
+            }
+            _ => Err(flight_status(&not_found())),
+        }
+    }
+
     /// A handle-carrying call (design §3.2): it runs in the handle's session `sid`; a cookie
     /// naming another of the caller's sessions still promotes that one (v3 review m10).
     fn handle_call(
@@ -160,8 +262,10 @@ impl FlightSqlServer {
     }
 
     /// `CreatePreparedStatement` (design §4.4): classified with `sql_query_with` (nothing runs;
-    /// a parameterized statement with each marker `NULL`), stored as a prepared handle in the
-    /// call's session, which it marks changed (§3.2).
+    /// a parameterized statement with each marker `NULL`, else, when that does not analyze, each
+    /// marker `1`), stored as a prepared handle in the call's session, which it marks changed
+    /// (§3.2). A query answers the columns of that analysis as its `dataset_schema`, a marker's
+    /// own column as `Null`: a client (Arrow's JDBC driver) reads an empty schema as an update.
     pub(crate) async fn prepared_create(
         &self,
         request: ActionCreatePreparedStatementRequest,
@@ -179,34 +283,30 @@ impl FlightSqlServer {
             session.parser_options().double_quoted_identifiers,
         )
         .len();
-        let classified_text = if markers == 0 {
-            sql.to_string()
-        } else {
-            session
-                .bind_parameters(&sql, &null_row(markers)?, 0)
-                .map_err(|e| flight_status(&e))?
-        };
         let query_start = now_micros();
         let gate = entry.shared().await;
-        let classified = session
-            .sql_query_with(
-                &classified_text,
-                QueryOptions::new().query_start(query_start),
-            )
-            .await
-            .map_err(|e| flight_status(&e))?;
-        let (query, schema) = match classified {
-            SqlQuery::Query(df) => {
-                let schema = df.schema().await.map_err(|e| flight_status(&e))?;
-                drop(gate);
-                let tz = time_zone(session);
-                let shaped = spark_schema(&schema, tz.as_ref()).map_err(|e| flight_status(&e))?;
-                // A parameterized query's columns are not known before its binding (§4.4).
-                (true, (markers == 0).then_some(shaped))
+        let (query, schema) = if markers == 0 {
+            classify(session, &sql, query_start).await
+        } else {
+            let text = session
+                .bind_parameters(&sql, &null_row(markers)?, 0)
+                .map_err(|e| flight_status(&e))?;
+            match classify(session, &text, query_start).await {
+                Ok(c) => Ok(c),
+                // Only a query is analyzed, so only a query fails here: one a `NULL` cannot
+                // stand in (`LIMIT ?`) is tried with `1`; failing both, the `NULL` error stands.
+                Err(first) => {
+                    let text = session
+                        .bind_parameters(&sql, &one_row(markers)?, 0)
+                        .map_err(|e| flight_status(&e))?;
+                    classify(session, &text, query_start)
+                        .await
+                        .map_err(|_| first)
+                }
             }
-            SqlQuery::NotAQuery(_) => (false, None),
-            _ => return Err(internal("an unknown kind of SQL statement".to_owned())),
-        };
+        }
+        .map_err(|e| flight_status(&e))?;
+        drop(gate);
         let dataset_schema = match &schema {
             Some(s) => schema_message(s)?,
             None => prost::bytes::Bytes::new(),
@@ -216,9 +316,8 @@ impl FlightSqlServer {
         } else {
             schema_message(&parameter_schema(markers))?
         };
-        let bytes = sql
-            .len()
-            .saturating_add(schema.as_ref().map_or(0, schema_bytes));
+        // The handle holds its text (and, once bound, the bound text; `prepared_bind`).
+        let bytes = sql.len();
         let payload = Payload {
             owner: call.owner.clone(),
             sql: Arc::clone(&sql),
@@ -286,13 +385,13 @@ impl FlightSqlServer {
         descriptor: FlightDescriptor,
         caller: &Authenticated,
     ) -> Result<Response<FlightInfo>, Status> {
-        let (_, sid, payload, prepared) =
-            self.prepared_of(caller, &command.prepared_statement_handle)?;
-        let mut call = self.handle_call(caller, metadata, &sid)?;
-        let sql = prepared
+        let used = self.prepared_use(caller, &command.prepared_statement_handle)?;
+        let mut call = self.handle_call(caller, metadata, &used.sid)?;
+        let sql = used
+            .prepared
             .bound
             .clone()
-            .unwrap_or_else(|| Arc::clone(&payload.sql));
+            .unwrap_or_else(|| Arc::clone(&used.payload.sql));
         let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
         let response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
         slot.answered = true;
@@ -300,7 +399,8 @@ impl FlightSqlServer {
     }
 
     /// `DoPut(CommandPreparedStatementQuery)` (design §4.4): binds one row (no row clears the
-    /// binding); answers the same handle.
+    /// binding), for a query or a command alike (more rows go through
+    /// `DoPut(CommandPreparedStatementUpdate)`); answers the same handle.
     pub(crate) async fn prepared_bind(
         &self,
         command: CommandPreparedStatementQuery,
@@ -310,13 +410,20 @@ impl FlightSqlServer {
     ) -> Result<Response<DoPutStream>, Status> {
         let inner = &self.inner;
         let handle = command.prepared_statement_handle;
-        let (id, sid, payload, prepared) = self.prepared_of(caller, &handle)?;
+        let InUse {
+            id,
+            sid,
+            payload,
+            prepared,
+            _use,
+        } = self.prepared_use(caller, &handle)?;
         let call = self.handle_call(caller, metadata, &sid)?;
         let rows = bound_rows(stream, inner.config.max_batch_rows).await?;
         let count: usize = rows.iter().map(RecordBatch::num_rows).sum();
-        if prepared.query && count > 1 {
+        if count > 1 {
             return Err(invalid_parameters(format!(
-                "a query binds one row, not {count}"
+                "a binding is one row, not {count} (a command runs a batch through \
+                 CommandPreparedStatementUpdate)"
             )));
         }
         let bound = match rows.first() {
@@ -342,7 +449,14 @@ impl FlightSqlServer {
         let evicted = inner
             .handles
             .store(&cap, &id, rebound, bytes)
-            .map_err(|e| flight_status(&e))?;
+            .map_err(|e| {
+                // Closed while it was being bound: gone, not an internal error.
+                if inner.handles.get(&cap, &id, Instant::now()).is_none() {
+                    flight_status(&not_found())
+                } else {
+                    flight_status(&e)
+                }
+            })?;
         self.after_evictions(&evicted);
         let result = DoPutPreparedStatementResult {
             prepared_statement_handle: Some(handle),
@@ -355,7 +469,8 @@ impl FlightSqlServer {
 
     /// `DoPut(CommandPreparedStatementUpdate)` (design §4.4): each bound row runs the command
     /// once, in order, and the counts are summed (`-1` when a run reports none); with no row
-    /// it runs once as prepared. A query is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, unrun.
+    /// it runs once as prepared. A query is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, unrun. A row
+    /// that fails after others ran says how many did (they are not undone).
     pub(crate) async fn prepared_update(
         &self,
         command: &CommandPreparedStatementUpdate,
@@ -363,8 +478,13 @@ impl FlightSqlServer {
         metadata: &MetadataMap,
         caller: &Authenticated,
     ) -> Result<Response<DoPutStream>, Status> {
-        let (_, sid, payload, prepared) =
-            self.prepared_of(caller, &command.prepared_statement_handle)?;
+        let InUse {
+            sid,
+            payload,
+            prepared,
+            _use,
+            ..
+        } = self.prepared_use(caller, &command.prepared_statement_handle)?;
         if prepared.query {
             return Err(flight_status(
                 &krishiv_common::error::KrishivFlightSqlQueryAsUpdate {}.into(),
@@ -388,15 +508,15 @@ impl FlightSqlServer {
                     .unwrap_or_else(|| Arc::clone(&payload.sql)),
             );
         }
-        let mut total: Option<i64> = Some(0);
-        for sql in &texts {
-            let (count, _) = self.run_update(&call, sql).await?;
-            total = match total {
-                Some(t) if count >= 0 => Some(t.saturating_add(count)),
-                _ => None,
-            };
+        let mut counts = Vec::with_capacity(texts.len());
+        for (ran, sql) in texts.iter().enumerate() {
+            match self.run_update(&call, sql).await {
+                Ok((count, _)) => counts.push(count),
+                Err(s) if ran > 0 => return Err(partly_ran(&s, ran, texts.len())),
+                Err(s) => return Err(s),
+            }
         }
-        Ok(Response::new(update_result(total.unwrap_or(-1))))
+        Ok(Response::new(update_result(summed(counts))))
     }
 
     /// `sql` with row `row` of `batch` bound to its `markers` markers, one column each; the
@@ -452,5 +572,32 @@ mod tests {
         assert_eq!(decode_schema(&bytes).as_deref(), Some(&s));
         assert_eq!(decode_schema(&[]), None);
         assert_eq!(null_row(3).expect("row").num_rows(), 1);
+        assert_eq!(one_row(2).expect("row").num_columns(), 2);
+    }
+
+    #[test]
+    fn counts_sum_unless_one_is_unknown() {
+        assert_eq!(summed([2, 3]), 5);
+        assert_eq!(summed([0, 7, 0]), 7);
+        assert_eq!(summed([2, -1, 3]), -1, "one run reports no count");
+        assert_eq!(summed([-1]), -1);
+        assert_eq!(summed([i64::MAX, 1]), i64::MAX);
+    }
+
+    #[test]
+    fn a_partial_batch_keeps_the_class_and_says_how_many_ran() {
+        let failed = invalid_parameters("bad".to_owned());
+        let s = partly_ran(&failed, 1, 3);
+        assert_eq!(s.code(), failed.code());
+        assert_eq!(
+            s.metadata().get("x-krishiv-error-class"),
+            failed.metadata().get("x-krishiv-error-class")
+        );
+        assert!(s.message().starts_with(failed.message()), "{}", s.message());
+        assert!(
+            s.message().contains("1 of 3 parameter rows ran"),
+            "{}",
+            s.message()
+        );
     }
 }
