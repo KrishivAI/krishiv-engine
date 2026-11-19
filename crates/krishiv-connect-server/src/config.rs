@@ -209,6 +209,9 @@ fn failed_to_set(key: &str, value: Option<&str>, message: &str) -> String {
     match value {
         None => format!("Failed to set {key} to None due to {message}"),
         Some(v) if is_redacted(key, Some(v)) => {
+            // Every occurrence goes, even inside other words or the SQLSTATE when the value is
+            // very short (`1`): garbling a warning is the safe side. An empty value is skipped,
+            // since `replace("")` would insert the marker between every character.
             let message = if v.is_empty() {
                 Cow::Borrowed(message)
             } else {
