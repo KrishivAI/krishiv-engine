@@ -4247,6 +4247,10 @@ pub struct ResourceGroups {
   pub fn replace_file(self: &Self, path: &str, document: &str, etag: &str) -> Result<(), KrishivError> { /* ... */ }
   ```
   Replaces the group file at `path` with `document` and swaps the tree for it. In order:
+  a stale `etag`, then a file edited since it was loaded, then a target that is a link or not
+  writable are refused; the document is validated; the file is written beside itself,
+  synced, renamed over the original (mode kept) and the directory synced; then the tree is
+  swapped as [`ResourceGroups::reload_json`] does. Nothing changes on a refusal.
 
 - ```rust
   pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
@@ -4257,6 +4261,7 @@ pub struct ResourceGroups {
   pub fn with_clock(json: &str, total_memory: usize, now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, KrishivError> { /* ... */ }
   ```
   As [`ResourceGroups::from_json`], with the clock (milliseconds since the Unix epoch)
+  that scan-quota windows use, so a test moves time by hand.
 
 - ```rust
   pub fn validate(json: &str, total_memory: usize) -> Result<(), KrishivError> { /* ... */ }
@@ -4949,6 +4954,7 @@ pub struct Catalog<'a> {
   pub async fn list_tables(self: &Self, database: Option<&str>, pattern: Option<&str>) -> Result<Vec<Table>, KrishivError> { /* ... */ }
   ```
   The tables, views and temporary views of `database` (default: the current one), sorted by name.
+  Local temporary views are listed for every database, global ones for `global_temp`.
 
 - ```rust
   pub async fn get_table(self: &Self, name: &str) -> Result<Table, KrishivError> { /* ... */ }
@@ -4999,6 +5005,10 @@ pub struct Catalog<'a> {
   pub async fn create_table(self: &Self, name: &str, source: Option<&str>, schema: Option<&str>, description: Option<&str>, options: &[(&str, &str)]) -> Result<(), KrishivError> { /* ... */ }
   ```
   `spark.catalog.createTable(name, source, schema, description, options)`: creates a table of the data
+  source `source` (`spark.sql.sources.default` when `None`). `schema` is a DDL column list
+  (`"a INT, b STRING"`); without one a data source table takes its schema from its files. A `path`
+  option makes the table external, at that location, as Spark's `CatalogImpl` does; the other options
+  become the table's `OPTIONS`.
 
 - ```rust
   pub async fn is_cached(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }

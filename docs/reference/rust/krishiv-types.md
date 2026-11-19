@@ -537,6 +537,7 @@ pub struct Batch {
   pub fn new(data: RecordBatch) -> Self { /* ... */ }
   ```
   An unweighted batch: every row has weight 1 ([`Weights::Const`]`(1)`).
+  Change streams pass their weights explicitly with [`Self::with_weights`].
 
 - ```rust
   pub fn with_weights(data: RecordBatch, weights: Weights) -> Result<Self> { /* ... */ }
@@ -592,16 +593,20 @@ pub struct Batch {
   pub fn project(self: &Self, indices: &[usize]) -> Result<Self> { /* ... */ }
   ```
   The columns at `indices`, in that order, with the same rows and
+  weights. Zero-copy: the result shares the input's buffers. An index
+  may repeat; an empty `indices` keeps the row count.
 
 - ```rust
   pub fn slice(self: &Self, offset: usize, len: usize) -> Result<Self> { /* ... */ }
   ```
   `len` rows starting at `offset`, with their weights. Zero-copy: the
+  result shares the input's buffers.
 
 - ```rust
   pub fn concat(schema: &SchemaRef, batches: &[Self]) -> Result<Self> { /* ... */ }
   ```
   The rows of `batches`, in order, as one batch with `schema` (copies,
+  except that a single batch is returned with shared buffers).
 
 ###### Trait Implementations
 

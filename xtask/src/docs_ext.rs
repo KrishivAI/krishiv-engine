@@ -6,6 +6,7 @@
 //! Rust: rustdoc JSON (nightly rustdoc) converted to Markdown by `rustdoc-md` (a tool installed with
 //! `cargo install rustdoc-md --version 0.2.0 --locked`, not a workspace dependency; ADR 0028).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -51,7 +52,68 @@ fn markdown_of(json: &Path, out: &Path) -> Result<String, String> {
         return Err(format!("rustdoc-md failed on {}: {status}", json.display()));
     }
     let text = std::fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    Ok(tidy(&text))
+    let json_text =
+        std::fs::read_to_string(json).map_err(|e| format!("{}: {e}", json.display()))?;
+    let paragraphs = first_paragraphs(&json_text)?;
+    Ok(tidy(&expand_first_lines(&text, &paragraphs)))
+}
+
+/// The doc comments of the rustdoc JSON whose first paragraph spans several lines, keyed by their
+/// first line, with the whole paragraph as the value. `None` marks a first line that two items
+/// share with different paragraphs (it cannot be told which item a Markdown line belongs to).
+/// `rustdoc-md` 0.2.0 prints only `docs.lines().next()` for a method, which cuts a sentence in
+/// the middle.
+fn first_paragraphs(json_text: &str) -> Result<HashMap<String, Option<String>>, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("rustdoc JSON: {e}"))?;
+    let mut map: HashMap<String, Option<String>> = HashMap::new();
+    let Some(index) = doc.get("index").and_then(serde_json::Value::as_object) else {
+        return Ok(map);
+    };
+    for item in index.values() {
+        let Some(docs) = item.get("docs").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(first) = docs.lines().next() else {
+            continue;
+        };
+        let paragraph: Vec<&str> = docs.lines().take_while(|l| !l.trim().is_empty()).collect();
+        if paragraph.len() < 2 {
+            continue;
+        }
+        let paragraph = paragraph.join("\n");
+        match map.get_mut(first) {
+            Some(known) if known.as_deref() != Some(paragraph.as_str()) => *known = None,
+            Some(_) => {}
+            None => {
+                map.insert(first.to_string(), Some(paragraph));
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Replaces a method's one-line description (the indented line after its closing code fence) by
+/// the whole first paragraph of its doc comment.
+fn expand_first_lines(md: &str, paragraphs: &HashMap<String, Option<String>>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut after_fence = false;
+    for line in md.lines() {
+        let full = after_fence
+            .then(|| line.strip_prefix("  "))
+            .flatten()
+            .and_then(|first| paragraphs.get(first))
+            .and_then(Option::as_deref);
+        if let Some(paragraph) = full {
+            out.extend(paragraph.lines().map(|l| format!("  {l}")));
+        } else {
+            out.push(line.to_string());
+        }
+        after_fence = line == "  ```";
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    text
 }
 
 /// Rewrites a rustdoc intra-doc link whose target is an item path (`[`name`](ScalarUdf::name)`) to
@@ -351,6 +413,18 @@ mod tests {
         assert_eq!(
             fix_signature("fn f where /* synthetic */ impl Foo()"),
             "fn f where /* synthetic */ impl Foo()"
+        );
+    }
+
+    #[test]
+    fn a_method_description_is_expanded_to_its_first_paragraph() {
+        let json = r#"{"index":{"1":{"docs":"Swaps the tree for the one `json`\ndescribes (other keys).\n\n# Errors\n\nNone."},
+            "2":{"docs":"One line only."},"3":{"docs":"Same start\nfirst."},"4":{"docs":"Same start\nsecond."}}}"#;
+        let map = first_paragraphs(json).unwrap();
+        let md = "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n";
+        assert_eq!(
+            expand_first_lines(md, &map),
+            "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n  describes (other keys).\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n"
         );
     }
 
