@@ -43,6 +43,14 @@ Spark readers, but other tools that list the directory see it. `krishiv.sql.file
 Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
 do not delete the log from a table you still append to.
 
+## Delta `DESCRIBE HISTORY` shows NULL `isBlindAppend` for non-append commits
+
+A Delta commit that removes files or reads the table (DELETE, UPDATE, MERGE, overwrite) leaves `isBlindAppend` out
+of its `commitInfo`; delta-spark writes `false`, so Spark's `DESCRIBE HISTORY` shows `false` where Krishiv's commits
+show NULL. Appends that read nothing still write `true`. delta_kernel's `CommitInfo` writes the field only when it is
+true and replaces a connector-supplied value, so the connector cannot set it. Conflict checking is unaffected: it
+uses Krishiv's own flag, not the logged one. It changes when the kernel writes `false`.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example
