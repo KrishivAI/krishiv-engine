@@ -184,3 +184,18 @@ fn non_empty<'a>(values: impl Iterator<Item = &'a [u8]>, f: &mut dyn FnMut(&[u8]
         f(b);
     }
 }
+
+#[cfg(test)]
+mod bench_hook_tests {
+    use super::*;
+    use arrow_array::Int64Array;
+
+    #[test]
+    fn the_bench_hook_estimates_a_sketched_column_and_refuses_the_rest() {
+        let ty = IcebergType::Long;
+        let est = bench_estimate(&Int64Array::from(vec![1, 2, 2, 3]), &ty);
+        assert_eq!(est, Some(3.0));
+        let uuid = IcebergType::Uuid;
+        assert_eq!(bench_estimate(&Int64Array::from(vec![1]), &uuid), None);
+    }
+}

@@ -124,12 +124,7 @@ pub fn run_qerror(root: &Path, flags: &[&str]) -> Result<(), String> {
     let (cargo_args, env) = invocation(&args);
     let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     // The flags describe the run: nothing inherited from the shell.
-    for var in [
-        "KRISHIV_QERROR_DIR",
-        "KRISHIV_QERROR_SCALE",
-        "KRISHIV_QERROR_SUITES",
-        "KRISHIV_QERROR_NDV",
-    ] {
+    for var in RUN_ENV {
         cmd.env_remove(var);
     }
     cmd.current_dir(root).args(cargo_args).envs(env);
@@ -140,9 +135,23 @@ pub fn run_qerror(root: &Path, flags: &[&str]) -> Result<(), String> {
     }
 }
 
+/// The variables that describe a run, cleared before the run sets its own.
+const RUN_ENV: [&str; 4] = [
+    "KRISHIV_QERROR_DIR",
+    "KRISHIV_QERROR_SCALE",
+    "KRISHIV_QERROR_SUITES",
+    "KRISHIV_QERROR_NDV",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_variable_the_run_sets_is_cleared_first() {
+        let (_, env) = invocation(&QerrorArgs::default());
+        assert!(env.iter().all(|(k, _)| RUN_ENV.contains(&k.as_str())));
+    }
 
     #[test]
     fn no_flags_run_both_suites_on_generated_data() {
