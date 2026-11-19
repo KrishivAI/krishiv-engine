@@ -945,6 +945,7 @@ impl RowTable {
     /// `p` and a fold of `cols` (`fold` says which columns each aggregate
     /// reads; a string `min`/`max` may keep all their bytes, once).
     fn projected_accs(&self, new: &[usize], cols: &[ArrayRef], fold: Fold) -> usize {
+        let states = matches!(fold, Fold::States { .. });
         let parts: usize = self
             .parts
             .iter()
@@ -952,7 +953,7 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected(n, None, None))
+                    .map(|a| a.projected_part(n, states))
                     .sum::<usize>()
             })
             .sum();
@@ -961,6 +962,10 @@ impl RowTable {
                 .iter()
                 .zip(&self.core.ranges)
                 .map(|(a, r)| {
+                    // The HLL sketches are bounded per partition above (their rows are the partition's).
+                    if a.projects_by_partition() {
+                        return 0;
+                    }
                     // The value column, then (`max_by`/`min_by`) the key.
                     let at = |n: usize| {
                         let i = match fold {
@@ -969,8 +974,8 @@ impl RowTable {
                         };
                         i.and_then(|i| cols.get(i))
                     };
-                    a.projected(0, at(0), at(1))
-                        .saturating_sub(a.projected(0, None, None))
+                    a.projected(0, at(0), at(1), states)
+                        .saturating_sub(a.projected(0, None, None, false))
                 })
                 .sum()
         });
@@ -1869,7 +1874,7 @@ impl RowTable {
                 let accs: usize = empty
                     .accs
                     .iter()
-                    .map(|a| a.projected(n, None, None).saturating_sub(a.size()))
+                    .map(|a| a.projected(n, None, None, false).saturating_sub(a.size()))
                     .sum();
                 n.saturating_mul(self.stride).saturating_add(accs)
             })

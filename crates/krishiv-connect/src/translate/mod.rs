@@ -84,11 +84,14 @@ mod relation_udf;
 mod schema;
 mod types;
 mod udf;
+mod write;
 
 pub use udf::{
     CheckpointSpec, Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf,
     translate_command,
 };
+
+pub use write::{WriteSpec, WriteTarget, WriteV2Spec, write_spec, write_v2_spec};
 
 pub use cached::{CACHED_REMOTE_NAMESPACE, CachedRemoteIds, cached_remote_table};
 pub use local::{LocalRelations, LocalRequest};

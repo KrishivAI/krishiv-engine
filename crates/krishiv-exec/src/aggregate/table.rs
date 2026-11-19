@@ -295,7 +295,7 @@ impl AggTable {
                         };
                         i.and_then(|i| p.cols.get(i))
                     };
-                    a.projected(new, at(0), at(1))
+                    a.projected(new, at(0), at(1), p.states)
                 })
                 .sum::<usize>()
     }

@@ -483,6 +483,25 @@ fn icu_collations_stay_refused_in_every_key_position() {
     }
 }
 
+/// `hll_sketch_agg` hashes the collation's sort key in Spark (`HllSketchAgg.update`), so a non-binary collation is
+/// refused rather than run on the raw bytes (the `hll.sql` goldens 11 and 12 count 7, not 10). The refusal is
+/// `KRISHIV_UNSUPPORTED_FEATURE` (`DEPENDS`), not a type mismatch: Spark accepts the type. Hashing the collation key
+/// would lift it.
+#[test]
+fn hll_sketch_agg_of_a_non_binary_collation_is_refused() {
+    let s = Session::new().unwrap();
+    for c in ["utf8_lcase", "unicode"] {
+        let sql = format!(
+            "SELECT hll_sketch_estimate(hll_sketch_agg(c COLLATE {c})) FROM VALUES ('a'),('A'),('b') t(c)"
+        );
+        assert_eq!(
+            rows_in(&s, &sql).unwrap_err().error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+}
+
 /// Nested ordering stays refused, and `mode` waits for its by-key form.
 #[test]
 fn what_has_no_ordering_key_yet_is_refused() {

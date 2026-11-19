@@ -1265,3 +1265,95 @@ fn clustered_new_keys_turn_append_only() {
     let t = totals(&merged);
     assert!(t.values().all(|&c| c == 4), "{t:?}");
 }
+
+/// A table grouping by `k` with `hll_sketch_agg(v)` at lgK 12, raw or final.
+fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
+    let s = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: vec![0],
+        aggregates: vec![AggregateExpr::new(
+            AggregateFunction::HllSketchAgg { lg_k: 12 },
+            1,
+            DataType::Binary,
+            "h",
+        )],
+        output,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    Arc::new(AggCore::new(spec).unwrap())
+}
+
+/// `groups` keys with `per_group` distinct values each.
+fn hll_batch(core: &AggCore, groups: i64, per_group: i64) -> Batch {
+    let (mut k, mut v) = (Vec::new(), Vec::new());
+    for d in 0..per_group {
+        for g in 0..groups {
+            k.push(g);
+            v.push(d);
+        }
+    }
+    let cols: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(k)), Arc::new(Int64Array::from(v))];
+    Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap())
+}
+
+/// Review 5e55d3e29 finding 1: over several radix partitions, the projection before a batch of new groups is at
+/// least the table's size after it, whether every group's sketch reaches the registers in this batch (raw values)
+/// or arrives there already (partial states). Partition 0's groups alone, which is all the old bound saw, would
+/// not do: the table is empty.
+#[test]
+fn hll_sketches_are_projected_over_every_partition_of_a_new_batch() {
+    let seed = HashSeed::new(Some(4));
+    // Raw: 1,024 new groups, 500 distinct values each, so each reaches the registers.
+    let raw = hll_core(AggregateOutput::Partial);
+    let mut partial = RowTable::new(&raw, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    assert_eq!(partial.part_count(), PARTS);
+    apply(&mut partial, &hll_batch(&raw, 1_024, 500));
+    assert!(
+        partial.memory_size() >= 1_024 * 4_096,
+        "{}",
+        partial.memory_size()
+    );
+    // States: the partial's sketches, all in registers, into an empty final table.
+    let refs = partial.ids(0..partial.len());
+    let states = Batch::new(partial.state_batch(&refs).unwrap());
+    let fin = hll_core(AggregateOutput::Final);
+    let mut table = RowTable::new(&fin, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    let p = table.prepare(&states, true).unwrap();
+    let want = table.projected(&p);
+    table.apply(&p).unwrap();
+    assert!(
+        table.memory_size() <= want,
+        "{} > {want}",
+        table.memory_size()
+    );
+    assert!(table.memory_size() >= 1_024 * 4_096);
+}
+
+/// Review 023ffd9ab: a low-cardinality `GROUP BY` whose sketches are all at the registers reserves little for a
+/// further raw batch: the groups have no room to grow, and the fresh-group terms are per row, not per sketch.
+#[test]
+fn full_sketches_project_little_for_a_further_batch() {
+    let seed = HashSeed::new(Some(4));
+    let core = hll_core(AggregateOutput::Partial);
+    let mut t = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    apply(&mut t, &hll_batch(&core, 10, 3_000));
+    assert!(t.memory_size() >= 10 * 4_096, "{}", t.memory_size());
+    let again = t.prepare(&hll_batch(&core, 10, 820), false).unwrap();
+    let (before, projected) = (t.memory_size(), t.projected(&again));
+    // 8,200 rows over 10 groups: the real growth is none. The old bound was rows * the registers (34 MB).
+    assert!(
+        projected - before < 3 << 20,
+        "{} bytes over {before}",
+        projected - before
+    );
+    t.apply(&again).unwrap();
+    assert!(t.memory_size() <= projected);
+}
