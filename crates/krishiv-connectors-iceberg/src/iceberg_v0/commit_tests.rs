@@ -559,7 +559,7 @@ pub(super) struct Case {
     pub(super) new: NewManifests,
 }
 
-fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
+pub(super) fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     case_on(version, properties, None)
 }
 

@@ -142,13 +142,34 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
+    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    FlightSql,
 }
 
 impl Surface {
     /// Every surface, in counter order.
-    pub const ALL: [Self; 4] = [Self::Connect, Self::Admin, Self::Metrics, Self::Ui];
+    pub const ALL: [Self; 5] = [
+        Self::Connect,
+        Self::Admin,
+        Self::Metrics,
+        Self::Ui,
+        Self::FlightSql,
+    ];
 
-    /// The label value: `connect`, `admin`, `metrics` or `ui`.
+    /// The surface whose requests a session of `transport` serves: `Connect`, `FlightSql` and
+    /// `Ui` map to themselves; an embedded or MCP session arrives on no listener, so `None`
+    /// (P3-T101 §2 H3: a Flight SQL session counts its denials under `flight-sql`).
+    #[must_use]
+    pub fn of(transport: crate::Transport) -> Option<Self> {
+        match transport {
+            crate::Transport::Connect => Some(Self::Connect),
+            crate::Transport::FlightSql => Some(Self::FlightSql),
+            crate::Transport::Ui => Some(Self::Ui),
+            crate::Transport::Embedded | crate::Transport::Mcp => None,
+        }
+    }
+
+    /// The label value: `connect`, `admin`, `metrics`, `ui` or `flight-sql`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -156,6 +177,7 @@ impl Surface {
             Self::Admin => "admin",
             Self::Metrics => "metrics",
             Self::Ui => "ui",
+            Self::FlightSql => "flight-sql",
         }
     }
 }

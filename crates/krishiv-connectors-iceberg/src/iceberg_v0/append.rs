@@ -53,6 +53,7 @@ use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
 use super::data_file::check_partition;
+use super::filter::{FilterContext, FilterError, Removals, filter_manifests, overwrite_summary};
 use super::merge::{MergeConfig, MergeContext, arrange};
 use super::rolling::{ManifestNames, SpecManifests};
 use super::scan::{read_manifest_files, snapshot_refs};
@@ -144,8 +145,9 @@ pub(crate) struct NewManifests {
     /// write fails with every outcome known (design note §7.4).
     pub(crate) data_files: Vec<String>,
     /// The merged manifests written by any attempt (only the first merges,
-    /// `merge.rs`): kept when the committed list names them, else deleted
-    /// with the attempt's other files (design note §7.4).
+    /// `merge.rs`) and the manifests an overwrite's filter rewrote
+    /// (`filter.rs`, every attempt): kept when the committed list names
+    /// them, else deleted with the attempt's other files (design note §7.4).
     pub(crate) merged: Vec<String>,
     /// The write's column sketches (PR-54b, `statistics_file.rs`): each attempt
     /// writes a statistics file of its snapshot from them and adds
@@ -158,6 +160,12 @@ pub(crate) struct NewManifests {
     /// committed metadata names it, else deleted with the attempt's other
     /// files (design note §7.4).
     pub(crate) statistics_files: Vec<String>,
+    /// The partition paths of the added files (Java's `partitionToPath`,
+    /// `""` unpartitioned), for an overwrite's `changed-partition-count`.
+    pub(crate) changed: HashSet<String>,
+    /// The files an overwrite removes (`filter.rs`), re-applied to every
+    /// attempt's base; `None`: an append.
+    pub(crate) removals: Option<Removals>,
     /// Attempts prepared so far (Java's `SnapshotProducer.attempt`).
     attempts: u32,
 }
@@ -255,6 +263,8 @@ pub(crate) async fn write_new_manifests(
         merged: Vec::new(),
         statistics: None,
         statistics_files: Vec::new(),
+        changed,
+        removals: None,
         attempts: 0,
     })
 }
@@ -307,6 +317,7 @@ pub(crate) struct Attempt {
 /// at a snapshot the metadata lacks; the base manifest list's read errors
 /// (`KRISHIV_CATALOG_LIMIT_EXCEEDED` past `max_metadata_bytes`); iceberg-rust's
 /// write failures.
+#[cfg(test)]
 pub(crate) async fn prepare_attempt(
     io: &FileIO,
     metadata: &TableMetadata,
@@ -315,6 +326,32 @@ pub(crate) async fn prepare_attempt(
     timestamp_ms: i64,
     max_metadata_bytes: u64,
 ) -> Result<Attempt, KrishivError> {
+    prepare(io, metadata, new, ids, timestamp_ms, max_metadata_bytes)
+        .await
+        .map_err(|e| match e {
+            FilterError::Error(e) => e,
+            FilterError::Missing(m) => internal(m),
+        })
+}
+
+/// [`prepare_attempt`] for an append or an overwrite (`new.removals`, an
+/// `OverwriteFiles` as Java's `BaseOverwriteFiles`): the removals are
+/// applied to this attempt's base (`filter.rs`) before the list is arranged,
+/// the operation is `delete` when files are only removed, `append` when only
+/// added, else `overwrite` (`BaseOverwriteFiles.java:49-60`; an empty
+/// overwrite is `overwrite`), and the summary carries the removed files.
+///
+/// # Errors
+/// [`FilterError::Missing`] when a file to remove is not live in the base
+/// (the loop's conflict); else as [`prepare_attempt`].
+pub(crate) async fn prepare(
+    io: &FileIO,
+    metadata: &TableMetadata,
+    new: &mut NewManifests,
+    ids: WriteIds<'_>,
+    timestamp_ms: i64,
+    max_metadata_bytes: u64,
+) -> Result<Attempt, FilterError> {
     let branch = ids.branch;
     let refs = snapshot_refs(metadata)?;
     let mut base_ref = refs.get(branch).cloned();
@@ -328,11 +365,11 @@ pub(crate) async fn prepare_attempt(
     if let Some(r) = &base_ref
         && !r.is_branch()
     {
-        return Err(KrishivUnsupportedFeature {
+        return Err(KrishivError::from(KrishivUnsupportedFeature {
             feature: format!(
                 "{branch} is a tag, not a branch. Tags cannot be targets for producing snapshots"
             ),
-        }
+        })
         .into());
     }
     // A dangling ref is refused: read as "no base", the list would drop every
@@ -385,13 +422,38 @@ pub(crate) async fn prepare_attempt(
         })
         .collect();
     let dir = metadata_dir(metadata);
+    let prefix = format!("{dir}/{}-m", new.commit_uuid);
+    let mut filtered = None;
+    let base_manifests = match &new.removals {
+        None => base_manifests,
+        Some(removals) => {
+            let next = new.manifests.len() + new.merged.len();
+            let f = filter_manifests(
+                &mut FilterContext {
+                    io,
+                    metadata,
+                    snapshot_id,
+                    prefix: prefix.clone(),
+                    next,
+                    written: &mut new.merged,
+                    max_metadata_bytes,
+                },
+                base_manifests,
+                removals,
+            )
+            .await?;
+            let manifests = f.manifests.clone();
+            filtered = Some(f);
+            manifests
+        }
+    };
     let next = new.manifests.len() + new.merged.len();
     let arranged = arrange(
         &mut MergeContext {
             io,
             metadata,
             snapshot_id,
-            prefix: format!("{dir}/{}-m", new.commit_uuid),
+            prefix,
             next,
             merged: &mut new.merged,
             max_metadata_bytes,
@@ -441,7 +503,15 @@ pub(crate) async fn prepare_attempt(
     let next_row_id = list.next_row_id();
     list.close().await.map_err(from_iceberg)?;
 
-    let mut props = new.added.clone();
+    let mut props = match &filtered {
+        None => new.added.clone(),
+        Some(f) => overwrite_summary(
+            &new.added,
+            &new.changed,
+            &f.removed,
+            partition_summary_limit(metadata),
+        ),
+    };
     for (total, added, removed) in TOTALS {
         // Java's `updateTotal`: a total the previous snapshot lacks, an
         // unparseable value or a negative result leaves the key out.
@@ -466,7 +536,8 @@ pub(crate) async fn prepare_attempt(
     }
     props.insert(MANIFESTS_CREATED.to_owned(), created.to_string());
     props.insert(MANIFESTS_KEPT.to_owned(), kept.to_string());
-    props.insert(MANIFESTS_REPLACED.to_owned(), arranged.replaced.to_string());
+    let replaced = arranged.replaced + filtered.as_ref().map_or(0, |f| f.replaced);
+    props.insert(MANIFESTS_REPLACED.to_owned(), replaced.to_string());
     props.insert("engine-name".to_owned(), "krishiv".to_owned());
     props.insert(
         "engine-version".to_owned(),
@@ -485,7 +556,7 @@ pub(crate) async fn prepare_attempt(
         .with_manifest_list(path)
         .with_schema_id(metadata.current_schema_id())
         .with_summary(Summary {
-            operation: Operation::Append,
+            operation: operation(new),
             additional_properties: props,
         });
     let snapshot = match (version, next_row_id) {
@@ -562,6 +633,22 @@ async fn attempt_statistics_file(
             skipped(&format!("writing the statistics file {path}: {e}"));
             None
         }
+    }
+}
+
+/// The operation of `new`'s snapshot: `append` for an append; for an
+/// overwrite Java's `BaseOverwriteFiles.operation` (module docs of
+/// [`prepare`]).
+fn operation(new: &NewManifests) -> Operation {
+    let Some(removals) = &new.removals else {
+        return Operation::Append;
+    };
+    let adds = !new.data_files.is_empty();
+    let deletes = !removals.data_files.is_empty();
+    match (adds, deletes) {
+        (false, true) => Operation::Delete,
+        (true, false) => Operation::Append,
+        _ => Operation::Overwrite,
     }
 }
 

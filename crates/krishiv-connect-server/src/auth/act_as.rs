@@ -145,7 +145,8 @@ fn percent_decode(text: &str) -> Option<String> {
 }
 
 /// Who the request acts for: `caller` itself without act-as metadata, else the end user
-/// `server` allows (module docs).
+/// `server` allows (module docs). The audit records name `surface`, the request's service
+/// (P3-T101 §3.1: act-as on Flight SQL names `flight-sql`).
 ///
 /// # Errors
 /// `KRISHIV_AUTH_IMPERSONATION_DENIED` (42501) for every refusal, the reason in the audit
@@ -155,38 +156,29 @@ pub(super) async fn resolve(
     headers: &HeaderMap,
     peer: SocketAddr,
     caller: Authenticated,
+    surface: Surface,
 ) -> Result<Authenticated, KrishivError> {
     if !asks(headers) {
         return Ok(caller);
     }
     let Some(metadata) = Metadata::read(headers) else {
-        return Err(server.refuse_impersonation(
-            &caller,
-            Surface::Connect,
-            peer,
-            Denial::Malformed,
-        ));
+        return Err(server.refuse_impersonation(&caller, surface, peer, Denial::Malformed));
     };
     if let Some(token) = &metadata.token {
         let (_, end_user) = server
-            .impersonate_signed(&caller, Surface::Connect, peer, token, &metadata.hint())
+            .impersonate_signed(&caller, surface, peer, token, &metadata.hint())
             .await?;
         return Ok(end_user);
     }
     // Groups or a tenant name no one without a user.
     let Some(user) = metadata.user else {
-        return Err(server.refuse_impersonation(
-            &caller,
-            Surface::Connect,
-            peer,
-            Denial::Malformed,
-        ));
+        return Err(server.refuse_impersonation(&caller, surface, peer, Denial::Malformed));
     };
     let mut act_as = ActAs::new(user).with_groups(metadata.groups.unwrap_or_default());
     if let Some(tenant) = metadata.tenant {
         act_as = act_as.with_tenant(tenant);
     }
-    server.impersonate(&caller, Surface::Connect, peer, &act_as)
+    server.impersonate(&caller, surface, peer, &act_as)
 }
 
 #[cfg(test)]

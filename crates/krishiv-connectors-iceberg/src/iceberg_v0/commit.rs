@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The append commit loop (P3-T027, PR-36a; design note
 //! `P3-T026-T027-iceberg-scan-and-commit.md` §7, Tier U): [`commit_append`]
-//! sends the attempts [`prepare_attempt`] builds through a [`CommitTable`]
+//! sends the attempts [`prepare_attempt`](super::append::prepare_attempt) builds through a [`CommitTable`]
 //! until one is known to be in the table, the retry budget runs out, or the
 //! write fails.
 //!
@@ -28,7 +28,7 @@
 //!   never moved) stays unresolved until a later load shows the branch off its
 //!   base.
 //! - **Rebase** (§7.3 steps 4a.0, 4a.1, 4a.3): an append validates nothing; it
-//!   keeps its manifests (reset to unassigned by [`prepare_attempt`]) and
+//!   keeps its manifests (reset to unassigned by [`prepare_attempt`](super::append::prepare_attempt)) and
 //!   recomputes the list, sequence number, totals, v3 row ids and timestamp
 //!   against the refreshed table. Across a v2 → v3 upgrade it takes the v3
 //!   lineage fields; any other change of format version, or a replaced table
@@ -105,10 +105,15 @@ use krishiv_common::error::{
     KrishivIcebergCommitStateUnknown, KrishivUnsupportedFeature,
 };
 
-use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt};
+use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
+use super::filter::FilterError;
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::statistics_file::skipped;
 use super::validate::{Validation, validate};
+
+/// The check named by a conflict whose overwrite found a file to remove no
+/// longer live (Java's `failMissingDeletePaths`).
+pub(crate) const CHECK_MISSING: &str = "files to delete";
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -224,7 +229,7 @@ pub(crate) struct CommitContext<'a> {
 /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` for a format-version change other than
 /// v2 → v3 or a replaced table, `KRISHIV_UNSUPPORTED_FEATURE` for a commit
 /// property that is not a number, a failure answered to an attempt's first
-/// request, or [`prepare_attempt`]'s errors. A refresh after a conflict that
+/// request, or [`prepare_attempt`](super::append::prepare_attempt)'s errors. A refresh after a conflict that
 /// never succeeds is `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`.
 ///
 /// # Cancellation
@@ -436,7 +441,7 @@ impl Loop<'_> {
     ) -> Result<TableMetadata, End> {
         'attempts: loop {
             self.before_request().await?;
-            let mut attempt = prepare_attempt(
+            let mut attempt = match prepare(
                 self.cx.io,
                 &current,
                 new,
@@ -445,7 +450,15 @@ impl Loop<'_> {
                 self.cx.max_metadata_bytes,
             )
             .await
-            .map_err(End::Error)?;
+            {
+                Ok(a) => a,
+                // An overwrite's file is no longer live in this base
+                // (`filter.rs`, Java's `failMissingDeletePaths`).
+                Err(FilterError::Missing(message)) => {
+                    return Err(self.conflict(&current, CHECK_MISSING, message));
+                }
+                Err(FilterError::Error(e)) => return Err(End::Error(e)),
+            };
             self.lists.push(attempt.snapshot.manifest_list().to_owned());
             let base = attempt_base(&attempt);
             let mut unknown = false;
@@ -646,7 +659,7 @@ impl Loop<'_> {
     }
 
     /// The branch's head in `m` (`Some(None)`: no such branch), as
-    /// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+    /// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
     fn head(&self, m: &TableMetadata) -> Option<Option<i64>> {
         branch_head(m, self.ids.branch)
     }
@@ -847,7 +860,7 @@ fn drop_statistics(attempt: &mut Attempt) -> bool {
 }
 
 /// The head of `branch` in `m` (`Some(None)`: no such branch), as
-/// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+/// [`prepare_attempt`](super::append::prepare_attempt) reads it; `None` when the refs cannot be read.
 fn branch_head(m: &TableMetadata, branch: &str) -> Option<Option<i64>> {
     let refs = snapshot_refs(m).ok()?;
     Some(match refs.get(branch) {
