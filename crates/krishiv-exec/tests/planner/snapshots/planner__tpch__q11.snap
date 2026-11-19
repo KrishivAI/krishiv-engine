@@ -22,14 +22,14 @@ Sort [value#16 DESC NULLS LAST]
       :                                   +- Filter ((n_name#13 == 'GERMANY') and isnotnull(n_nationkey#12))
       :                                      +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13], PushedFilters: [((n_name#13 == 'GERMANY') and isnotnull(n_nationkey#12))]
       +- Subquery scalar
-         +- Project [(sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))#4611686018427387924 * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#33]
+         +- Project [(sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))#4611686018427387925 * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#33]
             +- HashAggregate keys=[], functions=[sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))]
                +- Exchange SinglePartition
                   +- PartialHashAggregate keys=[], functions=[sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))]
                      +- Project [(ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0)))]
                         +- Project [ps_availqty#19, ps_supplycost#20]
                            +- HashJoin Inner, [ps_suppkey#1] = [s_suppkey#5], RuntimeFilter #4: ps_suppkey#1 -> spark_catalog.default.partsupp.ps_suppkey, probe filter: isnotnull(ps_suppkey#1) (ids +17)
-                              :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3], PushedFilters: [isnotnull(ps_suppkey#1)]
+                              :- Scan spark_catalog.default.partsupp [ps_suppkey#1, ps_availqty#2, ps_supplycost#3], PushedFilters: [isnotnull(ps_suppkey#1)]
                               +- BroadcastExchange
                                  +- Project [s_suppkey#5]
                                     +- HashJoin Inner, [s_nationkey#8] = [n_nationkey#12], RuntimeFilter #3: s_nationkey#8 -> spark_catalog.default.supplier.s_nationkey, probe filter: (isnotnull(s_suppkey#5) and isnotnull(s_nationkey#8))
