@@ -37,7 +37,7 @@ spark.profile.show()
 - `memory` reports, per UDF, the calls, the peak and the net bytes the calls allocated (`tracemalloc`), not Spark's line-by-line `memory_profiler` report, and it needs no extra package.
 - A profiled call takes a process-wide lock (also across sessions), because `cProfile` and `tracemalloc` are one per process: while a profiler is on, calls of profiled UDFs do not overlap, free-threaded Python included. Turn it off for timing the whole query.
 - Whether a call is profiled is decided when the column is built (`plus_one("id")`), by the setting at that moment, not when the query runs.
-- A profiled UDF must not run a query that calls another profiled UDF: the inner call waits for the lock the outer one holds.
+- Nested profiled calls are not supported: a profiled UDF must not run a query that calls another profiled UDF. The process lock is re-entrant, so on the same thread the inner call does not wait; on Python 3.12 and later enabling the inner `cProfile` raises `ValueError` (one profiler per process). The inner call waits for the lock only when it runs on another thread.
 - The profiler setting is read from the session the builder created (`SparkSession.builder.getOrCreate()`), not from a session made with `newSession()`: set `spark.sql.pyspark.udf.profiler` on the builder's session. Profiling per session is a follow-up.
 - The memory dump file is `.json`, where Spark writes `.txt`. `memory` resets the peak of a `tracemalloc` you started yourself.
 - `spark.profile.render` is not available.

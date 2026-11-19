@@ -57,6 +57,40 @@ fn a_bad_setting_fails_and_skips_the_rest() {
 }
 
 #[test]
+fn an_address_that_does_not_resolve_fails_and_keeps_every_check_row() {
+    let out = doctor(&["--json", "--conf", "krishiv.connect.address=not-an-ip"]);
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["ok"], false);
+    let checks: Vec<(&str, &str)> = v["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().expect("name"),
+                c["status"].as_str().expect("status"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("config", "ok"),
+            ("listener", "fail"),
+            ("authentication", "skipped"),
+            ("tls", "skipped"),
+            ("ports", "skipped"),
+            ("user", "skipped"),
+            ("directories", "skipped"),
+            ("paths", "skipped"),
+            ("object store", "skipped"),
+            ("catalogs", "skipped"),
+        ]
+    );
+}
+
+#[test]
 fn json_output_says_ok_and_lists_the_checks() {
     let out = doctor(&["--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");

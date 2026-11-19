@@ -145,6 +145,13 @@ pub(crate) fn diagnose(args: &ServerArgs) -> Vec<Check> {
                 e,
                 "set --host or krishiv.connect.address to an IP address",
             ));
+            // Same rows as every other failure path: what needs the listener address is skipped.
+            for name in DEPENDENT.iter().skip(1) {
+                out.push(Check::skipped(
+                    name,
+                    "the listener address does not resolve",
+                ));
+            }
             return out;
         }
     };
