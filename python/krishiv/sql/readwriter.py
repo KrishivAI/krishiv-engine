@@ -11,13 +11,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type
+from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type, unsupported_feature
 from krishiv.sql.column import Column
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.types import StructType
 
 if TYPE_CHECKING:
     from krishiv.sql.session import SparkSession
+
+
+def _refuse_jdbc(source: str) -> None:
+    """``format('jdbc')`` fails where it is named, not later as a wrong-typed ``path``."""
+    if isinstance(source, str) and source.lower() == "jdbc":
+        raise unsupported_feature("the jdbc data source (there is no JDBC data source)")
 
 
 def _schema_type_error(schema: object) -> PySparkTypeError:
@@ -41,8 +47,13 @@ class DataFrameReader:
         self._schema: tuple[str | None, str | None] = (None, None)
 
     def format(self, source: str) -> DataFrameReader:
+        _refuse_jdbc(source)
         self._format = source
         return self
+
+    def jdbc(self, *args: object, **kwargs: object) -> DataFrame:
+        """Not supported: Krishiv has no JDBC source (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("DataFrameReader.jdbc (there is no JDBC data source)")
 
     def schema(self, schema: StructType | str) -> DataFrameReader:
         """The input schema: a :class:`StructType` or a DDL string (``"a INT,
@@ -116,9 +127,14 @@ class DataFrameWriter:
         self._sort_by: list[str] | None = None
 
     def format(self, source: str) -> DataFrameWriter:
+        _refuse_jdbc(source)
         self._format = source
         self._format_set = True
         return self
+
+    def jdbc(self, *args: object, **kwargs: object) -> None:
+        """Not supported: Krishiv has no JDBC sink (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("DataFrameWriter.jdbc (there is no JDBC data source)")
 
     def mode(self, saveMode: str) -> DataFrameWriter:
         self._mode = saveMode
