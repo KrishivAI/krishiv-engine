@@ -53,8 +53,10 @@
 //! `cdc`, `celeborn`, `connect`, `flight-sql`, `iceberg`, `kafka`, `mcp`, `mimalloc`, `python` and
 //! `wasm-udf` are **reserved**: they are accepted and enable nothing yet (features are additive, so
 //! they can start to do something without a breaking change). `connect`, `flight-sql`, `mcp`,
-//! `python`, `kafka`, `iceberg` and `cdc` ship as their own `krishiv-*` crates and in the
-//! `krishiv` binary; `celeborn` is not implemented yet; `mimalloc` is the binary's allocator (set
+//! `python`, `kafka`, `iceberg` and `cdc` ship as their own `krishiv-*` crates; `connect` and `mcp`
+//! are also in the `krishiv` binary (`krishiv server`, `krishiv mcp`) and `python` is the `krishiv`
+//! Python package (the wheel); `celeborn` is not implemented yet; `mimalloc` is the binary's
+//! allocator (set
 //! in `krishiv-cli`), which a library never links; `wasm-udf` is forwarded from the CLI's feature
 //! of the same name.
 
