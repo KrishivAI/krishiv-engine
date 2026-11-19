@@ -1903,3 +1903,123 @@ async fn a_udtf_argument_naming_the_left_relation_by_plan_id_is_not_resolved_as_
         "{status:?}"
     );
 }
+
+/// Adds `name` with `data` to the session as `token` (one batch, one chunk).
+async fn add_artifact(channel: &Channel, token: &str, name: &str, data: &[u8]) {
+    use krishiv_connect::proto::v4_3::add_artifacts_request::{
+        ArtifactChunk, Batch, Payload, SingleChunkArtifact,
+    };
+    let request = pb::AddArtifactsRequest {
+        session_id: SESSION.to_owned(),
+        payload: Some(Payload::Batch(Batch {
+            artifacts: vec![SingleChunkArtifact {
+                name: name.to_owned(),
+                data: Some(ArtifactChunk {
+                    data: data.to_vec(),
+                    crc: i64::from(krishiv_connect_server::artifacts::crc32(data)),
+                }),
+            }],
+        })),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.client_streaming(
+        with_token(futures::stream::iter([request]), token),
+        path("AddArtifacts"),
+        tonic_prost::ProstCodec::<pb::AddArtifactsRequest, pb::AddArtifactsResponse>::default(),
+    )
+    .await
+    .expect("add the artifact");
+}
+
+/// `spark.addArtifacts("helper_mod.py", pyfile=True)`: the module is importable in the session's UDFs.
+const IMPORTS_HELPER: &str = "def f(x):\n    import helper_mod\n    return helper_mod.scale(x)";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udf_imports_a_pyfile_added_to_its_session() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    add_artifact(
+        &run.channel,
+        ADMIN,
+        "pyfiles/helper_mod.py",
+        b"def scale(x):\n    return x * 7\n",
+    )
+    .await;
+    let responses = execute(
+        &run.channel,
+        select(
+            3,
+            alias(
+                call(udf(
+                    Some(&py),
+                    "imports_helper",
+                    IMPORTS_HELPER,
+                    long(),
+                    vec![id()],
+                )),
+                "r",
+            ),
+        ),
+        ADMIN,
+    )
+    .await
+    .expect("the UDF imports the added module");
+    assert_eq!(longs(&responses), [Some(0), Some(7), Some(14)]);
+}
+
+/// A zip holding `pkg/__init__.py` with `def scale(x): return x * 5`, built by `python`.
+fn package_zip(python: &Path) -> Vec<u8> {
+    let code = "import io, sys, zipfile\nb = io.BytesIO()\n\
+                with zipfile.ZipFile(b, 'w') as z:\n    \
+                z.writestr('pkg/__init__.py', 'def scale(x):\\n    return x * 5\\n')\n\
+                sys.stdout.buffer.write(b.getvalue())";
+    let out = Command::new(python)
+        .args(["-c", code])
+        .output()
+        .expect("run the interpreter");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout
+}
+
+/// `spark.addArtifacts("dep.zip#dep", archive=True)`: Spark unpacks it as `dep` in the worker's working
+/// directory (not on `sys.path`), so `import dep.pkg` finds it from there.
+const IMPORTS_ARCHIVE: &str = "def f(x):\n    import dep.pkg\n    return dep.pkg.scale(x)";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_udf_imports_from_an_archive_under_its_fragment() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    add_artifact(
+        &run.channel,
+        ADMIN,
+        "archives/dep.zip#dep",
+        &package_zip(&py),
+    )
+    .await;
+    let responses = execute(
+        &run.channel,
+        select(
+            3,
+            alias(
+                call(udf(
+                    Some(&py),
+                    "imports_archive",
+                    IMPORTS_ARCHIVE,
+                    long(),
+                    vec![id()],
+                )),
+                "r",
+            ),
+        ),
+        ADMIN,
+    )
+    .await
+    .expect("the UDF imports from the unpacked archive");
+    assert_eq!(longs(&responses), [Some(0), Some(5), Some(10)]);
+}

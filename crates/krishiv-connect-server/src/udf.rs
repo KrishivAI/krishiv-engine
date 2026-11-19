@@ -146,6 +146,21 @@ impl SessionUdfRuntime for krishiv_udf_pool::SessionUdfs {
         );
     }
 
+    /// An archive's `#fragment` is the pool's alias: the directory it is unpacked into.
+    fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) {
+        krishiv_udf_pool::SessionUdfs::set_artifacts(
+            self,
+            pyfiles,
+            archives
+                .into_iter()
+                .map(|archive| krishiv_udf_pool::PythonArchive {
+                    path: archive.path,
+                    alias: archive.fragment,
+                })
+                .collect(),
+        );
+    }
+
     fn release(&self) {
         krishiv_udf_pool::SessionUdfs::release(self);
     }
