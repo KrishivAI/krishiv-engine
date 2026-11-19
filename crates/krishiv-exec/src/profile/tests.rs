@@ -1222,3 +1222,18 @@ fn text_lists_hints_only_when_there_are_some() {
         "{text}"
     );
 }
+
+/// Join inputs are positional (probe, build): one malformed element drops them all instead of shifting the rest,
+/// which would attribute the build input's facts to the probe.
+#[test]
+fn a_malformed_join_input_drops_all_inputs_rather_than_shifting_them() {
+    let good = serde_json::json!({"estimated_rows": 10, "statistics": false, "tables_without_stats": ["t"]});
+    let bad = serde_json::json!({"estimated_rows": "x", "statistics": true});
+    let both = serde_json::json!({"inputs": [good, good]});
+    let facts = super::facts_json::facts_of(&both).expect("facts");
+    assert_eq!(facts.inputs.len(), 2);
+    assert_eq!(facts.inputs[1].tables_without_stats, vec!["t".to_owned()]);
+    let mixed = serde_json::json!({"inputs": [bad, good]});
+    let facts = super::facts_json::facts_of(&mixed).expect("facts");
+    assert!(facts.inputs.is_empty());
+}
