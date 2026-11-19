@@ -15,6 +15,7 @@ pub mod metrics;
 mod prepared;
 pub mod server;
 mod service;
+pub mod session_options;
 pub mod sessions;
 pub mod sql_info;
 mod statement;

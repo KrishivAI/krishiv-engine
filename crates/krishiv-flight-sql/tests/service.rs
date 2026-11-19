@@ -37,6 +37,8 @@ use tonic::{Code, Request, Status};
 mod metadata;
 #[path = "service/prepared.rs"]
 mod prepared;
+#[path = "service/session_options.rs"]
+mod session_options;
 #[path = "service/updates.rs"]
 mod updates;
 
@@ -1797,7 +1799,10 @@ async fn list_actions_names_the_served_actions() {
             "CancelFlightInfo",
             "CancelQuery",
             "CreatePreparedStatement",
-            "ClosePreparedStatement"
+            "ClosePreparedStatement",
+            "SetSessionOptions",
+            "GetSessionOptions",
+            "CloseSession"
         ]
     );
     assert_eq!(h.flight.session_count(), 0);
