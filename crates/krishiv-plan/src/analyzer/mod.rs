@@ -115,6 +115,7 @@ mod ops;
 mod pivot;
 pub(crate) mod prefix;
 mod python_relations;
+mod python_udtf;
 mod reads;
 mod recursive;
 mod repartition;
@@ -150,8 +151,8 @@ use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
 pub use access::{
-    allowed, authorize, authorize_reported, authorize_secret_refs, insufficient_permissions,
-    namespace_parts, secret_scopes, table_ident,
+    allowed, authorize, authorize_quietly, authorize_reported, authorize_secret_refs,
+    insufficient_permissions, namespace_parts, secret_scopes, table_ident,
 };
 pub use builtins::BuiltinFunctions;
 pub use catalog::{

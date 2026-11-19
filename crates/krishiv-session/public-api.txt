@@ -1639,13 +1639,39 @@ pub struct krishiv_session::PythonUdfLibrary
 impl krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::entry(&self, &str) -> core::option::Option<krishiv_plan::analyzer::catalog::FunctionEntry>
 pub fn krishiv_session::PythonUdfLibrary::get(&self, &str) -> core::option::Option<krishiv_session::PythonUdfEntry>
+pub fn krishiv_session::PythonUdfLibrary::get_udtf(&self, &str) -> core::option::Option<krishiv_session::PythonUdtfEntry>
 pub fn krishiv_session::PythonUdfLibrary::new() -> Self
 pub fn krishiv_session::PythonUdfLibrary::register(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfLibrary::register_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::PythonUdfLibrary::version(&self) -> u64
 impl core::default::Default for krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::default() -> krishiv_session::PythonUdfLibrary
 impl core::fmt::Debug for krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::PythonUdtfDef
+pub krishiv_session::PythonUdtfDef::deterministic: bool
+pub krishiv_session::PythonUdtfDef::eval_type: krishiv_plan::function::PythonEvalType
+pub krishiv_session::PythonUdtfDef::name: alloc::string::String
+pub krishiv_session::PythonUdtfDef::return_type: core::option::Option<krishiv_types::data_type::DataType>
+impl core::clone::Clone for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::clone(&self) -> krishiv_session::PythonUdtfDef
+impl core::cmp::Eq for krishiv_session::PythonUdtfDef
+impl core::cmp::PartialEq for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::eq(&self, &krishiv_session::PythonUdtfDef) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdtfDef
+pub struct krishiv_session::PythonUdtfEntry
+pub krishiv_session::PythonUdtfEntry::def: krishiv_session::PythonUdtfDef
+pub krishiv_session::PythonUdtfEntry::version: u32
+impl core::clone::Clone for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::clone(&self) -> krishiv_session::PythonUdtfEntry
+impl core::cmp::Eq for krishiv_session::PythonUdtfEntry
+impl core::cmp::PartialEq for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::eq(&self, &krishiv_session::PythonUdtfEntry) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdtfEntry
 pub struct krishiv_session::QueryId(_)
 impl krishiv_session::QueryId
 pub fn krishiv_session::QueryId::as_str(&self) -> &str
@@ -1796,7 +1822,9 @@ pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
+pub fn krishiv_session::Session::python_udtf_frame(&self, &krishiv_session::PythonUdtfDef, u32, alloc::vec::Vec<krishiv_session::Column>) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::Session::register_python_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::set_python_udf_runtime(&self, alloc::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>)
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>

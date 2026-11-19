@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -238,6 +238,9 @@ pub mod node {
         /// feature: observe
         #[prost(message, tag = "33")]
         CollectMetrics(super::CollectMetricsNode),
+        /// feature: python_udtf
+        #[prost(message, tag = "34")]
+        PythonUdtf(super::PythonUdtfNode),
     }
 }
 /// feature: table_write
@@ -365,6 +368,49 @@ pub struct PythonMapNode {
     pub input: u32,
     #[prost(message, optional, tag = "2")]
     pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udtf
+/// A Python table function (eval types 300-302) over `input`: one task per
+/// partition; `udf`'s one side holds the scalar argument columns, its output
+/// the carried columns then the UDTF's.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonUdtfNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(message, optional, tag = "2")]
+    pub udf: ::core::option::Option<PythonRelation>,
+    /// Per argument, in call order: its name (unset for a positional one).
+    #[prost(message, repeated, tag = "3")]
+    pub arg_names: ::prost::alloc::vec::Vec<PythonUdtfArgName>,
+    /// The `TABLE` argument, if any.
+    #[prost(message, optional, tag = "4")]
+    pub table: ::core::option::Option<PythonUdtfTable>,
+    /// The input columns each result row leads with (a `LATERAL` call).
+    #[prost(uint64, repeated, tag = "5")]
+    pub carried: ::prost::alloc::vec::Vec<u64>,
+    /// `analyze`'s pickled `AnalyzeResult`, if any.
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub analyzed: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+/// feature: python_udtf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonUdtfArgName {
+    #[prost(string, optional, tag = "1")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// feature: python_udtf
+/// The `TABLE` argument's row struct: its fields as input columns, their
+/// names, and the fields that are `PARTITION BY` values.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonUdtfTable {
+    #[prost(uint64, tag = "1")]
+    pub position: u64,
+    #[prost(uint64, repeated, tag = "2")]
+    pub columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, repeated, tag = "3")]
+    pub names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(uint64, repeated, tag = "4")]
+    pub partition_child_indexes: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: python_udf_relations
 /// A grouped map over `input` clustered and sorted by the key columns.
