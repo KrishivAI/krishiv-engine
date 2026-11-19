@@ -1176,6 +1176,26 @@ fn nested_types_need_their_feature() {
 }
 
 #[test]
+fn a_user_defined_type_needs_its_feature() {
+    use krishiv_types::{DataType, UdtType};
+    // The storage type (an array) is a construct of its own: the UDT's `nested_types` comes with it.
+    let plan = message("udt_scan");
+    assert!(
+        plan.features.contains(&"udt_type".to_owned()),
+        "{:?}",
+        plan.features
+    );
+    let udt = DataType::Udt(std::sync::Arc::new(UdtType::new(
+        DataType::Integer,
+        Some("pkg.PointUDT".to_owned()),
+        None,
+        None,
+    )));
+    assert_eq!(feature_of(Construct::Type(&udt)), Some(Feature::UdtType));
+    assert_eq!(Feature::UdtType.kind(), FeatureKind::Semantic);
+}
+
+#[test]
 fn the_variant_type_needs_its_feature() {
     use krishiv_types::DataType;
     assert_eq!(message("variant_scan").features, ["variant_type"]);
