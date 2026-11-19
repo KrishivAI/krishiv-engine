@@ -107,6 +107,7 @@ __all__ = [
     "cot",
     "count_if",
     "count_min_sketch",
+    "counter_diff",
     "covar_pop",
     "covar_samp",
     "crc32",
@@ -176,6 +177,7 @@ __all__ = [
     "hll_sketch_estimate",
     "hll_union",
     "hll_union_agg",
+    "hmac",
     "hour",
     "hypot",
     "ifnull",
@@ -1019,6 +1021,11 @@ def count_min_sketch(
     raise _unsupported("count_min_sketch")
 
 
+def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``counter_diff``."""
+    return _call("counter_diff", _named(value, "value"), *_opt(_named, startTime, "startTime"))
+
+
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``covar_pop``."""
     return _call("covar_pop", _named(col1, "col1"), _named(col2, "col2"))
@@ -1365,6 +1372,11 @@ def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | No
     raise _unsupported("hll_union_agg")
 
 
+def hmac(key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``hmac``."""
+    return _call("hmac", _named(key, "key"), _named(message, "message"), *_opt(_named, algorithm, "algorithm"))
+
+
 def hour(col: ColumnOrName) -> Column:
     """Calls the registry function ``hour``."""
     return _call("hour", _named(col, "col"))
@@ -1405,9 +1417,17 @@ def input_file_name() -> Column:
     return _call("input_file_name")
 
 
-def instr(str: ColumnOrName, substr: str | Column) -> Column:
+def instr(
+    str: ColumnOrName, substr: str | Column, start: int | Column | None = None, occurrence: int | Column | None = None
+) -> Column:
     """Calls the registry function ``instr``."""
-    return _call("instr", _named(str, "str"), _lit(substr, "substr"))
+    return _call(
+        "instr",
+        _named(str, "str"),
+        _lit(substr, "substr"),
+        *_opt(_lit, start, "start"),
+        *_opt(_lit, occurrence, "occurrence"),
+    )
 
 
 def is_valid_utf8(str: ColumnOrName) -> Column:

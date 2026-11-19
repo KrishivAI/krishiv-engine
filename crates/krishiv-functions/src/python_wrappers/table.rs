@@ -700,7 +700,15 @@ pub(super) fn rows() -> Vec<Row> {
             "mask",
             "col: ColumnOrName, upperChar: ColumnOrName = None, lowerChar: ColumnOrName = None, digitChar: ColumnOrName = None, otherChar: ColumnOrName = None",
         ),
+        Row::new(
+            "hmac",
+            "key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName = None",
+        ),
         Row::new("ntile", "n: int"),
+        Row::new(
+            "counter_diff",
+            "value: ColumnOrName, startTime: ColumnOrName = None",
+        ),
         Row::new("rand", "seed: int = None"),
         Row::new("random", "seed: int = None"),
         Row::new("randn", "seed: int = None"),
@@ -804,7 +812,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("printf", "format: ColumnOrName, *cols: ColumnOrName"),
         Row::new("encode", "col: ColumnOrName, charset: str"),
         Row::new("find_in_set", "str: ColumnOrName, str_array: ColumnOrName"),
-        Row::new("instr", "str: ColumnOrName, substr: str | Column"),
+        Row::new(
+            "instr",
+            "str: ColumnOrName, substr: str | Column, start: int | Column = None, occurrence: int | Column = None",
+        ),
         Row::new("left", "str: ColumnOrName, len: ColumnOrName"),
         Row::new(
             "levenshtein",

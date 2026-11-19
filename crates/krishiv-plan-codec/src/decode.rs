@@ -1245,6 +1245,11 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 data_type: type_from(&o.data_type)?,
             }
         }
+        Function::CounterDiff(o) => WindowFunction::CounterDiff {
+            counter: usize_of(o.counter)?,
+            start_time: o.start_time.map(usize_of).transpose()?,
+            data_type: type_from(&o.data_type)?,
+        },
     };
     let frame = required(&f.frame, "a window frame")?;
     let bound = |b: i32, offset: i64, range: &[u8]| {

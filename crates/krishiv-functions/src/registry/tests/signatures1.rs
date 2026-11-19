@@ -7,7 +7,7 @@ use super::*;
 fn every_definition_is_in_sparks_catalog() {
     let r = builtins();
     assert!(r.unlisted().is_empty(), "{:?}", r.unlisted());
-    assert_eq!(r.spark_function_count(), 574);
+    assert_eq!(r.spark_function_count(), 576);
     assert_eq!(r.version(), 0);
     let names: Vec<&str> = r.functions().iter().map(|d| d.name).collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]));
