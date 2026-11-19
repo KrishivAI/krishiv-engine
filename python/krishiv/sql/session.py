@@ -27,6 +27,7 @@ from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
+    from krishiv._console import Console
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
@@ -118,6 +119,8 @@ class SparkSession:
         self._conf = RuntimeConfig(native)
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
+        # The session's web console once `krishiv.ui()` has started one; `stop` stops it.
+        self._console: Console | None = None
 
     @property
     def version(self) -> str:
@@ -400,6 +403,9 @@ class SparkSession:
         with _lock:
             if _active is self:
                 _active = None
+        console, self._console = self._console, None
+        if console is not None:
+            console.stop()
 
 
 def _is_pandas(data: Any) -> bool:

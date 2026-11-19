@@ -81,6 +81,13 @@ pub struct PySession {
     udfs: std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>,
 }
 
+impl PySession {
+    /// The engine session behind this handle.
+    pub(crate) fn session(&self) -> &Session {
+        &self.inner
+    }
+}
+
 #[pymethods]
 impl PySession {
     /// A session with the configuration `config` (`(key, value)` pairs).

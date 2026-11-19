@@ -15,10 +15,12 @@ from typing import final
 __version__: str
 __allocator__: str
 __commit__: str
+__ui__: bool
 __all__ = [
     "AnonymousPythonUdf",
     "ArrowStream",
     "Column",
+    "Console",
     "DataFrame",
     "GroupedData",
     "LocalConnectServer",
@@ -27,6 +29,7 @@ __all__ = [
     "WindowSpec",
     "__allocator__",
     "__commit__",
+    "__ui__",
     "__version__",
     "_udf_pool_shutdown",
     "_udf_runner_conf",
@@ -49,6 +52,20 @@ class LocalConnectServer:
     def token(self) -> str: ...
     @property
     def connection_string(self) -> str: ...
+    def is_running(self) -> bool: ...
+    def stop(self) -> None: ...
+
+@final
+class Console:
+    def __new__(cls, session: Session, port: int = ...) -> Console: ...
+    @property
+    def port(self) -> int: ...
+    @property
+    def token(self) -> str: ...
+    @property
+    def url(self) -> str: ...
+    @property
+    def session_id(self) -> str: ...
     def is_running(self) -> bool: ...
     def stop(self) -> None: ...
 
