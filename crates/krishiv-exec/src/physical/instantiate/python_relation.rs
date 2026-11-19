@@ -6,6 +6,7 @@
 //! [`UdfRuntime`]: crate::python_eval::UdfRuntime
 
 use super::*;
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowType, Field};
 use krishiv_common::config::ARROW_MAX_RECORDS_PER_BATCH;
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
@@ -13,7 +14,7 @@ use krishiv_plan::{ExprNode, PythonUdfRef, ResolvedExpr};
 use krishiv_types::arrow::client_arrow_type;
 
 use crate::operators::ScalarExpr;
-use crate::physical::{PythonCallPlan, PythonRelationPlan};
+use crate::physical::{PythonCallPlan, PythonRelationPlan, PythonUdtfPlan};
 use crate::python_relation::{
     DEFAULT_WINDOW, InputColumn, PreparedRelationUdf, RelationCallSpec, RelationLane,
     RelationLimits, RelationShape, RelationSink, RunnerConf,
@@ -34,7 +35,9 @@ impl Instantiation<'_> {
     /// and whose source yields what they returned.
     pub(super) fn python_relation(&mut self, node: &PhysNode) -> Result<Built> {
         let (input, shape) = match node {
-            PhysNode::PythonMap { input, .. } => (input, RelationShape::Map),
+            PhysNode::PythonMap { input, .. } | PhysNode::PythonUdtf { input, .. } => {
+                (input, RelationShape::Map)
+            }
             PhysNode::PythonGroupMap { input, keys, .. } => {
                 (input, RelationShape::Grouped { keys: keys.clone() })
             }
@@ -88,6 +91,9 @@ impl Instantiation<'_> {
                     | RelationShape::Aligned { .. } => 0,
                 };
                 self.relation_lane(&input.schema, udf, keys, &conf)?
+            }
+            PhysNode::PythonUdtf { udf, call, .. } => {
+                self.udtf_lane(&input.schema, udf, call, &conf)?
             }
             PhysNode::PythonAggregate {
                 layout,
@@ -249,6 +255,149 @@ impl Instantiation<'_> {
             udf,
             sides,
             names: plan.sides.iter().map(|s| s.names.clone()).collect(),
+            client,
+        };
+        Ok((vec![lane], Arc::new(Schema::new(canonical))))
+    }
+
+    /// The lane of a Python UDTF and its schema: the frames are the call's
+    /// arguments in call order (the `TABLE` argument as one struct column
+    /// of its row), then the carried columns; the result is the carried
+    /// columns, then the UDTF's.
+    fn udtf_lane(
+        &self,
+        input: &SchemaRef,
+        plan: &PythonRelationPlan,
+        call: &PythonUdtfPlan,
+        conf: &RunnerConf,
+    ) -> Result<(Vec<RelationLane>, SchemaRef)> {
+        let column = |c: usize| -> Result<Arc<dyn ScalarExpr>> {
+            let field = input
+                .fields()
+                .get(c)
+                .ok_or_else(|| internal(format!("frame column {c} out of range")))?;
+            Ok(Arc::new(InputColumn {
+                index: c,
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+            }))
+        };
+        let side = plan
+            .sides
+            .first()
+            .ok_or_else(|| internal("a Python UDTF without its argument side".to_owned()))?;
+        let mut frame: Vec<Arc<dyn ScalarExpr>> = Vec::with_capacity(call.arg_names.len());
+        let mut names = Vec::with_capacity(call.arg_names.len());
+        let mut types = Vec::with_capacity(call.arg_names.len());
+        let mut scalars = side.columns.iter().zip(&side.types);
+        for i in 0..call.arg_names.len() {
+            match &call.table {
+                Some(t) if t.position == i => {
+                    let mut fields = Vec::with_capacity(t.columns.len());
+                    let mut spark = Vec::with_capacity(t.columns.len());
+                    for (&c, name) in t.columns.iter().zip(&t.names) {
+                        let field = input
+                            .fields()
+                            .get(c)
+                            .ok_or_else(|| internal(format!("table column {c} out of range")))?;
+                        fields.push(Field::new(
+                            name,
+                            field.data_type().clone(),
+                            field.is_nullable(),
+                        ));
+                        spark.push(krishiv_types::StructField::new(
+                            name.clone(),
+                            krishiv_types::DataType::from_arrow(field.data_type()).map_err(
+                                |e| internal(format!("a TABLE argument column's type: {e}")),
+                            )?,
+                            field.is_nullable(),
+                        ));
+                    }
+                    frame.push(Arc::new(StructOf {
+                        columns: t.columns.clone(),
+                        fields: fields.into(),
+                    }));
+                    types.push(krishiv_types::DataType::Struct(
+                        krishiv_types::StructType::new(spark),
+                    ));
+                }
+                _ => {
+                    let (&c, t) = scalars
+                        .next()
+                        .ok_or_else(|| internal("Python UDTF argument count".to_owned()))?;
+                    frame.push(column(c)?);
+                    types.push(t.clone());
+                }
+            }
+            names.push(format!("_{i}"));
+        }
+        let args = frame.len();
+        for (j, &c) in call.carried.iter().enumerate() {
+            frame.push(column(c)?);
+            let field = input
+                .fields()
+                .get(c)
+                .ok_or_else(|| internal(format!("carried column {c} out of range")))?;
+            types.push(
+                krishiv_types::DataType::from_arrow(field.data_type())
+                    .map_err(|e| internal(format!("a carried column's type: {e}")))?,
+            );
+            names.push(format!("_carried{j}"));
+        }
+        let canonical: Vec<Field> = plan
+            .output
+            .iter()
+            .map(|c| Field::new(&c.name, c.data_type.to_arrow(), c.nullable))
+            .collect();
+        let client: Vec<ArrowType> = canonical
+            .iter()
+            .map(|f| client_arrow_type(f.data_type()))
+            .collect();
+        let client_fields: Vec<Field> = canonical
+            .iter()
+            .zip(&client)
+            .map(|(f, t)| Field::new(f.name(), t.clone(), f.is_nullable()))
+            .collect();
+        let udtf = crate::python_udtf::UdtfCall {
+            args: call
+                .arg_names
+                .iter()
+                .enumerate()
+                .map(|(offset, name)| crate::python_udtf::UdtfArg {
+                    offset,
+                    name: name.clone(),
+                })
+                .collect(),
+            partition_child_indexes: call
+                .table
+                .as_ref()
+                .map(|t| t.partition_child_indexes.clone())
+                .unwrap_or_default(),
+            table_arg_offsets: call.table.iter().map(|t| t.position).collect(),
+            analyze_result: call.analyzed.as_deref().map(Arc::from),
+            passthrough: (args..args + call.carried.len()).collect(),
+        };
+        let spec = RelationCallSpec {
+            name: plan.udf.name.clone(),
+            version: plan.udf.version,
+            eval_type: plan.udf.eval_type,
+            thread_safe: plan.udf.thread_safe,
+            input_types: vec![types],
+            input_names: vec![names.clone()],
+            key_count: 0,
+            arity: frame.len(),
+            output_names: plan.output.iter().map(|c| c.name.clone()).collect(),
+            output_types: plan.output.iter().map(|c| c.data_type.clone()).collect(),
+            output_arrow: Arc::new(Schema::new(client_fields)),
+            conf: conf.clone(),
+            udtf: Some(udtf),
+        };
+        let udf = self.prepare_relation(&plan.udf, &spec)?;
+        let lane = RelationLane {
+            name: plan.udf.name.clone(),
+            udf,
+            sides: vec![frame],
+            names: vec![names],
             client,
         };
         Ok((vec![lane], Arc::new(Schema::new(canonical))))
@@ -425,5 +574,45 @@ impl Instantiation<'_> {
             });
         }
         Ok((lanes, Arc::new(Schema::new(fields))))
+    }
+}
+
+/// A `TABLE` argument's row: a struct of input columns (Spark's
+/// `CreateStruct(subquery.output)`).
+#[derive(Debug)]
+struct StructOf {
+    columns: Vec<usize>,
+    fields: arrow_schema::Fields,
+}
+
+impl ScalarExpr for StructOf {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Struct(self.fields.clone())
+    }
+
+    fn nullable(&self) -> bool {
+        false
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        let arrays = self
+            .columns
+            .iter()
+            .map(|&c| {
+                batch
+                    .columns()
+                    .get(c)
+                    .cloned()
+                    .ok_or_else(|| internal(format!("table column {c} out of range")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        let rows = RecordBatch::try_new_with_options(
+            Arc::new(Schema::new(self.fields.clone())),
+            arrays,
+            &options,
+        )
+        .map_err(|e| internal(format!("a TABLE argument's row: {e}")))?;
+        Ok(Arc::new(arrow_array::StructArray::from(rows)))
     }
 }

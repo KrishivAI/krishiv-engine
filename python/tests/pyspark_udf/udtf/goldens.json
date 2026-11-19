@@ -1,0 +1,6007 @@
+{
+ "cases": {
+  "analyze/udtf300/argument_array": {
+   "rows": [
+    [
+     0,
+     "array<int>",
+     "[1, 2]",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_binary": {
+   "rows": [
+    [
+     0,
+     "binary",
+     "b'\\n\\xff'",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_boolean": {
+   "rows": [
+    [
+     0,
+     "boolean",
+     "True",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_date": {
+   "rows": [
+    [
+     0,
+     "date",
+     "datetime.date(2020, 1, 2)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_decimal": {
+   "rows": [
+    [
+     0,
+     "decimal(3,2)",
+     "Decimal('1.50')",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_decimal_cast": {
+   "rows": [
+    [
+     0,
+     "decimal(10,3)",
+     "Decimal('1.500')",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_double": {
+   "rows": [
+    [
+     0,
+     "double",
+     "1.5",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_expression": {
+   "rows": [
+    [
+     0,
+     "int",
+     "2",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_int": {
+   "rows": [
+    [
+     0,
+     "int",
+     "1",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_interval": {
+   "rows": [
+    [
+     0,
+     "interval day",
+     "datetime.timedelta(days=1)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_map": {
+   "rows": [
+    [
+     0,
+     "map<string,int>",
+     "{'k': 1}",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_non_constant_column": {
+   "rows": [
+    [
+     1,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     2,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     3,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     4,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     5,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ]
+   ],
+   "schema": "struct<id:int,position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_null": {
+   "rows": [
+    [
+     0,
+     "void",
+     "None",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_null_typed": {
+   "rows": [
+    [
+     0,
+     "date",
+     "None",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_string": {
+   "rows": [
+    [
+     0,
+     "string",
+     "'abc'",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_struct": {
+   "rows": [
+    [
+     0,
+     "struct<x:int,y:string>",
+     "Row(x=1, y='a')",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_timestamp": {
+   "rows": [
+    [
+     0,
+     "timestamp",
+     "datetime.datetime(2020, 1, 2, 3, 4, 5)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/argument_timestamp_ntz": {
+   "rows": [
+    [
+     0,
+     "timestamp_ntz",
+     "datetime.datetime(2020, 1, 2, 3, 4, 5)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/dataframe_partition_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     1
+    ],
+    [
+     "a",
+     2,
+     2
+    ],
+    [
+     "b",
+     3,
+     1
+    ],
+    [
+     "b",
+     4,
+     2
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf300/named_arguments": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the static 'analyze' method (got an unexpected keyword argument 'b'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its static 'analyze' method accepts the provided arguments, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/partition_by_and_explicit_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL] Failed to evaluate the table function f because its table metadata specified its own required partitioning of the input table, but the function call specified the WITH SINGLE PARTITION or PARTITION BY clause; please remove these clauses and retry the query again.. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/partition_by_without_table": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method returned an 'AnalyzeResult' object with the 'partitionBy' list set to non-empty, but the function call did not provide any table argument. Please update the query so that it provides a table argument, or else update the table function so that its 'analyze' method returns an 'AnalyzeResult' object with the 'partitionBy' list set to empty, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/schema_from_argument": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<colname:int>"
+  },
+  "analyze/udtf300/single_partition_and_explicit_single_partition": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL] Failed to evaluate the table function f because its table metadata specified its own required partitioning of the input table, but the function call specified the WITH SINGLE PARTITION or PARTITION BY clause; please remove these clauses and retry the query again.. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/single_partition_without_table": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method returned an 'AnalyzeResult' object with the 'withSinglePartition' field set to 'true', but the function call did not provide any table argument. Please update the query so that it provides a table argument, or else update the table function so that its 'analyze' method returns an 'AnalyzeResult' object with the 'withSinglePartition' field set to 'false', and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/table_argument_seen": {
+   "rows": [
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf300/table_order_by_without_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID] Failed to evaluate the table function f because its table metadata was invalid; the 'order_by' field cannot be non-empty unless the 'with_single_partition' field is set to true or the 'partition_by' list is non-empty. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/table_partition_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf300/table_partition_by_expr_order_by_expr": {
+   "rows": [
+    [
+     "a",
+     1,
+     1
+    ],
+    [
+     "a",
+     2,
+     2
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     3
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf300/table_partition_by_order_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf300/table_partition_by_select_order_by": {
+   "rows": [
+    [
+     "1",
+     "a",
+     1
+    ],
+    [
+     "2",
+     "a",
+     2
+    ],
+    [
+     "3",
+     "a",
+     1
+    ],
+    [
+     "4",
+     "a",
+     2
+    ],
+    [
+     "5",
+     "a",
+     1
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf300/table_partition_by_unknown_column": {
+   "error": {
+    "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "exception": "AnalysisException",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`g`, `id`, `v`]. SQLSTATE: 42703; line 1 pos 0;",
+    "python_error": null,
+    "sqlstate": "42703",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/table_select": {
+   "rows": [
+    [
+     "1",
+     "a,g2",
+     2
+    ],
+    [
+     "2",
+     "a,g2",
+     1
+    ],
+    [
+     "3",
+     "a,g2",
+     4
+    ],
+    [
+     "4",
+     "a,g2",
+     3
+    ],
+    [
+     "5",
+     "a,g2",
+     5
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf300/table_select_expression": {
+   "rows": [
+    [
+     "2",
+     "a,g2",
+     2
+    ],
+    [
+     "3",
+     "a,g2",
+     1
+    ],
+    [
+     "4",
+     "a,g2",
+     4
+    ],
+    [
+     "5",
+     "a,g2",
+     3
+    ],
+    [
+     "6",
+     "a,g2",
+     5
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf300/table_select_expression_needs_alias": {
+   "error": {
+    "condition": "UDTF_INVALID_REQUESTED_SELECTED_EXPRESSION_FROM_ANALYZE_METHOD_REQUIRES_ALIAS",
+    "exception": "AnalysisException",
+    "message": "[UDTF_INVALID_REQUESTED_SELECTED_EXPRESSION_FROM_ANALYZE_METHOD_REQUIRES_ALIAS] Failed to evaluate the user-defined table function because its 'analyze' method returned a requested 'select' expression ((id + 1)) that does not include a corresponding alias; please update the UDTF to specify an alias there and then try the query again. SQLSTATE: 42802; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "42802",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/table_select_unknown_column": {
+   "error": {
+    "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "exception": "AnalysisException",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`g`, `id`, `v`]. SQLSTATE: 42703; line 1 pos 0;",
+    "python_error": null,
+    "sqlstate": "42703",
+    "worker": null
+   }
+  },
+  "analyze/udtf300/table_single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     4
+    ],
+    [
+     "b",
+     4,
+     3
+    ],
+    [
+     "c",
+     5,
+     5
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf300/table_single_partition_and_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID] Failed to evaluate the table function f because its table metadata was invalid; the 'with_single_partition' field cannot be assigned to true if the 'partition_by' list is non-empty. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/argument_binary": {
+   "rows": [
+    [
+     0,
+     "binary",
+     "b'\\n\\xff'",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/argument_date": {
+   "rows": [
+    [
+     0,
+     "date",
+     "datetime.date(2020, 1, 2)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/argument_decimal": {
+   "rows": [
+    [
+     0,
+     "decimal(3,2)",
+     "Decimal('1.50')",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/argument_non_constant_column": {
+   "rows": [
+    [
+     1,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     2,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     3,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     4,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ],
+    [
+     5,
+     0,
+     "int",
+     "None",
+     false,
+     false
+    ]
+   ],
+   "schema": "struct<id:int,position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/argument_null": {
+   "rows": [
+    [
+     0,
+     "void",
+     "None",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/argument_timestamp": {
+   "rows": [
+    [
+     0,
+     "timestamp",
+     "datetime.datetime(2020, 1, 2, 3, 4, 5)",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/dataframe_partition_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     1
+    ],
+    [
+     "a",
+     2,
+     2
+    ],
+    [
+     "b",
+     3,
+     1
+    ],
+    [
+     "b",
+     4,
+     2
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf301/named_arguments": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the static 'analyze' method (got an unexpected keyword argument 'b'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its static 'analyze' method accepts the provided arguments, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/partition_by_and_explicit_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL] Failed to evaluate the table function f because its table metadata specified its own required partitioning of the input table, but the function call specified the WITH SINGLE PARTITION or PARTITION BY clause; please remove these clauses and retry the query again.. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/partition_by_without_table": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method returned an 'AnalyzeResult' object with the 'partitionBy' list set to non-empty, but the function call did not provide any table argument. Please update the query so that it provides a table argument, or else update the table function so that its 'analyze' method returns an 'AnalyzeResult' object with the 'partitionBy' list set to empty, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/schema_from_argument": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<colname:int>"
+  },
+  "analyze/udtf301/single_partition_and_explicit_single_partition": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INCOMPATIBLE_WITH_CALL] Failed to evaluate the table function f because its table metadata specified its own required partitioning of the input table, but the function call specified the WITH SINGLE PARTITION or PARTITION BY clause; please remove these clauses and retry the query again.. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/single_partition_without_table": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method returned an 'AnalyzeResult' object with the 'withSinglePartition' field set to 'true', but the function call did not provide any table argument. Please update the query so that it provides a table argument, or else update the table function so that its 'analyze' method returns an 'AnalyzeResult' object with the 'withSinglePartition' field set to 'false', and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/table_argument_seen": {
+   "rows": [
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     0,
+     "struct<id:int,g:string,v:int>",
+     "None",
+     false,
+     true
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ],
+    [
+     1,
+     "int",
+     "5",
+     true,
+     false
+    ]
+   ],
+   "schema": "struct<position:int,data_type:string,value:string,is_constant:boolean,is_table:boolean>"
+  },
+  "analyze/udtf301/table_order_by_without_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID] Failed to evaluate the table function f because its table metadata was invalid; the 'order_by' field cannot be non-empty unless the 'with_single_partition' field is set to true or the 'partition_by' list is non-empty. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/table_partition_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf301/table_partition_by_expr_order_by_expr": {
+   "rows": [
+    [
+     "a",
+     1,
+     1
+    ],
+    [
+     "a",
+     2,
+     2
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     3
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf301/table_partition_by_order_by": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     2
+    ],
+    [
+     "b",
+     4,
+     1
+    ],
+    [
+     "c",
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf301/table_partition_by_select_order_by": {
+   "rows": [
+    [
+     "1",
+     "a",
+     1
+    ],
+    [
+     "2",
+     "a",
+     2
+    ],
+    [
+     "3",
+     "a",
+     1
+    ],
+    [
+     "4",
+     "a",
+     2
+    ],
+    [
+     "5",
+     "a",
+     1
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf301/table_partition_by_unknown_column": {
+   "error": {
+    "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "exception": "AnalysisException",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`g`, `id`, `v`]. SQLSTATE: 42703; line 1 pos 0;",
+    "python_error": null,
+    "sqlstate": "42703",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/table_select": {
+   "rows": [
+    [
+     "1",
+     "a,g2",
+     2
+    ],
+    [
+     "2",
+     "a,g2",
+     1
+    ],
+    [
+     "3",
+     "a,g2",
+     4
+    ],
+    [
+     "4",
+     "a,g2",
+     3
+    ],
+    [
+     "5",
+     "a,g2",
+     5
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf301/table_select_expression": {
+   "rows": [
+    [
+     "2",
+     "a,g2",
+     2
+    ],
+    [
+     "3",
+     "a,g2",
+     1
+    ],
+    [
+     "4",
+     "a,g2",
+     4
+    ],
+    [
+     "5",
+     "a,g2",
+     3
+    ],
+    [
+     "6",
+     "a,g2",
+     5
+    ]
+   ],
+   "schema": "struct<a:string,b:string,n:int>"
+  },
+  "analyze/udtf301/table_select_expression_needs_alias": {
+   "error": {
+    "condition": "UDTF_INVALID_REQUESTED_SELECTED_EXPRESSION_FROM_ANALYZE_METHOD_REQUIRES_ALIAS",
+    "exception": "AnalysisException",
+    "message": "[UDTF_INVALID_REQUESTED_SELECTED_EXPRESSION_FROM_ANALYZE_METHOD_REQUIRES_ALIAS] Failed to evaluate the user-defined table function because its 'analyze' method returned a requested 'select' expression ((id + 1)) that does not include a corresponding alias; please update the UDTF to specify an alias there and then try the query again. SQLSTATE: 42802; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "42802",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/table_select_unknown_column": {
+   "error": {
+    "condition": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "exception": "AnalysisException",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `nope` cannot be resolved. Did you mean one of the following? [`g`, `id`, `v`]. SQLSTATE: 42703; line 1 pos 0;",
+    "python_error": null,
+    "sqlstate": "42703",
+    "worker": null
+   }
+  },
+  "analyze/udtf301/table_single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2
+    ],
+    [
+     "a",
+     2,
+     1
+    ],
+    [
+     "b",
+     3,
+     4
+    ],
+    [
+     "b",
+     4,
+     3
+    ],
+    [
+     "c",
+     5,
+     5
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int>"
+  },
+  "analyze/udtf301/table_single_partition_and_partition_by": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_REQUIRED_METADATA_INVALID] Failed to evaluate the table function f because its table metadata was invalid; the 'with_single_partition' field cannot be assigned to true if the 'partition_by' list is non-empty. SQLSTATE: 22023; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "22023",
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_binary": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_date": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_decimal": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_non_constant_column": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_null": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/argument_timestamp": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/dataframe_partition_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/named_arguments": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/partition_by_and_explicit_partition_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/partition_by_without_table": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/schema_from_argument": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'NamedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'NamedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/single_partition_and_explicit_single_partition": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/single_partition_without_table": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_argument_seen": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'DescribeArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'DescribeArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_order_by_without_partition_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_partition_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_partition_by_expr_order_by_expr": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_partition_by_order_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_partition_by_select_order_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_partition_by_unknown_column": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_select": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_select_expression": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_select_expression_needs_alias": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_select_unknown_column": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_single_partition": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "analyze/udtf302/table_single_partition_and_partition_by": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'AnalyzedArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'AnalyzedArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "definition/default_udtf_eval_type": {
+   "rows": [
+    [
+     "b'ab'"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "errors/definition/no_eval_method": {
+   "error": {
+    "condition": "INVALID_UDTF_NO_EVAL",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_UDTF_NO_EVAL] The UDTF 'NoEval' is invalid. It does not implement the required 'eval' method. Please implement the 'eval' method in 'NoEval' and try again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/definition/no_return_type_no_analyze": {
+   "error": {
+    "condition": "INVALID_UDTF_RETURN_TYPE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_UDTF_RETURN_TYPE] The UDTF 'NoType' is invalid. It does not specify its return type or implement the required 'analyze' static method. Please specify the return type or implement the 'analyze' static method in 'NoType' and try again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/definition/return_type_and_analyze": {
+   "error": {
+    "condition": "INVALID_UDTF_BOTH_RETURN_TYPE_AND_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_UDTF_BOTH_RETURN_TYPE_AND_ANALYZE] The UDTF 'Both' is invalid. It has both its return type and an 'analyze' attribute. Please make it have one of either the return type or the 'analyze' static method in 'Both' and try again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/definition/return_type_array": {
+   "error": {
+    "condition": "UDTF_RETURN_TYPE_MISMATCH",
+    "exception": "PySparkTypeError",
+    "message": "[UDTF_RETURN_TYPE_MISMATCH] Mismatch in return type for the UDTF 'Bad'. Expected a 'StructType', but got 'ArrayType(IntegerType(), True)'. Please ensure the return type is a correctly formatted StructType.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/definition/return_type_not_struct": {
+   "error": {
+    "condition": "UDTF_RETURN_TYPE_MISMATCH",
+    "exception": "PySparkTypeError",
+    "message": "[UDTF_RETURN_TYPE_MISMATCH] Mismatch in return type for the UDTF 'Bad'. Expected a 'StructType', but got 'IntegerType()'. Please ensure the return type is a correctly formatted StructType.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf300/analyze_none": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method expects a result of type pyspark.sql.udtf.AnalyzeResult with a 'schema' field comprising a StructType, but the 'schema' field had the wrong type: <class 'NoneType'> SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/analyze_raises": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Traceback (most recent call last):",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/analyze_two": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the static 'analyze' method (missing a required argument: 'b'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its static 'analyze' method accepts the provided arguments, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/analyze_wrong_type": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method expects a result of type pyspark.sql.udtf.AnalyzeResult, but instead this method returned a value of type: <class 'pyspark.sql.types.StructType'> SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/constructor_argument_without_analyze": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD] Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD",
+     "message": "Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/constructor_arguments_with_analyze": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_CONSTRUCTOR_INVALID_IMPLEMENTS_ANALYZE_METHOD] Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function implements the 'analyze' method, but its constructor has more than two arguments (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, or one 'self' argument plus another argument for the result of the 'analyze' method, and try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_CONSTRUCTOR_INVALID_IMPLEMENTS_ANALYZE_METHOD",
+     "message": "Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function implements the 'analyze' method, but its constructor has more than two arguments (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, or one 'self' argument plus another argument for the result of the 'analyze' method, and try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/eval_too_few_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/eval_too_many_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/eval_wrong_argument_name": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/raises_in_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: eval failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/raises_in_init": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: init failed",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EXEC_ERROR",
+     "message": "User defined table function encountered an error in the '__init__' method: init failed",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/raises_in_terminate": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: terminate failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/rows_dict_row": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_iterator_of_rows_then_none": {
+   "rows": [
+    [
+     null
+    ],
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_list_result": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_list_row": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_narrow_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_SCHEMA_MISMATCH] The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 0. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 0. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/rows_none_result": {
+   "rows": [],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_none_row": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_not_iterable": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_NOT_ITERABLE] The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_NOT_ITERABLE",
+     "message": "The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/rows_row_object": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf300/rows_scalar_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_INVALID_OUTPUT_ROW_TYPE] The type of an individual output row in the 'eval' method of the UDTF is invalid. Each row should be a tuple, list, or dict, but got 'int'. Please make sure that the output rows are of the correct type.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_INVALID_OUTPUT_ROW_TYPE",
+     "message": "The type of an individual output row in the 'eval' method of the UDTF is invalid. Each row should be a tuple, list, or dict, but got 'int'. Please make sure that the output rows are of the correct type.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/rows_string_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_INVALID_OUTPUT_ROW_TYPE] The type of an individual output row in the 'eval' method of the UDTF is invalid. Each row should be a tuple, list, or dict, but got 'str'. Please make sure that the output rows are of the correct type.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_INVALID_OUTPUT_ROW_TYPE",
+     "message": "The type of an individual output row in the 'eval' method of the UDTF is invalid. Each row should be a tuple, list, or dict, but got 'str'. Please make sure that the output rows are of the correct type.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/rows_wide_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_SCHEMA_MISMATCH] The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 2. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 2. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf300/scalar_argument_to_table_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "TypeError: 'int' object is not subscriptable",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf300/table_argument_to_scalar_eval": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "org.apache.spark.SparkException: Job aborted due to stage failure: Task 0 in stage N.0 failed 1 times, most recent failure: Lost task N.0 in stage N.0 (TID N) (HOST executor driver): net.razorvine.pickle.PickleException: expected zero arguments for construction of ClassDict (for pyspark.sql.types._create_row). This happens when an unsupported/unregistered class is being unpickled that requires construction arguments. Fix it by registering a custom IObjectConstructor for this class.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf301/analyze_none": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method expects a result of type pyspark.sql.udtf.AnalyzeResult with a 'schema' field comprising a StructType, but the 'schema' field had the wrong type: <class 'NoneType'> SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/analyze_raises": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Traceback (most recent call last):",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/analyze_two": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the static 'analyze' method (missing a required argument: 'b'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its static 'analyze' method accepts the provided arguments, and then try the query again. SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/analyze_wrong_type": {
+   "error": {
+    "condition": "TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON",
+    "exception": "AnalysisException",
+    "message": "[TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON] Failed to analyze the Python user defined table function: Failed to evaluate the user-defined table function 'f' because the static 'analyze' method expects a result of type pyspark.sql.udtf.AnalyzeResult, but instead this method returned a value of type: <class 'pyspark.sql.types.StructType'> SQLSTATE: 38000; line 1 pos 14",
+    "python_error": null,
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/constructor_argument_without_analyze": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD] Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD",
+     "message": "Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/constructor_arguments_with_analyze": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_CONSTRUCTOR_INVALID_IMPLEMENTS_ANALYZE_METHOD] Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function implements the 'analyze' method, but its constructor has more than two arguments (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, or one 'self' argument plus another argument for the result of the 'analyze' method, and try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_CONSTRUCTOR_INVALID_IMPLEMENTS_ANALYZE_METHOD",
+     "message": "Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function implements the 'analyze' method, but its constructor has more than two arguments (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, or one 'self' argument plus another argument for the result of the 'analyze' method, and try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/eval_too_few_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/eval_too_many_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/eval_wrong_argument_name": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/raises_in_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: eval failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/raises_in_init": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: init failed",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EXEC_ERROR",
+     "message": "User defined table function encountered an error in the '__init__' method: init failed",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/raises_in_terminate": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: terminate failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/rows_dict_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert {'a': 1} with type dict: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [({'a': 1},)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/rows_iterator_of_rows_then_none": {
+   "rows": [
+    [
+     null
+    ],
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_list_result": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_list_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert [1] with type list: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [([1],)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/rows_narrow_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkValueError: [AXIS_LENGTH_MISMATCH] Length mismatch: Expected axis has 1 elements, new values have 0 elements.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 0. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/rows_none_result": {
+   "rows": [],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_none_row": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_not_iterable": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_NOT_ITERABLE] The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_NOT_ITERABLE",
+     "message": "The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/rows_row_object": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_scalar_int": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf301/rows_string_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert '1' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('1',)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/rows_wide_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkValueError: [AXIS_LENGTH_MISMATCH] Length mismatch: Expected axis has 1 elements, new values have 2 elements.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 2. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf301/scalar_argument_to_table_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "TypeError: 'int' object is not subscriptable",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf301/table_argument_to_scalar_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert Row(id=2, g='a', v=20) with type Row: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(Row(id=2, g='a', v=20), 0), (Row(id=2, g='a', v=20), 1)]. Schema: struct<a:int,i:int>. Arrow Schema: struct<a: int32, i: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/analyze_none": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'FailArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'FailArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf302/analyze_raises": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'FailArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'FailArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf302/analyze_two": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'FailArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'FailArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf302/analyze_wrong_type": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'FailArrow' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'FailArrow' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf302/constructor_argument_without_analyze": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD] Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD",
+     "message": "Failed to evaluate the user-defined table function 'f' because its constructor is invalid: the function does not implement the 'analyze' method, and its constructor has more than one argument (including the 'self' reference). Please update the table function so that its constructor accepts exactly one 'self' argument, and try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/constructor_arguments_with_analyze": {
+   "error": {
+    "condition": "INVALID_ARROW_UDTF_WITH_ANALYZE",
+    "exception": "PySparkAttributeError",
+    "message": "[INVALID_ARROW_UDTF_WITH_ANALYZE] The arrow UDTF 'WithAnalyze' is invalid. Arrow UDTFs do not support the 'analyze' method. Please remove the 'analyze' method from 'WithAnalyze' and specify a returnType instead.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "errors/udtf302/eval_too_few_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/eval_too_many_arguments": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/eval_wrong_argument_name": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (missing a required argument: 'n'). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/raises_in_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: eval failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf302/raises_in_init": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: init failed",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EXEC_ERROR",
+     "message": "User defined table function encountered an error in the '__init__' method: init failed",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/raises_in_terminate": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "ValueError: terminate failed",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf302/rows_dict_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_iterator_of_rows_then_none": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_list_result": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf302/rows_list_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_narrow_row": {
+   "rows": [],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf302/rows_none_result": {
+   "rows": [],
+   "schema": "struct<a:int>"
+  },
+  "errors/udtf302/rows_none_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_not_iterable": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_NOT_ITERABLE] The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_NOT_ITERABLE",
+     "message": "The return value of the 'eval' method of the UDTF is invalid. It should be an iterable (e.g., generator or list), but got 'int'. Please make sure that the UDTF returns one of these types.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_row_object": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_scalar_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_string_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_ARROW_TYPE_CONVERSION_ERROR] PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_TYPE_CONVERSION_ERROR",
+     "message": "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/rows_wide_row": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_RETURN_SCHEMA_MISMATCH] The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 2. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 1, Actual column count: 2. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "errors/udtf302/scalar_argument_to_table_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "AttributeError: 'pyarrow.lib.Int32Array' object has no attribute 'column'",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "errors/udtf302/table_argument_to_scalar_eval": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert {'id': 2, 'g': 'a', 'v': 20} with type dict: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf300/bool_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/bytes_for_string": {
+   "rows": [
+    [
+     "[B@HASH"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf300/date_for_string": {
+   "rows": [
+    [
+     "java.util.GregorianCalendar[...]"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf300/decimal_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/dict_for_map": {
+   "rows": [
+    [
+     {
+      "k": 1
+     }
+    ]
+   ],
+   "schema": "struct<a:map<string,int>>"
+  },
+  "mistyped/udtf300/dict_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf300/float_for_decimal": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:decimal(5,2)>"
+  },
+  "mistyped/udtf300/float_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/int_for_bool": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:boolean>"
+  },
+  "mistyped/udtf300/int_for_decimal": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:decimal(5,2)>"
+  },
+  "mistyped/udtf300/int_for_double": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:double>"
+  },
+  "mistyped/udtf300/int_for_string": {
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf300/list_for_array": {
+   "rows": [
+    [
+     [
+      1,
+      2
+     ]
+    ]
+   ],
+   "schema": "struct<a:array<int>>"
+  },
+  "mistyped/udtf300/long_for_int_small": {
+   "rows": [
+    [
+     7
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/mixed_list_for_array": {
+   "rows": [
+    [
+     [
+      null,
+      2
+     ]
+    ]
+   ],
+   "schema": "struct<a:array<int>>"
+  },
+  "mistyped/udtf300/none_for_not_null": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EXEC_ERROR] User defined table function encountered an error in the 'eval' or 'terminate' method: Column 0 within a returned row had a value of None, either directly or within array/struct/map subfields, but the corresponding column type was declared as non-nullable; please update the UDTF to return a non-None value at this location or otherwise declare the column type as nullable.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EXEC_ERROR",
+     "message": "User defined table function encountered an error in the 'eval' or 'terminate' method: Column 0 within a returned row had a value of None, either directly or within array/struct/map subfields, but the corresponding column type was declared as non-nullable; please update the UDTF to return a non-None value at this location or otherwise declare the column type as nullable.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf300/none_for_struct": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:struct<x:int>>"
+  },
+  "mistyped/udtf300/none_nullable": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/numeric_string_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/overflow_int": {
+   "rows": [
+    [
+     0
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/short_tuple_for_struct": {
+   "error": {
+    "condition": "STRUCT_ARRAY_LENGTH_MISMATCH",
+    "exception": "IllegalArgumentException",
+    "message": "[STRUCT_ARRAY_LENGTH_MISMATCH] Input row doesn't have expected number of values required by the schema. 2 fields are required while 1 values are provided. SQLSTATE: 2201E",
+    "python_error": null,
+    "sqlstate": "2201E",
+    "worker": null
+   }
+  },
+  "mistyped/udtf300/string_for_binary": {
+   "rows": [
+    [
+     "b'ab'"
+    ]
+   ],
+   "schema": "struct<a:binary>"
+  },
+  "mistyped/udtf300/string_for_date": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "AttributeError: 'str' object has no attribute 'toordinal'",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf300/string_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf300/struct_nested_mistyped": {
+   "rows": [
+    [
+     "Row(x=None)"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int>>"
+  },
+  "mistyped/udtf300/tuple_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf300/two_columns_first_wrong": {
+   "rows": [
+    [
+     null,
+     "y"
+    ]
+   ],
+   "schema": "struct<a:int,b:string>"
+  },
+  "mistyped/udtf300/whole_float_for_int": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf301/bool_for_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowTypeError: Expected integer, got bool",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(True,)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/bytes_for_string": {
+   "rows": [
+    [
+     "b'ab'"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf301/date_for_string": {
+   "rows": [
+    [
+     "2020-01-02"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf301/decimal_for_int": {
+   "rows": [
+    [
+     3
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf301/dict_for_map": {
+   "rows": [
+    [
+     {
+      "k": 1
+     }
+    ]
+   ],
+   "schema": "struct<a:map<string,int>>"
+  },
+  "mistyped/udtf301/dict_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf301/float_for_decimal": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "AssertionError",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(1.25,)]. Schema: struct<a:decimal(5,2)>. Arrow Schema: struct<a: decimal128(5, 2)>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/float_for_int": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf301/int_for_bool": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert 1 with type int: tried to convert to boolean",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(1,)]. Schema: struct<a:boolean>. Arrow Schema: struct<a: bool>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/int_for_decimal": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "AssertionError",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(3,)]. Schema: struct<a:decimal(5,2)>. Arrow Schema: struct<a: decimal128(5, 2)>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/int_for_double": {
+   "rows": [
+    [
+     1.0
+    ]
+   ],
+   "schema": "struct<a:double>"
+  },
+  "mistyped/udtf301/int_for_string": {
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf301/list_for_array": {
+   "rows": [
+    [
+     [
+      1,
+      2
+     ]
+    ]
+   ],
+   "schema": "struct<a:array<int>>"
+  },
+  "mistyped/udtf301/long_for_int_small": {
+   "rows": [
+    [
+     7
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf301/mixed_list_for_array": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert 'x' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(['x', 2],)]. Schema: struct<a:array<int>>. Arrow Schema: struct<a: list<element: int32>>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/none_for_not_null": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EXEC_ERROR] User defined table function encountered an error in the 'eval' or 'terminate' method: Column 0 within a returned row had a value of None, either directly or within array/struct/map subfields, but the corresponding column type was declared as non-nullable; please update the UDTF to return a non-None value at this location or otherwise declare the column type as nullable.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EXEC_ERROR",
+     "message": "User defined table function encountered an error in the 'eval' or 'terminate' method: Column 0 within a returned row had a value of None, either directly or within array/struct/map subfields, but the corresponding column type was declared as non-nullable; please update the UDTF to return a non-None value at this location or otherwise declare the column type as nullable.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/none_for_struct": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:struct<x:int>>"
+  },
+  "mistyped/udtf301/none_nullable": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf301/numeric_string_for_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert '12' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('12',)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/overflow_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Value 1099511627776 too large to fit in C integer type",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(1099511627776,)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/short_tuple_for_struct": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkValueError: [AXIS_LENGTH_MISMATCH] Length mismatch: Expected axis has 2 elements, new values have 1 elements.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_RETURN_SCHEMA_MISMATCH",
+     "message": "The number of columns in the result does not match the specified schema. Expected column count: 2, Actual column count: 1. Please make sure the values returned by the 'eval' method have the same number of columns as specified in the output schema.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/string_for_binary": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "AssertionError",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('ab',)]. Schema: struct<a:binary>. Arrow Schema: struct<a: binary>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/string_for_date": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowTypeError: object of type <class 'str'> cannot be converted to int",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('2020-01-02',)]. Schema: struct<a:date>. Arrow Schema: struct<a: date32[day]>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/string_for_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert 'x' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('x',)]. Schema: struct<a:int>. Arrow Schema: struct<a: int32>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/struct_nested_mistyped": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert 's' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [(('s',),)]. Schema: struct<a:struct<x:int>>. Arrow Schema: struct<a: struct<x: int32>>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/tuple_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf301/two_columns_first_wrong": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Could not convert 'x' with type str: tried to convert to int32",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_ARROW_DATA_CONVERSION_ERROR",
+     "message": "Cannot convert UDTF output to Arrow. Data: [('x', 'y')]. Schema: struct<a:int,b:string>. Arrow Schema: struct<a: int32, b: string>.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "mistyped/udtf301/whole_float_for_int": {
+   "rows": [
+    [
+     2
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/bool_for_int": {
+   "rows": [
+    [
+     1
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/bytes_for_string": {
+   "rows": [
+    [
+     "ab"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf302/date_for_string": {
+   "rows": [
+    [
+     "2020-01-02"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf302/decimal_for_int": {
+   "rows": [
+    [
+     3
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/dict_for_map": {
+   "rows": [
+    [
+     {
+      "k": 1
+     }
+    ]
+   ],
+   "schema": "struct<a:map<string,int>>"
+  },
+  "mistyped/udtf302/dict_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf302/float_for_decimal": {
+   "rows": [
+    [
+     "Decimal('1.25')"
+    ]
+   ],
+   "schema": "struct<a:decimal(5,2)>"
+  },
+  "mistyped/udtf302/float_for_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Float value 1.500000 was truncated converting to int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/int_for_bool": {
+   "rows": [
+    [
+     true
+    ]
+   ],
+   "schema": "struct<a:boolean>"
+  },
+  "mistyped/udtf302/int_for_decimal": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Precision is not great enough for the result. It should be at least 21",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/int_for_double": {
+   "rows": [
+    [
+     1.0
+    ]
+   ],
+   "schema": "struct<a:double>"
+  },
+  "mistyped/udtf302/int_for_string": {
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "schema": "struct<a:string>"
+  },
+  "mistyped/udtf302/list_for_array": {
+   "rows": [
+    [
+     [
+      1,
+      2
+     ]
+    ]
+   ],
+   "schema": "struct<a:array<int>>"
+  },
+  "mistyped/udtf302/long_for_int_small": {
+   "rows": [
+    [
+     7
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/mixed_list_for_array": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Failed to parse string: 'y' as a scalar of type int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/none_for_not_null": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.IllegalStateException: Value at index is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/none_for_struct": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:struct<x:int>>"
+  },
+  "mistyped/udtf302/none_nullable": {
+   "rows": [
+    [
+     null
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/numeric_string_for_int": {
+   "rows": [
+    [
+     12
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "mistyped/udtf302/overflow_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Integer value 1099511627776 not in range: -2147483648 to 2147483647",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/short_tuple_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y=None)"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf302/string_for_binary": {
+   "rows": [
+    [
+     "b'ab'"
+    ]
+   ],
+   "schema": "struct<a:binary>"
+  },
+  "mistyped/udtf302/string_for_date": {
+   "rows": [
+    [
+     "datetime.date(2020, 1, 2)"
+    ]
+   ],
+   "schema": "struct<a:date>"
+  },
+  "mistyped/udtf302/string_for_int": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Failed to parse string: 'x' as a scalar of type int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/struct_nested_mistyped": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Failed to parse string: 's' as a scalar of type int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/tuple_for_struct": {
+   "rows": [
+    [
+     "Row(x=1, y='p')"
+    ]
+   ],
+   "schema": "struct<a:struct<x:int,y:string>>"
+  },
+  "mistyped/udtf302/two_columns_first_wrong": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyarrow.lib.ArrowInvalid: Failed to parse string: 'x' as a scalar of type int32",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "mistyped/udtf302/whole_float_for_int": {
+   "rows": [
+    [
+     2
+    ]
+   ],
+   "schema": "struct<a:int>"
+  },
+  "rows/udtf300/dataframe_lateral": {
+   "rows": [
+    [
+     4,
+     "b",
+     null,
+     4,
+     0
+    ],
+    [
+     5,
+     "c",
+     50,
+     5,
+     0
+    ],
+    [
+     5,
+     "c",
+     50,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,g:string,v:int,a:int,i:int>"
+  },
+  "rows/udtf300/empty_eval_output": {
+   "rows": [
+    [
+     -1
+    ]
+   ],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf300/empty_lateral_input": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.NullPointerException: Cannot invoke \"org.apache.spark.sql.catalyst.InternalRow.numFields()\" because \"this.row1\" is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "rows/udtf300/empty_table_input": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.NullPointerException: Cannot invoke \"org.apache.spark.sql.catalyst.InternalRow.numFields()\" because \"this.row1\" is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "rows/udtf300/empty_table_partitioned": {
+   "rows": [],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf300/eval_dataframe": {
+   "rows": [
+    [
+     7,
+     0
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     7,
+     2
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf300/eval_lateral": {
+   "rows": [
+    [
+     4,
+     4,
+     0
+    ],
+    [
+     5,
+     5,
+     0
+    ],
+    [
+     5,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,a:int,i:int>"
+  },
+  "rows/udtf300/eval_sql": {
+   "rows": [
+    [
+     3,
+     0
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf300/lateral_left_join": {
+   "rows": [
+    [
+     4,
+     4,
+     0
+    ],
+    [
+     5,
+     5,
+     0
+    ],
+    [
+     5,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,a:int,i:int>"
+  },
+  "rows/udtf300/null_constant": {
+   "rows": [
+    [
+     true
+    ]
+   ],
+   "schema": "struct<is_null:boolean>"
+  },
+  "rows/udtf300/null_lateral": {
+   "rows": [
+    [
+     1,
+     false
+    ],
+    [
+     2,
+     false
+    ],
+    [
+     3,
+     false
+    ],
+    [
+     4,
+     true
+    ],
+    [
+     5,
+     false
+    ]
+   ],
+   "schema": "struct<id:int,is_null:boolean>"
+  },
+  "rows/udtf300/terminate_constant_args": {
+   "rows": [
+    [
+     -1,
+     1
+    ],
+    [
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<v:int,n:int>"
+  },
+  "rows/udtf300/terminate_lateral_one_instance": {
+   "rows": [
+    [
+     1,
+     10,
+     2
+    ],
+    [
+     2,
+     20,
+     1
+    ],
+    [
+     3,
+     30,
+     4
+    ],
+    [
+     4,
+     null,
+     3
+    ],
+    [
+     5,
+     -1,
+     5
+    ],
+    [
+     5,
+     50,
+     5
+    ]
+   ],
+   "schema": "struct<id:int,v:int,n:int>"
+  },
+  "rows/udtf300/zero_rows_requested": {
+   "rows": [],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf301/dataframe_lateral": {
+   "rows": [
+    [
+     4,
+     "b",
+     null,
+     4,
+     0
+    ],
+    [
+     5,
+     "c",
+     50,
+     5,
+     0
+    ],
+    [
+     5,
+     "c",
+     50,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,g:string,v:int,a:int,i:int>"
+  },
+  "rows/udtf301/empty_eval_output": {
+   "rows": [
+    [
+     -1
+    ]
+   ],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf301/empty_lateral_input": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.NullPointerException: Cannot invoke \"org.apache.spark.sql.catalyst.InternalRow.numFields()\" because \"this.row1\" is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "rows/udtf301/empty_table_input": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.NullPointerException: Cannot invoke \"org.apache.spark.sql.catalyst.InternalRow.numFields()\" because \"this.row1\" is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "rows/udtf301/empty_table_partitioned": {
+   "rows": [],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf301/eval_dataframe": {
+   "rows": [
+    [
+     7,
+     0
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     7,
+     2
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf301/eval_lateral": {
+   "rows": [
+    [
+     4,
+     4,
+     0
+    ],
+    [
+     5,
+     5,
+     0
+    ],
+    [
+     5,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,a:int,i:int>"
+  },
+  "rows/udtf301/eval_sql": {
+   "rows": [
+    [
+     3,
+     0
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf301/lateral_left_join": {
+   "rows": [
+    [
+     4,
+     4,
+     0
+    ],
+    [
+     5,
+     5,
+     0
+    ],
+    [
+     5,
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<id:int,a:int,i:int>"
+  },
+  "rows/udtf301/null_constant": {
+   "rows": [
+    [
+     true
+    ]
+   ],
+   "schema": "struct<is_null:boolean>"
+  },
+  "rows/udtf301/null_lateral": {
+   "rows": [
+    [
+     1,
+     false
+    ],
+    [
+     2,
+     false
+    ],
+    [
+     3,
+     false
+    ],
+    [
+     4,
+     true
+    ],
+    [
+     5,
+     false
+    ]
+   ],
+   "schema": "struct<id:int,is_null:boolean>"
+  },
+  "rows/udtf301/terminate_constant_args": {
+   "rows": [
+    [
+     -1,
+     1
+    ],
+    [
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<v:int,n:int>"
+  },
+  "rows/udtf301/terminate_lateral_one_instance": {
+   "rows": [
+    [
+     1,
+     10,
+     2
+    ],
+    [
+     2,
+     20,
+     1
+    ],
+    [
+     3,
+     30,
+     4
+    ],
+    [
+     4,
+     null,
+     3
+    ],
+    [
+     5,
+     -1,
+     5
+    ],
+    [
+     5,
+     50,
+     5
+    ]
+   ],
+   "schema": "struct<id:int,v:int,n:int>"
+  },
+  "rows/udtf301/zero_rows_requested": {
+   "rows": [],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf302/dataframe_lateral": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/empty_eval_output": {
+   "rows": [
+    [
+     -1
+    ]
+   ],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf302/empty_lateral_input": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/empty_table_input": {
+   "error": {
+    "condition": null,
+    "exception": "Py4JJavaError",
+    "message": "java.lang.NullPointerException: Cannot invoke \"org.apache.spark.sql.catalyst.InternalRow.numFields()\" because \"this.row1\" is null",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "rows/udtf302/empty_table_partitioned": {
+   "rows": [],
+   "schema": "struct<r:int>"
+  },
+  "rows/udtf302/eval_dataframe": {
+   "rows": [
+    [
+     7,
+     0
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     7,
+     2
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf302/eval_lateral": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/eval_sql": {
+   "rows": [
+    [
+     3,
+     0
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "schema": "struct<a:int,i:int>"
+  },
+  "rows/udtf302/lateral_left_join": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/null_constant": {
+   "rows": [
+    [
+     true
+    ]
+   ],
+   "schema": "struct<is_null:boolean>"
+  },
+  "rows/udtf302/null_lateral": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/terminate_constant_args": {
+   "rows": [
+    [
+     -1,
+     1
+    ],
+    [
+     5,
+     1
+    ]
+   ],
+   "schema": "struct<v:int,n:int>"
+  },
+  "rows/udtf302/terminate_lateral_one_instance": {
+   "error": {
+    "condition": "LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED",
+    "exception": "AnalysisException",
+    "message": "[LATERAL_JOIN_WITH_ARROW_UDTF_UNSUPPORTED] LATERAL JOIN with Arrow-optimized user-defined table functions (UDTFs) is not supported. Arrow UDTFs cannot be used on the right-hand side of a lateral join.",
+    "python_error": null,
+    "sqlstate": "0A000",
+    "worker": null
+   }
+  },
+  "rows/udtf302/zero_rows_requested": {
+   "rows": [],
+   "schema": "struct<a:int,i:int>"
+  },
+  "table/udtf300/dataframe_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/dataframe_plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/dataframe_single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/named_view_select": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/null_values_partition_key": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/order_without_partition": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "exception": "ParseException",
+    "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'ORDER'. SQLSTATE: 42601 (line 1, pos 25)",
+    "python_error": null,
+    "sqlstate": "42601",
+    "worker": null
+   }
+  },
+  "table/udtf300/partition_by": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/partition_expr": {
+   "rows": [
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "2,4"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "1,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "2,4"
+    ],
+    [
+     "c",
+     -1,
+     3,
+     "1,3,5"
+    ],
+    [
+     "c",
+     5,
+     3,
+     "1,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/partition_order_desc": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/partition_order_expr": {
+   "error": {
+    "condition": "_LEGACY_ERROR_TEMP_0064",
+    "exception": "ParseException",
+    "message": "The table function call includes a table argument with an invalid partitioning/ordering specification: the ORDER BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "table/udtf300/partition_two_keys": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/single_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     2,
+     4,
+     "5,4,3,2"
+    ],
+    [
+     "b",
+     3,
+     3,
+     "5,4,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "5,4"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/skip_rest_of_input": {
+   "rows": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     3
+    ],
+    [
+     "c",
+     5
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ]
+   ],
+   "schema": "struct<g:string,id:int>"
+  },
+  "table/udtf300/subquery": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf300/table_and_scalar_mix": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "table/udtf301/dataframe_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/dataframe_plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/dataframe_single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/named_view_select": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/null_values_partition_key": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/order_without_partition": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "exception": "ParseException",
+    "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'ORDER'. SQLSTATE: 42601 (line 1, pos 25)",
+    "python_error": null,
+    "sqlstate": "42601",
+    "worker": null
+   }
+  },
+  "table/udtf301/partition_by": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/partition_expr": {
+   "rows": [
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "2,4"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "1,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "2,4"
+    ],
+    [
+     "c",
+     -1,
+     3,
+     "1,3,5"
+    ],
+    [
+     "c",
+     5,
+     3,
+     "1,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/partition_order_desc": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/partition_order_expr": {
+   "error": {
+    "condition": "_LEGACY_ERROR_TEMP_0064",
+    "exception": "ParseException",
+    "message": "The table function call includes a table argument with an invalid partitioning/ordering specification: the ORDER BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "table/udtf301/partition_two_keys": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/single_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     2,
+     4,
+     "5,4,3,2"
+    ],
+    [
+     "b",
+     3,
+     3,
+     "5,4,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "5,4"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/skip_rest_of_input": {
+   "rows": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     3
+    ],
+    [
+     "c",
+     5
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ]
+   ],
+   "schema": "struct<g:string,id:int>"
+  },
+  "table/udtf301/subquery": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf301/table_and_scalar_mix": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "table/udtf302/dataframe_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/dataframe_plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/dataframe_single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/named_view_select": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "TypeError: make_table_rows.<locals>.TableArrow.eval() got an unexpected keyword argument 'row'",
+    "sqlstate": "38000",
+    "worker": null
+   }
+  },
+  "table/udtf302/null_values_partition_key": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/order_without_partition": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "exception": "ParseException",
+    "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'ORDER'. SQLSTATE: 42601 (line 1, pos 25)",
+    "python_error": null,
+    "sqlstate": "42601",
+    "worker": null
+   }
+  },
+  "table/udtf302/partition_by": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/partition_expr": {
+   "rows": [
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "2,4"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "1,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "2,4"
+    ],
+    [
+     "c",
+     -1,
+     3,
+     "1,3,5"
+    ],
+    [
+     "c",
+     5,
+     3,
+     "1,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/partition_order_desc": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     3,
+     2,
+     "4,3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/partition_order_expr": {
+   "error": {
+    "condition": "_LEGACY_ERROR_TEMP_0064",
+    "exception": "ParseException",
+    "message": "The table function call includes a table argument with an invalid partitioning/ordering specification: the ORDER BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.",
+    "python_error": null,
+    "sqlstate": null,
+    "worker": null
+   }
+  },
+  "table/udtf302/partition_two_keys": {
+   "rows": [
+    [
+     "a",
+     -1,
+     2,
+     "1,2"
+    ],
+    [
+     "a",
+     1,
+     1,
+     "1"
+    ],
+    [
+     "a",
+     2,
+     2,
+     "1,2"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     -1,
+     1,
+     "4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     1,
+     "4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/plain": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/single_partition": {
+   "rows": [
+    [
+     "a",
+     1,
+     2,
+     "2,1"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     3,
+     4,
+     "2,1,4,3"
+    ],
+    [
+     "b",
+     4,
+     3,
+     "2,1,4"
+    ],
+    [
+     "c",
+     -1,
+     5,
+     "2,1,4,3,5"
+    ],
+    [
+     "c",
+     5,
+     5,
+     "2,1,4,3,5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/single_partition_order": {
+   "rows": [
+    [
+     "a",
+     -1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     1,
+     5,
+     "5,4,3,2,1"
+    ],
+    [
+     "a",
+     2,
+     4,
+     "5,4,3,2"
+    ],
+    [
+     "b",
+     3,
+     3,
+     "5,4,3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "5,4"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/skip_rest_of_input": {
+   "rows": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     3
+    ],
+    [
+     "c",
+     5
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ],
+    [
+     "end",
+     -1
+    ]
+   ],
+   "schema": "struct<g:string,id:int>"
+  },
+  "table/udtf302/subquery": {
+   "rows": [
+    [
+     "a",
+     -1,
+     1,
+     "2"
+    ],
+    [
+     "a",
+     2,
+     1,
+     "2"
+    ],
+    [
+     "b",
+     -1,
+     2,
+     "3,4"
+    ],
+    [
+     "b",
+     3,
+     1,
+     "3"
+    ],
+    [
+     "b",
+     4,
+     2,
+     "3,4"
+    ],
+    [
+     "c",
+     -1,
+     1,
+     "5"
+    ],
+    [
+     "c",
+     5,
+     1,
+     "5"
+    ]
+   ],
+   "schema": "struct<g:string,id:int,n:int,seen:string>"
+  },
+  "table/udtf302/table_and_scalar_mix": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "message": "An exception was thrown from the Python worker:",
+    "python_error": "pyspark.errors.exceptions.base.PySparkRuntimeError: [UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE] Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+    "sqlstate": "38000",
+    "worker": {
+     "error_class": "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE",
+     "message": "Failed to evaluate the user-defined table function 'f' because the function arguments did not match the expected signature of the 'eval' method (too many positional arguments). Please update the query so that this table function call provides arguments matching the expected signature, or else update the table function so that its 'eval' method accepts the provided arguments, and then try the query again.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  }
+ },
+ "conf": {
+  "spark.sql.session.timeZone": "UTC",
+  "spark.sql.shuffle.partitions": "3"
+ },
+ "defaults": {
+  "spark.sql.execution.pythonUDTF.arrow.enabled": "true"
+ },
+ "generator": "python/tests/pyspark_udf/udtf/gen_goldens.py",
+ "pandas": "3.0.6",
+ "pyarrow": "26.0.0",
+ "pyspark": "4.2.0",
+ "spark": "4.2.0"
+}

@@ -59,7 +59,22 @@ impl Resolver<'_> {
             );
             return self.rel(&select, env);
         }
-        match self.ctx.table_functions.lookup(name, self.ctx.profile) {
+        let lookup = self.ctx.table_functions.lookup(name, self.ctx.profile);
+        // A built-in resolves first, then a session's Python UDTF (Spark 4.2.0's
+        // `spark.sql.functionResolution.sessionOrder` default `second`: builtin, session, persistent).
+        if lookup == TableFunctionLookup::NotFound
+            && let Some(entry) = self.ctx.table_functions.python_udtf(name)
+        {
+            return self.python_udtf_call(p, &entry, args, env);
+        }
+        // Only a Python table function takes a `TABLE(...)` argument.
+        if args
+            .iter()
+            .any(|a| super::python_udtf::is_table_argument(a))
+        {
+            return Err(super::bind::unsupported("table-valued functions", o));
+        }
+        match lookup {
             TableFunctionLookup::NotFound => {
                 // A SQL-bodied table function of the session or its catalog.
                 let parts: Vec<String> = name
