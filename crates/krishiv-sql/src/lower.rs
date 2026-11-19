@@ -136,6 +136,7 @@ fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: e.into(),
         span,
+        relation: None,
     }
 }
 
@@ -239,6 +240,9 @@ struct Lowerer {
     /// The names the session substituted for `IDENTIFIER(..)` clauses: a column at one of these
     /// spans is [`ColumnRef::by_identifier`].
     identifier_spans: Vec<Span>,
+    /// The names of the CTEs in scope of the query being lowered (`WITH` names, outer first): a
+    /// time-travel read of one is Spark's `TIME_TRAVEL` error on that name.
+    ctes: Vec<String>,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -456,13 +460,29 @@ impl Lowerer {
     }
 
     fn query_with(&mut self, q: &Query) -> R<LogicalPlan> {
-        let mut plan = self.with_windows(&q.windows, |l| {
+        let base = self.ctes.len();
+        let names: Vec<&str> = q
+            .with
+            .iter()
+            .flat_map(|w| w.ctes.iter().map(|c| c.name.value.as_str()))
+            .collect();
+        self.ctes.extend(names.iter().map(|n| (*n).to_owned()));
+        let planned = self.with_windows(&q.windows, |l| {
             let plan = l.body(&q.body)?;
             l.organize(plan, q)
-        })?;
+        });
+        self.ctes.truncate(base);
+        let mut plan = planned?;
         if let Some(with) = &q.with {
             let mut ctes = Vec::new();
-            for c in &with.ctes {
+            for (i, c) in with.ctes.iter().enumerate() {
+                // A definition sees the ones before it (and itself, when recursive).
+                self.ctes.truncate(base);
+                self.ctes.extend(
+                    names[..i + usize::from(with.recursive)]
+                        .iter()
+                        .map(|n| (*n).to_owned()),
+                );
                 let max_level = match &c.max_recursion_level {
                     None => None,
                     Some(n) if with.recursive => Some(
@@ -471,7 +491,9 @@ impl Lowerer {
                     ),
                     Some(_) => return Err(unsupported("MAX RECURSION LEVEL", c.span)),
                 };
-                let mut body = self.query(&c.query)?;
+                let body = self.query(&c.query);
+                self.ctes.truncate(base);
+                let mut body = body?;
                 let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
                 if with.recursive && reads_table(&body, &c.name.value, self.case_sensitive) {
                     body = self.recursive_cte(&body, c, &columns, max_level)?;

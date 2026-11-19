@@ -402,7 +402,7 @@ impl Session {
             self.parser_options().case_sensitive,
             ids,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &self.query_env()))?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout, &mut None)
             .await

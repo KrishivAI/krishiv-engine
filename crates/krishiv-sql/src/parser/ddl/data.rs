@@ -595,6 +595,7 @@ impl Parser<'_> {
                 return Self::fatal(ParseError {
                     error: MergeWithoutWhen {}.into(),
                     span,
+                    relation: None,
                 });
             }
             Ok(Statement::Merge(Box::new(Merge {

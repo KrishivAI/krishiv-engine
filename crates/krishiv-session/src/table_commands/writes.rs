@@ -151,7 +151,7 @@ impl Session {
                     self.parser_options().case_sensitive,
                     ids,
                 )
-                .map_err(|e| e.error)?;
+                .map_err(|e| self.lowering_error(e, &self.query_env()))?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
                     .analyzed_in(self.query_env())
                     .await?;
@@ -169,7 +169,7 @@ impl Session {
             self.parser_options().case_sensitive,
             ids,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &self.query_env()))?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
             .columns

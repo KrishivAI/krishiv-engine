@@ -576,15 +576,13 @@ impl Session {
         )?;
         match statement {
             Statement::Query(q) => {
-                let plan = self
-                    .lower_identified(&q, &env, redacted, query)
-                    .map_err(|e| {
-                        crate::execute_immediate::unbound_markers(
-                            e,
-                            query,
-                            env.parser.double_quoted_identifiers,
-                        )
-                    })?;
+                let plan = self.lower_identified(&q, &env, redacted).map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                })?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)

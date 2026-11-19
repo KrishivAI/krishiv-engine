@@ -1102,7 +1102,7 @@ impl Session {
                     self.parser_options().case_sensitive,
                     ids,
                 )
-                .map_err(|e| e.error)?;
+                .map_err(|e| self.lowering_error(e, &env))?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
                 // A column's comment follows it through the query (Spark's field metadata).

@@ -193,7 +193,11 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
-            written: format!("`{}`", parts.join("`.`")),
+            written: parts
+                .iter()
+                .map(|p| format!("`{}`", p.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join("."),
             bare,
         })
     }
@@ -586,7 +590,7 @@ impl Session {
             self.parser_options().case_sensitive,
             ids,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &env))?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -1082,7 +1086,7 @@ impl Session {
                     self.parser_options().case_sensitive,
                     ids,
                 )
-                .map_err(|e| e.error)?;
+                .map_err(|e| self.lowering_error(e, &env))?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),

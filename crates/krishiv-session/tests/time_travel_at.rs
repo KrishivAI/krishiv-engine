@@ -104,6 +104,8 @@ fn time_travel_names_the_resolved_relation() {
         "create database db2",
         "create table db2.t2 (id int) using parquet",
         "create temp view tv as select 1",
+        "create view pv as select 1 as a",
+        "create global temp view gv as select 1 as a",
     ] {
         block_on(async { s.sql(q).await?.collect().await }).unwrap();
     }
@@ -127,6 +129,57 @@ fn time_travel_names_the_resolved_relation() {
         error(&s, "select * from spark_catalog.db2.t2@v1"),
         travel("`spark_catalog`.`db2`.`t2`")
     );
+    // A permanent view is a `V1Table` to Spark, which refuses it by its qualified name.
+    assert_eq!(
+        error(&s, "select * from pv@v1"),
+        travel("`spark_catalog`.`default`.`pv`")
+    );
+    // A global temporary view and a CTE are named as written.
+    assert_eq!(
+        error(&s, "select * from global_temp.gv@v1"),
+        travel("`global_temp`.`gv`")
+    );
+    assert_eq!(
+        error(&s, "with c as (select 1) select * from c@v1"),
+        travel("`c`")
+    );
+    assert_eq!(
+        error(
+            &s,
+            "with c as (select 1), d as (select * from c version as of 1) select * from d"
+        ),
+        travel("`c`")
+    );
+    // The other statements that lower a query give the same errors.
+    assert_eq!(
+        error(&s, "create table x2 as select * from tbl@v1"),
+        travel("`spark_catalog`.`default`.`tbl`")
+    );
+    assert_eq!(
+        error(&s, "insert into tbl select * from tbl@v1"),
+        travel("`spark_catalog`.`default`.`tbl`")
+    );
+    assert_eq!(
+        error(&s, "create view v9 as select * from tbl@v1"),
+        travel("`spark_catalog`.`default`.`tbl`")
+    );
+    assert_eq!(
+        error(&s, "insert into tbl select * from nope@v1").0,
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        error(&s, "explain select * from tbl@v1"),
+        travel("`spark_catalog`.`default`.`tbl`")
+    );
+    // An embedded backtick is doubled in the name as written.
+    block_on(async {
+        s.sql("create temp view `a``b` as select 1")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(error(&s, "select * from `a``b`@v1"), travel("`a``b`"));
     // The current namespace qualifies a bare name.
     block_on(async { s.sql("use db2").await?.collect().await }).unwrap();
     assert_eq!(

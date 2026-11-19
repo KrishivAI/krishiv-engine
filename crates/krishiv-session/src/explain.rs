@@ -79,7 +79,7 @@ impl Session {
             env.parser.case_sensitive,
             &env.identifier_spans,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &env))?;
         // The per-query store check (`check_store_options`: `MANAGE` on the cluster while the
         // session changed a server-scoped store setting) is asked by every analysis: the explained
         // query's (its trial, then a withheld fallback, which folds a refusal into the text) and

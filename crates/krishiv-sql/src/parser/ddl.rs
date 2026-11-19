@@ -1414,6 +1414,7 @@ impl<'s> Parser<'s> {
                             }
                             .into(),
                             span: p.span_from(start),
+                            relation: None,
                         });
                     }
                     path
@@ -1537,6 +1538,7 @@ impl<'s> Parser<'s> {
                         }
                         .into(),
                         span,
+                        relation: None,
                     });
                 }
             };

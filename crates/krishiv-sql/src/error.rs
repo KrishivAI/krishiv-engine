@@ -86,6 +86,9 @@ pub struct ParseError {
     pub error: KrishivError,
     /// The source text the error refers to (empty at the end of input).
     pub span: Span,
+    /// For the refusal of a time-travel read: the parts of the relation's name as written, which the
+    /// session resolves to name Spark's error.
+    pub relation: Option<Vec<String>>,
 }
 
 impl PartialEq for ParseError {
@@ -125,6 +128,7 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: error.into(),
         span,
+        relation: None,
     }
 }
 
