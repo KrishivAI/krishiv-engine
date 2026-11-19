@@ -485,7 +485,8 @@ pub(super) fn float_lt(a: f64, b: f64) -> bool {
     !a.is_nan() && (b.is_nan() || a < b)
 }
 
-/// `10^p` for `p ≤ 38` (larger `p` saturate at `10^38`), from a table:
+/// `10^p` for `p ≤ 38`, from a table (callers pass Spark decimal precisions,
+/// never above 38; a larger `p` saturates at `10^38`):
 /// the per-group decimal result checks call it once a group, where a
 /// computed `i128` power was ~3% of TPC-H q18's instructions at SF100.
 pub(super) fn pow10(p: u8) -> i128 {
