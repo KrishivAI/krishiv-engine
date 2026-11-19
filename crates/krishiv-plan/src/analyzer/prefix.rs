@@ -52,6 +52,8 @@ pub(super) struct PrefixEntry {
     /// The observation names the root registered (`Dataset.observe`), with the identity key of the
     /// relation that holds each: a warm run must still refuse a second relation using the name.
     observed: Vec<(String, u128)>,
+    /// A `Hint` relation was resolved under the root.
+    saw_hint: bool,
 }
 
 impl Resolver<'_> {
@@ -106,6 +108,7 @@ impl Resolver<'_> {
             columns: self.columns.clone(),
             tables,
             sql_calls: self.sql_calls,
+            saw_hint: self.saw_hint,
             observed: self
                 .observed
                 .iter()
@@ -186,6 +189,7 @@ impl Resolver<'_> {
         self.pass_exprs = entry.pass_exprs.clone();
         self.built_ids = entry.built_ids.clone();
         self.sql_calls += entry.sql_calls;
+        self.saw_hint |= entry.saw_hint;
         for (mine, theirs) in self.columns.iter_mut().zip(&entry.columns) {
             mine.clone_from(theirs);
         }

@@ -244,6 +244,9 @@ pub(super) struct Resolver<'a> {
     pub(super) declared: HashMap<AttrId, Arc<str>>,
     /// The attributes that carry a column comment, by id (Spark's `comment` field metadata; see `comments`).
     pub(super) comments: HashMap<AttrId, Arc<str>>,
+    /// A `Hint` relation was resolved in this analysis (or in the prefix a warm start seeded from), so
+    /// the hint passes have something to do; without one they skip their walks of the whole plan.
+    pub(super) saw_hint: bool,
 }
 
 type Resolved = (
@@ -300,6 +303,7 @@ pub(super) fn resolve(
         built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
+        saw_hint: false,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -322,9 +326,20 @@ pub(super) fn resolve(
         None
     };
     // What the hints read, before they are dropped (P3-T062 review r-m1).
-    let hinted = super::reads::hint_reads(&rel.plan);
-    // Hints name relations of their resolved subtree.
-    let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
+    // Both passes walk the whole plan, so a plan that resolved no hint skips them (a debug build checks
+    // that the flag agrees with the walk).
+    let (hinted, root, warnings) = if r.saw_hint {
+        let hinted = super::reads::hint_reads(&rel.plan);
+        // Hints name relations of their resolved subtree.
+        let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
+        (hinted, root, warnings)
+    } else {
+        debug_assert!(
+            !super::hints::has_hint(&rel.plan),
+            "a Hint relation reached the plan without the resolver seeing it"
+        );
+        (Default::default(), Arc::clone(&rel.plan), Vec::new())
+    };
     // Subqueries to joins, after everything resolved (P2-T071c).
     let root = super::subquery::rewrite(
         &root,
