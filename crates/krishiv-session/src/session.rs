@@ -65,7 +65,7 @@ use crate::variables::SessionVariables;
 mod context;
 mod lifecycle;
 #[cfg(feature = "unstable-ir")]
-pub use lifecycle::SqlOutcome;
+pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
 mod run_task;
 
@@ -556,64 +556,10 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
             .await
+            .and_then(Ran::into_frame)
             .map(|(df, _)| df)
-    }
-
-    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
-    pub(crate) async fn sql_here_marked(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
-    }
-
-    async fn sql_here_inner(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-        spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        let mut env = self.query_env();
-        env.row = row;
-        let written = query;
-        let query = self.substituted(query);
-        let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
-        let resolved = self.identifier_clauses_into(query, &mut env).await?;
-        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
-        if !spans.is_empty() && !named_by_clause && query == written {
-            env.identifier_spans = spans.into();
-        }
-        let query: &str = &resolved;
-        let redacted = krishiv_sql::redact_sql(query);
-        let statement = krishiv_sql::parse_statement(query, &env.parser)
-            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
-        // clause when it drops it; the parser sees only the evaluated name.
-        if named_by_clause
-            && let Statement::DropFunction(f) = &statement
-            && f.temporary
-        {
-            krishiv_sql::check_temporary_function_name(&f.name, f.span)
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        }
-        // Before any side effect: what the statement writes, creates or
-        // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
-        self.authorize_statement(&statement, class, &env).await?;
-        env.statement_class = Some(class.name());
-        self.refuse_changes_while_draining(class, &redacted, &env)?;
-        let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok((df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -1996,3 +1942,6 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+mod ran;
+pub(crate) use ran::Ran;

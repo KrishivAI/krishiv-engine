@@ -1428,6 +1428,7 @@ fn late_payload_join_defaults_on_and_parses() {
     assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
 }
 
+mod flight_sql;
 mod payload_above;
 
 #[test]
