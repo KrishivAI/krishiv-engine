@@ -579,3 +579,182 @@ proptest::proptest! {
         }
     }
 }
+
+const ANY_OPTS: &[(&str, &str)] = &[("convert.any.fields.to.json", "true")];
+
+fn any_of(type_name: &str, value: &[u8]) -> Vec<u8> {
+    let mut a = build::len(1, format!("type.googleapis.com/{type_name}").as_bytes());
+    a.extend(build::len(2, value));
+    a
+}
+
+/// The `details` column of an `AnyOnly` row holding `any` (and `many` holding each of `more`), as JSON text.
+fn any_json(any: &[u8], more: &[Vec<u8>]) -> Vec<Option<String>> {
+    let mut row = build::len(2, any);
+    for m in more {
+        row.extend(build::len(3, m));
+    }
+    let out = decode(
+        TYPES,
+        "krishiv.golden.types.AnyOnly",
+        ANY_OPTS,
+        &[Some(row.as_slice())],
+    )
+    .unwrap();
+    let s = out.as_struct();
+    let details = s.column_by_name("details").unwrap().as_string_view();
+    let many = s.column_by_name("many").unwrap().as_list::<i32>();
+    let mut got = vec![(!details.is_null(0)).then(|| details.value(0).to_owned())];
+    let items = many.value(0);
+    got.extend(items.as_string_view().iter().map(|v| v.map(str::to_owned)));
+    got
+}
+
+#[test]
+fn an_any_holding_a_message_prints_every_field_kind_as_protobuf_java_json() {
+    let payload = [build::len(1, b"n"), build::int(2, 4)].concat();
+    let mut kinds = Vec::new();
+    kinds.extend(build::len(1, &[1, 2])); // packed enum list
+    kinds.extend(build::int(2, 2));
+    kinds.extend(build::len(3, &[1, 2, 3]));
+    kinds.extend(build::len(4, b"a\"b\n\x01"));
+    kinds.extend(build::len(5, &1.5f32.to_le_bytes()));
+    kinds.extend(build::len(6, &f64::NAN.to_le_bytes()));
+    kinds.extend(build::len(7, &[1, 0]));
+    kinds.extend(build::len(8, &[6]));
+    kinds.extend(build::len(9, &[7]));
+    kinds.extend(build::len(10, &[5]));
+    kinds.extend(build::len(
+        11,
+        &[build::int(1, 7), build::len(2, b"x")].concat(),
+    ));
+    kinds.extend(build::len(
+        12,
+        &[build::int(1, 9), build::len(2, &[1, 2, 3])].concat(),
+    ));
+    kinds.extend(build::len(
+        13,
+        &[build::int(1, 1), build::int(2, 1)].concat(),
+    ));
+    kinds.extend(build::len(
+        14,
+        &[build::len(1, b"k"), build::len(2, &payload)].concat(),
+    ));
+    kinds.extend(build::len(
+        15,
+        &[build::int(1, 3), build::int(2, 4)].concat(),
+    ));
+    kinds.extend(build::len(17, &payload));
+    kinds.extend(build::len(20, &payload));
+    kinds.extend(build::len(20, &payload));
+    kinds.extend(build::len(24, &payload));
+    kinds.extend(build::len(25, &[1, 2]));
+    kinds.extend(build::len(27, &build::int(1, 1)));
+    kinds.extend(build::len(28, b"camel"));
+    kinds.extend(build::len(30, b"j"));
+    let any = any_of("krishiv.golden.types.Kinds", &kinds);
+    let json = any_json(&any, std::slice::from_ref(&any));
+    let first = json[0].as_deref().unwrap();
+    assert!(
+        first.starts_with("{\"@type\":\"type.googleapis.com/krishiv.golden.types.Kinds\","),
+        "{first}"
+    );
+    for part in [
+        "\"shades\":[\"LIGHT\",\"DARK\"]",
+        "\"shade\":\"DARK\"",
+        "\"bins\":[\"AQID\"]",
+        "\"strs\":[\"a\\\"b\\n\\u0001\"]",
+        "\"flts\":[1.5]",
+        "\"dbls\":[\"NaN\"]",
+        "\"bools\":[true,false]",
+        "\"s64s\":[\"3\"]",
+        "\"u32s\":[7]",
+        "\"u64s\":[\"5\"]",
+        "\"i2s\":{\"7\":\"x\"}",
+        "\"l2b\":{\"9\":\"AQID\"}",
+        "\"b2e\":{\"true\":\"LIGHT\"}",
+        "\"s2p\":{\"k\":{\"name\":\"n\",\"id\":4}}",
+        "\"u2u\":{\"3\":\"4\"}",
+        "\"p\":{\"name\":\"n\",\"id\":4}",
+        "\"ps\":[{\"name\":\"n\",\"id\":4},{\"name\":\"n\",\"id\":4}]",
+        "\"opayload\":{\"name\":\"n\",\"id\":4}",
+        "\"nested\":{\"inside\":\"INSIDE_ONE\"}",
+    ] {
+        assert!(first.contains(part), "{part} missing from {first}");
+    }
+    assert_eq!(json[1], json[0]);
+}
+
+#[test]
+fn an_any_holding_a_well_known_type_prints_its_value_form() {
+    let ts = [build::int(1, 1_700_000_000), build::int(2, 123_000_000)].concat();
+    let dur = [build::int(1, 5), build::int(2, 500)].concat();
+    let any_ts = any_of("google.protobuf.Timestamp", &ts);
+    let any_dur = any_of("google.protobuf.Duration", &dur);
+    let any_int = any_of("google.protobuf.Int32Value", &build::int(1, 9));
+    let any_str = any_of("google.protobuf.StringValue", &build::len(1, b"s"));
+    let any_empty = any_of("google.protobuf.Empty", &[]);
+    let inner = any_of("google.protobuf.Int32Value", &build::int(1, 3));
+    let any_any = any_of("google.protobuf.Any", &inner);
+    let json = any_json(&any_ts, &[any_dur, any_int, any_str, any_empty, any_any]);
+    assert_eq!(
+        json[0].as_deref(),
+        Some(
+            "{\"@type\":\"type.googleapis.com/google.protobuf.Timestamp\",\"value\":\"2023-11-14T22:13:20.123Z\"}"
+        )
+    );
+    assert_eq!(
+        json[1].as_deref(),
+        Some(
+            "{\"@type\":\"type.googleapis.com/google.protobuf.Duration\",\"value\":\"5.000000500s\"}"
+        )
+    );
+    assert_eq!(
+        json[2].as_deref(),
+        Some("{\"@type\":\"type.googleapis.com/google.protobuf.Int32Value\",\"value\":9}")
+    );
+    assert_eq!(
+        json[3].as_deref(),
+        Some("{\"@type\":\"type.googleapis.com/google.protobuf.StringValue\",\"value\":\"s\"}")
+    );
+    assert_eq!(
+        json[4].as_deref(),
+        Some("{\"@type\":\"type.googleapis.com/google.protobuf.Empty\"}")
+    );
+    assert!(json[5].as_deref().unwrap().contains("\"value\":{\"@type\""));
+}
+
+#[test]
+fn an_any_with_an_unknown_type_is_malformed_and_a_struct_inside_is_refused() {
+    let unknown = any_of("no.such.Type", &[1, 2]);
+    let row = build::len(2, &unknown);
+    let strict = decode(
+        TYPES,
+        "krishiv.golden.types.AnyOnly",
+        ANY_OPTS,
+        &[Some(&row)],
+    );
+    assert!(strict.is_err());
+    let permissive = decode(
+        TYPES,
+        "krishiv.golden.types.AnyOnly",
+        &[
+            ("convert.any.fields.to.json", "true"),
+            ("mode", "PERMISSIVE"),
+        ],
+        &[Some(&row)],
+    )
+    .unwrap();
+    assert!(permissive.is_null(0));
+    let refused = any_of("google.protobuf.Struct", &[]);
+    let row = build::len(2, &refused);
+    assert!(
+        decode(
+            TYPES,
+            "krishiv.golden.types.AnyOnly",
+            ANY_OPTS,
+            &[Some(&row)]
+        )
+        .is_err()
+    );
+}
