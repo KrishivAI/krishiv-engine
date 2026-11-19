@@ -112,7 +112,7 @@ fn echo_debug_shows_the_length_only() {
         }
     );
     assert!(!shown.contains("secret"), "{shown}");
-    assert!(shown.contains('6'), "{shown}");
+    assert_eq!(shown, "Echo { message_len: 6 }");
 }
 
 #[test]
