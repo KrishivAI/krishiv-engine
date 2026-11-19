@@ -16,14 +16,6 @@
 //! Hashing goes through [`raw_bytes::from_slice`], never a `&[u8]` (Rust's `Hash` for slices adds a length
 //! prefix, which no other implementation hashes).
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fed by PR-54b's sketches on write; PR-54a tests it"
-    )
-)]
-
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
@@ -34,7 +26,7 @@ use arrow_schema::{DataType, TimeUnit};
 use datasketches::hash::value::raw_bytes;
 use datasketches::theta::{ThetaSketch, ThetaSketchBuilder};
 
-use super::bounds::min_be_bytes;
+use super::bounds::min_be_slice;
 use super::types::IcebergType;
 
 /// A sketch as Iceberg's Spark writer builds them: the library's default `k` (4,096) and seed.
@@ -43,6 +35,16 @@ use super::types::IcebergType;
 #[must_use]
 pub(crate) fn new_sketch() -> Option<ThetaSketch> {
     ThetaSketchBuilder::default().build().ok()
+}
+
+/// The distinct-count estimate of `array` as a default sketch sees it; the `theta_update` bench's hook.
+///
+/// `None` when the type pair is not sketched.
+#[doc(hidden)]
+#[must_use]
+pub fn bench_estimate(array: &dyn Array, ty: &IcebergType) -> Option<f64> {
+    let mut sketch = new_sketch()?;
+    update_column(&mut sketch, array, ty).then(|| sketch.estimate())
 }
 
 /// Whether a column of Iceberg type `ty` is sketched at all (`uuid` and the nested types are not).
@@ -108,18 +110,21 @@ pub(crate) fn for_each_value(
             fixed(array.as_primitive::<Float64Type>(), f, f64::to_le_bytes);
         }
         (T::Decimal { .. }, DataType::Decimal32(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal32Type>().iter().flatten() {
-                f(&min_be_bytes(i128::from(v)));
+                f(min_be_slice(i128::from(v), &mut buf));
             }
         }
         (T::Decimal { .. }, DataType::Decimal64(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal64Type>().iter().flatten() {
-                f(&min_be_bytes(i128::from(v)));
+                f(min_be_slice(i128::from(v), &mut buf));
             }
         }
         (T::Decimal { .. }, DataType::Decimal128(..)) => {
+            let mut buf = [0; 16];
             for v in array.as_primitive::<Decimal128Type>().iter().flatten() {
-                f(&min_be_bytes(v));
+                f(min_be_slice(v, &mut buf));
             }
         }
         (T::String, DataType::Utf8) => {
@@ -172,5 +177,20 @@ fn fixed<T: arrow_array::ArrowPrimitiveType, const N: usize>(
 fn non_empty<'a>(values: impl Iterator<Item = &'a [u8]>, f: &mut dyn FnMut(&[u8])) {
     for b in values.filter(|b| !b.is_empty()) {
         f(b);
+    }
+}
+
+#[cfg(test)]
+mod bench_hook_tests {
+    use super::*;
+    use arrow_array::Int64Array;
+
+    #[test]
+    fn the_bench_hook_estimates_a_sketched_column_and_refuses_the_rest() {
+        let ty = IcebergType::Long;
+        let est = bench_estimate(&Int64Array::from(vec![1, 2, 2, 3]), &ty);
+        assert_eq!(est, Some(3.0));
+        let uuid = IcebergType::Uuid;
+        assert_eq!(bench_estimate(&Int64Array::from(vec![1]), &uuid), None);
     }
 }

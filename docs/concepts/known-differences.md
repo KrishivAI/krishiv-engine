@@ -659,3 +659,13 @@ table). They differ in:
   also computes the file's `minValues`, `maxValues` and `nullCount` by reading it.
 - **Change data feed.** A vector-only `DELETE` commits; an `UPDATE` or a `MERGE` that changes rows
   stays refused (delta-spark writes change data files for them).
+
+## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
+
+`hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
+(`HllSketch.toUpdatableByteArray`). Both are the Apache DataSketches `HLL_8` format, and both libraries read
+both forms, so a sketch written by one engine can be estimated or unioned by the other, and
+`hll_sketch_estimate`, `hll_union` and `hll_union_agg` give the same numbers. What differs is the bytes:
+`length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
+`hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
+(`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
