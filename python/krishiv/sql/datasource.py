@@ -17,7 +17,12 @@ How it runs here (design P3-T040):
   failed, with ``None`` for the failed task's message).
 * Filter pushdown: ``spark.sql.python.filterPushdown.enabled`` is off by default, as in Spark 4.3.0; a
   reader that overrides ``pushFilters`` then fails with ``DATA_SOURCE_PUSHDOWN_DISABLED``. With the
-  switch on the engine does not push filters into the reader yet (it applies every filter itself).
+  switch on, ``pushFilters`` is **not called** yet (the engine applies every filter itself); the pushdown
+  acceptance of P3-T040 stays open.
+* Interim embedded path: the read is materialised in memory when a query is planned (capped by
+  ``KRISHIV_PYTHON_DATA_SOURCE_LIMIT``), not streamed per partition as the design's read operator will.
+* The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame (Spark
+  re-creates it from the pickled class for each planning), so state a reader keeps on it lasts across actions.
 * The streaming classes (``DataSourceStreamReader``, ``SimpleDataSourceStreamReader``,
   ``DataSourceStreamWriter``, ``DataSourceStreamArrowWriter``) are P4: ``streamReader`` and
   ``streamWriter`` raise ``NOT_IMPLEMENTED``.
@@ -31,6 +36,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from krishiv.errors import (
+    AnalysisException,
+    PySparkAssertionError,
+    PySparkException,
     PySparkNotImplementedError,
     PySparkRuntimeError,
     PySparkTypeError,
@@ -203,7 +211,8 @@ class InputPartition:
         self.value = value
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.value!r})"
+        attributes = ", ".join(f"{k}={v!r}" for k, v in self.__dict__.items())
+        return f"{self.__class__.__name__}({attributes})"
 
 
 class WriterCommitMessage:
@@ -242,11 +251,12 @@ class DataSourceReader(ABC):
     """Reads one source: ``partitions`` cuts it, ``read`` reads a partition."""
 
     def pushFilters(self, filters: list[Filter]) -> Iterable[Filter]:
-        """Takes the filters it can handle and returns the ones it cannot."""
-        raise PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": "pushFilters"})
+        """Takes the filters it can handle and returns the ones it cannot (the default takes none)."""
+        return filters
 
     def partitions(self) -> Sequence[InputPartition]:
-        raise PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": "partitions"})
+        """The partitions of a read (the default is one ``InputPartition(None)``)."""
+        return [InputPartition(None)]
 
     @abstractmethod
     def read(self, partition: InputPartition) -> Iterator[tuple[Any, ...]] | Iterator[Any]:
@@ -276,31 +286,33 @@ class DataSourceArrowWriter(DataSourceWriter):
 # ---- running them ---------------------------------------------------------------------------------
 
 
-def _source_error(action: str, kind: str, error: BaseException) -> PySparkRuntimeError:
+def _described(error: BaseException) -> str:
+    """``error`` as the worker's text gives it: ``[CLASS] message`` for an errors-package error, else
+    ``Type: message``."""
+    condition = error.getCondition() if isinstance(error, PySparkException) else None
+    return f"[{condition}] {error}" if condition else f"{type(error).__name__}: {error}"
+
+
+def _source_error(action: str, kind: str, error: BaseException | str) -> PySparkRuntimeError:
     """``PYTHON_DATA_SOURCE_ERROR`` (SQLSTATE 38000): "Failed to <action> Python data source <type>: <msg>"."""
-    message = f"{type(error).__name__}: {error}"
+    message = error if isinstance(error, str) else _described(error)
     return PySparkRuntimeError(
-        f"[PYTHON_DATA_SOURCE_ERROR] Failed to {action} Python data source {kind}: {message}",
         errorClass="PYTHON_DATA_SOURCE_ERROR",
         messageParameters={"action": action, "type": kind, "msg": message},
         sqlState="38000",
     )
 
 
-def _mismatch(feature: str, message: str) -> PySparkRuntimeError:
-    return PySparkRuntimeError(
-        f"[{feature}] {message}",
-        errorClass=feature,
-        messageParameters={"message": message},
-    )
+def _mismatch(error_class: str, **parameters: str) -> PySparkRuntimeError:
+    """A PySpark-side class of the data source worker, its text from the class's template."""
+    return PySparkRuntimeError(errorClass=error_class, messageParameters=parameters)
 
 
 def _guard(action: str, kind: str, call: Any) -> Any:
-    """``call()``, any exception of the user's code raised as ``PYTHON_DATA_SOURCE_ERROR``."""
+    """``call()`` with every exception of the user's code (and the worker's own checks) raised once as
+    ``PYTHON_DATA_SOURCE_ERROR`` of Spark's ``action`` and ``kind`` (``UserDefinedPythonDataSource.scala``)."""
     try:
         return call()
-    except PySparkRuntimeError:
-        raise
     except Exception as error:
         raise _source_error(action, kind, error) from error
 
@@ -353,7 +365,9 @@ class DataSourceRegistration:
             )
         name = _guard("create", "instance", lambda: dataSource.name())
         if not isinstance(name, str) or not name:
-            raise _mismatch("DATA_SOURCE_TYPE_MISMATCH", "the data source name() must be a non-empty string")
+            raise _mismatch(
+                "DATA_SOURCE_TYPE_MISMATCH", expected="name() to return a non-empty string", actual=repr(name)
+            )
         registry = _registry(self._session)
         old = registry.get(name.lower())
         registry[name.lower()] = _Registered(dataSource, name, (old.version + 1) if old else 1)
@@ -379,29 +393,33 @@ def _read_partitions(reader: DataSourceReader) -> list[InputPartition]:
         partitions = reader.partitions()
     except NotImplementedError:
         return [InputPartition(None)]
-    except Exception as error:
-        raise _source_error("generate", "read partitions", error) from error
     if not isinstance(partitions, list):
         raise _mismatch(
             "DATA_SOURCE_TYPE_MISMATCH",
-            f"Expected the partitions() of the reader to be a list, but got {type(partitions).__name__}.",
+            expected="'partitions' to return a list",
+            actual=f"'{type(partitions).__name__}'",
         )
-    for p in partitions:
-        if not isinstance(p, InputPartition):
-            raise _mismatch(
-                "DATA_SOURCE_TYPE_MISMATCH",
-                f"Expected every element of partitions() to be an InputPartition, but got {type(p).__name__}.",
-            )
+    if not all(isinstance(p, InputPartition) for p in partitions):
+        raise _mismatch(
+            "DATA_SOURCE_TYPE_MISMATCH",
+            expected="elements in 'partitions' to be of type 'InputPartition'",
+            actual=", ".join(f"'{type(p).__name__}'" for p in partitions),
+        )
     return partitions or [InputPartition(None)]
 
 
-def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession) -> Iterator[Any]:
-    """``reader.read``'s output as Arrow batches of the declared schema (Spark's ``records_to_arrow_batches``)."""
+def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession, source: DataSource) -> Iterator[Any]:
+    """``reader.read``'s output as Arrow batches of the declared schema (Spark's ``records_to_arrow_batches``:
+    the first element decides between the Arrow path, which only checks the schema, and the row path)."""
+    from itertools import chain, islice
+
     from krishiv.sql.row import Row
     from krishiv.sql.session import _cell, _pa_schema, _pa_type, _verify_row
 
     arrow_schema = _pa_schema(schema, pa)
-    width = len(schema.fields)
+    names = schema.fieldNames()
+    width = len(names)
+    position = {name: i for i, name in enumerate(names)}
 
     def flush(rows: list[tuple[Any, ...]]) -> Any:
         columns = []
@@ -410,81 +428,96 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession)
             columns.append(pa.array(values, type=_pa_type(field.dataType, pa)))
         return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 
-    rows: list[tuple[Any, ...]] = []
-    for item in output:
-        if isinstance(item, pa.RecordBatch):
-            if rows:
-                yield flush(rows)
-                rows = []
-            if item.num_columns != width:
+    try:
+        first = next(output)
+    except StopIteration:
+        return
+    if isinstance(first, pa.RecordBatch):
+        if first.num_columns != width:
+            raise _mismatch("DATA_SOURCE_RETURN_SCHEMA_MISMATCH", expected=str(width), actual=str(first.num_columns))
+        for name in names:
+            if name not in first.schema.names:
                 raise _mismatch(
-                    "DATA_SOURCE_RETURN_SCHEMA_MISMATCH",
-                    f"Return schema mismatch in the result from 'read' method. Expected: {width} columns, "
-                    f"Found: {item.num_columns} columns. Make sure the returned values match the "
-                    "required output schema.",
+                    "DATA_SOURCE_RETURN_SCHEMA_MISMATCH", expected=str(names), actual=str(first.schema.names)
                 )
-            table = pa.Table.from_batches([item]).rename_columns(arrow_schema.names).cast(arrow_schema)
-            yield from table.to_batches()
-            continue
-        if isinstance(item, Row | tuple | list):
-            values = tuple(item)
-        else:
-            raise _mismatch(
-                "DATA_SOURCE_INVALID_RETURN_TYPE",
-                "Unsupported return type ('" + type(item).__name__ + "') from Python data source 'read'. "
-                "Expected types: ('tuple', 'list', 'Row', 'pyarrow.RecordBatch').",
-            )
-        if len(values) != width:
-            raise _mismatch(
-                "DATA_SOURCE_RETURN_SCHEMA_MISMATCH",
-                f"Return schema mismatch in the result from 'read' method. Expected: {width} columns, "
-                f"Found: {len(values)} columns. Make sure the returned values match the required output schema.",
-            )
-        _verify_row(schema, list(values))
-        rows.append(values)
-        if len(rows) >= MAX_BATCH_ROWS:
-            yield flush(rows)
-            rows = []
-    if rows:
+        if not arrow_schema.equals(first.schema):
+            raise _mismatch("DATA_SOURCE_RETURN_SCHEMA_MISMATCH", expected=str(arrow_schema), actual=str(first.schema))
+        yield first
+        yield from output
+        return
+
+    iterator = chain([first], output)
+    while batch := list(islice(iterator, MAX_BATCH_ROWS)):
+        rows: list[tuple[Any, ...]] = []
+        for item in batch:
+            if hasattr(item, "__len__") and len(item) != width:
+                raise _mismatch("DATA_SOURCE_RETURN_SCHEMA_MISMATCH", expected=str(width), actual=str(len(item)))
+            if not isinstance(item, list | tuple):
+                raise _mismatch(
+                    "DATA_SOURCE_INVALID_RETURN_TYPE",
+                    type=type(item).__name__,
+                    name=source.name(),
+                    supported_types="tuple, list, `pyspark.sql.types.Row`, `pyarrow.RecordBatch`",
+                )
+            if isinstance(item, Row) and hasattr(item, "__fields__"):
+                # A named Row is placed by field name, not by position.
+                if set(item.__fields__) != set(names):
+                    raise _mismatch(
+                        "DATA_SOURCE_RETURN_SCHEMA_MISMATCH", expected=str(names), actual=str(item.__fields__)
+                    )
+                values: list[Any] = [None] * width
+                for name in names:
+                    values[position[name]] = item[name]
+            else:
+                values = list(item)
+            _verify_row(schema, values)
+            rows.append(tuple(values))
         yield flush(rows)
 
 
 def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType) -> Any:
-    """One physical plan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table."""
+    """One physical plan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table.
+
+    Planning failures (``reader()``, its type, ``pushFilters``, ``partitions()``) are raised once as
+    ``PYTHON_DATA_SOURCE_ERROR`` of Spark's pairs; what ``read`` raises is not wrapped here (the engine
+    raises it as ``PYTHON_EXCEPTION``, as a failed read task)."""
     from krishiv.sql import _convert
     from krishiv.sql.session import _pa_schema
 
     pa = _convert.require_pyarrow("a Python data source read")
-    reader = _guard("create", "reader", lambda: source.reader(schema))
-    if not isinstance(reader, DataSourceReader):
-        raise _mismatch(
-            "DATA_SOURCE_TYPE_MISMATCH",
-            f"Expected an instance of DataSourceReader from the data source's reader(), got {type(reader).__name__}.",
-        )
-    if type(reader).pushFilters is not DataSourceReader.pushFilters and not _pushdown_enabled(session):
-        raise _mismatch(
-            "DATA_SOURCE_PUSHDOWN_DISABLED",
-            f"Pushdown is disabled but the reader {type(reader).__name__} implements pushFilters. "
-            f"Set {PUSHDOWN_CONF} to true to enable it.",
-        )
+
+    def initialize() -> DataSourceReader:
+        reader = source.reader(schema)
+        if not isinstance(reader, DataSourceReader):
+            raise PySparkAssertionError(
+                errorClass="DATA_SOURCE_TYPE_MISMATCH",
+                messageParameters={
+                    "expected": "an instance of DataSourceReader",
+                    "actual": f"'{type(reader).__name__}'",
+                },
+            )
+        if getattr(reader.pushFilters, "__func__", None) is not DataSourceReader.pushFilters and (
+            not _pushdown_enabled(session)
+        ):
+            raise PySparkAssertionError(
+                errorClass="DATA_SOURCE_PUSHDOWN_DISABLED",
+                messageParameters={"type": type(reader).__name__, "conf": PUSHDOWN_CONF},
+            )
+        return reader
+
+    reader = _guard("initialize", "reader", initialize)
+    partitions = _guard("generate", "read partitions", lambda: _read_partitions(reader))
     batches: list[Any] = []
-    for partition in _read_partitions(reader):
-        try:
-            output = reader.read(partition)
-        except Exception as error:
-            raise _source_error("read", "partition", error) from error
+    for partition in partitions:
+        output = reader.read(partition)
         if not isinstance(output, Iterator):
             raise _mismatch(
                 "DATA_SOURCE_INVALID_RETURN_TYPE",
-                "Unsupported return type ('" + type(output).__name__ + "') from Python data source 'read'. "
-                "Expected an iterator (a generator is fine); a list is not accepted.",
+                type=type(output).__name__,
+                name=source.name(),
+                supported_types="iterator",
             )
-        try:
-            batches.extend(_batches_of(pa, output, schema, session))
-        except PySparkRuntimeError:
-            raise
-        except Exception as error:
-            raise _source_error("read", "partition", error) from error
+        batches.extend(_batches_of(pa, output, schema, session, source))
     return pa.Table.from_batches(batches, schema=_pa_schema(schema, pa))
 
 
@@ -514,15 +547,19 @@ def load(session: SparkSession, entry: _Registered, options: dict[str, str], use
 
 def save(session: SparkSession, entry: _Registered, df: DataFrame, mode: str, options: dict[str, str]) -> None:
     """``df.write.format(name).mode(mode).save()`` through a registered Python source's writer."""
-    from krishiv.sql.row import Row
+    import traceback
+
+    from krishiv.sql import _convert
 
     lowered = mode.lower()
     if lowered in ("error", "errorifexists", "default", "ignore"):
-        raise PySparkRuntimeError(
-            f'[UNSUPPORTED_DATA_SOURCE_SAVE_MODE] The data source "{entry.name}" cannot be written in the '
-            f'{lowered} mode. Please use either the "Append" or "Overwrite" mode instead.',
+        # Spark's `AnalysisException`, its `createMode` the `SaveMode` name.
+        raise AnalysisException(
             errorClass="UNSUPPORTED_DATA_SOURCE_SAVE_MODE",
-            messageParameters={"source": entry.name, "createMode": f'"{lowered}"'},
+            messageParameters={
+                "source": entry.name,
+                "createMode": "Ignore" if lowered == "ignore" else "ErrorIfExists",
+            },
             sqlState="0A000",
         )
     if lowered not in ("append", "overwrite"):
@@ -534,35 +571,39 @@ def save(session: SparkSession, entry: _Registered, df: DataFrame, mode: str, op
     overwrite = lowered == "overwrite"
     source = _guard("create", "instance", lambda: entry.cls(options=CaseInsensitiveDict(options)))
     struct = df.schema
-    writer = _guard("initialize", "writer", lambda: source.writer(struct, overwrite))
-    if not isinstance(writer, DataSourceWriter):
-        raise _mismatch(
-            "DATA_SOURCE_TYPE_MISMATCH",
-            f"Expected an instance of DataSourceWriter from the data source's writer(), got {type(writer).__name__}.",
-        )
+    writer = _guard("initialize", "writer", lambda: _writer_of(source, struct, overwrite))
     arrow_writer = isinstance(writer, DataSourceArrowWriter)
     message: WriterCommitMessage | None = None
     failure: BaseException | None = None
+    user_failure = False
     try:
         table = df.toArrow()
-        message = writer.write(iter(table.to_batches()) if arrow_writer else iter(_rows_of(table, Row)))
+        data = iter(table.to_batches()) if arrow_writer else iter(_convert.rows_of(table))
+        try:
+            message = writer.write(data)
+        except Exception:
+            user_failure = True
+            raise
     except BaseException as error:  # the task failed: abort, then raise
         failure = error
+        traced = traceback.format_exc()
     if failure is not None:
-        try:
-            writer.abort([None])
-        except Exception as error:
-            raise _source_error("commit or abort", "write", error) from error
-        if isinstance(failure, PySparkRuntimeError):
-            raise failure
-        raise _source_error("write", "task", failure) from failure
-    try:
-        writer.commit([message])
-    except Exception as error:
-        raise _source_error("commit or abort", "write", error) from error
+        _guard("commit or abort", "write", lambda: writer.abort([None]))
+        if not user_failure:
+            raise failure  # an engine error or an interrupt reaches the caller unchanged
+        raise PySparkRuntimeError(
+            errorClass="PYTHON_EXCEPTION",
+            messageParameters={"msg": "An exception was thrown from the Python worker", "traceback": traced},
+            sqlState="38000",
+        ) from failure
+    _guard("commit or abort", "write", lambda: writer.commit([message]))
 
 
-def _rows_of(table: Any, row_type: Any) -> Iterator[Any]:
-    names = table.schema.names
-    for record in table.to_pylist():
-        yield row_type(**{n: record[n] for n in names}) if len(set(names)) == len(names) else row_type(*record.values())
+def _writer_of(source: DataSource, schema: StructType, overwrite: bool) -> DataSourceWriter:
+    writer = source.writer(schema, overwrite)
+    if not isinstance(writer, DataSourceWriter):
+        raise PySparkAssertionError(
+            errorClass="DATA_SOURCE_TYPE_MISMATCH",
+            messageParameters={"expected": "an instance of DataSourceWriter", "actual": f"'{type(writer).__name__}'"},
+        )
+    return writer

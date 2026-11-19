@@ -7,7 +7,13 @@ from typing import Any, ClassVar
 
 import pytest
 
-from krishiv.errors import PySparkNotImplementedError, PySparkRuntimeError, PySparkTypeError
+from krishiv.errors import (
+    AnalysisException,
+    PySparkException,
+    PySparkNotImplementedError,
+    PySparkRuntimeError,
+    PySparkTypeError,
+)
 from krishiv.sql import SparkSession
 from krishiv.sql.datasource import (
     CaseInsensitiveDict,
@@ -135,34 +141,100 @@ def test_read_outputs_rows_lists_and_arrow_batches(spark: SparkSession) -> None:
                     yield (1, "x")
                     yield Row(a=2, b="y")
                     yield [3, "z"]
-                    yield pa.RecordBatch.from_pydict({"a": [4, 5], "b": ["p", "q"]})
 
             return R()
 
     spark.dataSource.register(Mixed)
-    assert rows(spark.read.format("Mixed").load()) == [
-        (1, "x"),
-        (2, "y"),
-        (3, "z"),
-        (4, "p"),
-        (5, "q"),
-    ]
+    assert rows(spark.read.format("Mixed").load()) == [(1, "x"), (2, "y"), (3, "z")]
 
 
-def test_arrow_batch_is_cast_to_the_declared_schema(spark: SparkSession) -> None:
-    class Cast(DataSource):
+def test_named_row_is_placed_by_field_name(spark: SparkSession) -> None:
+    class Named(DataSource):
         def schema(self) -> str:
-            return "a BIGINT"
+            return "a INT, b STRING"
 
         def reader(self, schema: Any) -> DataSourceReader:
             class R(DataSourceReader):
                 def read(self, partition: InputPartition) -> Any:
-                    yield pa.RecordBatch.from_pydict({"x": pa.array([1, 2], type=pa.int32())})
+                    yield Row(b="x", a=1)
 
             return R()
 
-    spark.dataSource.register(Cast)
-    assert rows(spark.read.format("Cast").load()) == [(1,), (2,)]
+    spark.dataSource.register(Named)
+    assert rows(spark.read.format("Named").load()) == [(1, "x")]
+
+
+def test_named_row_with_other_names_is_refused(spark: SparkSession) -> None:
+    class Wrong(DataSource):
+        def schema(self) -> str:
+            return "a INT, b STRING"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield Row(c=1, d="x")
+
+            return R()
+
+    spark.dataSource.register(Wrong)
+    with pytest.raises(PySparkException) as e:
+        spark.read.format("Wrong").load().collect()
+    assert e.value.getCondition() == "PYTHON_EXCEPTION"
+    assert "DATA_SOURCE_RETURN_SCHEMA_MISMATCH" in str(e.value)
+
+
+def test_a_tuple_then_an_arrow_batch_is_an_invalid_return_type(spark: SparkSession) -> None:
+    class Mixed2(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (1,)
+                    yield pa.RecordBatch.from_pydict({"a": pa.array([2], type=pa.int32())})
+
+            return R()
+
+    spark.dataSource.register(Mixed2)
+    with pytest.raises(PySparkException) as e:
+        spark.read.format("Mixed2").load().collect()
+    assert "DATA_SOURCE_INVALID_RETURN_TYPE" in str(e.value)
+
+
+def test_arrow_batch_of_another_schema_is_refused(spark: SparkSession) -> None:
+    class Strict(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield pa.RecordBatch.from_pydict({"a": pa.array([1, 2], type=pa.int64())})
+
+            return R()
+
+    spark.dataSource.register(Strict)
+    with pytest.raises(PySparkException) as e:
+        spark.read.format("Strict").load().collect()
+    assert e.value.getCondition() == "PYTHON_EXCEPTION"
+    assert "DATA_SOURCE_RETURN_SCHEMA_MISMATCH" in str(e.value)
+
+
+def test_arrow_batch_of_the_declared_schema_is_read(spark: SparkSession) -> None:
+    class Exact(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield pa.RecordBatch.from_pydict({"a": pa.array([1, 2], type=pa.int32())})
+
+            return R()
+
+    spark.dataSource.register(Exact)
+    assert rows(spark.read.format("Exact").load()) == [(1,), (2,)]
 
 
 def test_empty_iterator_and_missing_partitions_default(spark: SparkSession) -> None:
@@ -231,7 +303,7 @@ def test_reregistering_a_name_replaces_the_class(spark: SparkSession) -> None:
 def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
     spark.dataSource.register(Fixed)
     other = SparkSession.builder.create()
-    with pytest.raises(Exception):  # noqa: B017, PT011 - an unknown format, whatever its class
+    with pytest.raises(PySparkException):
         other.read.format("fixed").load().collect()
 
 
@@ -265,9 +337,9 @@ def test_read_failure_is_the_python_data_source_error(spark: SparkSession) -> No
 
     spark.dataSource.register(Boom)
     df = spark.read.format("Boom").load()
-    with pytest.raises(Exception) as e:  # the engine wraps the planning failure  # noqa: PT011
+    with pytest.raises(PySparkException) as e:
         df.collect()
-    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert e.value.getCondition() == "PYTHON_EXCEPTION"  # a failed read task, as Spark raises it
     assert "disk on fire" in str(e.value)
 
 
@@ -309,13 +381,15 @@ def test_wrong_width_and_bad_row_type(spark: SparkSession) -> None:
         return S
 
     spark.dataSource.register(source((1,)))
-    with pytest.raises(Exception) as e:  # noqa: PT011
+    with pytest.raises(PySparkException) as e:
         spark.read.format("s").load().collect()
     assert "DATA_SOURCE_RETURN_SCHEMA_MISMATCH" in str(e.value)
-    spark.dataSource.register(source("nope"))
-    with pytest.raises(Exception) as e:  # noqa: PT011
+    assert "Expected: 2 columns, Found: 1 columns" in str(e.value)
+    spark.dataSource.register(source(5))
+    with pytest.raises(PySparkException) as e:
         spark.read.format("s").load().collect()
     assert "DATA_SOURCE_INVALID_RETURN_TYPE" in str(e.value)
+    assert "Unsupported return type ('int') from Python data source 's'" in str(e.value)
 
 
 def test_partitions_must_be_a_list_of_input_partitions(spark: SparkSession) -> None:
@@ -342,9 +416,13 @@ def test_partitions_must_be_a_list_of_input_partitions(spark: SparkSession) -> N
 
     for bad in ((InputPartition(1),), [1]):
         spark.dataSource.register(source(bad))
-        with pytest.raises(Exception) as e:  # noqa: PT011
+        with pytest.raises(PySparkException) as e:
             spark.read.format("p").load().collect()
-        assert "DATA_SOURCE_TYPE_MISMATCH" in str(e.value)
+        assert e.value.getCondition() == "PYTHON_DATA_SOURCE_ERROR"
+        params = e.value.getMessageParameters()
+        assert params is not None
+        assert (params["action"], params["type"]) == ("generate", "read partitions")
+        assert "DATA_SOURCE_TYPE_MISMATCH" in params["msg"]
 
 
 def test_pushfilters_without_the_conf_is_refused(spark: SparkSession) -> None:
@@ -444,7 +522,7 @@ def test_write_failure_calls_abort_and_raises(spark: SparkSession) -> None:
     df = spark.range(2).selectExpr("cast(id as int) as a")
     with pytest.raises(PySparkRuntimeError) as e:
         df.write.format("sink").option("fail", "1").mode("append").save()
-    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert e.value.getCondition() == "PYTHON_EXCEPTION"
     assert "write failed" in str(e.value)
     assert ("abort", [None]) in Log.events
     assert not any(k == "commit" for k, _ in Log.events)
@@ -454,9 +532,12 @@ def test_write_failure_calls_abort_and_raises(spark: SparkSession) -> None:
 def test_write_modes_error_and_ignore_are_refused(spark: SparkSession, mode: str) -> None:
     spark.dataSource.register(Sink)
     df = spark.range(1).selectExpr("cast(id as int) as a")
-    with pytest.raises(PySparkRuntimeError) as e:
+    with pytest.raises(AnalysisException) as e:
         df.write.format("sink").mode(mode).save()
-    assert "UNSUPPORTED_DATA_SOURCE_SAVE_MODE" in str(e.value)
+    assert e.value.getCondition() == "UNSUPPORTED_DATA_SOURCE_SAVE_MODE"
+    params = e.value.getMessageParameters()
+    assert params is not None
+    assert params["createMode"] == ("Ignore" if mode == "ignore" else "ErrorIfExists")
 
 
 def test_arrow_writer_gets_record_batches(spark: SparkSession) -> None:
@@ -503,3 +584,34 @@ def test_round_trip_through_a_python_source_matches_parquet(spark: SparkSession,
     spark.read.parquet(path).createOrReplaceTempView("pq")
     spark.read.format("Same").load().createOrReplaceTempView("py")
     assert spark.sql(query.format(t="py")).collect() == spark.sql(query.format(t="pq")).collect()
+
+
+def test_writer_gets_nested_rows_and_duplicate_columns(spark: SparkSession) -> None:
+    seen: list[Any] = []
+
+    class Capture(DataSource):
+        def writer(self, schema: Any, overwrite: bool) -> DataSourceWriter:
+            class W(DataSourceWriter):
+                def write(self, iterator: Any) -> WriterCommitMessage:
+                    seen.extend(iterator)
+                    return WriterCommitMessage()
+
+            return W()
+
+    spark.dataSource.register(Capture)
+    df = spark.sql("select 1 as k, 2 as k, named_struct('x', 3, 'y', 'z') as s")
+    df.write.format("Capture").mode("append").save()
+    assert len(seen) == 1
+    assert tuple(seen[0])[:2] == (1, 2)
+    assert isinstance(seen[0][2], Row)
+    assert tuple(seen[0][2]) == (3, "z")
+
+
+def test_engine_error_in_a_write_reaches_the_caller_unchanged(spark: SparkSession) -> None:
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.sql("select 1 div 0 as a")
+    with pytest.raises(PySparkException) as e:
+        df.write.format("sink").mode("append").save()
+    assert e.value.getCondition() != "PYTHON_EXCEPTION"
+    assert ("abort", [None]) in Log.events

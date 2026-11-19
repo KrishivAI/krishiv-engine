@@ -63,9 +63,14 @@ pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + 
 /// once per registration): the Python Data Source API's reader lists its partitions and reads
 /// them when the plan is made, as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
 struct SourceTable {
+    name: String,
     schema: SchemaRef,
     source: BatchSource,
 }
+
+/// The most bytes of batches one plan of a [`SourceTable`] may hold: the interim embedded path
+/// materialises a source when a query is planned, so it is capped (⚗, design P3-T040 §3.3).
+const MAX_SOURCE_BYTES: usize = 1 << 30;
 
 impl std::fmt::Debug for SourceTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -78,6 +83,15 @@ impl std::fmt::Debug for SourceTable {
 impl TableProvider for SourceTable {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         let batches = (self.source)()?;
+        let bytes: usize = batches.iter().map(RecordBatch::get_array_memory_size).sum();
+        if bytes > MAX_SOURCE_BYTES {
+            return Err(krishiv_common::error::KrishivPythonDataSourceLimit {
+                source: self.name.clone(),
+                bytes: bytes.to_string(),
+                limit: MAX_SOURCE_BYTES.to_string(),
+            }
+            .into());
+        }
         let batches = batches
             .into_iter()
             .map(|b| {
@@ -131,7 +145,11 @@ impl Session {
             name,
             TempTable::Provider {
                 columns,
-                table: Arc::new(SourceTable { schema, source }),
+                table: Arc::new(SourceTable {
+                    name: name.to_owned(),
+                    schema,
+                    source,
+                }),
             },
         );
         self.state.cache.forget_table(name);

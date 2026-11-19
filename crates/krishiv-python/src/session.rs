@@ -221,8 +221,8 @@ impl PySession {
     /// object carrying the source's schema (read now, from an empty table), `read` a
     /// callable returning an Arrow object of that schema. The engine calls it once for
     /// every physical plan of a query over the DataFrame, so a source that lists its
-    /// partitions in `read` sees new ones on the next action. The failure of `read`
-    /// is `PYTHON_DATA_SOURCE_ERROR` (action `read`, type `partitions`).
+    /// partitions in `read` sees new ones on the next action. A failure of `read` is `PYTHON_EXCEPTION`; a planning failure the
+    /// Python side classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type.
     fn register_python_source(
         &self,
         py: Python<'_>,
@@ -236,16 +236,40 @@ impl PySession {
         );
         let source: krishiv_session::BatchSource = std::sync::Arc::new(move || {
             Python::attach(|py| {
+                // One wrap: a planning failure the reader's Python side already classed as
+                // `PYTHON_DATA_SOURCE_ERROR` keeps its action and type (Spark's
+                // `pythonDataSourceError` pairs); every other exception of user code is
+                // Spark's `PYTHON_EXCEPTION`, as a task of the read raises it.
                 let fail = |err: &PyErr| {
+                    let value = err.value(py);
+                    let class = value
+                        .call_method0("getCondition")
+                        .and_then(|c| c.extract::<String>())
+                        .ok();
+                    if class.as_deref() == Some("PYTHON_DATA_SOURCE_ERROR") {
+                        let parameter = |key: &str| {
+                            value
+                                .call_method0("getMessageParameters")
+                                .and_then(|p| p.get_item(key))
+                                .and_then(|v| v.extract::<String>())
+                                .unwrap_or_default()
+                        };
+                        return krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::PythonDataSourceError {
+                                action: parameter("action"),
+                                r#type: parameter("type"),
+                                msg: parameter("msg"),
+                            },
+                        );
+                    }
                     let traceback = err
                         .traceback(py)
                         .and_then(|t| t.format().ok())
                         .unwrap_or_default();
                     krishiv_common::error::KrishivError::from(
-                        krishiv_common::error::PythonDataSourceError {
-                            action: "read".to_owned(),
-                            r#type: "partitions".to_owned(),
-                            msg: format!("{traceback}{err}"),
+                        krishiv_common::error::PythonException {
+                            msg: "An exception was thrown from the Python worker".to_owned(),
+                            traceback: format!("{traceback}{err}"),
                         },
                     )
                 };

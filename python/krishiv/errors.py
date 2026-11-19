@@ -106,6 +106,29 @@ _TEMPLATES = {
     "CANNOT_SPECIFY_RETURN_TYPE_FOR_UDF": (
         "returnType can not be specified when `<arg_name>` is a user-defined function, but got <return_type>."
     ),
+    "DATA_SOURCE_PUSHDOWN_DISABLED": (
+        "<type> implements pushFilters() but filter pushdown is disabled because configuration '<conf>' is false. "
+        "Set it to true to enable filter pushdown."
+    ),
+    "DATA_SOURCE_INVALID_RETURN_TYPE": (
+        "Unsupported return type ('<type>') from Python data source '<name>'. Expected types: <supported_types>."
+    ),
+    "DATA_SOURCE_RETURN_SCHEMA_MISMATCH": (
+        "Return schema mismatch in the result from 'read' method. Expected: <expected> columns, Found: <actual> "
+        "columns. Make sure the returned values match the required output schema."
+    ),
+    "DATA_SOURCE_TYPE_MISMATCH": "Expected <expected>, but got <actual>.",
+    "DATA_SOURCE_EXTRANEOUS_FILTERS": (
+        "<type>.pushFilters() returned filters that are not part of the input. Make sure that each returned filter "
+        "is one of the input filters by reference."
+    ),
+    # JVM classes the Python data source API raises itself (the engine's registry has them too).
+    "PYTHON_DATA_SOURCE_ERROR": "Failed to <action> Python data source <type>: <msg>",
+    "PYTHON_EXCEPTION": "<msg>: <traceback>",
+    "UNSUPPORTED_DATA_SOURCE_SAVE_MODE": (
+        'The data source "<source>" cannot be written in the <createMode> mode. '
+        'Please use either the "Append" or "Overwrite" mode instead.'
+    ),
     "INVALID_UDF_EVAL_TYPE": "Eval type for UDF must be <eval_type>.",
     "INVALID_PANDAS_UDF_TYPE": "`<arg_name>` should be one of the values from PandasUDFType, got <arg_type>",
     "INVALID_PANDAS_UDF": "Invalid function: <detail>",
