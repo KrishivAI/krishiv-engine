@@ -1197,6 +1197,8 @@ pub struct Truncate {
 pub struct Show {
     /// What to show.
     pub kind: ShowKind,
+    /// `AS JSON` (Spark 4.3): one `json_metadata` string column instead of the rows.
+    pub as_json: bool,
     /// Source text, from `SHOW` to the end of the statement.
     pub span: Span,
 }

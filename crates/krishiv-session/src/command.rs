@@ -1551,6 +1551,9 @@ impl Session {
         s: &krishiv_sql::ast::Show,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
+        if s.as_json {
+            return self.exec_show_json(s, original).await;
+        }
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
                 // `system` (and a declared catalog) has no namespace here: after `USE system` the

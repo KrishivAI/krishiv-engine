@@ -865,9 +865,24 @@ impl<'s> Parser<'s> {
             let start = p.start();
             p.expect_kw("SHOW")?;
             let kind = p.show_kind()?;
+            // Spark 4.3: `SHOW TABLES | TABLE EXTENDED | PARTITIONS ... AS JSON`.
+            let as_json = matches!(
+                kind,
+                ShowKind::Tables { .. }
+                    | ShowKind::TableExtended { .. }
+                    | ShowKind::Partitions { .. }
+            ) && p.kw_at(0, "AS")
+                && p.kw_at(1, "JSON");
+            if as_json {
+                p.pos += 2;
+            }
             let span = p.span_from(start);
             p.command_end()?;
-            Ok(Statement::Show(Show { kind, span }))
+            Ok(Statement::Show(Show {
+                kind,
+                as_json,
+                span,
+            }))
         })
     }
 

@@ -88,6 +88,8 @@ pub(crate) const SHOW_CREATE_TABLE: &[CommandColumn] = &[c("createtab_stmt")];
 pub(crate) const SHOW_TBLPROPERTIES: &[CommandColumn] = &[c("key"), c("value")];
 /// `SHOW PARTITIONS`.
 pub(crate) const SHOW_PARTITIONS: &[CommandColumn] = &[c("partition")];
+/// `SHOW ... AS JSON` (Spark 4.3).
+pub(crate) const SHOW_JSON: &[CommandColumn] = &[c("json_metadata")];
 /// `SHOW CATALOGS`.
 pub(crate) const SHOW_CATALOGS: &[CommandColumn] = &[c("catalog")];
 /// `SHOW CURRENT NAMESPACE`.
@@ -128,6 +130,7 @@ pub(crate) const SET_VERBOSE: &[CommandColumn] =
 /// statement; `None` for any other statement.
 pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>> {
     let columns: &[CommandColumn] = match statement {
+        Statement::Show(s) if s.as_json => SHOW_JSON,
         Statement::Show(s) => show_columns(&s.kind)?,
         Statement::Describe(d) => describe_columns(&d.kind)?,
         Statement::Explain(_) => EXPLAIN,
