@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use krishiv_exec::profile::QueryProfile;
 
-use super::{StoredProfile, read_history, trim, write_segment};
+use super::{StoredProfile, kept_hints, read_history, trim, write_segment};
 use crate::{EngineRuntime, Session};
 
 fn row(i: i64, profile: String) -> StoredProfile {
@@ -770,4 +770,20 @@ fn stored_hints_equal_the_explain_analyze_hints_under_masking() {
             .any(|h| h.message.chars().any(|c| c.is_ascii_digit())),
         "a hint with numbers is what masking could have broken"
     );
+}
+
+#[test]
+fn only_a_finished_query_keeps_its_hints() {
+    use krishiv_exec::profile::{Hint, HintCode};
+    let hint = || Hint {
+        code: HintCode::Skew,
+        node: Some(1),
+        operator: None,
+        message: "skew".to_owned(),
+        evidence: Vec::new(),
+    };
+    assert_eq!(kept_hints("finished", vec![hint()]).len(), 1);
+    for state in ["failed", "cancelled", "denied"] {
+        assert!(kept_hints(state, vec![hint()]).is_empty(), "{state}");
+    }
 }

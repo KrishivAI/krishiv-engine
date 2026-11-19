@@ -394,17 +394,25 @@ fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
 
+/// The hints a stored profile keeps: those of a finished query only.
+fn kept_hints(
+    state: &str,
+    hints: Vec<krishiv_exec::profile::Hint>,
+) -> Vec<krishiv_exec::profile::Hint> {
+    if state == "finished" {
+        hints
+    } else {
+        Vec::new()
+    }
+}
+
 fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut profile = QueryProfile::new(&e.plan, e.metrics, e.detailed);
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
     profile.scans = e.scans;
     // `system.queries.hints` shows succeeded queries only; a failed, cancelled or denied one keeps none.
-    profile.hints = if e.state == "finished" {
-        e.hints
-    } else {
-        Vec::new()
-    };
+    profile.hints = kept_hints(e.state, e.hints);
     let mut sql = e.sql;
     if mask {
         // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named
