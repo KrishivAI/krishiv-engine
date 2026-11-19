@@ -1,0 +1,409 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Reads of a declared Iceberg REST table with `storage = vended` (design P3-T067 §4.1, §4.3, §4.4).
+//!
+//! - **Answers.** The vended part of a `loadTable` answer (its `storage-credentials`, the credential keys of its
+//!   `config`, the table location, when it was fetched) is kept in [`VendedCache`] per identity key and table: the
+//!   caller's on a `delegated` catalog, the catalog's otherwise, never shared across identity keys. The cache is one
+//!   per process, bounded by `krishiv.catalog.vended.maxEntries` (least recently used out first); an entry whose
+//!   credential has expired is never served, it is fetched again.
+//! - **Refresh.** [`VendedSource`] is the `CredentialSource` of one scope of one query: the cached credential of the
+//!   longest prefix covering the scope while it is valid for longer than the refresh skew, else a new answer from
+//!   `loadCredentials` with the same caller, or a reload of the table when the catalog does not advertise the endpoint.
+//!   Refresh endpoints and signer URLs a catalog sends are never followed (they are not even kept).
+//! - **Scopes.** One store scope per vended prefix: a full URL or bucket prefix is its own scope; a bare scheme prefix
+//!   becomes the buckets of the table's location and metadata location in that family; with no `storage-credentials`,
+//!   the table location. [`VendedPaths`] refuses any location outside those scopes
+//!   (`KRISHIV_CATALOG_LOCATION_REFUSED`, before any request), so no file of the table is read with the server's own
+//!   or ambient credentials. A vended prefix opens nothing to path reads: only this table's scans use these stores.
+//! - **Block-cache scope (§4.4).** `Principal` of the length-prefixed (catalog, principal id, tenant) on a `delegated`
+//!   catalog, of the catalog alone otherwise; `delegated_by` is left out.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, SystemTime};
+
+use async_trait::async_trait;
+use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_common::secret::SecretString;
+use krishiv_exec::files::{LocatedPath, PathLocator};
+use krishiv_session::catalog_registry::IdentityKey;
+use krishiv_store::{
+    CacheScope, CredentialScope, CredentialSource, ParsedUrl, ScopedCredential, parse_object_url,
+};
+
+use crate::iceberg_rest::types::StorageCredential;
+use crate::iceberg_rest::vended::{VendedPrefix, covering, credential, keep_credentials};
+use crate::iceberg_rest::{LoadedTable, RestCaller, RestClient};
+use crate::location::{LocationRule, refused};
+
+/// A vended-answer cache key: the identity, the namespace and the table as asked.
+pub(crate) type Key = (IdentityKey, Vec<String>, String);
+
+/// The vended part of one catalog answer (module docs). Holds secrets: its `Debug` shows none.
+pub(crate) struct VendedAnswer {
+    credentials: Vec<StorageCredential>,
+    config: BTreeMap<String, SecretString>,
+    location: String,
+    fetched: SystemTime,
+}
+
+impl std::fmt::Debug for VendedAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VendedAnswer")
+            .field("credentials", &self.credentials.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl VendedAnswer {
+    /// The vended part of a `loadTable` answer.
+    pub(crate) fn of_table(t: &LoadedTable) -> Self {
+        Self::new(
+            t.storage_credentials.clone(),
+            t.config.clone(),
+            t.location.clone(),
+        )
+    }
+
+    fn new(
+        credentials: Vec<StorageCredential>,
+        config: BTreeMap<String, SecretString>,
+        location: String,
+    ) -> Self {
+        Self {
+            credentials: credentials
+                .into_iter()
+                .map(|c| StorageCredential {
+                    prefix: c.prefix,
+                    config: keep_credentials(c.config),
+                })
+                .collect(),
+            config: keep_credentials(config),
+            location,
+            fetched: SystemTime::now(),
+        }
+    }
+
+    /// The table location the answer was given for.
+    pub(crate) fn location(&self) -> &str {
+        &self.location
+    }
+
+    /// Whether the answer vends anything at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.credentials.is_empty() && self.config.is_empty()
+    }
+}
+
+/// The vended answers of every declared catalog of the process (module docs).
+/// The entries (each with the tick it was last used at) and the tick.
+type Entries = (HashMap<Key, (Arc<VendedAnswer>, u64)>, u64);
+
+#[derive(Debug, Default)]
+pub(crate) struct VendedCache {
+    inner: Mutex<Entries>,
+}
+
+impl VendedCache {
+    /// The process's cache.
+    pub(crate) fn global() -> Arc<Self> {
+        static GLOBAL: OnceLock<Arc<VendedCache>> = OnceLock::new();
+        Arc::clone(GLOBAL.get_or_init(|| Arc::new(Self::default())))
+    }
+
+    pub(crate) fn get(&self, key: &Key) -> Option<Arc<VendedAnswer>> {
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let (entries, tick) = &mut *guard;
+        *tick += 1;
+        let now = *tick;
+        entries.get_mut(key).map(|(a, used)| {
+            *used = now;
+            Arc::clone(a)
+        })
+    }
+
+    /// Keeps `answer` for `key`, the least recently used entry out first past `max` entries.
+    pub(crate) fn put(&self, key: Key, answer: Arc<VendedAnswer>, max: usize) {
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let (entries, tick) = &mut *guard;
+        *tick += 1;
+        let now = *tick;
+        while entries.len() >= max.max(1) && !entries.contains_key(&key) {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
+        entries.insert(key, (answer, now));
+    }
+
+    /// Drops every identity's answer for `namespace.name` (`REFRESH TABLE`).
+    pub(crate) fn drop_table(&self, catalog: &str, namespace: &[String], name: &str) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .retain(|(id, ns, n), _| !(id.catalog == catalog && ns == namespace && n == name));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .len()
+    }
+}
+
+/// How one table's credentials are asked for again, and how its faults are named.
+#[derive(Clone)]
+pub(crate) struct Refetch {
+    pub(crate) client: Arc<RestClient>,
+    pub(crate) caller: RestCaller,
+    pub(crate) namespace: Vec<String>,
+    pub(crate) table: String,
+    pub(crate) catalog: String,
+    pub(crate) relation: String,
+    pub(crate) location: String,
+}
+
+impl std::fmt::Debug for Refetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Refetch")
+            .field("relation", &self.relation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Refetch {
+    fn refused(&self, rule: LocationRule) -> KrishivError {
+        refused(&self.catalog, &self.relation, rule)
+    }
+
+    /// A new answer: `loadCredentials`, or the table reloaded when the catalog does not advertise it.
+    fn fetch_blocking(&self) -> Result<VendedAnswer, KrishivError> {
+        let (ns, t) = (&self.namespace, self.table.as_str());
+        match self.client.load_credentials_as(&self.caller, ns, t) {
+            Ok(Some(credentials)) => Ok(VendedAnswer::new(
+                credentials,
+                BTreeMap::new(),
+                self.location.clone(),
+            )),
+            Ok(None) => Err(self.refused(LocationRule::NoVendedCredential)),
+            Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => {
+                match self.client.load_table_as(&self.caller, ns, t)? {
+                    Some(table) => Ok(VendedAnswer::of_table(&table)),
+                    None => Err(self.refused(LocationRule::NoVendedCredential)),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// [`Self::fetch_blocking`] off the compute workers.
+    pub(crate) async fn fetch(&self) -> Result<VendedAnswer, KrishivError> {
+        let this = self.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle
+                .spawn_blocking(move || this.fetch_blocking())
+                .await
+                .map_err(|_| self.refused(LocationRule::NoVendedCredential))?,
+            Err(_) => this.fetch_blocking(),
+        }
+    }
+}
+
+/// What one table's vended reads share: the cache, its key and bound, the default TTL and the refresh skew.
+#[derive(Debug, Clone)]
+pub(crate) struct VendedTable {
+    pub(crate) cache: Arc<VendedCache>,
+    pub(crate) key: Key,
+    pub(crate) max_entries: usize,
+    pub(crate) default_ttl: Duration,
+    pub(crate) skew: Duration,
+    pub(crate) refetch: Refetch,
+}
+
+impl VendedTable {
+    /// The cached answer, else a new one (kept).
+    pub(crate) async fn answer(&self) -> Result<Arc<VendedAnswer>, KrishivError> {
+        if let Some(a) = self.cache.get(&self.key) {
+            return Ok(a);
+        }
+        self.refreshed().await
+    }
+
+    async fn refreshed(&self) -> Result<Arc<VendedAnswer>, KrishivError> {
+        let fresh = Arc::new(self.refetch.fetch().await?);
+        self.cache
+            .put(self.key.clone(), Arc::clone(&fresh), self.max_entries);
+        Ok(fresh)
+    }
+
+    /// The credential `answer` gives `url`, `None` when it gives none.
+    fn pick(
+        &self,
+        answer: &VendedAnswer,
+        url: &ParsedUrl,
+    ) -> Result<Option<ScopedCredential>, KrishivError> {
+        let fault = |detail: String| {
+            tracing::warn!(target: "krishiv::catalog", catalog = self.refetch.catalog.as_str(), table = self.refetch.relation.as_str(), detail, "an Iceberg REST catalog vended a credential Krishiv cannot use");
+            self.refetch.refused(LocationRule::NoVendedCredential)
+        };
+        let Some((_, config)) =
+            covering(&answer.credentials, &answer.config, &answer.location, url)
+                .map_err(|f| fault(f.0))?
+        else {
+            return Ok(None);
+        };
+        credential(config, url, answer.fetched, self.default_ttl).map_err(|f| fault(f.0))
+    }
+
+    /// The store scopes of `answer` (module docs): each as a location text, deduplicated, in a stable order.
+    pub(crate) fn scopes(
+        &self,
+        answer: &VendedAnswer,
+        metadata_location: &str,
+    ) -> Result<Vec<String>, KrishivError> {
+        let fault = || self.refetch.refused(LocationRule::NoVendedCredential);
+        let mut out = Vec::new();
+        let mut add = |s: String| {
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        };
+        if answer.credentials.is_empty() {
+            add(answer.location.clone());
+            return Ok(out);
+        }
+        for c in &answer.credentials {
+            match VendedPrefix::parse(&c.prefix).map_err(|_| fault())? {
+                VendedPrefix::Scheme(family) => {
+                    for own in [answer.location.as_str(), metadata_location] {
+                        if let Ok(url) = parse_object_url(own)
+                            && url.scheme == family
+                        {
+                            add(url.store_id.key().to_owned());
+                        }
+                    }
+                }
+                VendedPrefix::Bucket { .. } | VendedPrefix::Path { .. } => add(c.prefix.clone()),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The source of the scope at `location`.
+    pub(crate) fn source(&self, location: &str) -> Result<VendedSource, KrishivError> {
+        let url = parse_object_url(location)
+            .map_err(|_| self.refetch.refused(LocationRule::NoVendedCredential))?;
+        Ok(VendedSource {
+            table: self.clone(),
+            url,
+        })
+    }
+}
+
+/// The `CredentialSource` of one vended scope of one query (module docs).
+#[derive(Debug)]
+pub(crate) struct VendedSource {
+    table: VendedTable,
+    url: ParsedUrl,
+}
+
+impl VendedSource {
+    /// The credential now, fetching a new answer when the cached one gives none or one about to expire.
+    pub(crate) async fn current(&self) -> Result<ScopedCredential, KrishivError> {
+        let t = &self.table;
+        if let Some(a) = t.cache.get(&t.key)
+            && let Some(c) = t.pick(&a, &self.url)?
+            && c.expires_at()
+                .is_none_or(|e| e > SystemTime::now() + t.skew)
+        {
+            return Ok(c);
+        }
+        let fresh = t.refreshed().await?;
+        t.pick(&fresh, &self.url)?
+            .ok_or_else(|| t.refetch.refused(LocationRule::NoVendedCredential))
+    }
+}
+
+#[async_trait]
+impl CredentialSource for VendedSource {
+    async fn fetch(&self, _scope: &CredentialScope) -> krishiv_store::Result<ScopedCredential> {
+        self.current().await
+    }
+}
+
+/// The block-cache scope of a vended read (§4.4): every part length-prefixed, an absent part `-`.
+pub(crate) fn cache_scope(identity: &IdentityKey, delegated: bool) -> CacheScope {
+    let mut parts = vec![Some(identity.catalog.as_str())];
+    if delegated {
+        parts.push(identity.principal_id.as_deref());
+        parts.push(identity.tenant.as_deref());
+    }
+    let mut out = String::from("vended:");
+    for p in parts {
+        match p {
+            None => out.push('-'),
+            Some(p) => out.push_str(&format!("{}:{p}", p.len())),
+        }
+    }
+    CacheScope::Principal(out)
+}
+
+/// The locator of one vended table read: only locations under a registered scope, else refused (module docs).
+#[derive(Debug)]
+pub(crate) struct VendedPaths {
+    pub(crate) inner: Arc<dyn PathLocator>,
+    pub(crate) prefixes: Vec<VendedPrefix>,
+    pub(crate) catalog: String,
+    pub(crate) relation: String,
+}
+
+impl VendedPaths {
+    fn check(&self, path: &str) -> Result<(), KrishivError> {
+        let covered = parse_object_url(path)
+            .ok()
+            .is_some_and(|url| self.prefixes.iter().any(|p| p.covers(&url)));
+        if covered {
+            Ok(())
+        } else {
+            Err(refused(
+                &self.catalog,
+                &self.relation,
+                LocationRule::OutsideVendedPrefixes,
+            ))
+        }
+    }
+}
+
+impl PathLocator for VendedPaths {
+    fn locate(&self, path: &str) -> Result<LocatedPath, KrishivError> {
+        self.check(path)?;
+        self.inner.locate(path)
+    }
+
+    fn locate_with_options(
+        &self,
+        path: &str,
+        options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
+    ) -> Result<LocatedPath, KrishivError> {
+        self.check(path)?;
+        self.inner.locate_with_options(path, options)
+    }
+
+    fn qualified_display(&self, path: &str) -> Result<String, KrishivError> {
+        self.check(path)?;
+        self.inner.qualified_display(path)
+    }
+}
+
+#[cfg(test)]
+#[path = "vended_tests.rs"]
+mod tests;

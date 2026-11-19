@@ -2998,6 +2998,7 @@ name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
+ "async-trait",
  "futures",
  "krishiv-common",
  "krishiv-connectors-iceberg",

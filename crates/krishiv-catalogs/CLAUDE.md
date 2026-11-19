@@ -79,11 +79,17 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   otherwise; `refresh` drops every identity's entry and moves `epoch`); `list_namespaces`/`list_tables` with the caller's
   token; `RestTable::open` (`DeclaredTable`) opens the scan through `IcebergTable::from_metadata` and
   `IcebergTableProvider::open` on a blocking thread, with the query's I/O and paths (the session confines them in server
-  mode, ADR 0046 §3a); `storage = vended` and a response asking for remote signing are refused at open; table `config`
-  (token, signer, refresh-endpoint keys) is dropped, never followed or sent anywhere), `EmbeddedLocations` (embedded use
+  mode, ADR 0046 §3a); a response asking for remote signing is refused at open; table `config`
+  (token, signer, refresh-endpoint keys) is dropped, never followed or sent anywhere); `declared/vended.rs` (§4.1, §4.3,
+  §4.4, unit 3) `storage = vended`: `VendedCache` (per process, per identity key and table, `krishiv.catalog.vended.maxEntries`
+  LRU, only credential keys kept), `VendedSource` (the cached credential while it outlives the refresh skew, else
+  `loadCredentials` with the same caller or a table reload), one store scope per vended prefix through `ScanInputs::stores`,
+  `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any
+  request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
+  segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
   also accepts absolute `file:` locations). Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
   connector's `testing::write_table` wrote, served by the fake REST server).
-- Not here yet: vended credentials (unit 3), distributed reads of declared tables (refused by the session), a fuzz
+- Not here yet: Unity vended credentials, distributed reads of declared tables (refused by the session), a fuzz
   target for the REST and the Unity Catalog response parsers (§5.6), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
   Hive catalog, the Docker acceptance against a real metastore and a real Unity Catalog server
   (the default port, transport and SASL are settings and unverified until then).

@@ -124,6 +124,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CATALOG_MAX_METADATA_BYTES,
     ),
     (
+        "krishiv.catalog.vendedDefaultTtl",
+        &CATALOG_VENDED_DEFAULT_TTL,
+    ),
+    (
         "krishiv.connect.handshakeTimeout",
         &CONNECT_HANDSHAKE_TIMEOUT,
     ),
@@ -154,6 +158,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.cache.defaultStorageLevel",
         &CACHE_DEFAULT_STORAGE_LEVEL,
+    ),
+    (
+        "krishiv.catalog.vended.maxEntries",
+        &CATALOG_VENDED_MAX_ENTRIES,
     ),
     (
         "krishiv.connect.keepAlive.enabled",

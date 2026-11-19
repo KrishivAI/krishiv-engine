@@ -172,6 +172,66 @@ pub struct ScanInputs {
     pub config: Arc<Config>,
     /// The drivers splits are planned for.
     pub worker_slots: u64,
+    /// What a table read with credentials of its own builds its stores from (vended, design P3-T067 §4.1).
+    pub stores: ScopedStores,
+}
+
+/// What a table read with credentials of its own (vended, design P3-T067 §4.1) builds its stores from: the query's
+/// configuration and the runtime's I/O scheduler. It holds no credential.
+#[derive(Clone)]
+pub struct ScopedStores {
+    config: Arc<Config>,
+    sched: Arc<krishiv_io::IoScheduler>,
+    cwd: String,
+}
+
+impl fmt::Debug for ScopedStores {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScopedStores").finish_non_exhaustive()
+    }
+}
+
+impl ScopedStores {
+    /// The stores of one query: `config` its snapshot, `sched` the runtime's scheduler, `cwd` where relative local
+    /// paths resolve.
+    #[must_use]
+    pub fn new(
+        config: Arc<Config>,
+        sched: Arc<krishiv_io::IoScheduler>,
+        cwd: impl Into<String>,
+    ) -> Self {
+        Self {
+            config,
+            sched,
+            cwd: cwd.into(),
+        }
+    }
+
+    /// A path locator whose stores under each scope of `sources` sign with that scope's source, registered under
+    /// `cache_scope`, and connect through the runtime's (egress policy) HTTP clients. A location outside every scope
+    /// would use the query's static store configuration, so the caller refuses those before it locates them. The
+    /// scoped stores are unregistered when the locator is dropped.
+    #[must_use]
+    pub fn paths(
+        &self,
+        cache_scope: krishiv_io::CacheScope,
+        sources: Vec<(
+            krishiv_io::CredentialScope,
+            Arc<dyn krishiv_io::CredentialSource>,
+        )>,
+    ) -> Arc<dyn PathLocator> {
+        let mut registry = krishiv_io::query_registry(Arc::clone(&self.config), &self.sched)
+            .with_cache_scope(cache_scope);
+        for (scope, source) in sources {
+            registry = registry.with_source(scope, source);
+        }
+        Arc::new(krishiv_exec::files::ObjectPaths::new(
+            krishiv_io::StoreId::new(crate::session::LOCAL_STORE),
+            self.cwd.clone(),
+            Arc::clone(&self.sched),
+            Arc::new(registry),
+        ))
+    }
 }
 
 impl fmt::Debug for ScanInputs {
@@ -191,12 +251,14 @@ impl ScanInputs {
         paths: Arc<dyn PathLocator>,
         config: Arc<Config>,
         worker_slots: u64,
+        stores: ScopedStores,
     ) -> Self {
         Self {
             io,
             paths,
             config,
             worker_slots,
+            stores,
         }
     }
 }

@@ -24,6 +24,7 @@ pub(crate) use crate::http_test_server as test_server;
 mod tests;
 mod transport;
 pub mod types;
+pub(crate) mod vended;
 
 pub use client::RestClient;
 pub use config::{ONELAKE_URI, RestAuth, RestConfig, RestLimits};

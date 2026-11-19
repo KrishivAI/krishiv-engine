@@ -228,6 +228,7 @@ pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
 }
 
 mod table;
+mod vended;
 
 pub(crate) use table::RestCatalog;
 
