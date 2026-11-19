@@ -37,8 +37,8 @@ use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, Spill
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -117,6 +117,9 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
+    /// plan reads the clock.
+    pub(crate) query_start: Option<i64>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
@@ -1397,6 +1400,7 @@ impl Session {
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
+        let udtfs = self.table_functions();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -1404,7 +1408,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: Arc::new(BuiltinTableFunctions::new()),
+            table_functions: Arc::clone(&udtfs) as _,
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
@@ -1441,7 +1445,8 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
+            udtfs,
         }
     }
 
@@ -1458,7 +1463,7 @@ impl Session {
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
         let r = self
-            .check_store_options(&env.config, std::iter::empty())
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
             .await;
         crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the

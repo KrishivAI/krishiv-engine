@@ -66,7 +66,7 @@ impl Session {
             catalog.use_catalog(default);
         }
         let seed = Seed {
-            conf: ConfStore::new(config),
+            conf: ConfStore::new(config).with_profile(parts.profile),
             catalog,
             variables: SessionVariables::default(),
             udfs: Arc::new(UdfLibrary::new()),
@@ -138,6 +138,7 @@ impl Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            query_start: None,
             request_tags: Arc::from([]),
             inbound_trace: None,
             inbound_baggage: Arc::from([]),
@@ -590,6 +591,7 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            query_start: options.query_start_micros.or(self.query_start),
             request_tags: options.request_tags.into(),
             inbound_trace,
             inbound_baggage,

@@ -631,6 +631,97 @@ fn configured_tokens_guard_the_admin_routes() {
     }
 }
 
+/// `METHOD path` with a JSON `body` and `Authorization: Bearer token`.
+#[cfg(feature = "ui")]
+fn http_post_as(addr: &str, path: &str, body: &str, token: &str) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    write!(
+        s,
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
+/// The UI editor's sessions are UI sessions (P3-T101 hooks): a statement the caller's role refuses
+/// counts under `surface="ui"`, never `connect`.
+#[cfg(all(unix, feature = "ui"))]
+#[test]
+fn the_editors_denials_count_under_the_ui_surface() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "editor-operator-token-0123456789abcdef";
+    let path = dir.path().join("op");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.op.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.op.principal=editor".to_owned(),
+        "krishiv.auth.tokens.op.role=operator".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    // An operator may run statements in the editor, but not durable DDL.
+    let started = http_post_as(
+        &server.admin,
+        "/api/internal/sql",
+        r#"{"sql": "CREATE TABLE editor_t (a INT) USING parquet"}"#,
+        token,
+    );
+    assert!(started.starts_with("HTTP/1.1 202"), "{started}");
+    let run = started
+        .split("\"run_id\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("run id")
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        let status = http_get_as(
+            &server.admin,
+            &format!("/api/internal/sql/{run}"),
+            Some(token),
+        );
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        if !status.contains("\"running\"") && !status.contains("\"queued\"") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the run did not end: {status}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // The run ended refused by the role, and that refusal is the one denial counted.
+    assert!(status.contains(r#""state":"failed""#), "{status}");
+    assert!(
+        status.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"),
+        "{status}"
+    );
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    let denied: Vec<&str> = scrape
+        .lines()
+        .filter(|l| l.starts_with("krishiv_auth_denied_total{"))
+        .collect();
+    let ui: Vec<&&str> = denied
+        .iter()
+        .filter(|l| l.contains(r#"surface="ui""#) && !l.ends_with(" 0"))
+        .collect();
+    assert_eq!(
+        ui,
+        [&r#"krishiv_auth_denied_total{surface="ui",privilege="CREATE"} 1"#],
+        "{denied:?}"
+    );
+    assert!(
+        !denied
+            .iter()
+            .any(|l| l.contains(r#"surface="connect""#) && !l.ends_with(" 0")),
+        "{denied:?}"
+    );
+}
+
 /// `krishiv.admin.v1` on the admin listener (design P3-T066 PR-52a): any authenticated caller
 /// reads the version and the capabilities, which list the surface and its revision; a request
 /// without a token is 401, and a `Host` outside the loopback names is 421.

@@ -1046,7 +1046,7 @@ impl DataFrame {
         {
             return Ok(a);
         }
-        env.quiet_denials = quiet_denials;
+        env.set_quiet_denials(quiet_denials, &self.session.state.policy);
         self.analyzed_in_with_text(env, text.as_deref()).await
     }
 
@@ -1098,8 +1098,10 @@ impl DataFrame {
         let plan = self.plan_with_checkpoints().await?;
         let analyzed = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
-        // A trial's analysis is kept as an ordinary one: later checks are audited.
-        env.quiet_denials = false;
+        // A trial's analysis is kept as an ordinary one: later checks are audited and told to
+        // the policy.
+        env.set_quiet_denials(false, &self.session.state.policy);
+        debug_assert!(env.asks_policy(&self.session.state.policy));
         if let Some(t) = text {
             env.set_text(t);
         }

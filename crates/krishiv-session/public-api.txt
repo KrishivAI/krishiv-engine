@@ -350,11 +350,13 @@ impl core::marker::StructuralPartialEq for krishiv_session::auth::SecretRef
 #[non_exhaustive] pub enum krishiv_session::auth::Surface
 pub krishiv_session::auth::Surface::Admin
 pub krishiv_session::auth::Surface::Connect
+pub krishiv_session::auth::Surface::FlightSql
 pub krishiv_session::auth::Surface::Metrics
 pub krishiv_session::auth::Surface::Ui
 impl krishiv_session::auth::Surface
-pub const krishiv_session::auth::Surface::ALL: [Self; 4]
+pub const krishiv_session::auth::Surface::ALL: [Self; 5]
 pub fn krishiv_session::auth::Surface::as_str(self) -> &'static str
+pub fn krishiv_session::auth::Surface::of(transport: krishiv_session::Transport) -> core::option::Option<Self>
 impl core::clone::Clone for krishiv_session::auth::Surface
 pub fn krishiv_session::auth::Surface::clone(&self) -> krishiv_session::auth::Surface
 impl core::cmp::Eq for krishiv_session::auth::Surface
@@ -1351,7 +1353,6 @@ pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
 pub fn krishiv_session::DataFrame::cache(&self) -> Self
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
-pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
@@ -1410,6 +1411,8 @@ pub async fn krishiv_session::DataFrame::explain_analyze_verbose(&self) -> core:
 pub async fn krishiv_session::DataFrame::explain_analyze_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose(&self) -> core::result::Result<krishiv_session::ExplainVerbose, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
+pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::estimate(&self) -> core::result::Result<krishiv_session::Estimate, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
@@ -1638,13 +1641,39 @@ pub struct krishiv_session::PythonUdfLibrary
 impl krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::entry(&self, &str) -> core::option::Option<krishiv_plan::analyzer::catalog::FunctionEntry>
 pub fn krishiv_session::PythonUdfLibrary::get(&self, &str) -> core::option::Option<krishiv_session::PythonUdfEntry>
+pub fn krishiv_session::PythonUdfLibrary::get_udtf(&self, &str) -> core::option::Option<krishiv_session::PythonUdtfEntry>
 pub fn krishiv_session::PythonUdfLibrary::new() -> Self
 pub fn krishiv_session::PythonUdfLibrary::register(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfLibrary::register_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::PythonUdfLibrary::version(&self) -> u64
 impl core::default::Default for krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::default() -> krishiv_session::PythonUdfLibrary
 impl core::fmt::Debug for krishiv_session::PythonUdfLibrary
 pub fn krishiv_session::PythonUdfLibrary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::PythonUdtfDef
+pub krishiv_session::PythonUdtfDef::deterministic: bool
+pub krishiv_session::PythonUdtfDef::eval_type: krishiv_plan::function::PythonEvalType
+pub krishiv_session::PythonUdtfDef::name: alloc::string::String
+pub krishiv_session::PythonUdtfDef::return_type: core::option::Option<krishiv_types::data_type::DataType>
+impl core::clone::Clone for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::clone(&self) -> krishiv_session::PythonUdtfDef
+impl core::cmp::Eq for krishiv_session::PythonUdtfDef
+impl core::cmp::PartialEq for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::eq(&self, &krishiv_session::PythonUdtfDef) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdtfDef
+pub fn krishiv_session::PythonUdtfDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdtfDef
+pub struct krishiv_session::PythonUdtfEntry
+pub krishiv_session::PythonUdtfEntry::def: krishiv_session::PythonUdtfDef
+pub krishiv_session::PythonUdtfEntry::version: u32
+impl core::clone::Clone for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::clone(&self) -> krishiv_session::PythonUdtfEntry
+impl core::cmp::Eq for krishiv_session::PythonUdtfEntry
+impl core::cmp::PartialEq for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::eq(&self, &krishiv_session::PythonUdtfEntry) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdtfEntry
+pub fn krishiv_session::PythonUdtfEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdtfEntry
 pub struct krishiv_session::QueryId(_)
 impl krishiv_session::QueryId
 pub fn krishiv_session::QueryId::as_str(&self) -> &str
@@ -1694,6 +1723,7 @@ pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Se
 pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::QueryOptions::query_start(self, i64) -> Self
 pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl core::clone::Clone for krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::clone(&self) -> krishiv_session::QueryOptions
@@ -1795,7 +1825,9 @@ pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
+pub fn krishiv_session::Session::python_udtf_frame(&self, &krishiv_session::PythonUdtfDef, u32, alloc::vec::Vec<krishiv_session::Column>) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::Session::register_python_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::set_python_udf_runtime(&self, alloc::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>)
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>
@@ -1896,6 +1928,25 @@ impl core::fmt::Debug for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::StorageLevel
 impl core::marker::StructuralPartialEq for krishiv_session::StorageLevel
+#[non_exhaustive] pub struct krishiv_session::StoredProfile
+pub krishiv_session::StoredProfile::duration_ns: i64
+pub krishiv_session::StoredProfile::error_class: core::option::Option<alloc::string::String>
+pub krishiv_session::StoredProfile::finished_at_ms: i64
+pub krishiv_session::StoredProfile::principal: alloc::string::String
+pub krishiv_session::StoredProfile::profile: alloc::string::String
+pub krishiv_session::StoredProfile::profile_minor: i64
+pub krishiv_session::StoredProfile::profile_version: i64
+pub krishiv_session::StoredProfile::query_id: alloc::string::String
+pub krishiv_session::StoredProfile::sql: core::option::Option<alloc::string::String>
+pub krishiv_session::StoredProfile::state: alloc::string::String
+impl core::clone::Clone for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::clone(&self) -> krishiv_session::StoredProfile
+impl core::cmp::Eq for krishiv_session::StoredProfile
+impl core::cmp::PartialEq for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::eq(&self, &krishiv_session::StoredProfile) -> bool
+impl core::fmt::Debug for krishiv_session::StoredProfile
+pub fn krishiv_session::StoredProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::StoredProfile
 pub struct krishiv_session::Unlimited
 impl core::clone::Clone for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::clone(&self) -> krishiv_session::Unlimited
@@ -1942,6 +1993,7 @@ pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
+pub fn krishiv_session::read_profile_history(&std::path::Path) -> core::result::Result<alloc::vec::Vec<krishiv_session::StoredProfile>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
 pub fn krishiv_session::register_surface(&str, &str, &str)
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>
