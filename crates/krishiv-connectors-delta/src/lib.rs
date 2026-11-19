@@ -50,7 +50,7 @@
 //! answer (design note sections 4.2 and 5).
 //!
 //! # Writing
-//! [`write`] is the write path behind [`table::DeltaTable`]'s `TableProvider::writer` and
+//! [`write`](mod@write) is the write path behind [`table::DeltaTable`]'s `TableProvider::writer` and
 //! [`write::NewDeltaTable`]: data files with physical names and field ids, Krishiv's own
 //! statistics, the overwrite modes' removes and Delta's `WRITE` commit (design note section 4).
 
