@@ -685,6 +685,22 @@ impl Accumulator {
         }
     }
 
+    /// [`projected`](Self::projected) for one partition of a row table that gets `rows` of a batch (an upper bound
+    /// on the groups it adds too), no columns at hand: the HLL sketch accumulators bound their own growth by those
+    /// rows and by this partition's largest sketch (`states`: the rows are partial states). The other accumulators
+    /// read the whole batch's columns instead (`projected`).
+    pub(crate) fn projected_part(&self, rows: usize, states: bool) -> usize {
+        match &self.kind {
+            Kind::HllSketch(h) => h.projected(rows, rows, states),
+            _ => self.projected(rows, None, None, false),
+        }
+    }
+
+    /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
+    pub(crate) fn projects_by_partition(&self) -> bool {
+        matches!(self.kind, Kind::HllSketch(_))
+    }
+
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
     /// groups and an update with `input` (string values it may keep).
     /// `arg` is the value column the update reads (raw or state); `key` the

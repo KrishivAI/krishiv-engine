@@ -4,7 +4,7 @@
   "kind": "unsupported",
   "rules": [
     {
-      "order": 140,
+      "order": 145,
       "query": "(?i)hll_sketch_agg\\s*\\([^)]*\\bcollate\\b"
     }
   ],
