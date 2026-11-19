@@ -597,9 +597,10 @@ impl Lowerer {
                 temporal,
                 options,
             } => {
-                if let Some(t) = temporal {
-                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
-                    return Err(crate::error::time_travel_unsupported(&parts, t.span));
+                if temporal.is_some() {
+                    // The session resolves the relation to name Spark's error (`time_travel_error`); the
+                    // span is the relation's name, which it reads back.
+                    return Err(unsupported(crate::TIME_TRAVEL_FEATURE, name.span));
                 }
                 let mut opts = BTreeMap::new();
                 for o in options {

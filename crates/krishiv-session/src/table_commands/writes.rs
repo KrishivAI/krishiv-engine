@@ -59,9 +59,16 @@ impl Session {
                 env.analysis.conf.case_sensitive,
             );
         if self.temp_entry_of(name, env) || global {
+            // Spark 4.3 names a temporary view as written for `COMMENT ON COLUMN` (a 4.3.0 run); the other
+            // operations keep the qualified name their goldens record.
+            let view_name = if operation == "COMMENT ON COLUMN" && !global {
+                name.written.clone()
+            } else {
+                name.quoted()
+            };
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
-                view_name: name.quoted(),
+                view_name,
             }
             .into());
         }

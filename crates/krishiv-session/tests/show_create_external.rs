@@ -182,12 +182,26 @@ fn comment_on_column_sets_and_clears_the_column_comment() {
     );
     block_on(s.sql("CREATE VIEW cv AS SELECT a FROM cc")).unwrap();
     block_on(s.sql("CREATE TEMP VIEW ctv AS SELECT 1 AS a")).unwrap();
+    let message = |q: &str| {
+        block_on(async { s.sql(q).await?.collect().await })
+            .unwrap_err()
+            .message()
+            .to_owned()
+    };
     assert_eq!(
         class("COMMENT ON COLUMN cv.a IS 'x'"),
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
+    // Spark 4.3.0's text: the permanent view is qualified, the temporary one as written.
+    assert!(message("COMMENT ON COLUMN cv.a IS 'x'").contains(
+        "'COMMENT ON COLUMN' expects a table but `spark_catalog`.`default`.`cv` is a view."
+    ));
     assert_eq!(
         class("COMMENT ON COLUMN ctv.a IS 'x'"),
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+    );
+    assert!(
+        message("COMMENT ON COLUMN ctv.a IS 'x'")
+            .contains("'COMMENT ON COLUMN' expects a table but `ctv` is a view.")
     );
 }
