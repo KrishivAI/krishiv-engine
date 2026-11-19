@@ -181,13 +181,22 @@ pub fn random_token() -> Result<String, UiError> {
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
-/// Whether `req` asks for the embedded view of the SPA (`?embed=1` on a page, never on the API).
+/// Whether `req` is the embeddable view: the profile page of one query (`/queries/{id}/profile`, the only
+/// `embeddable` route of `ui/routes.json`) with exactly one `embed` parameter, and it is `1`. Anything else (another
+/// page, `embed=0&embed=1`, an API path) is never framable.
 fn is_embed_page(req: &axum::extract::Request) -> bool {
-    !req.uri().path().starts_with("/api")
-        && req.uri().query().is_some_and(|q| {
-            q.split('&')
-                .any(|kv| kv == format!("{}=1", crate::embed::EMBED_PARAM))
-        })
+    let mut seg = req.uri().path().trim_matches('/').split('/');
+    let profile = matches!(
+        (seg.next(), seg.next(), seg.next(), seg.next()),
+        (Some("queries"), Some(id), Some("profile"), None) if !id.is_empty()
+    );
+    let mut embeds = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .filter(|kv| kv.split_once('=').map_or(*kv, |(k, _)| k) == crate::embed::EMBED_PARAM);
+    profile && embeds.next() == Some("embed=1") && embeds.next().is_none()
 }
 
 async fn security_headers(
@@ -199,17 +208,20 @@ async fn security_headers(
     let framable = is_embed_page(&req) && !policy.embed().origins().is_empty();
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    let csp = if framable {
-        CSP.replace(
-            "frame-ancestors 'none'",
-            &format!("frame-ancestors {}", policy.embed().frame_ancestors()),
-        )
-    } else {
-        CSP.to_owned()
-    };
-    if let Ok(v) = HeaderValue::from_str(&csp) {
-        h.insert(header::CONTENT_SECURITY_POLICY, v);
-    }
+    let csp = framable
+        .then(|| {
+            CSP.replace(
+                "frame-ancestors 'none'",
+                &format!("frame-ancestors {}", policy.embed().frame_ancestors()),
+            )
+        })
+        .and_then(|c| HeaderValue::from_str(&c).ok());
+    // A policy that cannot be written falls back to the static one and `DENY`: never open.
+    let framable = csp.is_some();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        csp.unwrap_or_else(|| HeaderValue::from_static(CSP)),
+    );
     if framable {
         // X-Frame-Options cannot name several origins; frame-ancestors decides.
         h.remove(header::X_FRAME_OPTIONS);

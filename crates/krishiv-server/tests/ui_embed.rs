@@ -101,6 +101,13 @@ async fn only_the_embed_view_is_framable_and_only_by_the_listed_origins() {
         "/queries/q1/profile",
         "/",
         "/?embed=0",
+        "/sql?embed=1",
+        "/queries/q1?embed=1",
+        "/queries/q1/profile/x?embed=1",
+        "/queries//profile?embed=1",
+        "/sql?embed=0&embed=1",
+        "/queries/q1/profile?embed=0&embed=1",
+        "/queries/q1/profile?embed=1&embed=1",
         "/?notembed=1",
         "/api/internal/embed/config?embed=1",
     ] {

@@ -56,7 +56,9 @@ export type EmbedLink = { exp: string; sig: string; theme: string | null };
 /** The embed parameters of the address, or null when this is not the embedded view. */
 export function embedLink(search: string): EmbedLink | null {
   const p = new URLSearchParams(search);
-  if (p.get("embed") !== "1") return null;
+  // Exactly one `embed`, as the server decides framing (a repeated parameter is not the embedded view).
+  const all = p.getAll("embed");
+  if (all.length !== 1 || all[0] !== "1") return null;
   return { exp: p.get("exp") ?? "", sig: p.get("sig") ?? "", theme: p.get("theme") };
 }
 
