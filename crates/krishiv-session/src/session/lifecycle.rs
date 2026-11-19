@@ -72,7 +72,7 @@ impl SqlQuery {
     pub fn into_query(self) -> Result<DataFrame, KrishivError> {
         match self {
             Self::Query(df) => Ok(df),
-            Self::NotAQuery(class) => Err(super::not_a_query(class)),
+            Self::NotAQuery(class) => Err(super::ran::not_a_query(class)),
         }
     }
 }
