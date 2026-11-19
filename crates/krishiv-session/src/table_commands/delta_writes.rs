@@ -185,7 +185,7 @@ impl Session {
         };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
-        request.options = options;
+        request.options = with_conf_user_metadata(options, &analysis.env.config);
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
@@ -428,9 +428,11 @@ impl Session {
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
     /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the statement's
     /// `partitionOverwriteMode` option); else a truncate. The target's `sql_options` (`WITH (..)`)
-    /// are Delta's write options ([`super::delta_options`]); a DataFrame writer's options give
-    /// only the files' `maxRecordsPerFile` (delta-spark's `insertInto` reads no
-    /// `partitionOverwriteMode` from them, `WRITE-EDGES.json` `insert_into_overwrite_mode`).
+    /// are Delta's write options ([`super::delta_options`]), and so are the writer's options of
+    /// `saveAsTable` append and `writeTo(..).append()` (`target.delta_writer_options`);
+    /// `insertInto`'s give only the files' `maxRecordsPerFile` (delta-spark's `insertInto` reads
+    /// no other option, `CATALOG-OPTIONS.json`, nor `partitionOverwriteMode`, `WRITE-EDGES.json`
+    /// `insert_into_overwrite_mode`).
     pub(super) async fn insert_delta(
         &self,
         name: &super::TableName,
@@ -443,11 +445,16 @@ impl Session {
         let user_options = target.sql_options;
         let mut options =
             super::delta_options::delta_write_options(user_options, table.is_partitioned())?;
-        // `maxRecordsPerFile` of a DataFrame write into the table (`writeTo(..).append()`,
-        // `saveAsTable` append, `insertInto`).
-        if let Some(o) = target.options {
-            // Only the option the writer reads is asked to be plain: an append ignores the
-            // others, a secret one included.
+        if let (Some(o), true) = (target.options, target.delta_writer_options) {
+            // `saveAsTable` append and `writeTo(..).append()`: the writer's options are Delta's
+            // write options, checked and honoured as a `save`'s are (`CATALOG-OPTIONS.json`).
+            options.extend(super::delta_options::delta_write_options(
+                &plain_options(o)?,
+                table.is_partitioned(),
+            )?);
+        } else if let Some(o) = target.options {
+            // `insertInto` reads only `maxRecordsPerFile` of the writer's options. Only that
+            // option is asked to be plain: the others are ignored, a secret one included.
             let read: BTreeMap<String, OptionValue> = o
                 .iter()
                 .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
@@ -516,6 +523,26 @@ impl Session {
         )
         .await
     }
+}
+
+/// The session configuration delta-spark reads a commit's `userMetadata` from when the write
+/// has no `userMetadata` option (`DeltaSQLConf.DELTA_USER_METADATA`).
+const USER_METADATA_CONF: &str = "spark.databricks.delta.commitInfo.userMetadata";
+
+/// `options` with the session's [`USER_METADATA_CONF`] as `userMetadata` when they name none:
+/// the option wins, as in delta-spark (`CATALOG-OPTIONS.json` `option_and_conf_user_metadata`).
+fn with_conf_user_metadata(
+    mut options: BTreeMap<String, String>,
+    conf: &krishiv_common::config::Config,
+) -> BTreeMap<String, String> {
+    if !options
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("userMetadata"))
+        && let Some(v) = crate::conf::get(conf, USER_METADATA_CONF)
+    {
+        options.insert("userMetadata".to_owned(), v);
+    }
+    options
 }
 
 /// Whether `df`'s plan reads the Delta table at `path`.

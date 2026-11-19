@@ -7,6 +7,11 @@
 //!   `gen_delta_fixtures.py /out options`) as DataFrame options and as `INSERT .. WITH (..)`:
 //!   the same error, or the same commit parameters and `userMetadata`; the options Krishiv
 //!   refuses by name (`REFUSED_OPTIONS`) and the one recorded class difference;
+//! - `delta_catalog_writer_options_match_spark`: the Delta write options of the DataFrame
+//!   writers of a catalog table, as `CATALOG-OPTIONS.json` (`gen_delta_fixtures.py /out
+//!   catalog-options`) records them: `saveAsTable` append and `writeTo(..).append()` check and
+//!   honour them as a `save` does, `insertInto` ignores them, and every writer takes
+//!   `userMetadata` from `spark.databricks.delta.commitInfo.userMetadata` when no option names it;
 //! - `delta_no_internal_error_on_oracle_tables`: every oracle table under
 //!   `tests/fixtures/delta-4.4.1/` read, and every write and DML statement kind tried on its own
 //!   copy, never raises `INTERNAL_ERROR`, and every refusal carries a documented class;
@@ -259,6 +264,116 @@ fn delta_write_options_match_spark() {
         checked += 1;
     }
     assert!(checked >= 30, "{checked}");
+}
+
+/// Cases of `CATALOG-OPTIONS.json` delta-spark commits and Krishiv refuses by name
+/// (`KRISHIV_UNSUPPORTED_FEATURE`, as `REFUSED_OPTIONS` for `save`).
+const REFUSED_CATALOG_OPTIONS: &[&str] = &[
+    "save_as_table_append.data_change_false",
+    "save_as_table_append.txn_pair",
+    "write_to_append.data_change_false",
+    "write_to_append.txn_pair",
+];
+
+#[test]
+fn delta_catalog_writer_options_match_spark() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("CATALOG-OPTIONS.json")).unwrap())
+            .unwrap();
+    let mut checked = 0;
+    for (name, case) in oracle["cases"].as_object().unwrap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("cot");
+        let s = Session::new().unwrap();
+        run(
+            &s,
+            &format!(
+                "CREATE TABLE cot (id BIGINT, p INT) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        run(&s, "INSERT INTO cot VALUES (1, 1)").unwrap();
+        for (k, v) in case["conf"].as_object().unwrap() {
+            run(&s, &format!("SET {k} = {}", v.as_str().unwrap())).unwrap();
+        }
+        let before = versions(&dir);
+        let rows = df(&s, "SELECT CAST(2 AS BIGINT) AS id, 2 AS p");
+        let options = case["options"].as_object().unwrap();
+        let ours = match case["writer"].as_str().unwrap() {
+            w @ ("insert_into" | "insert_into_overwrite") => {
+                let mut wr = rows.write().mode(if w == "insert_into" {
+                    "append"
+                } else {
+                    "overwrite"
+                });
+                for (k, v) in options {
+                    wr = wr.option(k, v.as_str().unwrap());
+                }
+                block_on(wr.insert_into("cot"))
+            }
+            "save_as_table_append" => {
+                let mut wr = rows.write().format("delta").mode("append");
+                for (k, v) in options {
+                    wr = wr.option(k, v.as_str().unwrap());
+                }
+                block_on(wr.save_as_table("cot"))
+            }
+            "write_to_append" => {
+                let mut wr = rows.write_to_table("cot");
+                for (k, v) in options {
+                    wr = wr.option(k, v.as_str().unwrap());
+                }
+                block_on(wr.append())
+            }
+            other => panic!("{name}: writer {other}"),
+        };
+        let after = versions(&dir);
+        if REFUSED_CATALOG_OPTIONS.contains(&name.as_str()) {
+            assert!(case["error"].is_null(), "{name}: delta-spark commits it");
+            let e = ours.expect_err(name);
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{name}: {e}"
+            );
+            assert_eq!(after, before, "{name}: nothing committed");
+        } else if case["error"].is_null() {
+            ours.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(after, before + 1, "{name}");
+            assert_eq!(after as u64, case["versions"].as_u64().unwrap(), "{name}");
+            let info = last_commit_info(&dir);
+            let want = &case["commit"];
+            assert_eq!(info["operation"], want["operation"], "{name}");
+            assert_eq!(
+                info["operationParameters"],
+                as_strings(&want["operationParameters"]),
+                "{name}"
+            );
+            assert_eq!(
+                info.get("userMetadata").cloned().unwrap_or(Value::Null),
+                want["userMetadata"],
+                "{name}"
+            );
+        } else {
+            let e = ours.expect_err(name);
+            let want = &case["error"];
+            assert_eq!(e.error_class().name(), want["condition"], "{name}: {e}");
+            assert_eq!(
+                e.to_string()
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split(" SQLSTATE")
+                    .next(),
+                want["message"].as_str(),
+                "{name}"
+            );
+            assert_eq!(after, before, "{name}: nothing committed");
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 32);
 }
 
 /// Every Delta table under the fixtures: a directory holding `_delta_log`.

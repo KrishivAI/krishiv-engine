@@ -1575,6 +1575,14 @@ struct InsertTarget<'a> {
         expect(dead_code, reason = "read by the Delta write path only")
     )]
     options: Option<&'a BTreeMap<String, OptionValue>>,
+    /// `options` are a Delta table's write options ([`delta_options`]), as delta-spark reads
+    /// those of `saveAsTable` append and `writeTo(..).append()`; `insertInto` reads only
+    /// `maxRecordsPerFile` of them (`tests/fixtures/delta-4.4.1/CATALOG-OPTIONS.json`).
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    delta_writer_options: bool,
     /// The statement's `INSERT .. WITH (..)` options: a Delta table's write options
     /// ([`delta_options`]); empty for the DataFrame writers.
     #[cfg_attr(

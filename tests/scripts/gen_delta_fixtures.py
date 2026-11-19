@@ -39,6 +39,11 @@ with every commit's deletion vector descriptors and the change-data-feed rows Sp
 ``... /out options`` writes ``OPTIONS.json`` (``write_options``, PR-37e): delta-spark's handling
 of each Delta write option, and Spark 4.2.0's parse of the ``WITH (...)`` statement options.
 
+``... /out catalog-options`` writes ``CATALOG-OPTIONS.json`` (``catalog_write_options``): which
+Delta write options delta-spark reads from the DataFrame writers of a catalog table
+(``insertInto``, ``saveAsTable`` append, ``writeTo(..).append()``), and the session's
+``spark.databricks.delta.commitInfo.userMetadata`` against the option.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -2441,8 +2446,101 @@ def write_options(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+CATALOG_WRITERS = ["insert_into", "insert_into_overwrite", "save_as_table_append", "write_to_append"]
+
+# (name, writer options, session configuration set around the write)
+CATALOG_OPTION_CASES: list[tuple[str, dict[str, str], dict[str, str]]] = [
+    ("user_metadata", {"userMetadata": "hello"}, {}),
+    ("merge_schema_true", {"mergeSchema": "true"}, {}),
+    ("merge_schema_maybe", {"mergeSchema": "maybe"}, {}),
+    ("data_change_false", {"dataChange": "false"}, {}),
+    ("txn_version_only", {"txnVersion": "1"}, {}),
+    ("txn_pair", {"txnAppId": "app", "txnVersion": "1"}, {}),
+    ("conf_user_metadata", {}, {"spark.databricks.delta.commitInfo.userMetadata": "from-conf"}),
+    (
+        "option_and_conf_user_metadata",
+        {"userMetadata": "from-option"},
+        {"spark.databricks.delta.commitInfo.userMetadata": "from-conf"},
+    ),
+]
+
+
+def has_txn(path: str, version: int) -> bool:
+    """Whether the table's commit ``version`` carries a ``txn`` action (idempotent writes)."""
+    with open(os.path.join(path, "_delta_log", f"{version:020}.json")) as f:
+        return any("txn" in json.loads(line) for line in f)
+
+
+def catalog_write_options(spark: SparkSession, out: str) -> None:
+    """``CATALOG-OPTIONS.json``: for each DataFrame writer of an existing Delta catalog table
+    (``CATALOG_WRITERS``) and each case of ``CATALOG_OPTION_CASES``, the error, or the commit's
+    operation, parameters, ``userMetadata`` and whether it carries a ``txn`` action. The table is
+    ``(id BIGINT, p INT)``, unpartitioned, with one row; the write adds ``(2, 2)``."""
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "generator": "gen_delta_fixtures.py catalog-options",
+        "cases": {},
+    }
+    base = "/tmp/krishiv-catalog-options"
+    for writer in CATALOG_WRITERS:
+        for name, options, conf in CATALOG_OPTION_CASES:
+            key = f"{writer}.{name}"
+            path = os.path.join(base, key)
+            shutil.rmtree(path, ignore_errors=True)
+            spark.sql("DROP TABLE IF EXISTS cot")
+            spark.sql(f"CREATE TABLE cot (id BIGINT, p INT) USING delta LOCATION '{path}'")
+            spark.sql("INSERT INTO cot VALUES (1, 1)")
+            df = spark.sql("SELECT CAST(2 AS BIGINT) AS id, 2 AS p")
+            case: dict = {"writer": writer, "options": options, "conf": conf}
+            for k, v in conf.items():
+                spark.conf.set(k, v)
+            try:
+                if writer.startswith("insert_into"):
+                    w = df.write.mode("overwrite" if writer == "insert_into_overwrite" else "append")
+                    for k, v in options.items():
+                        w = w.option(k, v)
+                    w.insertInto("cot")
+                elif writer == "save_as_table_append":
+                    w = df.write.format("delta").mode("append")
+                    for k, v in options.items():
+                        w = w.option(k, v)
+                    w.saveAsTable("cot")
+                else:
+                    w2 = df.writeTo("cot")
+                    for k, v in options.items():
+                        w2 = w2.option(k, v)
+                    w2.append()
+                case["error"] = None
+                last = commits(path)[-1]
+                info = last["commitInfo"]
+                case["commit"] = {
+                    "operation": info.get("operation"),
+                    "operationParameters": info.get("operationParameters"),
+                    "userMetadata": info.get("userMetadata"),
+                    "txn": has_txn(path, last["version"]),
+                }
+            except Exception as e:  # the oracle records every failure
+                case["error"] = oracle_error(e, path)
+            finally:
+                for k in conf:
+                    spark.conf.unset(k)
+            case["versions"] = len(commits(path))
+            record["cases"][key] = case
+    spark.sql("DROP TABLE IF EXISTS cot")
+    shutil.rmtree(base, ignore_errors=True)
+    with open(os.path.join(out, "CATALOG-OPTIONS.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
+    if which == "catalog-options":
+        catalog_write_options(spark, out)
+        spark.stop()
+        return
     if which == "options":
         write_options(spark, out)
         spark.stop()

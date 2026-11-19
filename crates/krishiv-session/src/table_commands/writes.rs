@@ -204,6 +204,7 @@ impl Session {
                 statics: &statics,
                 dry,
                 options: None,
+                delta_writer_options: false,
                 sql_options: &options,
             },
         )
@@ -700,6 +701,7 @@ impl Session {
             statics: &[],
             dry: false,
             options: Some(options),
+            delta_writer_options: false,
             sql_options: &[],
         };
         self.insert_rows(&name, &found, df, &target).await
@@ -734,6 +736,7 @@ impl Session {
                     statics: &[],
                     dry: false,
                     options: Some(&spec.options),
+                    delta_writer_options: true,
                     sql_options: &[],
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
