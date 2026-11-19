@@ -16,4 +16,8 @@ path = "src/lib.rs"
 [dependencies]
 apache-spark-connect = "4.3.0"
 
+# The crate is imported as `spark_connect`, which cargo-machete cannot map back to the package name.
+[package.metadata.cargo-machete]
+ignored = ["apache-spark-connect"]
+
 [workspace]
