@@ -587,6 +587,89 @@ fn catalog_failures_hide_the_provider_text() {
     assert!(!format!("{e} {e:?}").contains("Canary"));
 }
 
+/// A catalog that refuses for want of a delegated user token (P3-T067 §3.3).
+struct NoUserToken;
+
+impl crate::analyzer::Catalog for NoUserToken {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivCatalogDelegationUnavailable {
+            catalog: "`lake`".to_owned(),
+            reason: "this session authenticated with `token`".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+/// A catalog whose delegated exchanges reached their limit (P3-T067 §3.3).
+struct ExchangeLimit;
+
+impl crate::analyzer::Catalog for ExchangeLimit {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivCatalogLimitExceeded {
+            source: "Delegated access to the catalog `lake` for this user".to_owned(),
+            limit: "token exchanges in a minute".to_owned(),
+            value: "60".to_owned(),
+            config: "a higher `krishiv.catalog.delegation.maxExchangesPerMinute`".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+#[test]
+fn a_catalog_limit_is_not_hidden_as_a_catalog_failure() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(ExchangeLimit),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogLimitExceeded
+    );
+    assert!(e.to_string().contains("maxExchangesPerMinute"), "{e}");
+}
+
+#[test]
+fn a_delegation_refusal_is_not_hidden_as_a_catalog_failure() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(NoUserToken),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable
+    );
+}
+
 #[test]
 fn already_resolved_plans_are_checked_too() {
     let resolved = run(QUERIES[5](), &ctx()).unwrap().plan;

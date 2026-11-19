@@ -1108,22 +1108,16 @@ fn python_udtfs_are_refused_until_pr_26c() {
         names: Vec::new(),
         qualifier: None,
     });
-    let table = LogicalPlan::new(PlanNode::PythonTableFunction {
-        args: Vec::new(),
-        table_arg: None,
-        udf: udf("f", PythonEvalType::ArrowUdtf),
-        output: counted(),
-    });
-    for node in [lateral, table] {
-        let text = node.to_string();
-        let err = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap_err();
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{text}: {err}"
-        );
-        assert!(err.to_string().contains("PR-26c"), "{text}: {err}");
-    }
+    // A `PythonTableFunction` is planned (PR-26c-4, `krishiv-session/tests/python_udtf.rs`); the analyzer
+    // builds no `Generate` of a UDTF, so one stays refused.
+    let text = lateral.to_string();
+    let err = run_with(&env, lateral, Some(Arc::new(Runtime::default()))).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{text}: {err}"
+    );
+    assert!(err.to_string().contains("PR-26c"), "{text}: {err}");
 }
 
 #[test]

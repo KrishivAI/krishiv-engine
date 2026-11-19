@@ -923,6 +923,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
+mod catalog_delegation;
 mod derived_keys;
 mod iceberg;
 

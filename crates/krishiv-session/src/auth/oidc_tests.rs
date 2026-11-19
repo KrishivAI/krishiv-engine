@@ -696,3 +696,42 @@ fn jwks_readiness_is_absent_without_oidc() {
             .expect("server auth");
     assert_eq!(plain.jwks_ready(), None);
 }
+
+/// P3-T067 §3.3: an OIDC session keeps its token, secret-typed, with the exchange claims and
+/// `exp`; a static-token session keeps none.
+#[test]
+fn oidc_keeps_the_token_and_its_exchange_claims() {
+    let source = Source::new(vec![Ok(jwks(&[rsa_jwk(rsa(), "k1")]))]);
+    let server = server(&source, &[]);
+    let mut c = claims();
+    c["scope"] = json!("lake.read lake.list");
+    let jwt = token(&rs_header("k1"), &c, rs256(rsa()));
+    let ok = auth(&server, &jwt).expect("valid");
+    let credential = ok.credential.clone().expect("kept");
+    assert_eq!(credential.kind(), super::CredentialKind::Oidc);
+    assert_eq!(credential.token().expose_secret(), jwt);
+    assert_eq!(credential.claims().audiences, [AUDIENCE, "other"]);
+    assert_eq!(
+        credential.claims().scope.as_deref(),
+        Some("lake.read lake.list")
+    );
+    assert_eq!(credential.claims().scp, None);
+    assert_eq!(
+        credential.claims().groups.as_deref(),
+        Some(&["analysts".to_owned(), "staff".to_owned()][..])
+    );
+    let exp = c["exp"].as_u64().unwrap();
+    assert_eq!(
+        credential.expires_at(),
+        std::time::UNIX_EPOCH + Duration::from_secs(exp)
+    );
+    // Never in `Debug`, of the credential or of the authentication result.
+    for text in [format!("{credential:?}"), format!("{ok:?}")] {
+        assert!(!text.contains(&jwt), "{text}");
+    }
+    // No groups claim is not the same as an empty one.
+    let mut c = claims();
+    c.as_object_mut().unwrap().remove("groups");
+    let ok = auth(&server, &token(&rs_header("k1"), &c, rs256(rsa()))).expect("valid");
+    assert_eq!(ok.credential.expect("kept").claims().groups, None);
+}

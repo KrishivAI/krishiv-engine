@@ -37,8 +37,8 @@ use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, Spill
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -127,6 +127,8 @@ pub struct Session {
     pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
     /// The baggage that came with it (empty without a valid `traceparent`).
     pub(crate) inbound_baggage: Arc<[(String, String)]>,
+    /// The authentication of the request that started the statement, for delegated catalogs.
+    pub(crate) request_inbound: Option<crate::catalog_registry::Inbound>,
 }
 
 impl fmt::Debug for Session {
@@ -204,6 +206,8 @@ pub(crate) struct SessionState {
     sql_sources: AtomicU32,
     /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
     pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
+    /// How the latest RPC authenticated and its user token, for delegated catalogs (P3-T067).
+    pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
 }
 
 impl Drop for SessionState {
@@ -1400,6 +1404,7 @@ impl Session {
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
+        let udtfs = self.table_functions();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -1407,7 +1412,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions,
-            table_functions: Arc::new(BuiltinTableFunctions::new()),
+            table_functions: Arc::clone(&udtfs) as _,
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
@@ -1444,7 +1449,8 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
-            quiet_denials: false,
+            quiet: QuietDenials::default(),
+            udtfs,
         }
     }
 
@@ -1461,7 +1467,7 @@ impl Session {
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
         let r = self
-            .check_store_options(&env.config, std::iter::empty())
+            .check_store_options(&*env.analysis.policy, &env.config, std::iter::empty())
             .await;
         crate::access::audit_read(self, env, r)?;
         // Temporary views over queries inline as subqueries, so the

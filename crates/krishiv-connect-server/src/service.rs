@@ -67,6 +67,7 @@ fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace 
     execute::InboundTrace {
         traceparent: text("traceparent"),
         baggage: text("baggage"),
+        credential: None,
     }
 }
 
@@ -223,15 +224,18 @@ impl ConnectService {
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
         // While draining no session is created: an unknown id is not found.
-        if self.is_draining() {
-            return self
-                .manager
-                .get(caller, session_id, observed)
-                .map_err(|e| status_of(&e));
+        let entry = if self.is_draining() {
+            self.manager.get(caller, session_id, observed)
+        } else {
+            self.manager
+                .get_or_create(caller, session_id, observed, user)
         }
-        self.manager
-            .get_or_create(caller, session_id, observed, user)
-            .map_err(|e| status_of(&e))
+        .map_err(|e| status_of(&e))?;
+        // The latest RPC's user token, for the session's delegated catalogs (P3-T067 §3.3).
+        entry
+            .session()
+            .set_inbound_credential(caller.method, caller.credential.clone());
+        Ok(entry)
     }
 }
 
@@ -274,7 +278,8 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let caller = self.caller(&request, Rpc::ExecutePlan)?;
-        let inbound = inbound_of(request.metadata());
+        let mut inbound = inbound_of(request.metadata());
+        inbound.credential = Some((caller.method, caller.credential.clone()));
         let request = request.into_inner();
         let entry = self.session_for_work(
             &caller,
@@ -318,7 +323,9 @@ impl SparkConnectService for ConnectService {
         )?;
         observe(&entry, request.client_type.as_deref());
         let _gate = entry.shared().await;
-        analyze::analyze_plan(&entry, &request, &self.limits)
+        let options = krishiv_session::QueryOptions::new()
+            .inbound_credential(caller.method, caller.credential.clone());
+        analyze::analyze_plan(&entry, &request, &self.limits, &options)
             .await
             .map(Response::new)
             .map_err(|e| entry.errors().status(&e))
