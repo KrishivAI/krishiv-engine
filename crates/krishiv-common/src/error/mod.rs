@@ -286,6 +286,28 @@ impl KrishivError {
         self
     }
 
+    /// This error with every occurrence of `value` in its message parameters
+    /// replaced by [`crate::redact::REDACTED`] and the message rendered again:
+    /// for an error about a setting whose value must not be shown
+    /// ([`crate::redact::is_redacted_setting`]). Other parameter text stays,
+    /// so the key is still named; a value inside a longer word goes too, the
+    /// safe side. The class, the SQLSTATE and the query contexts are kept; a
+    /// cause is dropped. An empty `value` changes nothing.
+    #[must_use]
+    pub fn with_value_redacted(mut self, value: &str) -> Self {
+        if value.is_empty() {
+            return self;
+        }
+        for (_, text) in &mut self.parameters {
+            if text.contains(value) {
+                *text = text.replace(value, crate::redact::REDACTED);
+            }
+        }
+        self.message = template::render(self.class.message_template(), &self.parameters);
+        self.cause = None;
+        self
+    }
+
     /// The same error caused by `cause` (replacing any earlier cause).
     #[must_use]
     pub fn with_cause(mut self, cause: KrishivError) -> Self {

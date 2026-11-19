@@ -38,8 +38,7 @@ use krishiv_common::error::{
     CannotModifyStaticConfig, ConnectInvalidPlanInvalidOneOfFieldNotSet,
     InvalidConfValueRequirement, KrishivError, SqlConfNotFound,
 };
-use krishiv_common::redact::redact;
-use krishiv_common::secret::is_sensitive_key;
+use krishiv_common::redact::{REDACTED, is_redacted_setting};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::config_request::operation::OpType;
 use krishiv_session::RuntimeConf;
@@ -164,39 +163,13 @@ fn warning(key: &str) -> Option<String> {
         })
 }
 
-/// The default of `spark.redaction.regex`
-/// (`core/.../internal/config/package.scala:1325-1333`),
-/// `(?i)secret|password|token|access[.]?key|credential`, as plain
-/// substrings: Java's `(?i)` folds ASCII only, and `[.]` is a literal dot.
-const REDACTION_WORDS: [&str; 6] = [
-    "secret",
-    "password",
-    "token",
-    "accesskey",
-    "access.key",
-    "credential",
-];
-
-fn matches_redaction(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    REDACTION_WORDS.iter().any(|w| lower.contains(w))
-}
-
 /// `SparkConnectConfigHandler.isRedacted` (`ConfigH:227-233`): the key or
-/// the value matches Spark's pattern. Krishiv also hides what its own
-/// classifier calls a secret (ADR 0038, threat model T-C8), a difference
-/// toward safety: a key [`is_sensitive_key`] names (`*.account.key.*`,
-/// `sasl.jaas.config`, `*.apiKey`, ...) and a value [`redact`] finds a
-/// credential in (`postgres://user:password@host`, `jdbc:...;password=`).
+/// the value matches Spark's pattern, or Krishiv's secret classifier (a
+/// difference toward safety); see [`is_redacted_setting`].
 #[must_use]
 pub fn is_redacted(key: &str, value: Option<&str>) -> bool {
-    matches_redaction(key)
-        || is_sensitive_key(key)
-        || value.is_some_and(|v| matches_redaction(v) || matches!(redact(v), Cow::Owned(_)))
+    is_redacted_setting(key, value)
 }
-
-/// What a redacted value is shown as (Spark's `Utils.REDACTION_REPLACEMENT_TEXT`).
-const REDACTED: &str = "*********(redacted)";
 
 /// A silent `set`'s warning for a pair that failed: Spark's
 /// `Failed to set <key> to <Option> due to <message>` (`ConfigH:92-93`).

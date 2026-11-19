@@ -719,3 +719,24 @@ fn iceberg_commit_classes_match_java_exceptions() {
         assert!(unknown.message().contains(java), "{unknown}");
     }
 }
+
+#[test]
+fn a_redacted_value_leaves_every_parameter_and_the_message() {
+    let e: KrishivError = InvalidConfValueTimeZone {
+        conf_name: "spark.sql.session.timeZone".to_owned(),
+        conf_value: "pw-1/pw-1".to_owned(),
+    }
+    .into();
+    let hidden = e.clone().with_value_redacted("pw-1");
+    assert_eq!(hidden.error_class(), ErrorClass::InvalidConfValueTimeZone);
+    assert!(!hidden.to_string().contains("pw-1"), "{hidden}");
+    assert!(
+        hidden
+            .to_string()
+            .contains("*********(redacted)/*********(redacted)"),
+        "{hidden}"
+    );
+    assert!(hidden.to_string().contains("spark.sql.session.timeZone"));
+    // An empty value changes nothing (replacing "" would mark every character).
+    assert_eq!(e.clone().with_value_redacted("").to_string(), e.to_string());
+}
