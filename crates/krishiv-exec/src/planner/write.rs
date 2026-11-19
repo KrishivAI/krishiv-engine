@@ -79,6 +79,22 @@ impl WriteRequest {
             write_id: None,
         }
     }
+
+    /// The filter of an [`WriteMode::OverwriteByFilter`] write as the typed
+    /// predicate a table decides its removals by, keeping **exactly** the
+    /// rows the filter keeps (TRUE where it is TRUE): `None` for another
+    /// mode, or when any part of the filter does not translate, which a
+    /// table must refuse rather than widen. A bare `true`/`false` literal is
+    /// a constant.
+    #[must_use]
+    pub fn overwrite_filter_pushdown(&self) -> Option<krishiv_io::PushdownExpr> {
+        let WriteMode::OverwriteByFilter(filter) = &self.mode else {
+            return None;
+        };
+        let mut columns = Vec::new();
+        super::row_level::bound_columns(filter, &mut columns);
+        super::pushdown::translate_exact(filter, &columns)
+    }
 }
 
 /// The write capabilities of a table; each is Spark's `TableCapability` of the
@@ -304,6 +320,80 @@ mod tests {
             ErrorClass::KrishivUnsupportedFeature
         );
         assert!(forgotten.to_string().contains("Bare"), "{forgotten}");
+    }
+
+    #[test]
+    fn an_overwrite_filter_translates_exactly_or_not_at_all() {
+        use krishiv_io::{CmpOp, ColumnPath, PushdownExpr, ScalarValue};
+        use krishiv_plan::{
+            AttrId, BoundColumn, Builtin, ExprNode, FunctionId, FunctionKind, ResolvedExpr,
+            ResolvedFunction,
+        };
+        let call = |b: Builtin, args: Vec<Arc<Expr>>| {
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(b),
+                    kind: FunctionKind::Scalar,
+                    args,
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: krishiv_types::DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            ))))
+        };
+        let x = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            BoundColumn {
+                id: AttrId(1),
+                name: "x".to_owned(),
+                data_type: krishiv_types::DataType::Integer,
+                nullable: true,
+            },
+        ))));
+        let one = Arc::new(Expr::literal(Literal::Integer(1)));
+        let schema = Arc::new(Schema::empty());
+        let with = |f: Arc<Expr>| {
+            WriteRequest::new(WriteMode::OverwriteByFilter(f), "`t`", Arc::clone(&schema))
+        };
+        let eq = call(Builtin::Eq, vec![Arc::clone(&x), Arc::clone(&one)]);
+        let x1 = PushdownExpr::cmp(ColumnPath::new("x"), CmpOp::Eq, ScalarValue::Int32(1));
+        assert_eq!(
+            with(Arc::clone(&eq)).overwrite_filter_pushdown(),
+            Some(x1.clone())
+        );
+        // A conjunct that does not translate makes the whole filter
+        // untranslatable (a superset would remove rows the filter keeps).
+        let opaque = call(Builtin::Eq, vec![Arc::clone(&x), Arc::clone(&x)]);
+        let and = call(Builtin::And, vec![Arc::clone(&eq), opaque]);
+        assert_eq!(with(and).overwrite_filter_pushdown(), None);
+        // A static partition's `x <=> 1` is `x IS NOT NULL AND x = 1`;
+        // `x <=> NULL` is `x IS NULL`.
+        let nse = call(Builtin::EqNullSafe, vec![Arc::clone(&x), Arc::clone(&one)]);
+        assert_eq!(
+            with(nse).overwrite_filter_pushdown(),
+            Some(PushdownExpr::And(vec![
+                PushdownExpr::IsNotNull(ColumnPath::new("x")),
+                x1
+            ]))
+        );
+        let null = Arc::new(Expr::literal(Literal::Null(Some(
+            krishiv_types::DataType::Integer,
+        ))));
+        let nse = call(Builtin::EqNullSafe, vec![null, Arc::clone(&x)]);
+        assert_eq!(
+            with(nse).overwrite_filter_pushdown(),
+            Some(PushdownExpr::IsNull(ColumnPath::new("x")))
+        );
+        assert_eq!(
+            with(Arc::new(Expr::literal(Literal::Boolean(true)))).overwrite_filter_pushdown(),
+            Some(PushdownExpr::Constant(true))
+        );
+        assert_eq!(
+            WriteRequest::new(WriteMode::Truncate, "`t`", schema).overwrite_filter_pushdown(),
+            None
+        );
     }
 
     #[test]
