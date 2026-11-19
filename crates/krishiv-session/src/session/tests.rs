@@ -43,6 +43,14 @@ fn max_records_per_file_reads_the_write_option() {
         max_records_per_file(&options(&[("MAXRECORDSPERFILE", " 7 ")]), "parquet").unwrap(),
         7
     );
+    // Spark reads a long and limits only above 0: zero and negatives mean no limit.
+    for v in ["0", "-1", "-9223372036854775808"] {
+        assert_eq!(
+            max_records_per_file(&options(&[("maxRecordsPerFile", v)]), "parquet").unwrap(),
+            0,
+            "{v}"
+        );
+    }
     let e = max_records_per_file(&options(&[("maxRecordsPerFile", "ten")]), "parquet").unwrap_err();
     assert_eq!(
         e.error_class().name(),

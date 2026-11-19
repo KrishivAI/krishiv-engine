@@ -149,15 +149,20 @@ pub(super) fn max_records_per_file(
         }
         .into());
     };
-    raw.trim().parse::<u64>().map_err(|_| {
-        krishiv_common::error::KrishivInvalidFormatOptionValue {
-            value: format!("'{raw}'"),
-            option: format!("\"{key}\""),
-            format: format!("\"{format}\""),
-            reason: "expected an integer in 0..=18446744073709551615".to_owned(),
-        }
-        .into()
-    })
+    // Spark reads a long and limits only above 0; zero and negatives mean no limit.
+    raw.trim()
+        .parse::<i64>()
+        .map(|n| u64::try_from(n).unwrap_or(0))
+        .map_err(|_| {
+            krishiv_common::error::KrishivInvalidFormatOptionValue {
+                value: format!("'{raw}'"),
+                option: format!("\"{key}\""),
+                format: format!("\"{format}\""),
+                reason: "expected an integer in -9223372036854775808..=9223372036854775807"
+                    .to_owned(),
+            }
+            .into()
+        })
 }
 
 /// A write directory that could not be opened, as the path-based store
