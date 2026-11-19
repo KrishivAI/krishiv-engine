@@ -318,7 +318,7 @@ pub(super) fn row_level_sink(
 }
 
 /// The file limits of a write: Delta's `maxRecordsPerFile` write option (`DeltaOptions`, case
-/// insensitive) and the default target size.
+/// insensitive; read as a long, a value not above 0 is no limit) and the default target size.
 fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
     let mut limits = FileLimits::default();
     if let Some((key, raw)) = request
@@ -326,14 +326,16 @@ fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
     {
-        limits.max_records = raw.trim().parse::<u64>().map_err(|_| {
+        // Read as a long, as delta-spark does; a value not above 0 is no limit (`-1` too).
+        let value = raw.trim().parse::<i64>().map_err(|_| {
             KrishivError::from(krishiv_common::error::KrishivInvalidFormatOptionValue {
                 value: format!("'{raw}'"),
                 option: format!("\"{key}\""),
                 format: "\"delta\"".to_owned(),
-                reason: "expected an integer in 0..=18446744073709551615".to_owned(),
+                reason: "expected a long integer".to_owned(),
             })
         })?;
+        limits.max_records = u64::try_from(value).unwrap_or(0);
     }
     Ok(limits)
 }

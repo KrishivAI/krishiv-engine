@@ -923,6 +923,67 @@ fn a_null_in_a_not_null_column_fails_as_delta_spark() {
     }
 }
 
+/// An empty string written into a `NOT NULL` partition column is stored as NULL, so it fails
+/// the NOT NULL check as delta-spark's does (`WRITE-EDGES.json` `not_null_partition`): the
+/// check sees the stored value, never an internal error, and nothing is committed.
+#[test]
+fn an_empty_value_in_a_not_null_partition_column_fails_as_delta_spark() {
+    let oracle = expected("WRITE-EDGES.json");
+    let steps = oracle["not_null_partition"].as_array().unwrap();
+    let table_schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int64, true),
+        Field::new("p", ArrowType::Utf8, false),
+    ]));
+    let loose: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int64, true),
+        Field::new("p", ArrowType::Utf8, true),
+    ]));
+    let batch = |id: i64, p: &str| {
+        RecordBatch::try_new(
+            Arc::clone(&loose),
+            vec![
+                Arc::new(Int64Array::from(vec![id])) as ArrayRef,
+                Arc::new(StringArray::from(vec![p])),
+            ],
+        )
+        .unwrap()
+    };
+    let env = Env::new();
+    let new = NewDeltaTable::new(
+        env.engine.clone(),
+        &table_schema,
+        vec!["p".to_owned()],
+        std::collections::BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    env.write(&new, WriteMode::Append, vec![batch(1, "x")], &[])
+        .unwrap();
+    for step in steps {
+        let name = step["step"].as_str().unwrap();
+        let theirs = &step["error"];
+        let e = env
+            .write(
+                &env.open().unwrap(),
+                WriteMode::Append,
+                vec![batch(2, "")],
+                &[],
+            )
+            .unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            theirs["condition"].as_str().unwrap(),
+            "{name}: {e}"
+        );
+        assert_eq!(e.sql_state(), theirs["sqlstate"].as_str(), "{name}");
+        assert!(
+            e.to_string().contains(theirs["message"].as_str().unwrap()),
+            "{name}: {e}"
+        );
+        assert_eq!(env.latest(), 0, "{name}: nothing committed");
+    }
+}
+
 /// A create (CTAS and an empty `CREATE TABLE`) under a feature the kernel's create admits but
 /// Krishiv's writer does not honour (design section 4.2) is refused before anything is written.
 #[test]
@@ -985,6 +1046,10 @@ fn a_create_under_a_refused_feature_writes_nothing() {
             );
             assert_eq!(e.sql_state(), Some("56038"));
             assert!(e.to_string().contains(feature), "{key}: {e}");
+            if *key == "delta.feature.variantShredding" {
+                // The kernel's create enables Variant support beside shredding.
+                assert!(e.to_string().contains("variantType"), "{key}: {e}");
+            }
             assert_eq!(
                 std::fs::read_dir(&env.dir).unwrap().count(),
                 0,
