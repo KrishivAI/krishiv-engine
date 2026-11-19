@@ -1147,6 +1147,37 @@ fn runs_of_equal_keys_are_looked_up_once() {
     }
 }
 
+/// An append-only table pushes one row per row of a batch with no two
+/// equal neighbours (the path without the run check), and one row per
+/// run of a batch with runs (NULL runs among them); every key counts its
+/// rows.
+#[test]
+fn append_pushes_a_row_per_run_and_per_row_without_runs() {
+    let core = core();
+    let seed = HashSeed::new(Some(9));
+    let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+    t.local_skip = 1;
+    // No runs: keys repeat, but never next to each other.
+    let plain: Vec<Option<i64>> = (0..500_i64).map(|i| Some(i % 250)).collect();
+    apply(&mut t, &opt_batch(&core, &plain));
+    assert_eq!(t.len(), 500);
+    // Runs of 1-3 rows, every fifth a NULL run: one row per run.
+    let mut runs = Vec::new();
+    let mut starts = 0;
+    for r in 0..300_i64 {
+        let k = (r % 5 != 2).then_some(r);
+        runs.extend(std::iter::repeat_n(k, usize::try_from(r % 3 + 1).unwrap()));
+        starts += 1;
+    }
+    apply(&mut t, &opt_batch(&core, &runs));
+    assert_eq!(t.len(), 500 + starts);
+    let mut want = std::collections::BTreeMap::new();
+    for k in plain.iter().chain(&runs) {
+        *want.entry(*k).or_insert(0) += 1;
+    }
+    assert_eq!(totals(&t), want);
+}
+
 /// Long (heap) string keys in runs: equal values sit at different heap
 /// offsets, so their encoded rows differ and each row is looked up; long
 /// values sharing a prefix stay apart; short (inline) values in runs take

@@ -10,15 +10,33 @@ impl RowTable {
         match self.mode {
             Mode::Append => {
                 self.unique &= keys.is_empty();
+                // A batch with no two equal neighbouring hashes has no run:
+                // every row pushes, with no run check carried across
+                // `push` (TPC-H q13 SF100: the check cost 2.3% of its
+                // instructions on input without runs).
+                if !hashes.windows(2).any(|w| w[0] == w[1]) {
+                    for (k, &h) in hashes.iter().enumerate() {
+                        let r = self.push(keys.row(k), heap, h)?;
+                        refs.push(r);
+                    }
+                    return Ok(());
+                }
                 // A row equal to the one before takes its row: a run of
                 // one key makes one row (the batch's first row always
                 // pushes; a run across batches makes two, merged later).
+                // Fixed-width keys compare word-wise; view keys by bytes
+                // (equal long values at other heap offsets only push again).
+                let (stride, views) = (self.stride, self.views.is_some());
                 let mut prev: Option<(u64, &[u8], u32)> = None;
                 for (k, &h) in hashes.iter().enumerate() {
                     let key = keys.row(k);
                     if let Some((ph, pkey, pr)) = prev
                         && ph == h
-                        && pkey == key
+                        && if views {
+                            pkey == key
+                        } else {
+                            same_key(pkey, key, stride)
+                        }
                     {
                         refs.push(pr);
                         continue;

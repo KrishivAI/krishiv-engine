@@ -1639,7 +1639,8 @@ fn row_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> &[u8] {
 /// Whether `row` holds the key of key row `key`: the same hash and key
 /// bytes. Fixed-width rows hold the whole key, NULLs and padding as zero
 /// bytes and floats normalized, so equal keys have equal bytes (the
-/// layout's word compare without views).
+/// layout's word compare without views). Strides are multiples of 8
+/// (`round8` in `rows/layout.rs`), so the words cover the whole row.
 #[inline(always)]
 fn same_key(row: &[u8], key: &[u8], stride: usize) -> bool {
     match (row.get(..stride), key.get(..stride)) {
