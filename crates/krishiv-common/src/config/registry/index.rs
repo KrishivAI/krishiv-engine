@@ -340,6 +340,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     ),
     (
+        "krishiv.exec.scan.instanceProjection",
+        &EXEC_SCAN_INSTANCE_PROJECTION,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
@@ -526,6 +530,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.flightSql.maxHandlesPerPrincipal",
         &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
+    ),
+    (
+        "krishiv.iceberg.write.statistics.enabled",
+        &ICEBERG_WRITE_STATISTICS_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",
