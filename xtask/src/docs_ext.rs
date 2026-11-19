@@ -112,10 +112,12 @@ fn unhide_examples(lines: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < lines.len() {
         out.push(lines[i].clone());
-        if lines[i] != "```rust" && lines[i] != "```" {
+        if !lines[i].starts_with("```") {
             i += 1;
             continue;
         }
+        // Every fence opens a block that the next bare fence closes; only Rust ones are rewritten.
+        let rust = lines[i] == "```rust" || lines[i] == "```";
         let start = i + 1;
         let end = lines[start..]
             .iter()
@@ -131,6 +133,14 @@ fn unhide_examples(lines: &[String]) -> Vec<String> {
                 }
             })
             .collect();
+        if !rust {
+            out.extend(lines[start..end].iter().cloned());
+            if end < lines.len() {
+                out.push(lines[end].clone());
+            }
+            i = end + 1;
+            continue;
+        }
         let hidden = lines[start..end]
             .iter()
             .any(|l| l == "#" || l.starts_with("# "));
@@ -153,7 +163,11 @@ fn unhide_examples(lines: &[String]) -> Vec<String> {
             }
             _ => out.extend(body.iter().map(|l| (*l).to_owned())),
         }
-        i = end;
+        // The closing fence ends the block; the next line is prose again.
+        if end < lines.len() {
+            out.push(lines[end].clone());
+        }
+        i = end + 1;
     }
     out
 }
@@ -409,6 +423,20 @@ mod tests {
             "```rust",
             "plain();",
             "```",
+            "# Errors",
+            "#",
+            "Prose between blocks keeps its heading marker.",
+            "```",
+            "# hidden();",
+            "```",
+            "# Panics",
+            "```text",
+            "# not rust",
+            "```",
+            "# Examples",
+            "```",
+            "# use a::C;",
+            "```",
         ]
         .map(String::from)
         .to_vec();
@@ -427,6 +455,20 @@ mod tests {
             "```",
             "```rust",
             "plain();",
+            "```",
+            "# Errors",
+            "#",
+            "Prose between blocks keeps its heading marker.",
+            "```",
+            "hidden();",
+            "```",
+            "# Panics",
+            "```text",
+            "# not rust",
+            "```",
+            "# Examples",
+            "```",
+            "use a::C;",
             "```",
         ];
         assert_eq!(unhide_examples(&lines), want);
