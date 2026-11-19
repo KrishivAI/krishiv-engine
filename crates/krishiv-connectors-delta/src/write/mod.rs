@@ -4,7 +4,7 @@
 //! returns for a Delta table, and [`NewDeltaTable`], the provider of a table a `CREATE TABLE ..
 //! USING delta [AS SELECT]` creates.
 //!
-//! A write streams: each driver writes its rows as they arrive ([`files`]): one open Parquet
+//! A write streams: each driver writes its rows as they arrive (`files`): one open Parquet
 //! file per partition it has seen, rolled over at `maxRecordsPerFile` and at a target size,
 //! buffering at most a row group and the upload's parts, all held in the driver's reservation
 //! (the sink spills by encoding and shipping the buffered row groups). The first driver to need
