@@ -15,6 +15,7 @@
 
 pub(crate) mod interrupt;
 pub(crate) mod pool;
+pub(crate) mod relation;
 pub(crate) mod runtime;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,7 +135,13 @@ pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
 #[derive(Debug)]
 pub(crate) struct PyAnonymousUdf {
     def: krishiv_session::PythonUdfDef,
-    version: u32,
+    pub(crate) version: u32,
+}
+
+impl PyAnonymousUdf {
+    pub(crate) fn def(&self) -> &krishiv_session::PythonUdfDef {
+        &self.def
+    }
 }
 
 #[pymethods]

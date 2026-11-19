@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The embedded Python relation UDF kinds (design P3-T085, PR-48a): `mapInPandas`/`mapInArrow`,
+`groupBy().applyInPandas`/`applyInArrow`, `cogroup().applyInPandas`/`applyInArrow` and grouped-aggregate
+`pandas_udf`, through the `krishiv.sql` facade on a one-thread pool (the GIL default, which is what makes
+pool occupancy matter)."""
+
+from __future__ import annotations
+
+import pyarrow as pa
+import pytest
+
+from krishiv import _native
+from krishiv.errors import UnsupportedOperationException
+from krishiv.sql.session import SparkSession
+
+
+def _spark(threads: str = "1") -> SparkSession:
+    config = [("krishiv.python.udf.threads", threads)]
+    return SparkSession(_native.Session(config), config)
+
+
+def _rows(df) -> list[tuple]:
+    return sorted(tuple(r) for r in df.collect())
+
+
+def test_map_in_pandas_sees_every_partition_as_batches() -> None:
+    spark = _spark()
+    df = spark.range(10).repartition(3)
+
+    def plus_one(batches):
+        for pdf in batches:
+            yield pdf.assign(id=pdf["id"] + 1)
+
+    assert _rows(df.mapInPandas(plus_one, "id long")) == [(i + 1,) for i in range(10)]
+
+
+def test_map_in_arrow_may_change_the_row_count_and_the_columns() -> None:
+    spark = _spark()
+    df = spark.range(5)
+
+    def doubled(batches):
+        for b in batches:
+            ids = b.column("id").to_pylist()
+            yield pa.RecordBatch.from_pydict({"v": ids + ids, "tag": ["x"] * (2 * len(ids))})
+
+    out = df.mapInArrow(doubled, "v long, tag string")
+    assert out.columns == ["v", "tag"]
+    assert len(out.collect()) == 10
+
+
+def test_map_in_pandas_barrier_is_refused() -> None:
+    spark = _spark()
+    with pytest.raises(UnsupportedOperationException):
+        spark.range(1).mapInPandas(lambda it: it, "id long", barrier=True)
+
+
+def test_a_map_result_missing_a_declared_column_fails_the_query() -> None:
+    spark = _spark()
+    df = spark.range(3).mapInPandas(lambda it: it, "id long, other long")
+    with pytest.raises(Exception, match=r"(?i)column|schema|field|other"):
+        df.collect()
+
+
+def test_a_map_result_with_an_extra_column_is_truncated_as_spark_does() -> None:
+    spark = _spark()
+    df = spark.range(3).mapInPandas(lambda it: (pdf.assign(extra=1) for pdf in it), "id long")
+    assert _rows(df) == [(0,), (1,), (2,)]
+
+
+def test_grouped_map_in_pandas_with_and_without_key() -> None:
+    spark = _spark()
+    df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0), (2, 5.0), (2, 10.0)], ["id", "v"])
+
+    def demean(pdf):
+        return pdf.assign(v=pdf["v"] - pdf["v"].mean())
+
+    out = df.groupBy("id").applyInPandas(demean, "id long, v double")
+    assert _rows(out) == [(1, -0.5), (1, 0.5), (2, -3.0), (2, -1.0), (2, 4.0)]
+
+    def with_key(key, pdf):
+        import pandas as pd
+
+        return pd.DataFrame({"id": [key[0]], "n": [len(pdf)]})
+
+    assert _rows(df.groupBy("id").applyInPandas(with_key, "id long, n long")) == [(1, 2), (2, 3)]
+
+
+def test_grouped_map_in_arrow() -> None:
+    spark = _spark()
+    df = spark.createDataFrame([(1, 1), (1, 2), (2, 3)], ["k", "v"])
+
+    def total(table: pa.Table) -> pa.Table:
+        return pa.table({"k": [table["k"][0].as_py()], "s": [sum(table["v"].to_pylist())]})
+
+    assert _rows(df.groupBy("k").applyInArrow(total, "k long, s long")) == [(1, 3), (2, 3)]
+
+
+def test_grouped_map_without_keys_is_one_group() -> None:
+    spark = _spark()
+    out = spark.range(6).groupBy().applyInPandas(lambda pdf: pdf.assign(id=pdf["id"].sum()).head(1), "id long")
+    assert _rows(out) == [(15,)]
+
+
+def test_cogroup_apply_in_pandas_has_an_empty_side_for_a_key_on_one_side() -> None:
+    spark = _spark()
+    left = spark.createDataFrame([(1, 1), (1, 2), (2, 3)], ["id", "v"])
+    right = spark.createDataFrame([(1, 10), (3, 30)], ["id", "v"])
+
+    def count(lpdf, rpdf):
+        import pandas as pd
+
+        key = lpdf["id"].iloc[0] if len(lpdf) else rpdf["id"].iloc[0]
+        return pd.DataFrame({"id": [key], "nl": [len(lpdf)], "nr": [len(rpdf)]})
+
+    out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(count, "id long, nl long, nr long")
+    assert _rows(out) == [(1, 2, 1), (2, 1, 0), (3, 0, 1)]
+
+
+def test_cogroup_apply_in_arrow() -> None:
+    spark = _spark()
+    left = spark.createDataFrame([(1, 1), (2, 2)], ["id", "v"])
+    right = spark.createDataFrame([(1, 5)], ["id", "w"])
+
+    def f(lt: pa.Table, rt: pa.Table) -> pa.Table:
+        return pa.table({"nl": [lt.num_rows], "nr": [rt.num_rows]})
+
+    out = left.groupBy("id").cogroup(right.groupBy("id")).applyInArrow(f, "nl long, nr long")
+    assert _rows(out) == [(1, 0), (1, 1)]
+
+
+def test_grouped_aggregate_pandas_udf() -> None:
+    from krishiv.sql.functions import pandas_udf
+
+    spark = _spark()
+    df = spark.createDataFrame([(1, 1.0), (1, 3.0), (2, 5.0)], ["id", "v"])
+
+    mean_udf = pandas_udf(lambda v: v.mean(), "double", 202)  # SQL_GROUPED_AGG_PANDAS_UDF
+
+    out = df.groupBy("id").agg(mean_udf(df["v"]).alias("m"))
+    assert _rows(out) == [(1, 2.0), (2, 5.0)]
+
+
+def test_eight_partitions_finish_on_a_pool_of_one_thread() -> None:
+    spark = _spark()
+    df = spark.range(800).repartition(8)
+    out = df.mapInPandas(lambda it: (pdf for pdf in it), "id long")
+    assert len(out.collect()) == 800
+
+
+def test_a_failing_function_surfaces_its_python_error() -> None:
+    spark = _spark()
+
+    def boom(batches):
+        raise ValueError("kaboom")
+        yield  # pragma: no cover
+
+    with pytest.raises(Exception, match="kaboom"):
+        spark.range(3).mapInPandas(boom, "id long").collect()
+
+
+def test_a_limit_over_a_map_returns_its_rows_and_frees_the_pool() -> None:
+    spark = _spark()
+
+    def many(batches):
+        import pandas as pd
+
+        for _ in batches:
+            pass
+        for _ in range(30):
+            yield pd.DataFrame({"id": [1]})
+
+    # The executor drains the task before the query ends (it does not cancel it early), so the task
+    # must be finite; what matters is that the pool thread is free again afterwards.
+    assert len(spark.range(1).mapInPandas(many, "id long").limit(3).collect()) == 3
+    assert len(spark.range(2).mapInPandas(lambda it: it, "id long").collect()) == 2
