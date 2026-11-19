@@ -4,26 +4,48 @@
 use super::*;
 
 impl Session {
-    /// The permanent table `name` for a command that writes it.
+    /// The permanent table `name` for a command that writes it. A Delta table is refused by name
+    /// until PR-37a.
     pub(crate) fn table_for_write(
         &self,
         name: &TableName,
         operation: &str,
         env: &QueryEnv,
     ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Write)
+    }
+
+    /// The permanent table `name` for a command that only reads it (`ANALYZE TABLE`): refused as
+    /// [`Self::table_for_write`] refuses, except that a Delta table is returned.
+    pub(crate) fn table_for_read_command(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_table_for(name, operation, env, Access::Read)
+    }
+
+    fn stored_table_for(
+        &self,
+        name: &TableName,
+        operation: &str,
+        env: &QueryEnv,
+        access: Access,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
         if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name)
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // Reading a Delta table to analyze it is no write; INSERT writes through the Delta
-                // writer (`delta_writes.rs`), DELETE, UPDATE and MERGE through its row-level table
-                // (`row_level.rs`, `merge.rs`); the other commands are refused by name.
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE, UPDATE and
+                // MERGE through its row-level table (`row_level.rs`, `merge.rs`); the other writes
+                // are refused by name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
-                if is_delta_table(&table)
+                if access == Access::Write
+                    && is_delta_table(&table)
                     && !matches!(
                         operation,
-                        "ANALYZE TABLE"
-                            | "INSERT"
+                        "INSERT"
                             | "INSERT OVERWRITE"
                             | "DELETE"
                             | "UPDATE TABLE"
@@ -32,6 +54,8 @@ impl Session {
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }
+                #[cfg(not(feature = "delta"))]
+                let _ = access;
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
@@ -179,7 +203,8 @@ impl Session {
                 overwrite: c.overwrite,
                 statics: &statics,
                 dry,
-                options: &options,
+                options: None,
+                sql_options: &options,
             },
         )
         .await
@@ -201,7 +226,7 @@ impl Session {
             overwrite,
             statics,
             dry,
-            options,
+            ..
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
@@ -307,8 +332,18 @@ impl Session {
                 .collect::<Vec<_>>(),
         );
         let mut select = Vec::with_capacity(values.len());
+        // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
+        // A Delta table's writer checks NOT NULL itself, as delta-spark does
+        // (`DELTA_NOT_NULL_CONSTRAINT_VIOLATED`, `WRITE-EDGES.json` `not_null`).
+        let null_checks = !delta
+            && !env
+                .config
+                .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+                .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
-            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
+            let checked =
+                crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);
@@ -318,7 +353,7 @@ impl Session {
                 return Ok(());
             }
             let written = self
-                .insert_delta(name, table, &df, overwrite, statics, reads_target, options)
+                .insert_delta(name, table, &df, target, reads_target)
                 .await;
             self.state.catalog.store.bump();
             self.forget_column_stats(name);
@@ -326,7 +361,7 @@ impl Session {
             return written
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
-        let _ = (reads_target, options);
+        let _ = reads_target;
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite).await;
@@ -627,12 +662,14 @@ impl Session {
     /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
     /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
     /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
-    /// statement runs it.
+    /// statement runs it. The writer's `options` reach a Delta table's writer, as Spark's v2
+    /// `insertInto` passes them (`maxRecordsPerFile`).
     pub(crate) async fn exec_insert_into(
         &self,
         df: &DataFrame,
         table: &str,
         mode: krishiv_io::SaveMode,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         let overwrite = mode == krishiv_io::SaveMode::Overwrite;
         let env = self.query_env();
@@ -662,7 +699,8 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
-            options: &[],
+            options: Some(options),
+            sql_options: &[],
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -695,7 +733,8 @@ impl Session {
                     overwrite: false,
                     statics: &[],
                     dry: false,
-                    options: &[],
+                    options: Some(&spec.options),
+                    sql_options: &[],
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }
@@ -801,4 +840,13 @@ impl Session {
             .check_save(&table.location.display().to_string())
             .await
     }
+}
+
+/// What a table command does to the stored table it names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Only reads it (`ANALYZE TABLE`).
+    Read,
+    /// Writes or changes it.
+    Write,
 }

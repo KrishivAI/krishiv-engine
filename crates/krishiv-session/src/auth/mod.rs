@@ -27,6 +27,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod credential;
 mod denials;
 mod der;
 mod impersonation;
@@ -77,9 +78,10 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
+pub use credential::{CredentialKind, ExchangeClaims, InboundCredential};
 pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
-pub use impersonation::{ActAs, Denial, ImpersonationConfig};
+pub use impersonation::{ActAs, ActAsHint, Denial, ImpersonationConfig};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;
@@ -142,13 +144,34 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
+    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    FlightSql,
 }
 
 impl Surface {
     /// Every surface, in counter order.
-    pub const ALL: [Self; 4] = [Self::Connect, Self::Admin, Self::Metrics, Self::Ui];
+    pub const ALL: [Self; 5] = [
+        Self::Connect,
+        Self::Admin,
+        Self::Metrics,
+        Self::Ui,
+        Self::FlightSql,
+    ];
 
-    /// The label value: `connect`, `admin`, `metrics` or `ui`.
+    /// The surface whose requests a session of `transport` serves: `Connect`, `FlightSql` and
+    /// `Ui` map to themselves; an embedded or MCP session arrives on no listener, so `None`
+    /// (P3-T101 §2 H3: a Flight SQL session counts its denials under `flight-sql`).
+    #[must_use]
+    pub fn of(transport: crate::Transport) -> Option<Self> {
+        match transport {
+            crate::Transport::Connect => Some(Self::Connect),
+            crate::Transport::FlightSql => Some(Self::FlightSql),
+            crate::Transport::Ui => Some(Self::Ui),
+            crate::Transport::Embedded | crate::Transport::Mcp => None,
+        }
+    }
+
+    /// The label value: `connect`, `admin`, `metrics`, `ui` or `flight-sql`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -156,6 +179,7 @@ impl Surface {
             Self::Admin => "admin",
             Self::Metrics => "metrics",
             Self::Ui => "ui",
+            Self::FlightSql => "flight-sql",
         }
     }
 }
@@ -283,6 +307,9 @@ pub struct Authenticated {
     pub method: Method,
     /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
     pub token_id: Option<String>,
+    /// The user token itself, kept for delegated catalogs (P3-T067 §3.3): an OIDC token or a
+    /// signed assertion; `None` for a static token, a certificate or plain act-as metadata.
+    pub credential: Option<InboundCredential>,
 }
 
 impl Authenticated {
@@ -294,7 +321,15 @@ impl Authenticated {
             role,
             method,
             token_id: None,
+            credential: None,
         }
+    }
+
+    /// This result keeping `credential`, the user token (P3-T067 §3.3).
+    #[must_use]
+    pub fn with_credential(mut self, credential: Option<InboundCredential>) -> Self {
+        self.credential = credential;
+        self
     }
 
     /// This result with the credential's id `token_id`.

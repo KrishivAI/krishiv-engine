@@ -106,23 +106,7 @@ impl QueryCatalog {
             .clone();
         let mut notes = Vec::new();
         for (key, table) in opened {
-            let name = match &key {
-                // A reference with read options of its own is named by its table, as a
-                // reference without options is; the options never reach the text.
-                super::FilesKey::View(n)
-                | super::FilesKey::Table(n)
-                | super::FilesKey::Reference { key: n, .. } => n.clone(),
-                super::FilesKey::Read(krishiv_plan::ReadSource::Files {
-                    format, paths, ..
-                }) => {
-                    let paths: Vec<String> = paths.iter().map(ToString::to_string).collect();
-                    format!("{format}.`{}`", paths.join("`, `"))
-                }
-                super::FilesKey::Read(krishiv_plan::ReadSource::Table { name, .. }) => {
-                    name.join(".")
-                }
-                super::FilesKey::Read(_) => "a read".to_owned(),
-            };
+            let name = files_label(&key);
             for outcome in table.sample_outcomes() {
                 let text = if timed {
                     outcome.with_time()
@@ -136,6 +120,24 @@ impl QueryCatalog {
             }
         }
         notes
+    }
+}
+
+/// How notes name the files of `key`: a reference with read options of its
+/// own by its table, as a reference without options is (the options never
+/// reach the text); a read by path by its paths as `Display` prints them
+/// (credentials redacted).
+pub(super) fn files_label(key: &super::FilesKey) -> String {
+    match key {
+        super::FilesKey::View(n)
+        | super::FilesKey::Table(n)
+        | super::FilesKey::Reference { key: n, .. } => n.clone(),
+        super::FilesKey::Read(krishiv_plan::ReadSource::Files { format, paths, .. }) => {
+            let paths: Vec<String> = paths.iter().map(ToString::to_string).collect();
+            format!("{format}.`{}`", paths.join("`, `"))
+        }
+        super::FilesKey::Read(krishiv_plan::ReadSource::Table { name, .. }) => name.join("."),
+        super::FilesKey::Read(_) => "a read".to_owned(),
     }
 }
 

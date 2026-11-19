@@ -108,8 +108,10 @@ impl Session {
         options: BTreeMap<String, String>,
         quoted: &str,
     ) -> Result<(), KrishivError> {
-        let (scan, df) = match target {
+        let (scan, df, opened) = match target {
             DeltaTarget::Existing { source, name } => {
+                // The target is opened in the analysis that is planned: a frame that reads files
+                // is analyzed afresh by each action, in a new query catalog.
                 let a = df.action_analysis().await?;
                 let table = a.env.catalog.delta.open(&source, name).await?;
                 let columns = delta_columns(&table)?;
@@ -118,7 +120,7 @@ impl Session {
                     output: bound(&columns),
                     version: None,
                 };
-                (scan, df.clone())
+                (scan, df.clone(), Some(a))
             }
             DeltaTarget::Create {
                 source,
@@ -174,10 +176,13 @@ impl Session {
                 hidden.keep.push(entry);
                 let fresh =
                     DataFrame::new(self.clone(), Arc::clone(&df.plan)).union(&hidden.limit(0));
-                (scan, fresh)
+                (scan, fresh, None)
             }
         };
-        let analysis = df.action_analysis().await?;
+        let analysis = match opened {
+            Some(a) => a,
+            None => df.action_analysis().await?,
+        };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
         request.options = options;
@@ -212,9 +217,12 @@ impl Session {
             let (Some(hit), None) = (hits.next(), hits.next()) else {
                 return Err(columns_differ(quoted));
             };
+            // Nested fields cast as nullable: the writer checks the table's NOT NULL fields
+            // and raises delta-spark's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` (a cast into a
+            // non-null struct field is refused before any row is read).
             select.push(
                 col(&ident(hit))
-                    .cast_ansi(c.data_type.clone())
+                    .cast_ansi(c.data_type.as_nullable())
                     .alias(&c.name),
             );
         }
@@ -418,22 +426,37 @@ impl Session {
     /// `INSERT INTO|OVERWRITE` into the Delta catalog table `table` of the rows of `df` (its
     /// columns, in its order): an append; an overwrite of the static partition `statics`
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
-    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the
-    /// `partitionOverwriteMode` option); else a truncate. `user_options` are the statement's
-    /// `WITH (..)` options, Delta's write options ([`super::delta_options`]).
-    #[expect(clippy::too_many_arguments, reason = "one INSERT clause's parts")]
-    pub(crate) async fn insert_delta(
+    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the statement's
+    /// `partitionOverwriteMode` option); else a truncate. The target's `sql_options` (`WITH (..)`)
+    /// are Delta's write options ([`super::delta_options`]); a DataFrame writer's options give
+    /// only the files' `maxRecordsPerFile` (delta-spark's `insertInto` reads no
+    /// `partitionOverwriteMode` from them, `WRITE-EDGES.json` `insert_into_overwrite_mode`).
+    pub(super) async fn insert_delta(
         &self,
         name: &super::TableName,
         table: &crate::store::CatalogTable,
         df: &DataFrame,
-        overwrite: bool,
-        statics: &[(String, String)],
+        target: &super::InsertTarget<'_>,
         reads_target: bool,
-        user_options: &[(String, String)],
     ) -> Result<(), KrishivError> {
+        let (overwrite, statics) = (target.overwrite, target.statics);
+        let user_options = target.sql_options;
         let mut options =
             super::delta_options::delta_write_options(user_options, table.is_partitioned())?;
+        // `maxRecordsPerFile` of a DataFrame write into the table (`writeTo(..).append()`,
+        // `saveAsTable` append, `insertInto`).
+        if let Some(o) = target.options {
+            // Only the option the writer reads is asked to be plain: an append ignores the
+            // others, a secret one included.
+            let read: BTreeMap<String, OptionValue> = o
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            options.extend(writer_options(
+                plain_options(&read)?.iter().map(|(k, v)| (k, v)),
+            ));
+        }
         let mode = if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {
@@ -511,6 +534,18 @@ fn columns_differ(quoted: &str) -> KrishivError {
         ),
     }
     .into()
+}
+
+/// The write options the Delta writer reads from its request (`maxRecordsPerFile`, matched
+/// ignoring case as Spark's case-insensitive options are), forwarded as written.
+pub(crate) fn writer_options<'a>(
+    options: impl IntoIterator<Item = (&'a String, &'a String)>,
+) -> BTreeMap<String, String> {
+    options
+        .into_iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 fn plain_options(

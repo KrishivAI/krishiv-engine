@@ -171,6 +171,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             let outer = outer_names(plan);
             match kind {
                 SubqueryKind::Scalar => format!("scalarsubquery({outer})"),
+                SubqueryKind::Table(_) => format!("table-argument({outer})"),
                 SubqueryKind::Exists => format!("exists({outer})"),
                 SubqueryKind::In(_) if k.len() == 1 => {
                     format!("({} IN (listquery({outer})))", k[0])

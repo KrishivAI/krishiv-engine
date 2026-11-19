@@ -3,12 +3,16 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use krishiv_common::config::{Config, SESSION_TIME_ZONE, Scope, ValueType, lookup};
+use krishiv_common::config::{
+    Config, ConfigEntry, ConfigValue, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope,
+    ValueType, lookup,
+};
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
 };
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
+use krishiv_plan::analyzer::SparkProfile;
 
 /// Session-scope keys fixed when the session is built (its memory pool): `SET` of one fails like
 /// a static config, a builder option sets it. Every other session-scope key is read per query, so
@@ -31,6 +35,20 @@ pub(crate) struct ConfStore {
     /// The default of `spark.sql.session.timeZone`, read once when the
     /// session is built (see [`local_zone`]).
     local_zone: Arc<str>,
+    /// Whether the catalog declaration keys are startup only (a server runtime, design P3-T067
+    /// §2.2, decisions 1 and 7): set when the session is built, never changed.
+    pub(crate) static_catalogs: bool,
+    /// The session's Spark profile: the default of an entry whose Spark default differs by release
+    /// ([`profile_default`]).
+    profile: SparkProfile,
+}
+
+/// The default of `entry` under `profile` where Spark's differs by release from the registry's (Spark 4.2's):
+/// `spark.sql.execution.pythonUDTF.arrow.enabled` is `false` before 4.2 (`SQLConf.scala` at v3.5.6, v4.0.0 and
+/// v4.1.0; `true` at v4.2.0).
+fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
+    let before_4_2 = profile < SparkProfile::V4_2;
+    (entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2).then_some(ConfigValue::Bool(false))
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -100,6 +118,8 @@ impl ConfStore {
             current: RwLock::new((config, 0)),
             initial,
             local_zone: Arc::clone(&self.local_zone),
+            static_catalogs: self.static_catalogs,
+            profile: self.profile,
         }
     }
 
@@ -108,7 +128,15 @@ impl ConfStore {
             current: RwLock::new((Arc::new(config.clone()), 0)),
             initial: config,
             local_zone: Arc::from(local_zone),
+            static_catalogs: false,
+            profile: SparkProfile::default(),
         }
+    }
+
+    /// This store for a session of `profile` (the defaults that differ by Spark release).
+    pub(crate) fn with_profile(mut self, profile: SparkProfile) -> Self {
+        self.profile = profile;
+        self
     }
 
     /// The zone an unset `spark.sql.session.timeZone` means.
@@ -193,7 +221,14 @@ impl ConfStore {
     /// The value of `key` as `spark.conf.get` and `SET key` show it: an
     /// unset session time zone shows the local zone.
     pub(crate) fn value(&self, key: &str) -> Option<String> {
-        get(&self.snapshot(), key).or_else(|| {
+        let config = self.snapshot();
+        if let Some(entry) = lookup(krishiv_common::config::resolve_alternative(key))
+            && !config.is_set(entry)
+            && let Some(v) = profile_default(entry, self.profile)
+        {
+            return Some(v.to_string());
+        }
+        get(&config, key).or_else(|| {
             lookup(key)
                 .is_some_and(|entry| entry.key == SESSION_TIME_ZONE.key)
                 .then(|| self.local_zone.to_string())
@@ -379,7 +414,7 @@ impl RuntimeConf {
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
     /// or `krishiv.sql.session.timeZone`) no zone database entry or offset names.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -429,7 +464,7 @@ impl RuntimeConf {
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
-        if !is_modifiable(key) {
+        if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }
@@ -462,9 +497,15 @@ impl RuntimeConf {
     /// assert!(!session.conf().is_modifiable("krishiv.memory.limit"));
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
+    ///
+    /// In a session of a server runtime the catalog declaration keys
+    /// (`krishiv.catalog.<name>.*`, `spark.sql.catalog.*`) are startup only, for every role
+    /// (design P3-T067 §2.2: a session-declared catalog is a client-chosen URL the server
+    /// fetches); an embedded session is unchanged.
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
+            && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
     }
 }
 

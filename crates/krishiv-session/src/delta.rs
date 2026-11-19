@@ -139,6 +139,26 @@ impl FileSchemaResolver for SessionFiles {
         }
         self.files.infer(format, paths, options)
     }
+
+    fn with_schema<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        options: &'a BTreeMap<String, OptionValue>,
+        schema: &'a krishiv_types::StructType,
+    ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>> {
+        // A user schema on a Delta read stays refused (the log's schema is the table's).
+        #[cfg(feature = "delta")]
+        if handles(format) {
+            return Box::pin(async {
+                Err(krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "a user-specified schema on a Delta read".to_owned(),
+                }
+                .into())
+            });
+        }
+        self.files.with_schema(format, paths, options, schema)
+    }
 }
 
 #[cfg(all(test, feature = "delta"))]

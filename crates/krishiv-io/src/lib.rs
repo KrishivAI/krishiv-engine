@@ -70,12 +70,19 @@ pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
     FileRef, Held, InferKey, InferredSchemas, IoConfig, IoContext, IoCounters, IoScheduler,
-    LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore,
-    PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy, StoreRegistry, StoreSettings,
-    Tail, VersionToken, infer_schema_cached, is_server_scoped_option, parse_object_url,
-    query_registry, register, register_with_options,
+    KeyFact, KeyFactKey, KeyFacts, LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore,
+    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
+    StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached, is_server_scoped_option,
+    parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
+/// Refuses an `hf://` directory or glob (no listing), from `krishiv-store`.
+pub use krishiv_store::check_hf_file_path;
+/// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
+pub use krishiv_store::egress;
+/// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
+#[cfg(feature = "cloud")]
+pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
@@ -90,6 +97,10 @@ pub use partition::{
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
     escape_partition_value, partition_dir_name, partition_segment, partition_segments,
     partition_texts, partition_texts_in, renders_as_string, spark_partitioned_file_name,
+    user_value::{
+        PARTITION_VALUE_KEY, UserPartitionValue, user_partition_field, user_partition_value,
+        user_value_mode,
+    },
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,

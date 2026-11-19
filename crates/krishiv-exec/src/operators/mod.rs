@@ -33,6 +33,7 @@ mod filter;
 mod generate;
 mod late_fetch;
 mod limit;
+mod partition_prune;
 mod project;
 mod range;
 mod replicate;
@@ -48,7 +49,7 @@ pub(crate) mod union;
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use file_scan::{
-    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, ROW_FILE_COLUMN,
+    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, PathRoots, ROW_FILE_COLUMN,
     ROW_POSITION_COLUMN,
 };
 pub use file_write::{FileWrite, FileWriteSink};

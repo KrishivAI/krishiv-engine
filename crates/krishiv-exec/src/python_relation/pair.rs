@@ -5,6 +5,10 @@
 //! joined with the values every lane has yielded so far and stored at once.
 //! A driver keeps one key batch per input batch (the group-start rows taken
 //! together), reserved until its last group is joined.
+//!
+//! The aligned kinds (a window aggregate, a scalar iterator) are the same
+//! join with a row for a group: every input row is kept whole, and each
+//! lane yields one value per row.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -14,7 +18,7 @@ use arrow_schema::SchemaRef;
 use krishiv_memory::Reservation;
 use krishiv_types::batch::Batch;
 
-use super::lane::Lane;
+use super::lane::{Lane, SharedMem};
 use super::sink::{RelationLane, mismatch};
 use crate::error::{Result, internal};
 use crate::sync::lock;
@@ -24,7 +28,15 @@ pub(super) struct KeyPart {
     rows: RecordBatch,
     /// Rows already joined.
     offset: usize,
-    _memory: Reservation,
+    _memory: KeyMem,
+}
+
+/// The memory of a [`KeyPart`]: its own, or the input batch's reservation
+/// it shares with the frames cut from the same rows (the aligned kinds).
+/// Held for its drop.
+struct KeyMem {
+    _own: Option<Reservation>,
+    _shared: Option<SharedMem>,
 }
 
 impl KeyPart {
@@ -78,7 +90,24 @@ impl Pending {
         self.keys.push_back(KeyPart {
             rows,
             offset: 0,
-            _memory: memory,
+            _memory: KeyMem {
+                _own: Some(memory),
+                _shared: None,
+            },
+        });
+    }
+
+    /// Adds an input batch's rows, each a group of one (the aligned kinds),
+    /// sharing the batch's reservation `memory`.
+    pub(super) fn push_shared(&mut self, rows: RecordBatch, memory: SharedMem) {
+        self.groups += rows.num_rows();
+        self.keys.push_back(KeyPart {
+            rows,
+            offset: 0,
+            _memory: KeyMem {
+                _own: None,
+                _shared: Some(memory),
+            },
         });
     }
 
@@ -167,19 +196,21 @@ fn take_values(state: &Lane, n: usize, memory: &mut Vec<Reservation>) -> Result<
 
 /// The output rows of every group whose values each lane has yielded: the
 /// keys, then a value per lane (canonical carriers), with the memory of the
-/// results they came from; `None` when no group is complete.
+/// results they came from; `None` when no group is complete. `unit` is what
+/// a group is, in errors ("group", or "row" for the aligned kinds).
 pub(super) fn joined(
     pending: &mut Pending,
     key_schema: &SchemaRef,
     schema: &SchemaRef,
     lanes: &[RelationLane],
     states: &[Lane],
+    unit: &str,
 ) -> Result<Option<(Batch, Vec<Reservation>)>> {
     let mut n = pending.waiting();
     for (lane, state) in lanes.iter().zip(states) {
         let rows = yielded(lane, state)?;
         if rows + pending.joined > pending.groups {
-            return Err(too_many(lane, rows + pending.joined, pending.groups));
+            return Err(too_many(lane, rows + pending.joined, pending.groups, unit));
         }
         n = n.min(rows);
     }
@@ -216,11 +247,12 @@ pub(super) fn check_complete(
     pending: &Pending,
     lanes: &[RelationLane],
     states: &[Lane],
+    unit: &str,
 ) -> Result<()> {
     for (lane, state) in lanes.iter().zip(states) {
         let total = yielded(lane, state)? + pending.joined;
         if total != pending.groups {
-            return Err(too_many(lane, total, pending.groups));
+            return Err(too_many(lane, total, pending.groups, unit));
         }
     }
     // Every lane has a value for every group, so `joined` took them all:
@@ -239,9 +271,10 @@ fn too_many(
     lane: &RelationLane,
     rows: usize,
     groups: usize,
+    unit: &str,
 ) -> krishiv_common::error::KrishivError {
     mismatch(
         lane,
-        format!("{rows} values for {groups} groups (one value per group)"),
+        format!("{rows} values for {groups} {unit}s (one value per {unit})"),
     )
 }

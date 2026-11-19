@@ -409,6 +409,7 @@ impl Session {
                     }
                     .into());
                 }
+                self.refuse_declared_current()?;
                 self.state.catalog.current_namespace()
             }
         };
@@ -565,6 +566,7 @@ impl Session {
             ShowKind::Namespaces { pattern, .. } => {
                 // `system` has no namespaces; never list the session catalog's under it.
                 let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
+                self.refuse_declared_current()?;
                 let rows = store
                     .namespaces()
                     .into_iter()

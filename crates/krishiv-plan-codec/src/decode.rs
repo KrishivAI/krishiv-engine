@@ -555,6 +555,13 @@ impl Decoder {
                     seed: s.seed,
                 }
             }
+            Kind::CollectMetrics(m) => PhysNode::CollectMetrics {
+                input: self.boxed(m.input)?,
+                name: m.name.clone(),
+                measure: self.boxed(m.measure)?,
+                instance: m.instance,
+                limit: m.limit,
+            },
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
                 layout: layout(&r.layout),
@@ -579,6 +586,40 @@ impl Decoder {
                 input: self.boxed(p.input)?,
                 udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
             },
+            Kind::PythonUdtf(p) => PhysNode::PythonUdtf {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+                call: krishiv_exec::physical::PythonUdtfPlan {
+                    arg_names: p.arg_names.iter().map(|n| n.name.clone()).collect(),
+                    table: p
+                        .table
+                        .as_ref()
+                        .map(|t| {
+                            let table = krishiv_exec::physical::PythonUdtfTable {
+                                position: usize_of(t.position)?,
+                                columns: usizes(&t.columns)?,
+                                names: t.names.clone(),
+                                partition_child_indexes: usizes(&t.partition_child_indexes)?,
+                            };
+                            // One struct of named input columns, at an argument's place.
+                            if table.names.len() != table.columns.len()
+                                || table.position >= p.arg_names.len()
+                                || table
+                                    .partition_child_indexes
+                                    .iter()
+                                    .any(|&i| i >= table.columns.len())
+                            {
+                                return Err(corrupt(
+                                    "a Python UDTF TABLE argument of uneven shape",
+                                ));
+                            }
+                            Ok(table)
+                        })
+                        .transpose()?,
+                    carried: usizes(&p.carried)?,
+                    analyzed: p.analyzed.clone(),
+                },
+            },
             Kind::PythonGroupMap(p) => PhysNode::PythonGroupMap {
                 input: self.boxed(p.input)?,
                 keys: usizes(&p.keys)?,
@@ -595,6 +636,7 @@ impl Decoder {
                 layout: layout(&p.layout),
                 keys: usizes(&p.keys)?,
                 key_values: usizes(&p.key_values)?,
+                window: p.window.as_ref().map(|w| w.bounded.clone()),
                 calls: p
                     .calls
                     .iter()
@@ -1306,6 +1348,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         PercentileApprox => percentile_approx_function(a)?,
         PercentileDisc => percentile_disc_function(a)?,
         ApproxCountDistinct => hll_function(a)?,
+        HistogramNumeric => histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
@@ -1476,6 +1519,23 @@ fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
         return Err(bad());
     }
     Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
+}
+
+/// A `histogram_numeric` function from its wire form.
+fn histogram_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+        || a.hll_precision != 0
+        || a.histogram_bins < 2
+    {
+        return Err(corrupt("a `histogram_numeric` of bad parameters"));
+    }
+    Ok(AggregateFunction::HistogramNumeric {
+        nb: a.histogram_bins,
+    })
 }
 
 fn join_type(t: i32) -> Result<JoinType> {

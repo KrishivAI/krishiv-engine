@@ -418,10 +418,11 @@ async fn for_each_line(
     } else {
         range
     };
-    let mut r =
-        LineReader::new(ctx.file.size, range, true, ctx.o.line_sep.clone()).compressed(codec);
+    let mut r = LineReader::new(ctx.file.size, range, true, ctx.o.line_sep.clone())
+        .compressed(codec)
+        .lenient(ctx.o.ignore_corrupt_files);
     loop {
-        match r.next_line()? {
+        match r.next_line().map_err(|e| e.at(&ctx.file.display_path()))? {
             ReadChunk::End => return Ok(()),
             ReadChunk::Line(line, at) => {
                 let line = if at == 0 {
@@ -570,22 +571,15 @@ pub(crate) fn infer<'a>(
         if opts.multi_line {
             for file in files {
                 let ctx = ctx_of(file);
-                let text = whole_text(&ctx).await?;
-                let mut pos = 0;
-                loop {
-                    match parse_next(&text, pos, syntax) {
-                        Ok(None) => break,
-                        Ok(Some((top, end))) => {
-                            pos = end;
-                            root = rm.absorb(&inf, root, &Ok(top))?;
-                        }
-                        // A tail that does not parse is one malformed
-                        // record, as the reader sees it.
-                        Err(reason) => {
-                            root = rm.absorb(&inf, root, &Err(reason))?;
-                            break;
-                        }
-                    }
+                let text = whole_text(&ctx)
+                    .await
+                    .map_err(|e| e.at(&ctx.file.display_path()))?;
+                // One record per file, its first value, as the reader
+                // sees it (Spark's `JsonInferSchema` over one root).
+                match parse_next(&text, 0, syntax) {
+                    Ok(None) => {}
+                    Ok(Some((top, _))) => root = rm.absorb(&inf, root, &Ok(top))?,
+                    Err(reason) => root = rm.absorb(&inf, root, &Err(reason))?,
                 }
             }
         } else {

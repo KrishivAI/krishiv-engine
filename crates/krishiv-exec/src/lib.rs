@@ -84,6 +84,7 @@ mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
+mod input_coalesce;
 mod join;
 mod loops;
 mod map_keys;
@@ -99,6 +100,7 @@ pub mod planner;
 pub mod profile;
 pub mod python_eval;
 pub mod python_relation;
+pub mod python_udtf;
 // Row layout (P2-T157): the join's key index (P2-T158) and the aggregate's
 // row tables (P2-T159); the key-page prototypes inside stay behind the
 // `row-table-prototype` feature.
@@ -146,10 +148,10 @@ pub use operator::{
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, Expand, FetchSlot, FileScan, FileScanMetrics, FileScanSource,
     FileSelections, FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate,
-    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem,
-    PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows, RowStageSettings,
-    RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics,
-    SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
+    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, PathRoots, Predicate, Project,
+    ProjectItem, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows,
+    RowStageSettings, RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, SortMetrics, SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

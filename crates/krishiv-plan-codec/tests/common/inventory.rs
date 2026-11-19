@@ -1308,6 +1308,26 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_histogram_numeric",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::HistogramNumeric { nb: 5 },
+                        args: vec![0],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::Int32,
+                        name: "x".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
             "sort_merge_join",
@@ -1752,6 +1772,36 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// `Dataset.observe` (`observe`): a scan whose rows pass through a
+/// `CollectMetrics` whose measure is `Project(Aggregate(OneRow))`.
+pub(crate) fn collect_metrics() -> PhysNode {
+    let aggregates = vec![aggregate_exprs().remove(0)];
+    PhysNode::CollectMetrics {
+        input: boxed(scan()),
+        name: "obs".to_owned(),
+        instance: 1,
+        limit: Some(5),
+        measure: boxed(PhysNode::Project {
+            input: boxed(PhysNode::Aggregate {
+                input: boxed(PhysNode::OneRow),
+                aggregate: AggregatePlan {
+                    group_by: Vec::new(),
+                    distinct: vec![false],
+                    aggregates,
+                    output: AggregateOutput::Final,
+                },
+            }),
+            layout: vec![AttrId(9)],
+            items: vec![ProjectItemPlan::Column {
+                index: 0,
+                name: Some("n".to_owned()),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        }),
+    }
+}
+
 /// A Python UDF call (`python_udf`): a `PythonEval` appending the call's
 /// column, read by the projection above it. The call references the UDF by
 /// name and registration version only.
@@ -1865,6 +1915,24 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "python_udtf",
+            PhysNode::PythonUdtf {
+                input: boxed(scan()),
+                udf: python_relation(T::TableUdf, 1),
+                call: krishiv_exec::physical::PythonUdtfPlan {
+                    arg_names: vec![None, Some("n".to_owned())],
+                    table: Some(krishiv_exec::physical::PythonUdtfTable {
+                        position: 0,
+                        columns: vec![0, 1],
+                        names: vec!["a".to_owned(), "partition_by_0".to_owned()],
+                        partition_child_indexes: vec![1],
+                    }),
+                    carried: vec![0],
+                    analyzed: Some(b"pickled".to_vec()),
+                },
+            },
+        ),
+        (
             "python_group_map",
             PhysNode::PythonGroupMap {
                 input: boxed(scan()),
@@ -1898,6 +1966,27 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
                         output: AttrId(10),
                     },
                 ],
+                window: None,
+            },
+        ),
+        (
+            "python_window",
+            PhysNode::PythonAggregate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                keys: vec![0],
+                key_values: Vec::new(),
+                calls: vec![
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggArrow),
+                        output: AttrId(9),
+                    },
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::WindowAggPandas),
+                        output: AttrId(10),
+                    },
+                ],
+                window: Some(vec![true, false]),
             },
         ),
         (
@@ -2138,6 +2227,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     out.push(("python_udf".to_owned(), plan_of(python_eval())));
+    out.push(("observe".to_owned(), plan_of(collect_metrics())));
     out.extend(
         python_relations()
             .into_iter()

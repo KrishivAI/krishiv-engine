@@ -12,7 +12,7 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
@@ -43,12 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 8] = [
+const TABLES: [&str; 10] = [
     "capabilities",
     "caches",
+    "catalogs",
     "memory",
     "metrics",
     "operators",
+    "partition_advice",
     "queries",
     "resource_groups",
     "sessions",
@@ -98,52 +100,6 @@ pub(crate) fn plan_reads_only_system(plan: &krishiv_exec::physical::PhysicalPlan
 
 fn table_known(table: &str) -> bool {
     TABLES.iter().any(|t| t.eq_ignore_ascii_case(table))
-}
-
-/// The cargo features this build was made with and whether each is on, set
-/// once by the binary (the library cannot see its dependents' features).
-static BUILD_FEATURES: OnceLock<Vec<(String, bool)>> = OnceLock::new();
-
-/// Records the cargo features of the running binary for
-/// `system.capabilities`: `(name, enabled)` for every feature that can be
-/// switched. The first call wins; later calls change nothing.
-pub fn register_build_features(features: &[(&str, bool)]) {
-    let owned = features
-        .iter()
-        .map(|(name, on)| ((*name).to_owned(), *on))
-        .collect();
-    let _ = BUILD_FEATURES.set(owned);
-}
-
-/// The rows of `system.capabilities`: `(kind, name, value, detail)`.
-fn capability_rows() -> Vec<[String; 4]> {
-    let row = |kind: &str, name: &str, value: &str, detail: &str| {
-        [
-            kind.to_owned(),
-            name.to_owned(),
-            value.to_owned(),
-            detail.to_owned(),
-        ]
-    };
-    let state = |on: bool| if on { "enabled" } else { "disabled" };
-    let mut rows = vec![
-        row("build", "engine", "krishiv", env!("CARGO_PKG_VERSION")),
-        row("build", "spark_versions", "3.5,4.0,4.1,4.2", ""),
-        row("surface", "system_tables", SCHEMA_VERSION, ""),
-        row("surface", "agent_result", "1", ""),
-        row("feature", "cloud", state(cfg!(feature = "cloud")), ""),
-    ];
-    if let Some(features) = BUILD_FEATURES.get() {
-        let mut sorted: Vec<&(String, bool)> = features.iter().collect();
-        sorted.sort();
-        rows.extend(
-            sorted
-                .into_iter()
-                .filter(|(name, _)| name != "cloud")
-                .map(|(name, on)| row("feature", name, state(*on), "")),
-        );
-    }
-    rows
 }
 
 /// What a column holds.
@@ -279,7 +235,9 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("partial", Flag, false),
             ("delegated_by", Text, true),
         ],
+        "partition_advice" => crate::partition_advice::layout(),
         "resource_groups" => crate::system_groups::layout(),
+        "catalogs" => crate::system_catalogs::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -550,8 +508,14 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("sessions") {
         return crate::sessions::columns(sources);
     }
+    if table.eq_ignore_ascii_case("partition_advice") {
+        return crate::partition_advice::columns(sources);
+    }
     if table.eq_ignore_ascii_case("resource_groups") {
         return crate::system_groups::columns(sources);
+    }
+    if table.eq_ignore_ascii_case("catalogs") {
+        return crate::system_catalogs::columns(sources);
     }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
@@ -681,6 +645,11 @@ pub(crate) struct Sources {
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
     /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
     pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
+    /// The advice of the persisted query history (`krishiv.history.path`), read off the executor when the
+    /// `partition_advice` table loads.
+    pub(crate) advice: Arc<crate::partition_advice::AdviceCell>,
+    /// The declared catalogs the query's principal sees (`system.catalogs`, name resolution).
+    pub(crate) catalogs: crate::catalog_registry::DeclaredView,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1334,6 +1303,8 @@ pub(crate) fn provider(
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
     monitor: Arc<Monitor>,
+    /// The history's advice, which `partition_advice` reads once the decision is made.
+    advice: Arc<crate::partition_advice::AdviceCell>,
     /// The session catalog of the query, asked first for a bare name: a temporary table or view of the
     /// session wins over a system table of the same name, as it does over any table.
     temps: Option<Arc<crate::catalog::QueryCatalog>>,
@@ -1350,6 +1321,7 @@ impl SystemCatalog {
     pub(crate) fn of(sources: &Sources) -> Self {
         Self {
             monitor: Arc::clone(&sources.monitor),
+            advice: Arc::clone(&sources.advice),
             temps: None,
         }
     }
@@ -1391,11 +1363,21 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators", "sessions", "resource_groups"]
-                .iter()
-                .any(|t| id.name.eq_ignore_ascii_case(t))
+            if [
+                "queries",
+                "operators",
+                "sessions",
+                "resource_groups",
+                "partition_advice",
+            ]
+            .iter()
+            .any(|t| id.name.eq_ignore_ascii_case(t))
             {
                 self.monitor.decide().await;
+                // The history read is file I/O: done here, in the async load, on the blocking pool.
+                if id.name.eq_ignore_ascii_case("partition_advice") && self.monitor.sees_all() {
+                    self.advice.load().await;
+                }
             }
             Ok(columns(&id.name).map(|columns| TableMeta {
                 ident: TableIdent {
@@ -1468,8 +1450,10 @@ impl crate::table_commands::TableName {
 /// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
 /// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
 impl Session {
-    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    /// The namespace a bare name of a stored object resolves in, refused under `system` and under a
+    /// declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         let (catalog, namespace) = self.state.catalog.position_pair();
         if is_system(&catalog) {
             return Err(krishiv_common::error::SchemaNotFound {
@@ -1503,8 +1487,28 @@ impl Session {
         self.function_namespace(ns)
     }
 
-    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
+    /// Refuses a namespace or table command that would resolve in the current catalog when that is
+    /// a declared one: a declared catalog resolves names in queries only for now (design P3-T067
+    /// PR-58a), and the embedded catalog is never read or changed in its name. `spark_catalog.<ns>`
+    /// forms, `global_temp` and temporary views are not refused.
+    pub(crate) fn refuse_declared_current(&self) -> Result<(), KrishivError> {
+        let catalog = self.state.catalog.current_catalog();
+        if is_system(&catalog) || catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+            return Ok(());
+        }
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "namespace and table commands in the declared catalog `{}`",
+                catalog.replace('`', "``")
+            ),
+        }
+        .into())
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
+    /// and under a declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        self.refuse_declared_current()?;
         if is_system(&self.state.catalog.current_catalog()) {
             return Err(krishiv_common::error::SchemaNotFound {
                 schema_name: format!("`system`.`{ns}`"),
@@ -1565,6 +1569,12 @@ impl Session {
             }
             .into());
         }
+        if !global
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
+        {
+            self.refuse_declared_current()?;
+        }
         Ok(env.catalog.namespace().join("."))
     }
 
@@ -1580,6 +1590,7 @@ impl Session {
             }
             .into());
         }
+        self.refuse_declared_current()?;
         Ok(env.catalog.namespace().join("."))
     }
 }
@@ -1588,8 +1599,12 @@ impl Session {
 mod tests;
 
 mod caches;
+mod capabilities;
 mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]
 use text::*;
+
+use capabilities::capability_rows;
+pub use capabilities::{capabilities, register_build_features, register_surface};

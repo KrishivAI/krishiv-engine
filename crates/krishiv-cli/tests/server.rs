@@ -53,6 +53,123 @@ fn an_unsupported_spark_connect_setting_is_refused() {
     assert!(err.contains("krishiv.connect.session.idleTimeout"), "{err}");
 }
 
+/// `krishiv server` with `confs`, expected to refuse startup: its stderr.
+fn refused(confs: &[&str]) -> String {
+    let mut cmd = krishiv();
+    // `--allow-root`: CI containers may run as root, and the root refusal comes before the
+    // catalogs are built.
+    cmd.args([
+        "server",
+        "--port",
+        "0",
+        "--connect-port",
+        "0",
+        "--allow-root",
+    ]);
+    for c in confs {
+        cmd.args(["--conf", c]);
+    }
+    let out = cmd.output().expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1), "{confs:?}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Design P3-T067 §2.3: declarations are parsed and checked at startup, and a refusal stops it.
+#[test]
+fn catalog_declarations_are_checked_at_startup() {
+    // A type no factory of this build builds is refused by name, never skipped.
+    let err = refused(&[
+        "krishiv.catalog.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`") && err.contains("`h`"), "{err}");
+    // In any letter case (review 58a2 B1): never dropped, never a silently wider catalog.
+    let err = refused(&[
+        "KRISHIV.CATALOG.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "Krishiv.catalog.lake.tenants=",
+    ]);
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("empty tenant list"), "{err}");
+    }
+    let err = refused(&[
+        "Spark.SQL.Catalog.h=org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.h.type=hive",
+        "spark.sql.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    // Spark's default-catalog key in any letter case reaches the registry (review 58a2 N3): a
+    // default no declaration names stops startup.
+    let err = refused(&["SPARK.SQL.DEFAULTCATALOG=nosuch"]);
+    assert!(err.contains("names no declared catalog"), "{err}");
+    // One field under two spellings is refused, never merged (review 58a2 N4).
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.tenants=acme",
+        "KRISHIV.CATALOG.lake.tenants=globex",
+    ]);
+    assert!(err.contains("set twice"), "{err}");
+    assert!(!err.contains("globex"), "{err}");
+    // A literal secret is refused without being echoed.
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.auth=token",
+        "krishiv.catalog.lake.token=literal-catalog-secret",
+    ]);
+    assert!(!err.contains("literal-catalog-secret"), "{err}");
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("krishiv.catalog.lake.token"), "{err}");
+        // The egress rule checks a declared literal uri and token endpoint at startup, in any
+        // spelling, naming the key, never the address.
+        for (key, conf) in [
+            (
+                "krishiv.catalog.lake.uri",
+                "krishiv.catalog.lake.uri=https://2852039166/api",
+            ),
+            (
+                "krishiv.catalog.lake.tokenEndpoint",
+                "krishiv.catalog.lake.tokenEndpoint=https://169.254.169.254/token",
+            ),
+        ] {
+            // One value per key: the tested one replaces the accepted one.
+            let confs: Vec<&str> = [
+                "krishiv.catalog.lake.type=iceberg-rest",
+                "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+                "krishiv.catalog.lake.auth=client-credentials",
+                "krishiv.catalog.lake.clientId=krishiv",
+                "krishiv.catalog.lake.clientSecret=env:PATH",
+                "krishiv.catalog.lake.tokenEndpoint=https://idp.example.com/token",
+            ]
+            .into_iter()
+            .map(|c| {
+                if c.split_once('=').map(|(k, _)| k) == Some(key) {
+                    conf
+                } else {
+                    c
+                }
+            })
+            .collect();
+            let err = refused(&confs);
+            assert!(err.contains(key), "{err}");
+            assert!(!err.contains("set twice"), "{err}");
+            assert!(
+                !err.contains("169.254") && !err.contains("2852039166"),
+                "{err}"
+            );
+        }
+    } else {
+        assert!(err.contains("`iceberg-rest`"), "{err}");
+    }
+}
+
 #[test]
 fn non_loopback_requires_auth() {
     for host in ["0.0.0.0", "::"] {
@@ -173,6 +290,22 @@ fn http_get(addr: &str, path: &str) -> String {
     http_get_as(addr, path, None)
 }
 
+/// `GET path` with the given `Host` and, when given, a bearer token.
+fn http_get_host(addr: &str, path: &str, host: &str, token: Option<&str>) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n"
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
 /// `GET path` with `Authorization: Bearer token` when `token` is given.
 fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let mut s = TcpStream::connect(addr).expect("connect");
@@ -181,7 +314,7 @@ fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -210,7 +343,13 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
     let mut run = start(spill.path());
     let h = http_get(&run.admin, "/healthz");
     assert!(h.starts_with("HTTP/1.1 200"), "{h}");
-    let r = http_get(&run.admin, "/readyz");
+    // Readiness can follow the printed addresses by a moment (503 `not_ready` until then).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut r = http_get(&run.admin, "/readyz");
+    while r.starts_with("HTTP/1.1 503") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        r = http_get(&run.admin, "/readyz");
+    }
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     assert!(r.ends_with(r#"{"status":"ready"}"#), "{r}");
     // The Connect port accepts connections.
@@ -345,6 +484,63 @@ fn pyspark_stream_cap_reattach() {
     );
 }
 
+/// Design P3-T011a §3.9 with the stock client: `addArtifacts` of a Python
+/// file succeeds, the same file again is a no-op, other bytes under the same
+/// name are `ARTIFACT_ALREADY_EXISTS`, and a cached blob answers
+/// `ArtifactStatus`.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_add_artifacts_pyfile() {
+    pyspark(
+        "import os, tempfile\n\
+         from pyspark.sql import SparkSession\n\
+         from pyspark.errors import SparkRuntimeException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         d = tempfile.mkdtemp()\n\
+         p = os.path.join(d, 'helper_mod.py')\n\
+         open(p, 'w').write('def f():\\n    return 1\\n')\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         open(p, 'w').write('def f():\\n    return 2\\n')\n\
+         try:\n\
+         \x20   s.addArtifacts(p, pyfile=True)\n\
+         \x20   raise AssertionError('no error')\n\
+         except SparkRuntimeException as e:\n\
+         \x20   assert e.getCondition() == 'ARTIFACT_ALREADY_EXISTS', e\n\
+         h = s._client._artifact_manager.cache_artifact(b'x' * 100000)\n\
+         assert s._client._artifact_manager.is_cached_artifact(h)\n\
+         assert not s._client._artifact_manager.is_cached_artifact('0' * 64)\n\
+         s.stop()\n",
+    );
+}
+
+/// Design P3-T011a §3.10 with the stock client: a failing query's status
+/// carries an `errorId`, the client fetches the details (`FetchErrorDetails`;
+/// its server stack trace is then the root error's class line, without
+/// frames), and raises the exception with the class and parameters.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_fetches_error_details() {
+    pyspark(
+        "from pyspark.sql import SparkSession\n\
+         from pyspark.errors import AnalysisException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         \x20   raise AssertionError('no error')\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getCondition().startswith('UNRESOLVED_COLUMN'), e.getCondition()\n\
+         \x20   assert e.getMessageParameters().get('objectName') == '`nope`', e.getMessageParameters()\n\
+         \x20   assert e.getStackTrace() == 'org.apache.spark.sql.AnalysisException', e.getStackTrace()\n\
+         s.conf.set('spark.sql.connect.enrichError.enabled', 'false')\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getStackTrace() is None, e.getStackTrace()\n\
+         s.stop()\n",
+    );
+}
+
 #[test]
 #[ignore = "needs SqlCommand (P3-T012) and a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn server_sessions_are_isolated() {
@@ -435,6 +631,150 @@ fn configured_tokens_guard_the_admin_routes() {
     }
 }
 
+/// `METHOD path` with a JSON `body` and `Authorization: Bearer token`.
+#[cfg(feature = "ui")]
+fn http_post_as(addr: &str, path: &str, body: &str, token: &str) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    write!(
+        s,
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
+/// The UI editor's sessions are UI sessions (P3-T101 hooks): a statement the caller's role refuses
+/// counts under `surface="ui"`, never `connect`.
+#[cfg(all(unix, feature = "ui"))]
+#[test]
+fn the_editors_denials_count_under_the_ui_surface() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "editor-operator-token-0123456789abcdef";
+    let path = dir.path().join("op");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.op.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.op.principal=editor".to_owned(),
+        "krishiv.auth.tokens.op.role=operator".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    // An operator may run statements in the editor, but not durable DDL.
+    let started = http_post_as(
+        &server.admin,
+        "/api/internal/sql",
+        r#"{"sql": "CREATE TABLE editor_t (a INT) USING parquet"}"#,
+        token,
+    );
+    assert!(started.starts_with("HTTP/1.1 202"), "{started}");
+    let run = started
+        .split("\"run_id\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("run id")
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        let status = http_get_as(
+            &server.admin,
+            &format!("/api/internal/sql/{run}"),
+            Some(token),
+        );
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        if !status.contains("\"running\"") && !status.contains("\"queued\"") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the run did not end: {status}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // The run ended refused by the role, and that refusal is the one denial counted.
+    assert!(status.contains(r#""state":"failed""#), "{status}");
+    assert!(
+        status.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"),
+        "{status}"
+    );
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    let denied: Vec<&str> = scrape
+        .lines()
+        .filter(|l| l.starts_with("krishiv_auth_denied_total{"))
+        .collect();
+    let ui: Vec<&&str> = denied
+        .iter()
+        .filter(|l| l.contains(r#"surface="ui""#) && !l.ends_with(" 0"))
+        .collect();
+    assert_eq!(
+        ui,
+        [&r#"krishiv_auth_denied_total{surface="ui",privilege="CREATE"} 1"#],
+        "{denied:?}"
+    );
+    assert!(
+        !denied
+            .iter()
+            .any(|l| l.contains(r#"surface="connect""#) && !l.ends_with(" 0")),
+        "{denied:?}"
+    );
+}
+
+/// `krishiv.admin.v1` on the admin listener (design P3-T066 PR-52a): any authenticated caller
+/// reads the version and the capabilities, which list the surface and its revision; a request
+/// without a token is 401, and a `Host` outside the loopback names is 421.
+#[test]
+fn the_admin_v1_surface_is_served_behind_the_guard() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "admin-v1-viewer-token-0123456789abcdef";
+    let path = dir.path().join("viewer");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.v.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.v.principal=viewer-service".to_owned(),
+        "krishiv.auth.tokens.v.role=viewer".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let none = http_get_host(&server.admin, "/api/admin/v1/version", "localhost", None);
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+    let version = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "localhost",
+        Some(token),
+    );
+    assert!(version.starts_with("HTTP/1.1 200"), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"2\""), "{version}");
+    let caps = http_get_host(
+        &server.admin,
+        "/api/admin/v1/capabilities",
+        "localhost",
+        Some(token),
+    );
+    assert!(caps.contains("\"admin.v1\""), "{caps}");
+    let rebound = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "evil.example",
+        Some(token),
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+    // The old route stays, marked deprecated, and names its successor.
+    let old = http_get_host(&server.admin, "/api/v1/version", "localhost", Some(token));
+    assert!(old.to_ascii_lowercase().contains("deprecation: @"), "{old}");
+    // With authentication configured the alias needs the credential too (design D6).
+    let open = http_get_host(&server.admin, "/api/v1/version", "localhost", None);
+    assert!(open.starts_with("HTTP/1.1 401"), "{open}");
+    // An unknown path is a 404 of the server's own, not a gRPC status, and the server started
+    // with the UI router and the admin routes merged.
+    let missing = http_get_host(&server.admin, "/api/nowhere", "localhost", Some(token));
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+}
+
 #[cfg(unix)]
 #[test]
 fn tokens_on_a_public_address_need_tls() {
@@ -510,7 +850,7 @@ fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpS
 fn tls_healthz_on(
     mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
 ) -> (Vec<u8>, String) {
-    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .expect("write");
     let mut out = Vec::new();
     // The server may close without `close_notify`; keep what came.
@@ -553,7 +893,7 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     plain
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
-    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut out = Vec::new();
     let _ = plain.read_to_end(&mut out);
     assert!(
@@ -591,4 +931,46 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     assert_eq!(leaf, first, "the old connection keeps its certificate");
     let _ = server.child.kill();
+}
+
+#[cfg(feature = "ui")]
+#[test]
+fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        dir.path(),
+        &["krishiv.ui.allowedHosts=ui.example.com".to_owned()],
+    );
+    let line = server
+        ._stdout
+        .next()
+        .expect("the open line")
+        .expect("utf-8");
+    let token = line
+        .split("?token=")
+        .nth(1)
+        .expect("token")
+        .trim()
+        .to_owned();
+    let named = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "ui.example.com",
+        Some(&token),
+    );
+    assert!(named.starts_with("HTTP/1.1 200"), "{named}");
+    let local = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "localhost",
+        Some(&token),
+    );
+    assert!(local.starts_with("HTTP/1.1 200"), "{local}");
+    let other = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "evil.example",
+        Some(&token),
+    );
+    assert!(other.starts_with("HTTP/1.1 403"), "{other}");
 }

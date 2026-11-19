@@ -37,7 +37,7 @@ use super::{PREDICATE_TEXT_OPTION, READS_TARGET_OPTION};
 use crate::commit::{CommitOperation, ReadSet, RetryLimits, StagedCommit, StagedRemoves, commit};
 use crate::engine::{DeltaEngine, KrishivEngineData};
 use crate::error::from_kernel;
-use crate::features::{WriteProtocol, check_write};
+use crate::features::{WriteProtocol, check_create, check_write};
 use crate::table::{DeltaTable, hadoop_path, partition_scalar};
 
 /// The default `delta.checkpointInterval`.
@@ -321,7 +321,7 @@ pub(super) fn row_level_sink(
 }
 
 /// The file limits of a write: Delta's `maxRecordsPerFile` write option (`DeltaOptions`, case
-/// insensitive) and the default target size.
+/// insensitive; read as a long, a value not above 0 is no limit) and the default target size.
 fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
     let mut limits = FileLimits::default();
     if let Some((key, raw)) = request
@@ -329,14 +329,17 @@ fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
     {
-        limits.max_records = raw.trim().parse::<u64>().map_err(|_| {
+        // Read as a long, as delta-spark does (no spaces around it); a value not above 0 is no
+        // limit (`-1` too).
+        let value = raw.parse::<i64>().map_err(|_| {
             KrishivError::from(krishiv_common::error::KrishivInvalidFormatOptionValue {
                 value: format!("'{raw}'"),
                 option: format!("\"{key}\""),
                 format: "\"delta\"".to_owned(),
-                reason: "expected an integer in 0..=18446744073709551615".to_owned(),
+                reason: "expected a long integer".to_owned(),
             })
         })?;
+        limits.max_records = u64::try_from(value).unwrap_or(0);
     }
     Ok(limits)
 }
@@ -933,6 +936,7 @@ pub(super) fn plan_create(
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
+    check_create(name, &new.properties, &new.schema)?;
     let kernel = |err: &delta_kernel::KernelError| from_kernel(err, name);
     let mut builder = create_table(
         e.table_root().as_str(),
@@ -1168,6 +1172,15 @@ impl DeltaWriteSink {
             // a partition filter copies no rows and writes no change files.
             metrics.push(("numCopiedRows".to_owned(), Some("0".to_owned())));
             metrics.push(("numAddedChangeFiles".to_owned(), Some("0".to_owned())));
+        }
+        // An append or a dynamic overwrite that wrote no file commits nothing: delta-spark 4.4.1
+        // writes no version for them (an empty `INSERT INTO`, one reading its own target, a
+        // DataFrame append, a dynamic `INSERT OVERWRITE`; probe
+        // `ops/reports/2026-11-18-o2-empty-append.md` in krishiv-internal), and the kernel refuses
+        // a blind append without files. A truncate or `replaceWhere` still commits its removes.
+        if matches!(self.mode, Mode::Append | Mode::Dynamic) && written.adds.is_empty() {
+            g.release_writers();
+            return Ok(());
         }
         let staged = StagedCommit {
             table: name.clone(),
@@ -1497,7 +1510,18 @@ pub(super) fn check_filter(
                     .column_by_name(p)
                     .ok_or_else(|| internal(&format!("the partition column {p} is not written")))?;
                 crate::engine::relabel::relabel(c, f.data_type())
-                    .or_else(|_| arrow_cast::cast(c, f.data_type()))
+                    .or_else(|_| {
+                        // Not the default safe cast: a value that does not fit fails, never
+                        // turns into NULL (the session casts first; this catches a gap).
+                        arrow_cast::cast_with_options(
+                            c,
+                            f.data_type(),
+                            &arrow_cast::CastOptions {
+                                safe: false,
+                                ..arrow_cast::CastOptions::default()
+                            },
+                        )
+                    })
                     .map_err(|err| internal(&format!("the partition column {p}: {err}")))
             })
             .collect::<Result<Vec<_>, _>>()?;

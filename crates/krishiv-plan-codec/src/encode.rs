@@ -56,7 +56,11 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
     let features = plan_features(plan);
     let mut e = Encoder::default();
     for tree in plan.roots() {
-        let order = post_order(tree, PhysNode::children);
+        let order = post_order(tree, |n| {
+            let mut v = n.children();
+            v.extend(n.measure());
+            v
+        });
         for node in &order {
             let message = e.node(node)?;
             e.nodes.insert(std::ptr::from_ref(*node), e.table.len());
@@ -317,6 +321,19 @@ impl Encoder {
                 upper: *upper,
                 seed: *seed,
             }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => Kind::CollectMetrics(pb::CollectMetricsNode {
+                input: self.node_index(input)?,
+                name: name.clone(),
+                measure: self.node_index(measure)?,
+                instance: *instance,
+                limit: *limit,
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout: l,
@@ -349,6 +366,23 @@ impl Encoder {
                 input: self.node_index(input)?,
                 udf: Some(self.python_relation(udf)?),
             }),
+            PhysNode::PythonUdtf { input, udf, call } => Kind::PythonUdtf(pb::PythonUdtfNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+                arg_names: call
+                    .arg_names
+                    .iter()
+                    .map(|n| pb::PythonUdtfArgName { name: n.clone() })
+                    .collect(),
+                table: call.table.as_ref().map(|t| pb::PythonUdtfTable {
+                    position: t.position as u64,
+                    columns: indexes(&t.columns),
+                    names: t.names.clone(),
+                    partition_child_indexes: indexes(&t.partition_child_indexes),
+                }),
+                carried: indexes(&call.carried),
+                analyzed: call.analyzed.clone(),
+            }),
             PhysNode::PythonGroupMap { input, keys, udf } => {
                 Kind::PythonGroupMap(pb::PythonGroupMapNode {
                     input: self.node_index(input)?,
@@ -375,11 +409,15 @@ impl Encoder {
                 keys,
                 key_values,
                 calls,
+                window,
             } => Kind::PythonAggregate(pb::PythonAggregateNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 keys: indexes(keys),
                 key_values: indexes(key_values),
+                window: window.as_ref().map(|bounded| pb::PythonWindow {
+                    bounded: bounded.clone(),
+                }),
                 calls: calls
                     .iter()
                     .map(|c| {
@@ -1241,6 +1279,7 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
             ..
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         _ => false,
     };
     if invalid {
@@ -1346,6 +1385,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 a,
                 nested,
             ));
+        }
+        AggregateFunction::HistogramNumeric { nb } => {
+            let mut e = percentile_expr(
+                pb::AggregateFunction::HistogramNumeric,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            );
+            e.histogram_bins = *nb;
+            return Ok(e);
         }
         AggregateFunction::ApproxCountDistinct { p } => {
             return Ok(percentile_expr(

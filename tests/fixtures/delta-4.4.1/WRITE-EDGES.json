@@ -1,0 +1,1503 @@
+{
+ "delta_spark": "4.4.1",
+ "empty_partition": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": null
+       },
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0d3e81be-b2f2-4355-ba19-d72729295ad2.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "minValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "893",
+       "numOutputRows": "1",
+       "numRemovedBytes": "881",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "isDynamicPartitionOverwrite": true,
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {},
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-f3361b4c-cf53-49c7-9c42-7fe97dc0a2c3.c000.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     2,
+     "b",
+     "x"
+    ],
+    [
+     3,
+     "c",
+     null
+    ]
+   ],
+   "step": "dynamic_overwrite_empty"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": null
+       },
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-9ed7ff43-a103-40ae-b6f7-93ba6390e97c.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5,
+         "v": "e"
+        },
+        "minValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 2
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "888",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     2,
+     "b",
+     "x"
+    ],
+    [
+     3,
+     "c",
+     null
+    ],
+    [
+     4,
+     "d",
+     null
+    ],
+    [
+     5,
+     "e",
+     null
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (4, 'd', ''), (5, 'e', NULL)",
+   "step": "append_empty"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_REPLACE_WHERE_MISMATCH",
+    "message": "[DELTA_REPLACE_WHERE_MISMATCH] Written data does not conform to partial table overwrite condition or constraint 'p = '''.",
+    "parameters": {
+     "message": "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint EXPRESSION(('p = )) (p = '') violated by row with values:\n - p : null",
+     "replaceWhere": "p = ''"
+    },
+    "sqlstate": "44000"
+   },
+   "rows": [
+    [
+     2,
+     "b",
+     "x"
+    ],
+    [
+     3,
+     "c",
+     null
+    ],
+    [
+     4,
+     "d",
+     null
+    ],
+    [
+     5,
+     "e",
+     null
+    ]
+   ],
+   "step": "replace_where_empty"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": null
+       },
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-a9fb18b7-0e41-454a-accc-54b13458270a.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 7,
+         "v": "g"
+        },
+        "minValues": {
+         "id": 7,
+         "v": "g"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numAddedChangeFiles": "0",
+       "numCopiedRows": "0",
+       "numDeletedRows": "3",
+       "numFiles": "1",
+       "numOutputBytes": "881",
+       "numOutputRows": "1",
+       "numRemovedBytes": "1781",
+       "numRemovedFiles": "2"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]",
+       "predicate": "p IS NULL"
+      },
+      "readVersion": 3
+     },
+     "removes": [
+      {
+       "partitionValues": {},
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-9ed7ff43-a103-40ae-b6f7-93ba6390e97c.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-0d3e81be-b2f2-4355-ba19-d72729295ad2.c000.snappy.parquet"
+      }
+     ],
+     "version": 4
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     2,
+     "b",
+     "x"
+    ],
+    [
+     7,
+     "g",
+     null
+    ]
+   ],
+   "step": "replace_where_null_with_empty"
+  }
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "insert_into_overwrite_mode": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-27086561-0805-44fa-b498-05aca6e70d7a.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1",
+       "numRemovedBytes": "1382",
+       "numRemovedFiles": "2"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "b"
+       },
+       "path": "p=b/part-00000-4855688a-a0cc-4975-9471-446900e03891.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-5178e22b-4f2d-4bd7-aff3-121d4f795dad.c000.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     3,
+     "a"
+    ]
+   ],
+   "step": "option_dynamic_conf_unset"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "b"
+       },
+       "path": "p=b/part-00000-1aa231bd-c1f7-4666-bf8b-fbebb46cc0c7.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     3,
+     "a"
+    ],
+    [
+     4,
+     "b"
+    ]
+   ],
+   "sql": "INSERT INTO iom VALUES (4, 'b')",
+   "step": "insert_b"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-85416bcf-0f1c-44b8-99e5-68149dbdf4b1.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5
+        },
+        "minValues": {
+         "id": 5
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1",
+       "numRemovedBytes": "691",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "isDynamicPartitionOverwrite": true,
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 3
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-27086561-0805-44fa-b498-05aca6e70d7a.c000.snappy.parquet"
+      }
+     ],
+     "version": 4
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     4,
+     "b"
+    ],
+    [
+     5,
+     "a"
+    ]
+   ],
+   "step": "option_static_conf_dynamic"
+  }
+ ],
+ "max_records": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-d3aaff47-eb47-47d1-9eeb-9c59577c49c3-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 2
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-df2d4ecf-1041-4193-8552-140e336715f7-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 2
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-ded900c2-a07b-4d7a-8896-559c8faa92b2-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "3",
+       "numOutputBytes": "1455",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "ErrorIfExists",
+       "partitionBy": "[]"
+      }
+     },
+     "partitionColumns": [],
+     "protocol": {
+      "minReaderVersion": 1,
+      "minWriterVersion": 2
+     },
+     "removes": [],
+     "version": 0
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "create_two"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-53e6892a-133b-495f-9da8-69ac7cedc638-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-751bcca9-8744-402c-acce-8c78213ff0e4-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-6850f5b6-3988-44cf-a39f-edb8191c3518-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-0d2509d5-6f55-425e-b62e-a7bafcae75bd-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-0d5b51dd-6e1d-4df1-9167-5d340ae6e085-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 0
+     },
+     "removes": [],
+     "version": 1
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "append_one"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": null,
+    "message": "For input string: \"abc\"",
+    "parameters": {},
+    "sqlstate": null
+   },
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "append_not_a_number"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-04244396-c28e-4168-9703-af7825267ceb-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 5
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "502",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "append_zero"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-0bc8fbef-3fcb-47de-a234-c8cdf9b27b03-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 5
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "502",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "append_negative"
+  }
+ ],
+ "max_records_table": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-2efb4f7f-c48a-42fd-96ac-d3e30ce1edb3-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-62c03012-a7d4-4c46-b7be-6a01cb9497ff-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-ea34ae6c-1b2c-4d22-96dd-f9bcc81de359-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-897c415b-9c71-4c8e-861a-f80b53f9df92-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-38ba4692-de8b-41a9-a127-1daf817739da-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 0
+     },
+     "removes": [],
+     "version": 1
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_one"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-ee442423-5669-442d-886a-a500afeb4d09-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-2e562d39-f61f-409c-abbb-333ab993f0d1-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cfa6c9d5-fe4a-4be4-821f-0529c6f1a097-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cd091b48-93e8-471a-8985-4a4bf8f5eda8-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-95c5d870-90b1-4b1a-b82d-ce67c0581407-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5",
+       "numRemovedBytes": "2400",
+       "numRemovedFiles": "5"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-897c415b-9c71-4c8e-861a-f80b53f9df92-c003.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-2efb4f7f-c48a-42fd-96ac-d3e30ce1edb3-c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-38ba4692-de8b-41a9-a127-1daf817739da-c004.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-62c03012-a7d4-4c46-b7be-6a01cb9497ff-c001.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-ea34ae6c-1b2c-4d22-96dd-f9bcc81de359-c002.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_overwrite_one"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": null,
+    "message": "For input string: \"abc\"",
+    "parameters": {},
+    "sqlstate": null
+   },
+   "rows": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "insert_into_not_a_number"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {},
+       "path": "part-00000-2cf31b87-d253-46fc-8cf0-7b756172dee4-c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 0
+        },
+        "minValues": {
+         "id": 0
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-c2e236ad-864d-4599-813f-c7d18fd7390f-c001.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1
+        },
+        "minValues": {
+         "id": 1
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-a7f2f3f1-c385-47df-ac81-b9d6db9a7e4f-c002.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-8988a41d-c655-4622-a91f-0905965976fe-c003.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {},
+       "path": "part-00000-cb994d66-5e70-4f6e-a205-e4a662ba2d52-c004.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "5",
+       "numOutputBytes": "2400",
+       "numOutputRows": "5"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     3
+    ],
+    [
+     3
+    ],
+    [
+     4
+    ],
+    [
+     4
+    ]
+   ],
+   "step": "save_as_table_append_one"
+  }
+ ],
+ "not_null": [
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: a.",
+    "parameters": {
+     "columnName": "a"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "struct": {
+       "x": 1,
+       "y": 1
+      }
+     }
+    ]
+   ],
+   "step": "dataframe_null_top_level"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: s.x.",
+    "parameters": {
+     "columnName": "s.x"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "struct": {
+       "x": 1,
+       "y": 1
+      }
+     }
+    ]
+   ],
+   "step": "dataframe_null_nested"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: s.x.",
+    "parameters": {
+     "columnName": "s.x"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "struct": {
+       "x": 1,
+       "y": 1
+      }
+     }
+    ]
+   ],
+   "step": "dataframe_null_struct"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: a.",
+    "parameters": {
+     "columnName": "a"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "struct": {
+       "x": 1,
+       "y": 1
+      }
+     }
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (5, NULL, named_struct('x', 5, 'y', 5))",
+   "step": "sql_null_top_level"
+  }
+ ],
+ "not_null_partition": [
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: p.",
+    "parameters": {
+     "columnName": "p"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     "x"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (2, '')",
+   "step": "sql_empty_partition"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED",
+    "jvm_class": "org.apache.spark.sql.delta.schema.DeltaInvariantViolationException",
+    "message": "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: p.",
+    "parameters": {
+     "columnName": "p"
+    },
+    "sqlstate": "23502"
+   },
+   "rows": [
+    [
+     1,
+     "x"
+    ]
+   ],
+   "step": "dataframe_empty_partition"
+  }
+ ],
+ "spark": "4.2.0"
+}

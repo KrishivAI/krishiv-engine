@@ -521,6 +521,7 @@ fn reference(
                         | AggregateFunction::PercentileApprox { .. }
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
+                        | AggregateFunction::HistogramNumeric { .. }
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }
@@ -1019,7 +1020,7 @@ async fn alternating_sizes_from_a_full_pool(
     large: usize,
     functions: Vec<(WindowFunction, WindowFrame)>,
     narrows: bool,
-) {
+) -> Arc<super::spill::Counters> {
     let rows: Vec<Row> = (0..3_000)
         .map(|i| (Some(0), Some(i), i, Some(i % 1_000)))
         .collect();
@@ -1069,6 +1070,7 @@ async fn alternating_sizes_from_a_full_pool(
     assert_eq!(outputs(&got, window.functions.len()), want, "{large} rows");
     drop((got, ctx));
     assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    Arc::clone(&op.counters)
 }
 
 /// A source of `count` batches made on demand by `make(k)` (an input

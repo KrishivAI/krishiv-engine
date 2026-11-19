@@ -69,6 +69,7 @@
 //! catalog functions exist before P3).
 
 mod access;
+pub mod access_control;
 mod aggregate_text;
 mod analytics;
 mod bind;
@@ -81,6 +82,7 @@ mod coerce;
 pub mod contract;
 mod exprs;
 mod table_change;
+mod time_window;
 
 /// Spark's `toPrettySQL` name of a resolved expression (timestamp literals
 /// in UTC): for errors raised outside the analyzer.
@@ -103,13 +105,18 @@ mod generate;
 mod having_subquery;
 mod hints;
 mod hof;
+mod input_file;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
 pub mod lineage;
+mod observe;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
+mod python_relations;
+mod python_udtf;
+mod reads;
 mod recursive;
 mod repartition;
 mod resolve;
@@ -142,8 +149,8 @@ use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
 pub use access::{
-    authorize, authorize_secret_refs, insufficient_permissions, namespace_parts, secret_scopes,
-    table_ident,
+    authorize, authorize_quietly, authorize_reported, authorize_secret_refs,
+    insufficient_permissions, namespace_parts, secret_scopes, table_ident,
 };
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
@@ -157,6 +164,7 @@ pub use catalog::{
 };
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
+pub use input_file::bind_input_files;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
@@ -1085,6 +1093,19 @@ async fn analyze_with(
     } else {
         plan
     };
+    // `window(..)` and `session_window(..)` calls of a plan that is not SQL text (SQL text is rewritten as
+    // Bind lowers it).
+    let windowed;
+    let plan = {
+        let root = time_window::rewrite(Arc::clone(plan.root()))?;
+        if Arc::ptr_eq(&root, plan.root()) {
+            plan
+        } else {
+            windowed =
+                Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+            &windowed
+        }
+    };
     let bindings = bind::bind(plan, ctx).await?;
     let metadata = started.elapsed();
     let resolving = std::time::Instant::now();
@@ -1092,9 +1113,25 @@ async fn analyze_with(
     let warm = slot
         .and_then(|(s, _)| s.lock().ok().and_then(|g| g.clone()))
         .filter(|e| e.fingerprint.as_ref() == Some(&context));
-    let (root, output, securables, warnings, output_declared, output_comments, entry, warm_started) =
-        resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
+    let (
+        root,
+        output,
+        mut securables,
+        warnings,
+        output_declared,
+        output_comments,
+        entry,
+        warm_started,
+        hinted,
+    ) = resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
+    // What each table read reads, from the final plan (P3-T062 review B1).
+    let reads = reads::column_reads(&root, &bindings, &hinted);
+    for (used, read) in securables.iter_mut().zip(&reads) {
+        used.columns.clone_from(&read.columns);
+    }
+    access::authorize_columns(ctx, &securables, &reads, plan.root().origin).await?;
     unexecutable::check(&root, ctx.conf.time_type)?;
+    input_file::check(plan.root(), &bindings, ctx)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {
         if warm_started {

@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 
 mod credentials;
+pub mod egress;
 mod error;
 mod http_clients;
 mod id;
@@ -48,15 +49,24 @@ pub use credentials::{
     CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, RefreshingProvider, ScopedCredential,
 };
 pub use error::Result;
+#[cfg(feature = "cloud")]
+pub use http_clients::DataOnlyClients;
 pub use http_clients::SharedHttpClients;
+#[cfg(feature = "cloud")]
+pub use http_clients::policy::{PolicyConnector, Redirects};
 pub use id::StoreId;
 pub use policy::StorePolicy;
 pub use refreshing::RefreshingStore;
 pub use scope::CacheScope;
 pub use settings::{SettingValue, StoreSettings};
 pub use stores::{
-    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
-    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, HF_ENDPOINT, HF_TOKEN, ObjectScheme, OpenedStore, ParsedUrl,
+    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_AUTH_TYPE, AZURE_ENDPOINT,
+    AZURE_OAUTH_ACCESS_TOKEN, AZURE_OAUTH_CLIENT_ENDPOINT, AZURE_OAUTH_CLIENT_ID,
+    AZURE_OAUTH_CLIENT_SECRET, AZURE_OAUTH_MSI_AUTHORITY, AZURE_OAUTH_MSI_ENDPOINT,
+    AZURE_OAUTH_MSI_TENANT, AZURE_OAUTH_PROVIDER_TYPE, AZURE_OAUTH_TOKEN_FILE, AZURE_SAS,
+    AZURE_SAS_FIXED_TOKEN, AZURE_SAS_TOKEN_PROVIDER_TYPE, GCS_ENDPOINT, GCS_KEY, GCS_KEYFILE,
+    GCS_STORAGE_ROOT_URL, HF_ENDPOINT, HF_TOKEN, ObjectScheme, OpenedStore, ParsedUrl,
     S3_ACCESS_KEY, S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
-    S3_SESSION_TOKEN, StoreRegistry, is_server_scoped_option, is_store_option, parse_object_url,
+    S3_SESSION_TOKEN, StoreRegistry, check_hf_file_path, is_server_scoped_option, is_store_option,
+    parse_object_url,
 };

@@ -57,6 +57,8 @@ pub(crate) struct BuildGlobal {
     probe_flushing: AtomicBool,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
+    /// Shared with every partial of this build ([`Partials::bloom_lost`]).
+    bloom_lost: Arc<[AtomicBool]>,
     /// The runtime filters and where they are published, abandoned if the
     /// build never publishes them.
     filters: Vec<FilterId>,
@@ -68,6 +70,13 @@ pub(crate) struct BuildGlobal {
 struct Partials {
     builders: Vec<Option<KeyFilterBuilder>>,
     memory: Vec<Reservation>,
+    /// Per filter, shared by every partial of one task's build: set once
+    /// any of them dropped that filter's Bloom hashes (a refused
+    /// reservation, a spill, or past `bloom_max_items`). The merged filter
+    /// can then no longer be a Bloom (`KeyFilterBuilder::merge` of a partial
+    /// without hashes has none), so the other drivers stop collecting them
+    /// (review N4). Only a hint: each task's build has its own flags.
+    bloom_lost: Arc<[AtomicBool]>,
 }
 
 impl Drop for BuildGlobal {
@@ -472,6 +481,15 @@ fn publish(
     drop(partials.memory);
 }
 
+/// One "Bloom lost" flag per runtime filter ([`Partials::bloom_lost`]).
+fn lost_flags(shared: &Shared) -> Arc<[AtomicBool]> {
+    shared
+        .runtime
+        .iter()
+        .map(|_| AtomicBool::new(false))
+        .collect()
+}
+
 /// Empty partials of `shared`'s runtime filters.
 fn partials(shared: &Shared) -> Vec<Option<KeyFilterBuilder>> {
     shared
@@ -488,6 +506,44 @@ impl Partials {
             .flatten()
             .map(KeyFilterBuilder::heap_bytes)
             .sum()
+    }
+
+    /// Bytes of the Bloom hashes alone: what [`Self::shed_hashes`] frees, so
+    /// part of what a build offers the arbitrator (review N3).
+    fn hash_bytes(&self) -> usize {
+        self.builders
+            .iter()
+            .flatten()
+            .map(KeyFilterBuilder::hash_bytes)
+            .sum()
+    }
+
+    /// Drops every filter's Bloom hashes and tells the build's other
+    /// partials.
+    fn drop_hashes(&mut self) {
+        for (i, b) in self.builders.iter_mut().enumerate() {
+            if let Some(b) = b.as_mut().filter(|b| b.has_hashes()) {
+                b.drop_hashes();
+                if let Some(lost) = self.bloom_lost.get(i) {
+                    lost.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Drops the hashes of the filters another partial of this build lost
+    /// the Bloom of; returns whether any went.
+    fn follow_lost(&mut self) -> bool {
+        let mut dropped = false;
+        for (b, lost) in self.builders.iter_mut().zip(self.bloom_lost.iter()) {
+            if let Some(b) = b.as_mut().filter(|b| b.has_hashes())
+                && lost.load(Ordering::Relaxed)
+            {
+                b.drop_hashes();
+                dropped = true;
+            }
+        }
+        dropped
     }
 
     /// Adds one batch's keys; reserves what the partials grew by, dropping
@@ -508,7 +564,14 @@ impl Partials {
         keys: &[ArrayRef],
         valid: Option<&arrow_buffer::NullBuffer>,
     ) {
-        for (b, f) in self.builders.iter_mut().zip(filters) {
+        // Another partial dropped a filter's hashes: its merged filter
+        // cannot be a Bloom, so these would only hold memory until finalize.
+        if self.follow_lost() {
+            self.release_excess();
+        }
+        let mut lost = false;
+        for (i, (b, f)) in self.builders.iter_mut().zip(filters).enumerate() {
+            let had = b.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             let ok = match (b.as_mut(), keys.get(f.key)) {
                 (Some(builder), Some(k)) => builder.add(k.as_ref(), valid).is_ok(),
                 _ => false,
@@ -516,8 +579,26 @@ impl Partials {
             if !ok {
                 *b = None;
             }
+            // Past `bloom_max_items` the builder dropped its own hashes.
+            if had && !b.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+        if lost {
+            self.release_excess();
         }
         self.fit();
+    }
+
+    /// Releases what the reservations hold beyond the partials' bytes, after
+    /// hashes were dropped (a merge or `bloom_max_items`); only then, so a
+    /// few bytes' shrink of a range does not release and re-grow per batch.
+    fn release_excess(&mut self) {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        self.release(held.saturating_sub(self.heap_bytes()));
     }
 
     /// Reserves what the partials hold beyond their reservations; when that
@@ -532,41 +613,55 @@ impl Partials {
         if want > held && memory.try_grow(want - held).is_err() {
             // The Bloom hashes go first; the exact keys only if the
             // reservation still fails without them.
-            for b in self.builders.iter_mut().flatten() {
-                b.drop_hashes();
-            }
+            self.drop_hashes();
             let want = self.heap_bytes();
             let Some(memory) = self.memory.first_mut() else {
                 return;
             };
             if want <= held || memory.try_grow(want - held).is_ok() {
-                if want < held {
-                    // Only the first reservation shrinks (the others are
-                    // merged drivers', released when the partials drop).
-                    let extra = (held - want).min(memory.size());
-                    memory.shrink(extra);
-                }
+                self.release(held.saturating_sub(want));
                 return;
             }
             for b in self.builders.iter_mut().flatten() {
                 b.drop_bloom();
             }
             let want = self.heap_bytes();
-            let Some(memory) = self.memory.first_mut() else {
-                return;
-            };
             if want < held {
-                let extra = (held - want).min(memory.size());
-                memory.shrink(extra);
-            } else {
+                self.release(held - want);
+            } else if let Some(memory) = self.memory.first_mut() {
                 // The few value-set bytes left are not worth failing over.
                 let _ = memory.try_grow(want - held);
             }
         }
     }
 
+    /// Shrinks the reservations, in order, by up to `extra` bytes in all;
+    /// returns the bytes released. Merged drivers' reservations shrink too:
+    /// they hold the merged hashes as much as the first does.
+    fn release(&mut self, mut extra: usize) -> usize {
+        let want = extra;
+        for m in &mut self.memory {
+            let s = extra.min(m.size());
+            m.shrink(s);
+            extra -= s;
+        }
+        want - extra
+    }
+
+    /// Drops the Bloom filters' hashes and shrinks the reservations to what
+    /// is left; returns the bytes freed. A build asked to spill sheds this
+    /// optional memory before it writes a table (review of the raised Bloom
+    /// caps, M1): at 20 M keys the hashes are up to 160 MB a driver.
+    fn shed_hashes(&mut self) -> usize {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        self.drop_hashes();
+        self.release(held.saturating_sub(self.heap_bytes()))
+    }
+
     fn merge(&mut self, other: Self) {
-        for (dst, src) in self.builders.iter_mut().zip(other.builders) {
+        let mut lost = false;
+        for (i, (dst, src)) in self.builders.iter_mut().zip(other.builders).enumerate() {
+            let had = dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             *dst = match (dst.take(), src) {
                 (Some(mut a), Some(b)) => {
                     a.merge(b);
@@ -574,8 +669,21 @@ impl Partials {
                 }
                 _ => None,
             };
+            // Past `bloom_max_items` the merge dropped the hashes: drivers
+            // still sinking stop collecting them (review nit of e324818fe).
+            if had && !dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
         }
         self.memory.extend(other.memory);
+        if lost {
+            // Both partials' reservations still hold the hashes the merge
+            // dropped.
+            self.release_excess();
+        }
         // `merge` grew this driver's hashes by the other's (review minor 2).
         self.fit();
     }
@@ -647,6 +755,19 @@ pub(crate) fn arena_chunk(
 }
 
 impl BuildSink {
+    /// What a build can free when asked to spill: the Bloom hashes of its
+    /// filter partials, which it sheds first, and its tables in memory when
+    /// it has a spill scope (review N3: a build with spilled or small
+    /// tables but large hashes is asked too).
+    fn spillable(&self, parts: &[Part], runtime: &Partials) -> usize {
+        let tables = if self.0.spill.is_some() {
+            mem_bytes(parts)
+        } else {
+            0
+        };
+        runtime.hash_bytes() + tables
+    }
+
     /// Builds and publishes the runtime filters from the merged partials;
     /// returns the reservation that holds them for the query (a filter that
     /// does not fit keeps only its min/max range).
@@ -720,7 +841,7 @@ impl BuildSink {
         }
         ctx.consumer()
             .signal()
-            .set_spillable_bytes(mem_bytes(&c.parts));
+            .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
         Ok(freed)
     }
 }
@@ -832,6 +953,7 @@ impl BuildGlobal {
             probes: AtomicUsize::new(0),
             probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials::default()),
+            bloom_lost: Arc::default(),
             filters: Vec::new(),
             publisher: None,
         };
@@ -850,6 +972,11 @@ impl BuildGlobal {
 }
 
 impl Sink for BuildSink {
+    // A build's tables do not depend on its input's batches (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinBuild"
     }
@@ -875,6 +1002,7 @@ impl Sink for BuildSink {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();
         let rows = hashing.rows();
+        let bloom_lost = lost_flags(&self.0);
         Ok(Arc::new(BuildGlobal {
             hashing,
             spilled: Arc::new(AtomicU64::new(0)),
@@ -892,7 +1020,9 @@ impl Sink for BuildSink {
             runtime: Mutex::new(Partials {
                 builders: partials(&self.0),
                 memory: Vec::new(),
+                bloom_lost: Arc::clone(&bloom_lost),
             }),
+            bloom_lost,
             filters: self.0.runtime.iter().map(|f| f.filter.id()).collect(),
             publisher: self.0.publisher.clone(),
         }))
@@ -912,6 +1042,7 @@ impl Sink for BuildSink {
             runtime: Partials {
                 builders: partials(&self.0),
                 memory: vec![memory.reservation()],
+                bloom_lost: Arc::clone(&state(global)?.bloom_lost),
             },
             sketches: sketches(&state(global)?.hashing, memory),
         }))
@@ -1022,9 +1153,8 @@ impl Sink for BuildSink {
         }
         g.rows.fetch_add(n as u64, Ordering::Relaxed);
         l.stored += stored;
-        if s.spill.is_some() {
-            l.signal.set_spillable_bytes(mem_bytes(&l.parts));
-        }
+        l.signal
+            .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
         Ok(SinkStatus::NeedMoreInput)
     }
 
@@ -1050,13 +1180,11 @@ impl Sink for BuildSink {
             (Some(_), None) => c.sketches = None,
             (None, _) => {}
         }
-        lock(&g.runtime).merge(l.runtime);
+        let mut runtime = lock(&g.runtime);
+        runtime.merge(l.runtime);
         // The finalizing driver's signal offers the combined state.
-        l.signal.set_spillable_bytes(if self.0.spill.is_some() {
-            mem_bytes(&c.parts)
-        } else {
-            0
-        });
+        l.signal
+            .set_spillable_bytes(self.spillable(&c.parts, &runtime));
         Ok(())
     }
 
@@ -1070,6 +1198,14 @@ impl Sink for BuildSink {
             let g = state(global)?;
             let s = &self.0;
             let filter_memory = self.publish_filters(g, ctx);
+            // The partials' hashes went with the publish: offer only the
+            // tables from here (review L3 of the N2-N4 pass).
+            {
+                let c = lock(&g.collect);
+                ctx.consumer()
+                    .signal()
+                    .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
+            }
             // Write what is left of spilled partitions; reserve the index of
             // the rest, spilling the largest while it does not fit. The arenas
             // read the blocks in place; finalize copies only the chunk tails.
@@ -1388,10 +1524,14 @@ impl Sink for BuildSink {
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            if self.0.spill.is_none() {
-                return Ok(0);
+            // The optional Bloom hashes go before any table is written.
+            let shed = l.runtime.shed_hashes();
+            if shed >= target || self.0.spill.is_none() {
+                l.signal
+                    .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
+                return Ok(shed);
             }
-            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target);
+            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target - shed);
             for &p in &chosen {
                 l.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
@@ -1399,8 +1539,9 @@ impl Sink for BuildSink {
                 .spill_parts(&l.hashing, &mut l.parts, &chosen, ctx, false)
                 .await?;
             l.file_bytes += written;
-            l.signal.set_spillable_bytes(mem_bytes(&l.parts));
-            Ok(freed)
+            l.signal
+                .set_spillable_bytes(self.spillable(&l.parts, &l.runtime));
+            Ok(freed + shed)
         })
     }
 
@@ -1415,195 +1556,23 @@ impl Sink for BuildSink {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
-            self.spill_collected(state(global)?, target, ctx, false)
-                .await
+            let g = state(global)?;
+            // The merged partials' Bloom hashes go before any table is
+            // written, as in `spill` (review N2).
+            let shed = lock(&g.runtime).shed_hashes();
+            if shed >= target || self.0.spill.is_none() || g.built.get().is_some() {
+                if shed > 0 {
+                    let c = lock(&g.collect);
+                    ctx.consumer()
+                        .signal()
+                        .set_spillable_bytes(self.spillable(&c.parts, &lock(&g.runtime)));
+                }
+                return Ok(shed);
+            }
+            Ok(shed + self.spill_collected(g, target - shed, ctx, false).await?)
         })
     }
 }
 
 #[cfg(all(test, not(loom)))]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{ArrayRef, Int64Array};
-    use arrow_schema::DataType;
-    use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions, RuntimeFilter};
-    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
-
-    use super::{Partials, Writing, publish};
-    use crate::join::grace::Grace;
-    use crate::join::{FilterPublisher, JoinRuntimeFilter};
-    use crate::sync::{Event, Mutex, lock};
-    use crate::values::{LocalValues, Producer};
-
-    /// A write of an idle build's partitions that ends any other way than
-    /// with its files (cancelled with its query) leaves the grace phase
-    /// failed, never short of rows; one that lands hands over its files.
-    #[test]
-    fn an_unfinished_write_of_an_idle_build_loses_its_partitions() {
-        let grace = Arc::new(Mutex::new(Grace::new(2)));
-        let changed = Arc::new(Event::default());
-        let writing = |parts| Writing {
-            grace: Arc::clone(&grace),
-            changed: Arc::clone(&changed),
-            parts,
-            landed: false,
-        };
-        lock(&grace).writing = 2;
-        writing(1).landed(Vec::new());
-        assert_eq!(lock(&grace).writing, 1);
-        assert!(lock(&grace).lost.is_none());
-        drop(writing(1));
-        let g = lock(&grace);
-        assert_eq!(g.writing, 0);
-        assert!(g.lost.is_some(), "the rows were lost");
-    }
-
-    fn reservation(limit: usize) -> Reservation {
-        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
-            limit: Some(limit),
-            quantum: 1,
-            // The whole limit for the partials: the spill-scratch floor
-            // would hide part of it from these exact-size cases.
-            spill_scratch_reserve: 0,
-            ..MemoryConfig::default()
-        });
-        let id = pool.register("partials", None);
-        Reservation::new(pool, id)
-    }
-
-    /// Publishes into `f`'s cell, as its only producer.
-    fn publisher(f: &JoinRuntimeFilter) -> FilterPublisher {
-        let values = LocalValues::new();
-        assert!(values.adopt_filter(Arc::clone(&f.filter)).is_ok());
-        FilterPublisher {
-            values: Arc::new(values),
-            producer: Producer::default(),
-        }
-    }
-
-    fn filter() -> JoinRuntimeFilter {
-        JoinRuntimeFilter {
-            key: 0,
-            filter: Arc::new(RuntimeFilter::new(
-                FilterId(1),
-                ColumnPath::new("k"),
-                DataType::Int64,
-            )),
-            options: KeyFilterOptions {
-                max_values: 0,
-                ..KeyFilterOptions::default()
-            },
-        }
-    }
-
-    /// Memory for the distinct keys but not for their Bloom hashes too: the
-    /// hashes go and the exact set stays (`drop_hashes`, review M1), with
-    /// the reservation equal to what the partial holds. Were the hashes and
-    /// the keys dropped together (`drop_bloom`), only the range would be
-    /// published.
-    #[test]
-    fn without_room_for_the_hashes_the_exact_set_stays() {
-        let mut f = filter();
-        f.options.max_values = 100;
-        let shared = vec![f.clone()];
-        // Sparse (not a dense range, which would publish as the range
-        // whatever is kept), and more than the `IN` list holds (100), so
-        // `drop_bloom` would drop them where `drop_hashes` keeps them.
-        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
-            (0..2000).map(|i: i64| i * 1_000_003),
-        ));
-        let sizes = |hashes: bool| {
-            let mut b = krishiv_io::KeyFilterBuilder::new(DataType::Int64, f.options).unwrap();
-            b.add(keys.as_ref(), None).unwrap();
-            if !hashes {
-                b.drop_hashes();
-            }
-            b.heap_bytes()
-        };
-        let (keys_only, with_hashes) = (sizes(false), sizes(true));
-        assert!(with_hashes > keys_only, "no hashes to drop");
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            // Room for the keys and half the hashes: never both.
-            memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
-        };
-        p.add_keys(&shared, &[Arc::clone(&keys)], None);
-        assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
-        assert_eq!(p.heap_bytes(), keys_only, "the keys were dropped too");
-        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert_eq!(
-            k.form(),
-            krishiv_io::FilterForm::HashSet(2000),
-            "no exact set published"
-        );
-    }
-
-    /// Without memory for the hashes the Bloom is dropped; without memory
-    /// for the published filter only the range is kept; a dropped partial
-    /// disables its filter.
-    #[test]
-    fn memory_pressure_drops_forms_never_fails() {
-        let f = filter();
-        let shared = vec![f.clone()];
-        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: vec![reservation(1024)],
-        };
-        let spec_keys = [Arc::clone(&keys)];
-        p.add_keys(&shared, &spec_keys, None);
-        assert!(p.memory[0].size() <= 1024);
-        let mut held = reservation(1 << 20);
-        publish(&publisher(&f), &shared, p, &mut held);
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert!(k.bloom_bytes().is_none() && k.has_range());
-
-        // The hashes fit, the published Bloom does not.
-        let f = filter();
-        let shared = vec![f.clone()];
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: vec![reservation(1 << 20)],
-        };
-        p.add_keys(&shared, &spec_keys, None);
-        let mut tiny = reservation(16);
-        publish(&publisher(&f), &shared, p, &mut tiny);
-        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-            unreachable!("not published")
-        };
-        assert!(k.bloom_bytes().is_none() && k.has_range());
-
-        // A key of another type drops the partial; the filter is disabled.
-        let f = filter();
-        let shared = vec![f.clone()];
-        let mut p = Partials {
-            builders: vec![krishiv_io::KeyFilterBuilder::new(
-                DataType::Int64,
-                f.options,
-            )],
-            memory: Vec::new(),
-        };
-        let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
-        p.add_keys(&shared, &[wrong], None);
-        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
-        assert!(matches!(
-            f.filter.published().snapshot,
-            FilterSnapshot::Disabled(_)
-        ));
-    }
-}
+mod tests;
