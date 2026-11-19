@@ -33,7 +33,7 @@ to_protobuf(child, messageName, descFilePath, options)
 ```sql
 -- to_protobuf, example 1
 > SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+Error: DATATYPE_MISMATCH.NON_STRUCT_TYPE
 ```
 
 ## Version history
