@@ -680,9 +680,21 @@ impl<'a> Planner<'a> {
                 krishiv_plan::check_python_relation_determinism(&p.node)?;
                 self.cogroup_map(left, right, left_keys, right_keys, udf, output)
             }
-            PlanNode::PythonTableFunction { .. } => Err(super::python_relation::later_kind(
-                "a Python table function",
-            )),
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+                lateral,
+                analyzed,
+            } => self.python_table_function(
+                args,
+                table_arg.as_ref(),
+                udf,
+                output,
+                lateral.as_ref(),
+                analyzed.as_ref(),
+            ),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -1595,7 +1607,7 @@ impl<'a> Planner<'a> {
 
     /// `input` with a column for each sort key that is not one already, and
     /// the keys.
-    fn sort_keys(
+    pub(crate) fn sort_keys(
         &mut self,
         input: Planned,
         order: &[SortOrder],

@@ -238,7 +238,8 @@ impl Session {
     /// Gated (T063 N1b review B2): a run checks the statement's targets before it looks up any table
     /// or directory, so a caller denied a target learns nothing about it, not even whether it exists.
     /// The directories are listed only when a quiet trial of that same check passes
-    /// ([`Session::targets_allowed_quietly`]: no audit record, no denial count); otherwise nothing more
+    /// ([`Session::targets_allowed_quietly`]: no audit record, no denial count, the policy's own `denied`
+    /// hook not called, review R2-1); otherwise nothing more
     /// is listed, and the output is the one a missing table gives. A statement whose list names
     /// what a listing shows (`DROP NAMESPACE ... CASCADE`: its tables) also needs that listing's
     /// right, asked as quietly ([`Session::listing_allowed_quietly`], review D1).

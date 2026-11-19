@@ -489,6 +489,15 @@ impl Encoder {
                         self.tag("in");
                         self.exprs(values, bias);
                     }
+                    crate::SubqueryKind::Table(t) => {
+                        self.tag("table");
+                        self.exprs(&t.partition_by, bias);
+                        self.num(t.order_by.len() as u64);
+                        for o in &t.order_by {
+                            self.order(o, bias);
+                        }
+                        self.flag(t.single_partition);
+                    }
                 }
                 self.plan(plan, bias);
             }
@@ -990,6 +999,8 @@ impl Encoder {
                 table_arg,
                 udf,
                 output,
+                lateral,
+                analyzed,
             } => {
                 self.tag("PythonTableFunction");
                 self.exprs(args, bias);
@@ -1002,7 +1013,24 @@ impl Encoder {
                         self.order(o, bias);
                     }
                     self.flag(t.single_partition);
+                    self.exprs(&t.select, bias);
+                    self.num(t.position as u64);
+                    self.flag(t.name.is_some());
+                    if let Some(n) = &t.name {
+                        self.text(n);
+                    }
                     self.plan(&t.input, bias);
+                }
+                self.flag(analyzed.is_some());
+                if let Some(bytes) = analyzed {
+                    self.num(bytes.len() as u64);
+                    for b in bytes.iter() {
+                        self.num(u64::from(*b));
+                    }
+                }
+                self.flag(lateral.is_some());
+                if let Some(l) = lateral {
+                    self.plan(l, bias);
                 }
             }
             PlanNode::ReplicateRows { input, count } => {
