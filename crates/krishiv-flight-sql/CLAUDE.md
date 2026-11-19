@@ -52,10 +52,18 @@ Paths are relative to this crate.
   is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, nothing runs), run once under an `Operation`; `record_count` from a
   `num_affected_rows` column, else -1; a cookie-less update that marks nothing changed runs in a transient session
   (no `set-cookie`, released at the end of the call)
+- `src/prepared.rs` prepared statements (design §4.4): `CreatePreparedStatement` classifies with `sql_query_with`
+  (a parameterized statement with each `?` bound to `NULL`; nothing runs), stores a `Kind::Prepared` handle (never
+  evicted) and marks the session changed; `dataset_schema` only without parameters, `parameter_schema` one nullable
+  `Null` per marker; `DoPut(CommandPreparedStatementQuery)` binds one row (`Session::bind_parameters`, literals as
+  `EXECUTE IMMEDIATE ... USING`), `GetFlightInfo` of it runs as §4.1 in the handle's session,
+  `DoPut(CommandPreparedStatementUpdate)` runs once per row (all bound first; counts summed, `-1` if any run reports
+  none; over `maxBatchRows` `KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS`, 07001); `ClosePreparedStatement` of a gone or
+  foreign handle is OK; every call but create is handle-carrying (`handle_call`)
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
-  session work, counted `unsupported`; `DoPut` is dispatched here (first message peeked), not by arrow-rs; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
+  session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, the actions it lets through; counted `list_actions`, no session)
 - `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)

@@ -9,15 +9,16 @@ use std::pin::Pin;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
-    ActionCancelQueryRequest, ActionCancelQueryResult, Any, Command as FlightCommand,
-    CommandGetSqlInfo, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
-    TicketStatementQuery,
+    ActionCancelQueryRequest, ActionCancelQueryResult, ActionClosePreparedStatementRequest,
+    ActionCreatePreparedStatementRequest, Any, Command as FlightCommand, CommandGetSqlInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
 };
 use arrow_flight::{
-    Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightDescriptor,
-    FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
+    Action, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, FlightData,
+    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
-use futures::stream::{self, Stream, StreamExt, TryStreamExt};
+use futures::stream::{self, Peekable, Stream, StreamExt, TryStreamExt};
 use krishiv_common::error::{InvalidHandleFormat, KrishivError};
 use krishiv_session::auth::Authenticated;
 use prost::Message;
@@ -26,6 +27,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::call::shutting_down;
 use crate::gate::CANCEL_FLIGHT_INFO;
 use crate::metrics::Command;
+use crate::prepared::ActionStream;
 use crate::server::FlightSqlServer;
 use crate::statement::{DoGetStream, internal};
 use crate::status::flight_status;
@@ -35,8 +37,6 @@ use crate::update::DoPutStream;
 /// does not export the enum).
 const CANCEL_RESULT_CANCELLED: i32 = 1;
 
-type ActionStream =
-    Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
 type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>;
 
 impl FlightSqlServer {
@@ -71,6 +71,51 @@ impl FlightSqlServer {
         let caller = self.admit(request)?;
         self.statement_update(update, request.metadata(), &caller)
             .await
+    }
+
+    /// `DoPut(CommandPreparedStatementQuery)` after the gate (design §4.4).
+    pub(crate) async fn do_put_bind(
+        &self,
+        bind: CommandPreparedStatementQuery,
+        stream: Peekable<Streaming<FlightData>>,
+        request: &Request<()>,
+    ) -> Result<Response<DoPutStream>, Status> {
+        let caller = self.admit(request)?;
+        self.prepared_bind(bind, stream, request.metadata(), &caller)
+            .await
+    }
+
+    /// `DoPut(CommandPreparedStatementUpdate)` after the gate (design §4.4).
+    pub(crate) async fn do_put_prepared_update(
+        &self,
+        update: CommandPreparedStatementUpdate,
+        stream: Peekable<Streaming<FlightData>>,
+        request: &Request<()>,
+    ) -> Result<Response<DoPutStream>, Status> {
+        let caller = self.admit(request)?;
+        self.prepared_update(&update, stream, request.metadata(), &caller)
+            .await
+    }
+
+    /// `CreatePreparedStatement` after the gate (design §4.4).
+    pub(crate) async fn do_action_create(
+        &self,
+        create: ActionCreatePreparedStatementRequest,
+        request: &Request<Action>,
+    ) -> Result<Response<ActionStream>, Status> {
+        let caller = self.admit(request)?;
+        self.prepared_create(create, request.metadata(), &caller)
+            .await
+    }
+
+    /// `ClosePreparedStatement` after the gate (design §4.4).
+    pub(crate) fn do_action_close(
+        &self,
+        close: &ActionClosePreparedStatementRequest,
+        request: &Request<Action>,
+    ) -> Result<Response<ActionStream>, Status> {
+        let caller = self.admit(request)?;
+        self.prepared_close(close, &caller)
     }
 
     /// Cancels the statement whose ticket is `info`'s first endpoint's (design §4.5): a missing
@@ -147,6 +192,22 @@ impl FlightSqlService for FlightSqlServer {
             Err(s) => Err(s),
         };
         self.counted(Command::StatementQuery, result)
+    }
+
+    async fn get_flight_info_prepared_statement(
+        &self,
+        query: CommandPreparedStatementQuery,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let result = match self.admit(&request) {
+            Ok(caller) => {
+                let descriptor = request.get_ref().clone();
+                self.prepared_info(&query, request.metadata(), descriptor, &caller)
+                    .await
+            }
+            Err(s) => Err(s),
+        };
+        self.counted(Command::PreparedQuery, result)
     }
 
     async fn do_get_statement(

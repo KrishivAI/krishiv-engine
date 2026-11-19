@@ -11,6 +11,7 @@ pub mod encode;
 mod gate;
 pub mod handles;
 pub mod metrics;
+mod prepared;
 pub mod server;
 mod service;
 pub mod sessions;
