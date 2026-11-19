@@ -692,6 +692,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
     (
+        "krishiv.catalog.delegation.maxExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
+    ),
+    (
         "krishiv.sql.execution.pandas.inferPandasDictAsMap",
         &PANDAS_INFER_DICT_AS_MAP,
     ),
@@ -746,6 +750,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
         &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
+    ),
+    (
+        "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+        &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

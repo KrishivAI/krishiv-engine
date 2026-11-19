@@ -18,7 +18,9 @@ use krishiv_plan::analyzer::{
 };
 use krishiv_session::auth::{Role, RolePolicy};
 use krishiv_session::catalog_decl::{CatalogDecl, CatalogType, DeclMode};
-use krishiv_session::catalog_registry::{CatalogDeps, CatalogFactory, CatalogSetup};
+use krishiv_session::catalog_registry::{
+    CallerCatalog, CatalogDeps, CatalogFactory, CatalogSetup, ServerIdentity,
+};
 use krishiv_session::{EngineRuntime, Principal, PrincipalKind, Session};
 use krishiv_types::DataType;
 
@@ -87,7 +89,7 @@ impl CatalogFactory for Fake {
         &self,
         decl: &CatalogDecl,
         _deps: &CatalogDeps,
-    ) -> Result<Arc<dyn Catalog>, KrishivError> {
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
         let n = self.builds.fetch_add(1, Ordering::SeqCst);
         std::thread::sleep(self.delay);
         if n < self.fail_first {
@@ -97,10 +99,10 @@ impl CatalogFactory for Fake {
             }
             .into());
         }
-        Ok(Arc::new(OneTable(
+        Ok(Arc::new(ServerIdentity(Arc::new(OneTable(
             decl.name.clone(),
             Arc::clone(&self.shape),
-        )))
+        )))))
     }
 }
 
@@ -682,4 +684,187 @@ fn server_runtime_refuses_declarations_in_its_configuration() {
         .catalogs(setup(DeclMode::Server, &[], Arc::default()))
         .build()
         .unwrap();
+}
+
+/// The callers a [`Recording`] catalog saw: principal id, method, credential token.
+type Calls = Arc<std::sync::Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>>;
+
+/// [`OneTable`] that records the caller of every load.
+#[derive(Debug)]
+struct Recording(Arc<dyn CallerCatalog>, Calls);
+
+impl CallerCatalog for Recording {
+    fn load_table<'a>(
+        &'a self,
+        caller: &'a krishiv_session::catalog_registry::CatalogCaller,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        form: NameForm,
+    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
+        self.1.lock().unwrap().push((
+            caller.identity.principal_id.clone(),
+            caller.method.map(|m| m.as_str().to_owned()),
+            caller
+                .credential
+                .as_ref()
+                .map(|c| c.token().expose_secret().to_owned()),
+        ));
+        self.0.load_table(caller, id, version, form)
+    }
+}
+
+#[derive(Debug, Default)]
+struct RecordingFactory(Calls);
+
+impl CatalogFactory for RecordingFactory {
+    fn kind(&self) -> CatalogType {
+        CatalogType::Memory
+    }
+
+    fn build(
+        &self,
+        decl: &CatalogDecl,
+        _deps: &CatalogDeps,
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
+        let inner = Arc::new(ServerIdentity(Arc::new(OneTable(
+            decl.name.clone(),
+            Arc::default(),
+        ))));
+        Ok(Arc::new(Recording(inner, Arc::clone(&self.0))))
+    }
+}
+
+/// P3-T067 §3.2/§3.3: a delegated catalog gets each query's caller (identity key and the
+/// session's latest user token, a fresher one replacing it); `system.catalogs` shows the mode.
+#[test]
+fn delegated_catalog_calls_carry_the_sessions_caller() {
+    use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};
+    let factory = Arc::new(RecordingFactory::default());
+    let calls = Arc::clone(&factory.0);
+    let mut setup = CatalogSetup::new(DeclMode::Server).factory(factory);
+    for (k, v) in [
+        ("krishiv.catalog.lake.type", "memory"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.delegation", "forward"),
+        ("krishiv.catalog.lake.audience", "lake"),
+        ("krishiv.catalog.plain.type", "memory"),
+    ] {
+        setup = setup.setting(k, v);
+    }
+    let rt = EngineRuntime::builder().catalogs(setup).build().unwrap();
+    let s = session_as(&rt, None, Role::Operator);
+    let rows = run(
+        &s,
+        "SELECT name, auth, delegation FROM system.catalogs ORDER BY name",
+    )
+    .unwrap();
+    assert_eq!(column(&rows, 0), ["lake", "plain"]);
+    assert_eq!(column(&rows, 1), ["delegated", "none"]);
+    // `delegation` is null for a catalog that is not delegated.
+    assert_eq!(rows[0].column(2).null_count(), 1);
+    assert_eq!(column(&rows, 2)[0], "forward");
+
+    let credential = |token: &str| {
+        InboundCredential::new(
+            CredentialKind::Oidc,
+            krishiv_common::secret::SecretString::new(token),
+            ExchangeClaims::with_audiences(vec!["lake".to_owned()]),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+        )
+    };
+    // No RPC recorded yet (an embedded caller): no method, no token.
+    schema_of(&s, "SELECT * FROM lake.db.t").unwrap();
+    s.set_inbound_credential(Method::Oidc, Some(credential("first-jwt")));
+    schema_of(&s, "SELECT * FROM lake.db.t").unwrap();
+    s.set_inbound_credential(Method::Oidc, Some(credential("fresher-jwt")));
+    schema_of(&s, "SELECT * FROM lake.db.t").unwrap();
+    // A catalog of another mode gets the server identity, never the user's token.
+    schema_of(&s, "SELECT * FROM plain.db.t").unwrap();
+    let id = Principal::new("u", PrincipalKind::User).id();
+    let seen = calls.lock().unwrap().clone();
+    let lake: Vec<_> = seen.iter().filter(|c| c.0.is_some()).cloned().collect();
+    assert_eq!(
+        lake,
+        [
+            (Some(id.clone()), None, None),
+            (
+                Some(id.clone()),
+                Some("oidc".to_owned()),
+                Some("first-jwt".to_owned())
+            ),
+            (
+                Some(id),
+                Some("oidc".to_owned()),
+                Some("fresher-jwt".to_owned())
+            ),
+        ]
+    );
+    assert!(
+        seen.contains(&(None, None, None)),
+        "the plain catalog's call is the server's: {seen:?}"
+    );
+    // The token never reaches the configuration or `system.catalogs`.
+    let all = format!(
+        "{:?} {:?}",
+        run(&s, "SELECT * FROM system.catalogs").unwrap(),
+        s.conf().entries()
+    );
+    assert!(!all.contains("fresher-jwt"), "{all}");
+}
+
+/// Review 58b1-r1 m6: a statement uses the token of the request that started it
+/// (`QueryOptions::inbound_credential`), not the session's latest; nit 10: a plain act-as session
+/// is named as such in the refusal, not by the service's method.
+#[test]
+fn a_statement_uses_its_own_requests_token() {
+    use krishiv_session::QueryOptions;
+    use krishiv_session::auth::{CredentialKind, ExchangeClaims, InboundCredential, Method};
+    use krishiv_session::catalog_registry::{CatalogCaller, IdentityKey};
+    let factory = Arc::new(RecordingFactory::default());
+    let calls = Arc::clone(&factory.0);
+    let mut setup = CatalogSetup::new(DeclMode::Server).factory(factory);
+    for (k, v) in [
+        ("krishiv.catalog.lake.type", "memory"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.delegation", "forward"),
+        ("krishiv.catalog.lake.audience", "lake"),
+    ] {
+        setup = setup.setting(k, v);
+    }
+    let rt = EngineRuntime::builder().catalogs(setup).build().unwrap();
+    let s = session_as(&rt, None, Role::Operator);
+    let credential = |token: &str| {
+        InboundCredential::new(
+            CredentialKind::Oidc,
+            krishiv_common::secret::SecretString::new(token),
+            ExchangeClaims::with_audiences(vec!["lake".to_owned()]),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+        )
+    };
+    // Another request of the session stored a wider token meanwhile.
+    s.set_inbound_credential(Method::Oidc, Some(credential("wide-jwt")));
+    let options =
+        QueryOptions::new().inbound_credential(Method::Oidc, Some(credential("narrow-jwt")));
+    block_on(async {
+        s.sql_with("SELECT * FROM lake.db.t", options)
+            .await?
+            .schema()
+            .await
+    })
+    .unwrap();
+    schema_of(&s, "SELECT * FROM lake.db.t").unwrap();
+    let tokens: Vec<_> = calls.lock().unwrap().iter().map(|c| c.2.clone()).collect();
+    assert_eq!(
+        tokens,
+        [Some("narrow-jwt".to_owned()), Some("wide-jwt".to_owned())]
+    );
+
+    let mut end_user = Principal::new("alice", PrincipalKind::User);
+    end_user.delegated_by = Some("portal".to_owned());
+    let caller = CatalogCaller::new(IdentityKey::of("lake", &end_user), Some(Method::Oidc), None);
+    assert!(
+        caller.authenticated_with().contains("act-as"),
+        "{}",
+        caller.authenticated_with()
+    );
 }
