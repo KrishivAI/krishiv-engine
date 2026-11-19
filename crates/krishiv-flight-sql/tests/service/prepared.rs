@@ -178,7 +178,8 @@ fn first_longs(batches: &[RecordBatch]) -> Vec<i64> {
         .collect()
 }
 
-/// A parameterized query: no `dataset_schema`, each marker a nullable `Null` parameter; bound
+/// A parameterized query: its `dataset_schema` is that of the `NULL`-bound analysis (a client
+/// reads an empty one as an update), each marker a nullable `Null` parameter; bound
 /// and fetched, rebound and fetched again, without a cookie (a session holding a prepared handle
 /// outlives a cookie-less fetch, §3.2); closed twice (the second is OK), then gone.
 #[tokio::test(flavor = "multi_thread")]
@@ -191,7 +192,14 @@ async fn prepared_query_with_parameters() {
         cookie.is_some(),
         "a create marks its provisional session changed"
     );
-    assert_eq!(schema_of(&created.dataset_schema), None);
+    let columns = schema_of(&created.dataset_schema).expect("a query's columns");
+    let names: Vec<_> = columns.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["n", "s"]);
+    assert_eq!(
+        columns.field(1).data_type(),
+        &DataType::Null,
+        "`? AS s` is untyped"
+    );
     let params = schema_of(&created.parameter_schema).expect("parameter schema");
     assert_eq!(params.fields().len(), 2);
     assert!(
@@ -255,6 +263,19 @@ async fn prepared_bindings_are_checked() {
     let e = bind(&mut h, OPS, &handle, vec![longs(&[1])])
         .await
         .expect_err("one column for two markers");
+    assert_eq!(class_of(&e), Some("KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS"));
+    let (command, _) = create(&mut h, OPS, None, "SET spark.sql.shuffle.partitions = ?")
+        .await
+        .expect("create a command");
+    let e = bind(
+        &mut h,
+        OPS,
+        &command.prepared_statement_handle,
+        vec![longs(&[1, 2])],
+    )
+    .await
+    .expect_err("a command binds one row too (a batch is an update)");
+    assert_eq!(e.code(), Code::InvalidArgument, "{e:?}");
     assert_eq!(class_of(&e), Some("KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS"));
     let e = prepared_info(&mut h, OPS, &handle)
         .await
@@ -393,4 +414,172 @@ async fn prepared_handles_not_evicted_refused_at_cap() {
         .downcast_ref::<Int32Array>()
         .expect("INT");
     assert_eq!(a.value(0), 3);
+}
+
+/// A query a `NULL` cannot analyze (`LIMIT ?`: Spark's `INVALID_LIMIT_LIKE_EXPRESSION`) is
+/// prepared with its markers tried as `1`, announces its columns, and runs with its binding.
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_limit_parameter() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (created, _) = create(&mut h, OPS, None, "SELECT id FROM range(10) LIMIT ?")
+        .await
+        .expect("a paging query prepares");
+    let columns = schema_of(&created.dataset_schema).expect("a query's columns");
+    assert_eq!(columns.field(0).name(), "id");
+    let handle = created.prepared_statement_handle.to_vec();
+    // `LIMIT` takes an `INT` (a `BIGINT` is Spark's `INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE`).
+    let three = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int32Array::from(vec![3])) as arrow_array::ArrayRef,
+    )])
+    .expect("batch");
+    bind(&mut h, OPS, &handle, vec![three]).await.expect("bind");
+    let info = prepared_info(&mut h, OPS, &handle).await.expect("info");
+    let batches = fetch(&mut h, OPS, None, ticket(&info))
+        .await
+        .expect("fetch");
+    assert_eq!(first_longs(&batches), [0, 1, 2]);
+    let e = create(
+        &mut h,
+        OPS,
+        None,
+        "SELECT * FROM no_such_table WHERE id = ?",
+    )
+    .await
+    .expect_err("fails with NULL and with 1: the NULL analysis' error");
+    assert_eq!(class_of(&e), Some("TABLE_OR_VIEW_NOT_FOUND"), "{e:?}");
+}
+
+/// A batch whose second row fails after the first ran says how many ran, with the failing row's
+/// own class (review of 4d7f3235f finding 5); the first row's effect stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_update_partly_ran() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (_, cookie) = updates::update(&mut h, OPS, None, "DECLARE VARIABLE v BIGINT DEFAULT 0")
+        .await
+        .expect("declare");
+    let cookie = cookie.expect("cookie");
+    updates::update(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SET spark.sql.ansi.enabled = true",
+    )
+    .await
+    .expect("ANSI");
+    let (created, _) = create(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SET VAR v = v + CAST(? AS BIGINT)",
+    )
+    .await
+    .expect("create");
+    let strings = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(StringArray::from(vec!["1", "x", "2"])) as arrow_array::ArrayRef,
+    )])
+    .expect("batch");
+    let e = run_update(
+        &mut h,
+        OPS,
+        &created.prepared_statement_handle,
+        vec![strings],
+    )
+    .await
+    .expect_err("row 2 is not a number");
+    assert_eq!(class_of(&e), Some("CAST_INVALID_INPUT"), "{e:?}");
+    assert!(
+        e.message().contains("1 of 3 parameter rows ran"),
+        "{}",
+        e.message()
+    );
+    let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT v")
+        .await
+        .expect("info");
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect("fetch");
+    assert_eq!(first_longs(&batches), [1], "row 1 ran, row 3 did not");
+}
+
+/// A prepared handle's TTL runs from the end of its last use, not from its create (review of
+/// 4d7f3235f finding 1), and a sweep while an update runs leaves it.
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_handle_ttl_runs_from_last_use() {
+    let ttl = Duration::from_millis(400);
+    let mut h = start(FlightSqlConfig {
+        handles: HandleLimits {
+            ttl,
+            ..HandleLimits::default()
+        },
+        ..FlightSqlConfig::default()
+    })
+    .await;
+    let (_, cookie) = updates::update(&mut h, OPS, None, "DECLARE VARIABLE v BIGINT DEFAULT 0")
+        .await
+        .expect("declare");
+    let cookie = cookie.expect("cookie");
+    let (created, _) = create(&mut h, OPS, Some(&cookie), "SELECT ? AS a")
+        .await
+        .expect("create");
+    let handle = created.prepared_statement_handle.to_vec();
+    let created_at = Instant::now();
+    tokio::time::sleep(ttl / 2).await;
+    bind(&mut h, OPS, &handle, vec![longs(&[1])])
+        .await
+        .expect("bind inside the TTL");
+    let used_at = Instant::now();
+    h.flight
+        .sweep_at(created_at + ttl + Duration::from_millis(50));
+    assert!(
+        used_at + ttl > created_at + ttl + Duration::from_millis(50),
+        "the sweep falls past create + TTL, inside last use + TTL"
+    );
+    prepared_info(&mut h, OPS, &handle)
+        .await
+        .expect("used since its create: still there");
+
+    // A slow prepared update: a sweep far past the TTL while it runs leaves its handle.
+    let (slow, _) = create(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SET VAR v = (SELECT max(id) FROM range(0, 200000000))",
+    )
+    .await
+    .expect("create");
+    let mut client = h.client.clone();
+    let cmd = CommandPreparedStatementUpdate {
+        prepared_statement_handle: slow.prepared_statement_handle.clone(),
+    };
+    let data = put_rows(&cmd, Vec::new()).await;
+    let running = tokio::spawn(async move {
+        let response = client
+            .do_put(authed(futures::stream::iter(data), OPS, None))
+            .await?;
+        response
+            .into_inner()
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|r| r.len())
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.manager.busy() == 0 && !running.is_finished() {
+        assert!(Instant::now() < deadline, "the update never started");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    h.flight.sweep_at(Instant::now() + Duration::from_secs(60));
+    assert!(!running.is_finished(), "the update is still running");
+    assert_eq!(running.await.expect("task").expect("ran"), 1);
+    let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT v")
+        .await
+        .expect("info");
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect("fetch");
+    assert_eq!(first_longs(&batches), [199_999_999]);
+    run_update(&mut h, OPS, &slow.prepared_statement_handle, Vec::new())
+        .await
+        .expect("idle only since the update ended: still there");
 }

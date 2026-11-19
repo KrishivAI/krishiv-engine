@@ -23,7 +23,7 @@ use crate::call::CallSession;
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::server::FlightSqlServer;
 use crate::statement::{
-    OpGuard, check_statement_bytes, internal, marks_changed, now_micros, op_failed,
+    OpGuard, check_statement_bytes, internal, marks_changed, now_micros, op_failed, ran_unread,
 };
 use crate::status::flight_status;
 
@@ -135,7 +135,8 @@ impl FlightSqlServer {
             _ => return Err(internal("an unknown outcome of a SQL statement".to_owned())),
         };
         drop(gate);
-        let count = count.map_err(|e| op_failed(&op, &e))?;
+        // The command ran (eagerly): a failure reading its count must not invite a rerun.
+        let count = count.map_err(|e| op_failed(&op, &ran_unread(e)))?;
         op.finish();
         Ok((count, changed))
     }

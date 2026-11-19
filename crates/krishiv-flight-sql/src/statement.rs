@@ -114,11 +114,12 @@ impl Drop for OpGuard {
     }
 }
 
-/// A fetch in flight on a handle ([`crate::Handles::begin`]): ends it when dropped, so the TTL
-/// runs from the stream's end.
-struct FetchGuard {
-    server: FlightSqlServer,
-    id: HandleId,
+/// An operation in flight on a handle ([`crate::Handles::begin`]: a fetch, or a prepared
+/// handle's bind or execution): ends it when dropped, so the handle does not expire while it
+/// runs and its TTL runs from the operation's end.
+pub(crate) struct FetchGuard {
+    pub(crate) server: FlightSqlServer,
+    pub(crate) id: HandleId,
 }
 
 impl Drop for FetchGuard {
@@ -769,6 +770,17 @@ fn not_stored_after(bytes: usize, e: &KrishivError) -> KrishivError {
         reason: client_reason(e),
     })
     .with_cause(e.clone())
+}
+
+/// A command that ran but whose result could not be read afterwards (an update's count):
+/// `RESULT_NOT_STORED` of unknown size with the failure's client-safe text, so the client knows
+/// the statement ran and does not run it again (§15 m3).
+pub(crate) fn ran_unread(e: KrishivError) -> KrishivError {
+    KrishivError::from(KrishivFlightSqlResultNotStored {
+        size: stored_size(None),
+        reason: client_reason(&e),
+    })
+    .with_cause(e)
 }
 
 /// The `<size>` of `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`: the bytes when the result was built,
