@@ -11,6 +11,7 @@ Paths are relative to this crate.
 - `src/config/registry.rs` typed registry of the `krishiv.*` keys (the source for the generated config docs)
 - `src/config/registry/python.rs` the Python UDF entries (`maxRecordsPerBatch`, `pythonUDF.arrow.enabled`, `krishiv.python.udf.threads`), re-exported by `registry.rs`
 - `src/config/registry/result_cache.rs` the `krishiv.resultCache.*` entries, re-exported by `registry.rs` (moved out to keep `registry.rs` under 2,000 lines)
+- `src/config/registry/runtime_filter.rs` the runtime join filter entries (`krishiv.runtimeFilter.enabled`, the IN-list, exact-set and Bloom limits, `adaptive.*`), re-exported by `registry.rs` (same reason)
 - `src/config/registry/runtime_filter_bloom.rs` the at-scale runtime Bloom entries (`krishiv.runtimeFilter.bloom.atScale`, `memoryTier`), re-exported by `registry.rs` (same reason)
 - `src/config/mod.rs` configuration types and lookup
 - `src/experimental.rs` `krishiv.experimental.*` gating
