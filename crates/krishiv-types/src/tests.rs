@@ -1252,3 +1252,27 @@ fn a_udt_json_round_trips_in_sparks_key_order() {
     assert!(DataType::from_json(r#"{"type":"udt","class":"x"}"#).is_err());
     assert!(DataType::from_json(r#"{"type":"udt","sqlType":"integer","extra":1}"#).is_err());
 }
+
+/// A UDT field is stored as its SQL type and reads back as the UDT through the field tag.
+#[test]
+fn a_udt_field_reads_back_as_the_udt() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::new(
+        storage.clone(),
+        Some("pkg.PointUDT".to_owned()),
+        None,
+        None,
+    )));
+    let field = u.to_arrow_field("p", true);
+    assert_eq!(field.data_type(), &storage.to_arrow());
+    assert_eq!(DataType::from_arrow_field(&field).unwrap(), u);
+    // Without the tag the column is just its storage type.
+    let bare = Field::new("p", storage.to_arrow(), true);
+    assert_eq!(DataType::from_arrow_field(&bare).unwrap(), storage);
+    // A UDT nested in an array keeps its class too.
+    let nested = DataType::Array(Arc::new(ArrayType::new(u, true)));
+    assert_eq!(
+        DataType::from_arrow_field(&nested.to_arrow_field("a", true)).unwrap(),
+        nested
+    );
+}
