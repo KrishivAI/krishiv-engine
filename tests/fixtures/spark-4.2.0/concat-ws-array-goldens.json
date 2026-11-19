@@ -1,0 +1,1588 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_concat_ws_array_goldens.py",
+ "notes": "Each case is a literal-only `SELECT concat_ws(...) AS r` run with ANSI on and off. Result: the output column's simpleString type and nullability and its row(s) as the hex of the string's bytes (NULL as null), or the error condition, SQLSTATE, message parameters and rendered message.",
+ "cases": [
+  {
+   "id": "flatten.ansi",
+   "sql": "SELECT concat_ws(',', array('a', 'b'), array('c')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C622C63"
+    ]
+   ]
+  },
+  {
+   "id": "flatten.legacy",
+   "sql": "SELECT concat_ws(',', array('a', 'b'), array('c')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C622C63"
+    ]
+   ]
+  },
+  {
+   "id": "flatten_mixed.ansi",
+   "sql": "SELECT concat_ws(',', 'x', array('a', 'b'), 'y', array('c')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "782C612C622C792C63"
+    ]
+   ]
+  },
+  {
+   "id": "flatten_mixed.legacy",
+   "sql": "SELECT concat_ws(',', 'x', array('a', 'b'), 'y', array('c')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "782C612C622C792C63"
+    ]
+   ]
+  },
+  {
+   "id": "null_element_skipped.ansi",
+   "sql": "SELECT concat_ws(',', array('a', NULL, 'b')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "null_element_skipped.legacy",
+   "sql": "SELECT concat_ws(',', array('a', NULL, 'b')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "all_null_elements.ansi",
+   "sql": "SELECT concat_ws(',', array(CAST(NULL AS STRING), CAST(NULL AS STRING))) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "all_null_elements.legacy",
+   "sql": "SELECT concat_ws(',', array(CAST(NULL AS STRING), CAST(NULL AS STRING))) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "null_array_skipped.ansi",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<STRING>), 'z') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "7A"
+    ]
+   ]
+  },
+  {
+   "id": "null_array_skipped.legacy",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<STRING>), 'z') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "7A"
+    ]
+   ]
+  },
+  {
+   "id": "only_null_array.ansi",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<STRING>)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "only_null_array.legacy",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<STRING>)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "untyped_null_with_array.ansi",
+   "sql": "SELECT concat_ws(',', NULL, array('a')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "61"
+    ]
+   ]
+  },
+  {
+   "id": "untyped_null_with_array.legacy",
+   "sql": "SELECT concat_ws(',', NULL, array('a')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "61"
+    ]
+   ]
+  },
+  {
+   "id": "empty_array.ansi",
+   "sql": "SELECT concat_ws(',', array()) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "empty_array.legacy",
+   "sql": "SELECT concat_ws(',', array()) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "empty_array_typed.ansi",
+   "sql": "SELECT concat_ws(',', CAST(array() AS ARRAY<STRING>)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "empty_array_typed.legacy",
+   "sql": "SELECT concat_ws(',', CAST(array() AS ARRAY<STRING>)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "empty_array_with_string.ansi",
+   "sql": "SELECT concat_ws(',', 'a', array(), 'b') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "empty_array_with_string.legacy",
+   "sql": "SELECT concat_ws(',', 'a', array(), 'b') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "mixed_all.ansi",
+   "sql": "SELECT concat_ws(',', array('a', NULL, 'b'), 'z', NULL, array()) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C622C7A"
+    ]
+   ]
+  },
+  {
+   "id": "mixed_all.legacy",
+   "sql": "SELECT concat_ws(',', array('a', NULL, 'b'), 'z', NULL, array()) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C622C7A"
+    ]
+   ]
+  },
+  {
+   "id": "empty_separator.ansi",
+   "sql": "SELECT concat_ws('', array('a', 'b'), 'c') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "616263"
+    ]
+   ]
+  },
+  {
+   "id": "empty_separator.legacy",
+   "sql": "SELECT concat_ws('', array('a', 'b'), 'c') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "616263"
+    ]
+   ]
+  },
+  {
+   "id": "multichar_separator.ansi",
+   "sql": "SELECT concat_ws('--', array('a', 'b'), array('c')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612D2D622D2D63"
+    ]
+   ]
+  },
+  {
+   "id": "multichar_separator.legacy",
+   "sql": "SELECT concat_ws('--', array('a', 'b'), array('c')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612D2D622D2D63"
+    ]
+   ]
+  },
+  {
+   "id": "empty_string_elements.ansi",
+   "sql": "SELECT concat_ws(',', array('', 'a', '')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "2C612C"
+    ]
+   ]
+  },
+  {
+   "id": "empty_string_elements.legacy",
+   "sql": "SELECT concat_ws(',', array('', 'a', '')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "2C612C"
+    ]
+   ]
+  },
+  {
+   "id": "array_only_one_element.ansi",
+   "sql": "SELECT concat_ws('|', array('only')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "6F6E6C79"
+    ]
+   ]
+  },
+  {
+   "id": "array_only_one_element.legacy",
+   "sql": "SELECT concat_ws('|', array('only')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "6F6E6C79"
+    ]
+   ]
+  },
+  {
+   "id": "string_only_unchanged.ansi",
+   "sql": "SELECT concat_ws(',', 'a', NULL, 'b') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "string_only_unchanged.legacy",
+   "sql": "SELECT concat_ws(',', 'a', NULL, 'b') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "612C62"
+    ]
+   ]
+  },
+  {
+   "id": "no_arguments.ansi",
+   "sql": "SELECT concat_ws(',') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "no_arguments.legacy",
+   "sql": "SELECT concat_ws(',') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "unicode.ansi",
+   "sql": "SELECT concat_ws('→', array('é', '日本'), 'z') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "C3A9E28692E697A5E69CACE286927A"
+    ]
+   ]
+  },
+  {
+   "id": "unicode.legacy",
+   "sql": "SELECT concat_ws('→', array('é', '日本'), 'z') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "C3A9E28692E697A5E69CACE286927A"
+    ]
+   ]
+  },
+  {
+   "id": "null_separator.ansi",
+   "sql": "SELECT concat_ws(NULL, array('a', 'b')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "null_separator.legacy",
+   "sql": "SELECT concat_ws(NULL, array('a', 'b')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "null_separator_typed.ansi",
+   "sql": "SELECT concat_ws(CAST(NULL AS STRING), array('a'), 'b') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "null_separator_typed.legacy",
+   "sql": "SELECT concat_ws(CAST(NULL AS STRING), array('a'), 'b') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "null_separator_empty_array.ansi",
+   "sql": "SELECT concat_ws(NULL, array()) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "null_separator_empty_array.legacy",
+   "sql": "SELECT concat_ws(NULL, array()) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": true,
+   "rows_hex": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "array_int.ansi",
+   "sql": "SELECT concat_ws(',', array(1, 2, 3)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C322C33"
+    ]
+   ]
+  },
+  {
+   "id": "array_int.legacy",
+   "sql": "SELECT concat_ws(',', array(1, 2, 3)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C322C33"
+    ]
+   ]
+  },
+  {
+   "id": "array_int_null.ansi",
+   "sql": "SELECT concat_ws(',', array(1, NULL, 3)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C33"
+    ]
+   ]
+  },
+  {
+   "id": "array_int_null.legacy",
+   "sql": "SELECT concat_ws(',', array(1, NULL, 3)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C33"
+    ]
+   ]
+  },
+  {
+   "id": "array_bigint.ansi",
+   "sql": "SELECT concat_ws(',', array(9223372036854775807L, -1L)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "393232333337323033363835343737353830372C2D31"
+    ]
+   ]
+  },
+  {
+   "id": "array_bigint.legacy",
+   "sql": "SELECT concat_ws(',', array(9223372036854775807L, -1L)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "393232333337323033363835343737353830372C2D31"
+    ]
+   ]
+  },
+  {
+   "id": "array_double.ansi",
+   "sql": "SELECT concat_ws(',', array(1.5D, CAST('NaN' AS DOUBLE), CAST('-Infinity' AS DOUBLE), -0.0D)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312E352C4E614E2C2D496E66696E6974792C2D302E30"
+    ]
+   ]
+  },
+  {
+   "id": "array_double.legacy",
+   "sql": "SELECT concat_ws(',', array(1.5D, CAST('NaN' AS DOUBLE), CAST('-Infinity' AS DOUBLE), -0.0D)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312E352C4E614E2C2D496E66696E6974792C2D302E30"
+    ]
+   ]
+  },
+  {
+   "id": "array_decimal.ansi",
+   "sql": "SELECT concat_ws(',', array(CAST(1.50 AS DECIMAL(5,2)), CAST(-0.10 AS DECIMAL(5,2)))) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312E35302C2D302E3130"
+    ]
+   ]
+  },
+  {
+   "id": "array_decimal.legacy",
+   "sql": "SELECT concat_ws(',', array(CAST(1.50 AS DECIMAL(5,2)), CAST(-0.10 AS DECIMAL(5,2)))) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312E35302C2D302E3130"
+    ]
+   ]
+  },
+  {
+   "id": "array_boolean.ansi",
+   "sql": "SELECT concat_ws(',', array(true, false)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "747275652C66616C7365"
+    ]
+   ]
+  },
+  {
+   "id": "array_boolean.legacy",
+   "sql": "SELECT concat_ws(',', array(true, false)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "747275652C66616C7365"
+    ]
+   ]
+  },
+  {
+   "id": "array_boolean_null.ansi",
+   "sql": "SELECT concat_ws(',', array(true, NULL)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "74727565"
+    ]
+   ]
+  },
+  {
+   "id": "array_boolean_null.legacy",
+   "sql": "SELECT concat_ws(',', array(true, NULL)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "74727565"
+    ]
+   ]
+  },
+  {
+   "id": "array_date.ansi",
+   "sql": "SELECT concat_ws(',', array(DATE'2024-02-29', DATE'1970-01-01')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392C313937302D30312D3031"
+    ]
+   ]
+  },
+  {
+   "id": "array_date.legacy",
+   "sql": "SELECT concat_ws(',', array(DATE'2024-02-29', DATE'1970-01-01')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392C313937302D30312D3031"
+    ]
+   ]
+  },
+  {
+   "id": "array_timestamp_ntz.ansi",
+   "sql": "SELECT concat_ws(',', array(TIMESTAMP_NTZ'2024-02-29 12:34:56.789')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392031323A33343A35362E373839"
+    ]
+   ]
+  },
+  {
+   "id": "array_timestamp_ntz.legacy",
+   "sql": "SELECT concat_ws(',', array(TIMESTAMP_NTZ'2024-02-29 12:34:56.789')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392031323A33343A35362E373839"
+    ]
+   ]
+  },
+  {
+   "id": "array_binary.ansi",
+   "sql": "SELECT concat_ws(',', array(X'41', X'4243')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "412C4243"
+    ]
+   ]
+  },
+  {
+   "id": "array_binary.legacy",
+   "sql": "SELECT concat_ws(',', array(X'41', X'4243')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "412C4243"
+    ]
+   ]
+  },
+  {
+   "id": "array_binary_non_utf8.ansi",
+   "sql": "SELECT concat_ws(',', array(X'FF')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "FF"
+    ]
+   ]
+  },
+  {
+   "id": "array_binary_non_utf8.legacy",
+   "sql": "SELECT concat_ws(',', array(X'FF')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "FF"
+    ]
+   ]
+  },
+  {
+   "id": "array_binary_empty.ansi",
+   "sql": "SELECT concat_ws(',', array(X'')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "array_binary_empty.legacy",
+   "sql": "SELECT concat_ws(',', array(X'')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     ""
+    ]
+   ]
+  },
+  {
+   "id": "array_interval_day_time.ansi",
+   "sql": "SELECT concat_ws(',', array(INTERVAL '1 02:03:04' DAY TO SECOND)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "494E54455256414C2027312030323A30333A3034272044415920544F205345434F4E44"
+    ]
+   ]
+  },
+  {
+   "id": "array_interval_day_time.legacy",
+   "sql": "SELECT concat_ws(',', array(INTERVAL '1 02:03:04' DAY TO SECOND)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "494E54455256414C2027312030323A30333A3034272044415920544F205345434F4E44"
+    ]
+   ]
+  },
+  {
+   "id": "array_interval_year_month.ansi",
+   "sql": "SELECT concat_ws(',', array(INTERVAL '1-2' YEAR TO MONTH)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "494E54455256414C2027312D3227205945415220544F204D4F4E5448"
+    ]
+   ]
+  },
+  {
+   "id": "array_interval_year_month.legacy",
+   "sql": "SELECT concat_ws(',', array(INTERVAL '1-2' YEAR TO MONTH)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "494E54455256414C2027312D3227205945415220544F204D4F4E5448"
+    ]
+   ]
+  },
+  {
+   "id": "array_int_and_string.ansi",
+   "sql": "SELECT concat_ws(',', array(1, 2), array('a'), 'b') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C322C612C62"
+    ]
+   ]
+  },
+  {
+   "id": "array_int_and_string.legacy",
+   "sql": "SELECT concat_ws(',', array(1, 2), array('a'), 'b') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C322C612C62"
+    ]
+   ]
+  },
+  {
+   "id": "array_mixed_element_types.ansi",
+   "sql": "SELECT concat_ws(',', array(1, 'a', true)) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "dataType": "(\"INT\" or \"STRING\" or \"BOOLEAN\")",
+    "functionName": "`array`",
+    "sqlExpr": "\"array(1, a, true)\""
+   },
+   "message": "[DATATYPE_MISMATCH.DATA_DIFF_TYPES] Cannot resolve \"array(1, a, true)\" due to data type mismatch: Input to `array` should all be the same type, but it's (\"INT\" or \"STRING\" or \"BOOLEAN\"). SQLSTATE: 42K09; line 1 pos 22;"
+  },
+  {
+   "id": "array_mixed_element_types.legacy",
+   "sql": "SELECT concat_ws(',', array(1, 'a', true)) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "dataType": "(\"INT\" or \"STRING\" or \"BOOLEAN\")",
+    "functionName": "`array`",
+    "sqlExpr": "\"array(1, a, true)\""
+   },
+   "message": "[DATATYPE_MISMATCH.DATA_DIFF_TYPES] Cannot resolve \"array(1, a, true)\" due to data type mismatch: Input to `array` should all be the same type, but it's (\"INT\" or \"STRING\" or \"BOOLEAN\"). SQLSTATE: 42K09; line 1 pos 22;"
+  },
+  {
+   "id": "cast_array_int_to_string_array.ansi",
+   "sql": "SELECT concat_ws(',', CAST(array(1, 2) AS ARRAY<STRING>)) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C32"
+    ]
+   ]
+  },
+  {
+   "id": "cast_array_int_to_string_array.legacy",
+   "sql": "SELECT concat_ws(',', CAST(array(1, 2) AS ARRAY<STRING>)) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C32"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_int.ansi",
+   "sql": "SELECT concat_ws(',', 1, array('a')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C61"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_int.legacy",
+   "sql": "SELECT concat_ws(',', 1, array('a')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "312C61"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_date.ansi",
+   "sql": "SELECT concat_ws(',', DATE'2024-02-29', array('a')) AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392C61"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_date.legacy",
+   "sql": "SELECT concat_ws(',', DATE'2024-02-29', array('a')) AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "323032342D30322D32392C61"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_binary.ansi",
+   "sql": "SELECT concat_ws(',', X'41', 'b') AS r",
+   "ansi": true,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "412C62"
+    ]
+   ]
+  },
+  {
+   "id": "non_string_arg_binary.legacy",
+   "sql": "SELECT concat_ws(',', X'41', 'b') AS r",
+   "ansi": false,
+   "ok": true,
+   "type": "string",
+   "nullable": false,
+   "rows_hex": [
+    [
+     "412C62"
+    ]
+   ]
+  },
+  {
+   "id": "refuse_array_of_array.ansi",
+   "sql": "SELECT concat_ws(',', array(array('a'))) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array(a))\"",
+    "inputType": "\"ARRAY<ARRAY<STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array(a)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array(a)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array(a))\" has the type \"ARRAY<ARRAY<STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array.legacy",
+   "sql": "SELECT concat_ws(',', array(array('a'))) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array(a))\"",
+    "inputType": "\"ARRAY<ARRAY<STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array(a)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array(a)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array(a))\" has the type \"ARRAY<ARRAY<STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_int.ansi",
+   "sql": "SELECT concat_ws(',', array(array(1, 2), array(3))) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array(1, 2), array(3))\"",
+    "inputType": "\"ARRAY<ARRAY<INT>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array(1, 2), array(3)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array(1, 2), array(3)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array(1, 2), array(3))\" has the type \"ARRAY<ARRAY<INT>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_int.legacy",
+   "sql": "SELECT concat_ws(',', array(array(1, 2), array(3))) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array(1, 2), array(3))\"",
+    "inputType": "\"ARRAY<ARRAY<INT>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array(1, 2), array(3)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array(1, 2), array(3)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array(1, 2), array(3))\" has the type \"ARRAY<ARRAY<INT>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_map.ansi",
+   "sql": "SELECT concat_ws(',', array(map('a', 'b'))) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(map(a, b))\"",
+    "inputType": "\"ARRAY<MAP<STRING, STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(map(a, b)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(map(a, b)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(map(a, b))\" has the type \"ARRAY<MAP<STRING, STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_map.legacy",
+   "sql": "SELECT concat_ws(',', array(map('a', 'b'))) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(map(a, b))\"",
+    "inputType": "\"ARRAY<MAP<STRING, STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(map(a, b)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(map(a, b)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(map(a, b))\" has the type \"ARRAY<MAP<STRING, STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_struct.ansi",
+   "sql": "SELECT concat_ws(',', array(named_struct('a', 1))) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(named_struct(a, 1))\"",
+    "inputType": "\"ARRAY<STRUCT<a: INT NOT NULL>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(named_struct(a, 1)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(named_struct(a, 1)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(named_struct(a, 1))\" has the type \"ARRAY<STRUCT<a: INT NOT NULL>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_struct.legacy",
+   "sql": "SELECT concat_ws(',', array(named_struct('a', 1))) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(named_struct(a, 1))\"",
+    "inputType": "\"ARRAY<STRUCT<a: INT NOT NULL>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(named_struct(a, 1)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(named_struct(a, 1)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(named_struct(a, 1))\" has the type \"ARRAY<STRUCT<a: INT NOT NULL>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_empty.ansi",
+   "sql": "SELECT concat_ws(',', array(array())) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array())\"",
+    "inputType": "\"ARRAY<ARRAY<VOID>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array()))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array()))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array())\" has the type \"ARRAY<ARRAY<VOID>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_empty.legacy",
+   "sql": "SELECT concat_ws(',', array(array())) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(array())\"",
+    "inputType": "\"ARRAY<ARRAY<VOID>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(array()))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(array()))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(array())\" has the type \"ARRAY<ARRAY<VOID>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_typed_null.ansi",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<ARRAY<STRING>>)) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"NULL\"",
+    "inputType": "\"ARRAY<ARRAY<STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, NULL)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, NULL)\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"NULL\" has the type \"ARRAY<ARRAY<STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_array_typed_null.legacy",
+   "sql": "SELECT concat_ws(',', CAST(NULL AS ARRAY<ARRAY<STRING>>)) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"NULL\"",
+    "inputType": "\"ARRAY<ARRAY<STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, NULL)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, NULL)\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"NULL\" has the type \"ARRAY<ARRAY<STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_map_second.ansi",
+   "sql": "SELECT concat_ws(',', 'a', array(map('a', 'b'))) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(map(a, b))\"",
+    "inputType": "\"ARRAY<MAP<STRING, STRING>>\"",
+    "paramIndex": "third",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, array(map(a, b)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, array(map(a, b)))\" due to data type mismatch: The third parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(map(a, b))\" has the type \"ARRAY<MAP<STRING, STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_map_second.legacy",
+   "sql": "SELECT concat_ws(',', 'a', array(map('a', 'b'))) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(map(a, b))\"",
+    "inputType": "\"ARRAY<MAP<STRING, STRING>>\"",
+    "paramIndex": "third",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, array(map(a, b)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, array(map(a, b)))\" due to data type mismatch: The third parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(map(a, b))\" has the type \"ARRAY<MAP<STRING, STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_struct_typed.ansi",
+   "sql": "SELECT concat_ws(',', CAST(array(named_struct('a', 'x')) AS ARRAY<STRUCT<a: STRING>>)) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(named_struct(a, x))\"",
+    "inputType": "\"ARRAY<STRUCT<a: STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(named_struct(a, x)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(named_struct(a, x)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(named_struct(a, x))\" has the type \"ARRAY<STRUCT<a: STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_of_struct_typed.legacy",
+   "sql": "SELECT concat_ws(',', CAST(array(named_struct('a', 'x')) AS ARRAY<STRUCT<a: STRING>>)) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(named_struct(a, x))\"",
+    "inputType": "\"ARRAY<STRUCT<a: STRING>>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, array(named_struct(a, x)))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, array(named_struct(a, x)))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"array(named_struct(a, x))\" has the type \"ARRAY<STRUCT<a: STRING>>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_argument.ansi",
+   "sql": "SELECT concat_ws(',', map('a', 'b')) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, map(a, b))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_argument.legacy",
+   "sql": "SELECT concat_ws(',', map('a', 'b')) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, map(a, b))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_struct_argument.ansi",
+   "sql": "SELECT concat_ws(',', named_struct('a', 1)) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"named_struct(a, 1)\"",
+    "inputType": "\"STRUCT<a: INT NOT NULL>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, named_struct(a, 1))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, named_struct(a, 1))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"named_struct(a, 1)\" has the type \"STRUCT<a: INT NOT NULL>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_struct_argument.legacy",
+   "sql": "SELECT concat_ws(',', named_struct('a', 1)) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"named_struct(a, 1)\"",
+    "inputType": "\"STRUCT<a: INT NOT NULL>\"",
+    "paramIndex": "second",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, named_struct(a, 1))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, named_struct(a, 1))\" due to data type mismatch: The second parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"named_struct(a, 1)\" has the type \"STRUCT<a: INT NOT NULL>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_separator.ansi",
+   "sql": "SELECT concat_ws(array('a'), 'b') AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(a)\"",
+    "inputType": "\"ARRAY<STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(array(a), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(array(a), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"array(a)\" has the type \"ARRAY<STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_separator.legacy",
+   "sql": "SELECT concat_ws(array('a'), 'b') AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(a)\"",
+    "inputType": "\"ARRAY<STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(array(a), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(array(a), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"array(a)\" has the type \"ARRAY<STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_separator_only.ansi",
+   "sql": "SELECT concat_ws(array(','), array('a')) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(,)\"",
+    "inputType": "\"ARRAY<STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(array(,), array(a))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(array(,), array(a))\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"array(,)\" has the type \"ARRAY<STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_array_separator_only.legacy",
+   "sql": "SELECT concat_ws(array(','), array('a')) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"array(,)\"",
+    "inputType": "\"ARRAY<STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(array(,), array(a))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(array(,), array(a))\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"array(,)\" has the type \"ARRAY<STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_second.ansi",
+   "sql": "SELECT concat_ws(',', 'a', map('a', 'b')) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "third",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, map(a, b))\" due to data type mismatch: The third parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_second.legacy",
+   "sql": "SELECT concat_ws(',', 'a', map('a', 'b')) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "third",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, map(a, b))\" due to data type mismatch: The third parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_third.ansi",
+   "sql": "SELECT concat_ws(',', 'a', 'b', map('a', 'b')) AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "4th",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, b, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, b, map(a, b))\" due to data type mismatch: The 4th parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_third.legacy",
+   "sql": "SELECT concat_ws(',', 'a', 'b', map('a', 'b')) AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "4th",
+    "requiredType": "(\"ARRAY<STRING>\" or \"STRING\")",
+    "sqlExpr": "\"concat_ws(,, a, b, map(a, b))\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(,, a, b, map(a, b))\" due to data type mismatch: The 4th parameter requires the (\"ARRAY<STRING>\" or \"STRING\") type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_struct_separator.ansi",
+   "sql": "SELECT concat_ws(named_struct('a', 1), 'b') AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"named_struct(a, 1)\"",
+    "inputType": "\"STRUCT<a: INT NOT NULL>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(named_struct(a, 1), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(named_struct(a, 1), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"named_struct(a, 1)\" has the type \"STRUCT<a: INT NOT NULL>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_struct_separator.legacy",
+   "sql": "SELECT concat_ws(named_struct('a', 1), 'b') AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"named_struct(a, 1)\"",
+    "inputType": "\"STRUCT<a: INT NOT NULL>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(named_struct(a, 1), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(named_struct(a, 1), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"named_struct(a, 1)\" has the type \"STRUCT<a: INT NOT NULL>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_separator.ansi",
+   "sql": "SELECT concat_ws(map('a', 'b'), 'b') AS r",
+   "ansi": true,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(map(a, b), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(map(a, b), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  },
+  {
+   "id": "refuse_map_separator.legacy",
+   "sql": "SELECT concat_ws(map('a', 'b'), 'b') AS r",
+   "ansi": false,
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"map(a, b)\"",
+    "inputType": "\"MAP<STRING, STRING>\"",
+    "paramIndex": "first",
+    "requiredType": "\"STRING\"",
+    "sqlExpr": "\"concat_ws(map(a, b), b)\""
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"concat_ws(map(a, b), b)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"map(a, b)\" has the type \"MAP<STRING, STRING>\". SQLSTATE: 42K09; line 1 pos 7;"
+  }
+ ]
+}

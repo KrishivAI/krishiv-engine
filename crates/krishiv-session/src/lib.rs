@@ -163,9 +163,9 @@ pub use python_udfs::{
 #[cfg(feature = "unstable-ir")]
 pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
-#[cfg(feature = "unstable-ir")]
-pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::{SqlOutcome, SqlQuery};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
 pub use udfs::SessionFunctions;

@@ -39,6 +39,7 @@ aes.workspace = true
 cbc = { workspace = true, features = ["alloc", "block-padding"] }
 aes-gcm.workspace = true
 getrandom.workspace = true
+datasketches = { workspace = true, features = ["hll", "theta", "tuple", "kll"] }
 
 [dev-dependencies]
 arrow-buffer.workspace = true
