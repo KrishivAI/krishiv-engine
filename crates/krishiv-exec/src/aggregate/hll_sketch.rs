@@ -31,6 +31,13 @@ const OVERHEAD: usize = 128;
 /// Bytes a new group's sketch is charged: the header and the empty list (8 four-byte slots) `fresh` allocates.
 const NEW_GROUP: usize = OVERHEAD + 32;
 
+/// The most bytes one raw row adds to a sketch that starts empty. In `datasketches` 0.6.0 a sketch holds its
+/// coupons (4 bytes each) in a list of 8, then in a set that doubles at 75% load, and becomes the `2^lgK` registers
+/// once it has more than `3/4 * 2^(lgK-3)` coupons. Right after a set doubles it holds `8 * S` bytes for
+/// `0.75 * S + 1` coupons (S the old slot count): 10.7 bytes a coupon; at the promotion the registers' `2^lgK`
+/// bytes hold `0.094 * 2^lgK` coupons: 10.7 again; the list is 4. A row adds one coupon, so 12 covers it.
+const FRESH_BYTES_PER_ROW: usize = 12;
+
 /// Bytes charged for a sketch or union of `lg_k` at its largest.
 fn charge(lg_k: u8) -> usize {
     (1_usize << lg_k) + OVERHEAD
@@ -144,36 +151,50 @@ impl HllSketchAcc {
         }
     }
 
-    /// The size after adding `new` groups and folding `rows` input rows (`states`: partial states, not raw values).
+    /// The size after adding `new` groups (an upper bound; a row table passes the partition's rows) and folding
+    /// `rows` input rows (`states`: partial states, not raw values).
     ///
-    /// A new sketch starts at its header plus the empty list `fresh` allocates. For raw values, one update at most
-    /// doubles the table it grows (a set doubling adds the table's size) or promotes a set to the registers (adds
-    /// less than the registers, from a set of at least 3/8 of them), so a row adds at most `2 * peak + header`
-    /// bytes, the largest group's charge being the peak, and never more than the registers. For states, a row is a
-    /// whole sketch: `merge` replaces the group's sketch with the union of the two, which can go from the empty list
-    /// to the registers, so a row is charged the registers, and one more for the union being built. Either way the
-    /// growth stays below every group at the registers.
+    /// Growth is bounded in two parts.
+    /// - **Groups that exist**: each can grow at most to the registers, so together by `groups * ceiling - total
+    ///   charged` (zero when every one is already at them), and for raw values also by `2 * peak + header` bytes a
+    ///   row (one update at most doubles the table it grows, or promotes a set to the registers from at least 3/8
+    ///   of them). For states a row is a whole sketch: `merge` replaces the group's sketch with a union that can
+    ///   reach the registers, so a row is `full`, and one more `full` for the union being built.
+    /// - **Fresh groups**: `new` of them, each starting at a header plus the empty list (`NEW_GROUP`). From raw
+    ///   values a row adds a coupon to one: at most `FRESH_BYTES_PER_ROW` bytes (see the constant). From states a
+    ///   fresh group can arrive at the registers, so `new * full`. A row table cannot tell which rows open groups
+    ///   before it folds them, and passes its rows as `new`: a final-phase fold of states costs `rows * full`
+    ///   there, as its documented cost (the plain table knows its real `new`).
     pub(crate) fn projected(&self, new: usize, rows: usize, states: bool) -> usize {
         let per_group = match self.op {
             HllSketchOp::Sketch(k) => {
-                let (groups, peak) = match &self.groups {
-                    Groups::Sketches(v, _, _, peak) => (v.len().saturating_add(new), *peak),
-                    Groups::Unions(_) => (new, 0),
+                let (existing, total, peak) = match &self.groups {
+                    Groups::Sketches(v, _, total, peak) => (v.len(), *total, *peak),
+                    Groups::Unions(_) => (0, 0, 0),
                 };
                 let full = charge(k);
+                // Even a tiny lgK has a list of 8 coupons, which can be larger than its registers.
+                let ceiling = full.max(2 * NEW_GROUP);
+                let room = existing.saturating_mul(ceiling).saturating_sub(total);
                 let per_row = if states {
                     full
                 } else {
                     peak.saturating_mul(2).saturating_add(OVERHEAD).min(full)
                 };
-                let growth = rows
-                    .saturating_mul(per_row)
-                    .min(groups.saturating_mul(full));
+                let landing = rows.saturating_mul(per_row).min(room);
+                let fresh = if states {
+                    new.saturating_mul(full)
+                } else if new > 0 {
+                    rows.saturating_mul(FRESH_BYTES_PER_ROW)
+                } else {
+                    0
+                };
                 let transient = if states { full } else { 0 };
                 return self
                     .size()
                     .saturating_add(new.saturating_mul(NEW_GROUP))
-                    .saturating_add(growth)
+                    .saturating_add(landing)
+                    .saturating_add(fresh)
                     .saturating_add(transient);
             }
             // The union of a group is allocated on its first sketch: counted at the default lgK here, and at its

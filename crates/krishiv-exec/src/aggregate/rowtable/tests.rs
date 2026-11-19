@@ -1164,3 +1164,24 @@ fn hll_sketches_are_projected_over_every_partition_of_a_new_batch() {
     );
     assert!(table.memory_size() >= 1_024 * 4_096);
 }
+
+/// Review 023ffd9ab: a low-cardinality `GROUP BY` whose sketches are all at the registers reserves little for a
+/// further raw batch: the groups have no room to grow, and the fresh-group terms are per row, not per sketch.
+#[test]
+fn full_sketches_project_little_for_a_further_batch() {
+    let seed = HashSeed::new(Some(4));
+    let core = hll_core(AggregateOutput::Partial);
+    let mut t = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    apply(&mut t, &hll_batch(&core, 10, 3_000));
+    assert!(t.memory_size() >= 10 * 4_096, "{}", t.memory_size());
+    let again = t.prepare(&hll_batch(&core, 10, 820), false).unwrap();
+    let (before, projected) = (t.memory_size(), t.projected(&again));
+    // 8,200 rows over 10 groups: the real growth is none. The old bound was rows * the registers (34 MB).
+    assert!(
+        projected - before < 3 << 20,
+        "{} bytes over {before}",
+        projected - before
+    );
+    t.apply(&again).unwrap();
+    assert!(t.memory_size() <= projected);
+}
