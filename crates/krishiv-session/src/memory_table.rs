@@ -10,6 +10,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::MemoryScan;
 use krishiv_exec::ScanPushdown;
 use krishiv_exec::planner::TableProvider;
+use krishiv_memory::{ConsumerId, MemoryPool, Reservation};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
@@ -63,9 +64,14 @@ pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + 
 /// once per registration): the Python Data Source API's reader lists its partitions and reads
 /// them when the plan is made, as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
 struct SourceTable {
-    name: String,
+    label: String,
     schema: SchemaRef,
     source: BatchSource,
+    pool: Arc<dyn MemoryPool>,
+    consumer: ConsumerId,
+    /// The bytes of the latest plan's batches, counted in the session's pool until the next plan
+    /// replaces them or the table is dropped (a plan's scan cannot hold them itself).
+    held: std::sync::Mutex<Option<Reservation>>,
 }
 
 /// The most bytes of batches one plan of a [`SourceTable`] may hold: the interim embedded path
@@ -86,12 +92,18 @@ impl TableProvider for SourceTable {
         let bytes: usize = batches.iter().map(RecordBatch::get_array_memory_size).sum();
         if bytes > MAX_SOURCE_BYTES {
             return Err(krishiv_common::error::KrishivPythonDataSourceLimit {
-                source: self.name.clone(),
+                source: self.label.clone(),
                 bytes: bytes.to_string(),
                 limit: MAX_SOURCE_BYTES.to_string(),
             }
             .into());
         }
+        let mut reservation = Reservation::new(Arc::clone(&self.pool), self.consumer);
+        reservation.try_grow(bytes).map_err(KrishivError::from)?;
+        *self
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reservation);
         let batches = batches
             .into_iter()
             .map(|b| {
@@ -117,12 +129,16 @@ impl Session {
     /// query over it is planned. The schema is fixed here (the analysis); the rows are not (a
     /// source that lists files sees new ones on the next action).
     ///
+    /// `label` names the source in errors. Each plan's batches are counted in the session's memory
+    /// pool (until the next plan or the table's drop) and capped at 1 GiB.
+    ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no equivalent of;
     /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` for a reserved name.
     pub fn register_batch_source(
         &self,
         name: &str,
+        label: &str,
         schema: SchemaRef,
         source: BatchSource,
     ) -> Result<(), KrishivError> {
@@ -141,14 +157,19 @@ impl Session {
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         let schema = crate::carrier::canonical_schema(schema);
+        let pool = self.state.memory.child("python_source", None);
+        let consumer = pool.register("python_source", None);
         self.state.catalog.put(
             name,
             TempTable::Provider {
                 columns,
                 table: Arc::new(SourceTable {
-                    name: name.to_owned(),
+                    label: label.to_owned(),
                     schema,
                     source,
+                    pool,
+                    consumer,
+                    held: std::sync::Mutex::new(None),
                 }),
             },
         );

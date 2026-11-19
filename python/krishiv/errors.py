@@ -125,6 +125,11 @@ _TEMPLATES = {
     # JVM classes the Python data source API raises itself (the engine's registry has them too).
     "PYTHON_DATA_SOURCE_ERROR": "Failed to <action> Python data source <type>: <msg>",
     "PYTHON_EXCEPTION": "<msg>: <traceback>",
+    "KRISHIV_PYTHON_DATA_SOURCE_LIMIT": (
+        "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read "
+        "path, which holds a source's rows in memory when a query is planned. Read less of it per query (narrow "
+        "the source's options or split it into smaller sources)."
+    ),
     "UNSUPPORTED_DATA_SOURCE_SAVE_MODE": (
         'The data source "<source>" cannot be written in the <createMode> mode. '
         'Please use either the "Append" or "Overwrite" mode instead.'
@@ -451,6 +456,8 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("INVALID_ARRAY_INDEX", ArrayIndexOutOfBoundsException),
     ("INVALID_PARAMETER_VALUE", IllegalArgumentException),
     ("PARSE_", ParseException),
+    # Spark raises it from `QueryCompilationErrors` for every `action`/`type` pair.
+    ("PYTHON_DATA_SOURCE_ERROR", AnalysisException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
     # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.

@@ -226,6 +226,7 @@ impl PySession {
     fn register_python_source(
         &self,
         py: Python<'_>,
+        label: &str,
         schema: &Bound<'_, PyAny>,
         read: Py<PyAny>,
     ) -> PyResult<PyDataFrame> {
@@ -246,7 +247,10 @@ impl PySession {
                         .call_method0("getCondition")
                         .and_then(|c| c.extract::<String>())
                         .ok();
-                    if class.as_deref() == Some("PYTHON_DATA_SOURCE_ERROR") {
+                    if matches!(
+                        class.as_deref(),
+                        Some("PYTHON_DATA_SOURCE_ERROR" | "KRISHIV_PYTHON_DATA_SOURCE_LIMIT")
+                    ) {
                         let parameter = |key: &str| {
                             value
                                 .call_method0("getMessageParameters")
@@ -254,6 +258,15 @@ impl PySession {
                                 .and_then(|v| v.extract::<String>())
                                 .unwrap_or_default()
                         };
+                        if class.as_deref() == Some("KRISHIV_PYTHON_DATA_SOURCE_LIMIT") {
+                            return krishiv_common::error::KrishivError::from(
+                                krishiv_common::error::KrishivPythonDataSourceLimit {
+                                    source: parameter("source"),
+                                    bytes: parameter("bytes"),
+                                    limit: parameter("limit"),
+                                },
+                            );
+                        }
                         return krishiv_common::error::KrishivError::from(
                             krishiv_common::error::PythonDataSourceError {
                                 action: parameter("action"),
@@ -281,7 +294,7 @@ impl PySession {
             })
         });
         self.inner
-            .register_batch_source(&name, schema, source)
+            .register_batch_source(&name, label, schema, source)
             .map_err(|e| to_py(py, &e))?;
         Ok(PyDataFrame {
             inner: self.inner.table(&name),

@@ -11,8 +11,8 @@ from krishiv.errors import (
     AnalysisException,
     PySparkException,
     PySparkNotImplementedError,
-    PySparkRuntimeError,
     PySparkTypeError,
+    SparkRuntimeException,
 )
 from krishiv.sql import SparkSession
 from krishiv.sql.datasource import (
@@ -317,10 +317,12 @@ def test_schema_not_implemented_is_the_python_data_source_error(spark: SparkSess
         pass
 
     spark.dataSource.register(NoSchema)
-    with pytest.raises(PySparkRuntimeError) as e:
+    with pytest.raises(AnalysisException) as e:
         spark.read.format("NoSchema").load()
-    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
-    assert "create" in str(e.value)
+    assert e.value.getCondition() == "PYTHON_DATA_SOURCE_ERROR"
+    params = e.value.getMessageParameters()
+    assert params is not None
+    assert (params["action"], params["type"]) == ("create", "instance")
 
 
 def test_read_failure_is_the_python_data_source_error(spark: SparkSession) -> None:
@@ -418,6 +420,7 @@ def test_partitions_must_be_a_list_of_input_partitions(spark: SparkSession) -> N
         spark.dataSource.register(source(bad))
         with pytest.raises(PySparkException) as e:
             spark.read.format("p").load().collect()
+        assert isinstance(e.value, AnalysisException)
         assert e.value.getCondition() == "PYTHON_DATA_SOURCE_ERROR"
         params = e.value.getMessageParameters()
         assert params is not None
@@ -520,7 +523,7 @@ def test_write_failure_calls_abort_and_raises(spark: SparkSession) -> None:
     Log.events = []
     spark.dataSource.register(Sink)
     df = spark.range(2).selectExpr("cast(id as int) as a")
-    with pytest.raises(PySparkRuntimeError) as e:
+    with pytest.raises(SparkRuntimeException) as e:
         df.write.format("sink").option("fail", "1").mode("append").save()
     assert e.value.getCondition() == "PYTHON_EXCEPTION"
     assert "write failed" in str(e.value)
@@ -613,5 +616,36 @@ def test_engine_error_in_a_write_reaches_the_caller_unchanged(spark: SparkSessio
     df = spark.sql("select 1 div 0 as a")
     with pytest.raises(PySparkException) as e:
         df.write.format("sink").mode("append").save()
-    assert e.value.getCondition() != "PYTHON_EXCEPTION"
+    assert e.value.getCondition() == "DIVIDE_BY_ZERO"
     assert ("abort", [None]) in Log.events
+
+
+def test_a_source_over_the_byte_limit_fails_before_it_is_read_whole(
+    spark: SparkSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from krishiv.sql import datasource
+
+    monkeypatch.setattr(datasource, "MAX_SOURCE_BYTES", 1000)
+    pulled: list[int] = []
+
+    class Big(DataSource):
+        def schema(self) -> str:
+            return "a BIGINT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    for i in range(1000):
+                        pulled.append(i)
+                        yield pa.RecordBatch.from_pydict({"a": pa.array([i] * 100, type=pa.int64())})
+
+            return R()
+
+    spark.dataSource.register(Big)
+    with pytest.raises(PySparkException) as e:
+        spark.read.format("Big").load().collect()
+    assert e.value.getCondition() == "KRISHIV_PYTHON_DATA_SOURCE_LIMIT"
+    params = e.value.getMessageParameters()
+    assert params is not None
+    assert params["source"] == "Big"
+    assert len(pulled) < 10  # stopped at the first batches over the limit

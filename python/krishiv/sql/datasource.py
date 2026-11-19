@@ -30,6 +30,7 @@ How it runs here (design P3-T040):
 
 from __future__ import annotations
 
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -38,10 +39,10 @@ from typing import TYPE_CHECKING, Any
 from krishiv.errors import (
     AnalysisException,
     PySparkAssertionError,
-    PySparkException,
     PySparkNotImplementedError,
     PySparkRuntimeError,
     PySparkTypeError,
+    SparkRuntimeException,
 )
 from krishiv.sql.types import DataType, StructType
 
@@ -78,6 +79,8 @@ __all__ = [
 PUSHDOWN_CONF = "spark.sql.python.filterPushdown.enabled"
 #: Rows per Arrow batch a read hands the engine (Spark's ``spark.sql.execution.arrow.maxRecordsPerBatch``).
 MAX_BATCH_ROWS = 10_000
+#: The most bytes one plan of a source may hold (the interim embedded read path, design P3-T040 §3.7).
+MAX_SOURCE_BYTES = 1 << 30
 
 ColumnPath = tuple[str, ...]
 
@@ -287,16 +290,18 @@ class DataSourceArrowWriter(DataSourceWriter):
 
 
 def _described(error: BaseException) -> str:
-    """``error`` as the worker's text gives it: ``[CLASS] message`` for an errors-package error, else
-    ``Type: message``."""
-    condition = error.getCondition() if isinstance(error, PySparkException) else None
-    return f"[{condition}] {error}" if condition else f"{type(error).__name__}: {error}"
+    """``error`` as the worker's ``handle_worker_exception`` writes it: the formatted traceback, its last line
+    ``Type: message`` (``[CLASS] message`` for an errors-package error)."""
+    import traceback
+
+    return "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
 
-def _source_error(action: str, kind: str, error: BaseException | str) -> PySparkRuntimeError:
-    """``PYTHON_DATA_SOURCE_ERROR`` (SQLSTATE 38000): "Failed to <action> Python data source <type>: <msg>"."""
+def _source_error(action: str, kind: str, error: BaseException | str) -> AnalysisException:
+    """``PYTHON_DATA_SOURCE_ERROR`` (SQLSTATE 38000), an ``AnalysisException`` as Spark's
+    ``QueryCompilationErrors`` raises it: "Failed to <action> Python data source <type>: <msg>"."""
     message = error if isinstance(error, str) else _described(error)
-    return PySparkRuntimeError(
+    return AnalysisException(
         errorClass="PYTHON_DATA_SOURCE_ERROR",
         messageParameters={"action": action, "type": kind, "msg": message},
         sqlState="38000",
@@ -475,7 +480,7 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
         yield flush(rows)
 
 
-def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType) -> Any:
+def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType, label: str) -> Any:
     """One physical plan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table.
 
     Planning failures (``reader()``, its type, ``pushFilters``, ``partitions()``) are raised once as
@@ -508,6 +513,7 @@ def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType
     reader = _guard("initialize", "reader", initialize)
     partitions = _guard("generate", "read partitions", lambda: _read_partitions(reader))
     batches: list[Any] = []
+    held = 0
     for partition in partitions:
         output = reader.read(partition)
         if not isinstance(output, Iterator):
@@ -517,7 +523,15 @@ def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType
                 name=source.name(),
                 supported_types="iterator",
             )
-        batches.extend(_batches_of(pa, output, schema, session, source))
+        for batch in _batches_of(pa, output, schema, session, source):
+            held += batch.nbytes
+            if held > MAX_SOURCE_BYTES:  # before the next batch is pulled: the source is never read whole
+                raise PySparkRuntimeError(
+                    errorClass="KRISHIV_PYTHON_DATA_SOURCE_LIMIT",
+                    messageParameters={"source": label, "bytes": str(held), "limit": str(MAX_SOURCE_BYTES)},
+                    sqlState="53400",
+                )
+            batches.append(batch)
     return pa.Table.from_batches(batches, schema=_pa_schema(schema, pa))
 
 
@@ -541,7 +555,16 @@ def load(session: SparkSession, entry: _Registered, options: dict[str, str], use
     else:
         schema = _struct_of(_guard("create", "instance", source.schema))
     empty = pa.Table.from_batches([], schema=_pa_schema(schema, pa))
-    native = session._native.register_python_source(empty, lambda: _plan_and_read(session, source, schema))
+    # The callback lives in the native catalog, which the session owns: hold the session weakly.
+    ref = weakref.ref(session)
+
+    def read() -> Any:
+        owner = ref()
+        if owner is None:
+            raise PySparkRuntimeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": "a closed session"})
+        return _plan_and_read(owner, source, schema, entry.name)
+
+    native = session._native.register_python_source(entry.name, empty, read)
     return DataFrame(native, session)
 
 
@@ -591,7 +614,7 @@ def save(session: SparkSession, entry: _Registered, df: DataFrame, mode: str, op
         _guard("commit or abort", "write", lambda: writer.abort([None]))
         if not user_failure:
             raise failure  # an engine error or an interrupt reaches the caller unchanged
-        raise PySparkRuntimeError(
+        raise SparkRuntimeException(
             errorClass="PYTHON_EXCEPTION",
             messageParameters={"msg": "An exception was thrown from the Python worker", "traceback": traced},
             sqlState="38000",

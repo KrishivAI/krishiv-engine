@@ -251,7 +251,7 @@
   },
   "KRISHIV_PYTHON_DATA_SOURCE_LIMIT" : {
     "message" : [
-      "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read path, which holds a source's rows in memory when a query is planned. Read less of it (filter in the reader's options or split the source) until the streaming read operator exists."
+      "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read path, which holds a source's rows in memory when a query is planned. Read less of it per query (narrow the source's options or split it into smaller sources)."
     ],
     "sqlState" : "53400"
   },
