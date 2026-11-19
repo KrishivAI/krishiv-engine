@@ -87,7 +87,7 @@ fn create(
 }
 
 /// `id, x, name` of the table at `location` as Krishiv reads it (`CAST` to text, `NULL` for null).
-fn krishiv_rows(
+pub(super) fn krishiv_rows(
     env: &super::provider_tests::Env,
     location: &str,
     name: &str,
@@ -104,7 +104,7 @@ fn krishiv_rows(
     )
 }
 
-fn snapshot_json(m: &iceberg::spec::TableMetadata) -> Vec<Value> {
+pub(super) fn snapshot_json(m: &iceberg::spec::TableMetadata) -> Vec<Value> {
     let mut snaps: Vec<_> = m.snapshots().collect();
     snaps.sort_by_key(|s| (s.sequence_number(), s.snapshot_id()));
     snaps
@@ -202,7 +202,7 @@ fn read_json(name: &str) -> Value {
 }
 
 /// One Spark value as the text `CAST(x AS STRING)` gives.
-fn text(v: &Value) -> String {
+pub(super) fn text(v: &Value) -> String {
     match v {
         Value::Null => "NULL".to_owned(),
         Value::String(s) => s.clone(),
@@ -210,7 +210,7 @@ fn text(v: &Value) -> String {
     }
 }
 
-fn spark_rows(rows: &Value) -> Vec<String> {
+pub(super) fn spark_rows(rows: &Value) -> Vec<String> {
     rows.as_array()
         .unwrap()
         .iter()

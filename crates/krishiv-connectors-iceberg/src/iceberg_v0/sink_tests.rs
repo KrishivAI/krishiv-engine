@@ -49,12 +49,16 @@ pub(super) struct Catalog {
 
 impl Catalog {
     pub(super) fn new(table: &iceberg::table::Table) -> Arc<Self> {
+        Self::at(
+            table.metadata().clone(),
+            table.metadata_location().unwrap().to_owned(),
+        )
+    }
+
+    /// The table whose current metadata is `metadata`, read from `location`.
+    pub(super) fn at(metadata: TableMetadata, location: String) -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new((
-                table.metadata().clone(),
-                table.metadata_location().unwrap().to_owned(),
-                0,
-            )),
+            state: Mutex::new((metadata, location, 0)),
             hang: AtomicBool::new(false),
             sent: AtomicBool::new(false),
         })
@@ -95,11 +99,7 @@ impl CommitTable for Catalog {
         let next = b.build().unwrap().metadata;
         s.2 += 1;
         let path = format!("{}/metadata/v{}-sink.metadata.json", next.location(), s.2);
-        std::fs::write(
-            path.strip_prefix("file://").unwrap(),
-            serde_json::to_vec(&next).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(local_path(&path), serde_json::to_vec(&next).unwrap()).unwrap();
         s.0 = next.clone();
         s.1 = path;
         CommitOutcome::Committed(Box::new(next))
@@ -108,6 +108,16 @@ impl CommitTable for Catalog {
     async fn load(&self, _all_snapshots: bool) -> Result<TableMetadata, KrishivError> {
         Ok(self.metadata())
     }
+}
+
+/// The local path of a `file://`, `file:` or bare absolute location (Spark's Hadoop catalog records a bare path
+/// as the table location).
+pub(super) fn local_path(location: &str) -> &str {
+    location
+        .strip_prefix("file://")
+        .or_else(|| location.strip_prefix("file:"))
+        .or_else(|| location.starts_with('/').then_some(location))
+        .unwrap_or_else(|| panic!("not a local location: {location}"))
 }
 
 /// The source side of the test's write node: no rows.

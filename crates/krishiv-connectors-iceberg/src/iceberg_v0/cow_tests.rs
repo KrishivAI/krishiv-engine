@@ -109,7 +109,7 @@ fn append(env: &Env, catalog: &Arc<Catalog>, batch: RecordBatch) {
 }
 
 /// One row-level statement against the table as the provider pinned it.
-struct Dml<'a> {
+pub(super) struct Dml<'a> {
     env: &'a Env,
     table: Arc<dyn RowLevelTable>,
     op: RowLevelOperation,
@@ -117,7 +117,7 @@ struct Dml<'a> {
 }
 
 impl<'a> Dml<'a> {
-    fn open(env: &'a Env, catalog: &Arc<Catalog>, op: RowLevelOperation) -> Self {
+    pub(super) fn open(env: &'a Env, catalog: &Arc<Catalog>, op: RowLevelOperation) -> Self {
         let p = provider(env, &catalog.location(), catalog);
         let lineage = p.snapshot().format_version >= 3;
         Self {
@@ -215,7 +215,7 @@ impl<'a> Dml<'a> {
     }
 
     /// `DELETE FROM t WHERE condition`.
-    fn delete(&self, condition: &str) -> Result<(), KrishivError> {
+    pub(super) fn delete(&self, condition: &str) -> Result<(), KrishivError> {
         let touched = self.find(condition);
         self.rewrite(
             touched,
@@ -228,7 +228,7 @@ impl<'a> Dml<'a> {
     }
 
     /// `UPDATE t SET name = value WHERE condition`.
-    fn update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
+    pub(super) fn update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
         let touched = self.find(condition);
         let hit = format!("coalesce(({condition}), false)");
         self.rewrite(
