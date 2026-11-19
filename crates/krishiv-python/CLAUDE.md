@@ -10,6 +10,7 @@ Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
 Paths are relative to this crate.
 - `src/lib.rs` module wiring of the extension module
 - `src/session.rs` `Session` handle; `src/dataframe.rs` `DataFrame` and `GroupedData`; `src/column.rs` `Column`
+- `src/local.rs` `LocalConnectServer`, the handle behind `krishiv.start_local()` (`../../python/krishiv/_local.py`) over `krishiv_connect_server::LocalServer`
 - `src/errors.rs` `block_on` (GIL released) and the `KrishivError` to `krishiv.errors` mapping
 - `src/stream.rs` PyCapsule Arrow bridge; `src/stream/ffi.rs` pyo3-free C-level bridge code
 - `src/stream/tests.rs` bridge tests (the Miri target)

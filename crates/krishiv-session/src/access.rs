@@ -25,8 +25,8 @@ use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
-    SecurableUse, TableIdent, authorize, authorize_reported, insufficient_permissions,
-    namespace_parts, table_ident,
+    SecurableUse, TableIdent, authorize, authorize_quietly, authorize_reported,
+    insufficient_permissions, namespace_parts, table_ident,
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
@@ -321,7 +321,7 @@ pub(crate) fn audit_read<T>(
     env: &QueryEnv,
     result: Result<T, KrishivError>,
 ) -> Result<T, KrishivError> {
-    if env.quiet_denials {
+    if env.quiet_denials() {
         return result;
     }
     audit(session, StatementClass::Read, result)
@@ -395,10 +395,11 @@ impl Session {
     }
 
     /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
-    /// questions in the same order, stopping at the first denial) but quietly: no `krishiv::audit`
-    /// record, no denial count. The analyze API asks it before it reads any catalog or file-system
-    /// state about a write target (T063 N1b review B2), so analysis reveals nothing about a target the
-    /// caller may not write.
+    /// questions in the same order, stopping at the first denial, the same decisions) but quietly: no
+    /// `krishiv::audit` record, no session denial count, and the policy's [`AccessPolicy::denied`] is
+    /// not called (`authorize_quietly`, review R2-1), so a provider counts and audits nothing either.
+    /// The analyze API asks it before it reads any catalog or file-system state about a write target
+    /// (T063 N1b review B2), so analysis reveals nothing about a target the caller may not write.
     pub(crate) async fn targets_allowed_quietly(
         &self,
         statement: &Statement,
@@ -408,8 +409,9 @@ impl Session {
     }
 
     /// Whether `privilege` on `object` would be allowed, asked as [`Self::targets_allowed_quietly`]
-    /// asks (through `authorize`, with its `Browse`-to-`Select` fallback), quietly: no audit record,
-    /// no denial count. An object that cannot be placed is not allowed.
+    /// asks (through `authorize_quietly`: `authorize`'s decision, with its `Browse`-to-`Select`
+    /// fallback), quietly: no audit record, no denial count, no [`AccessPolicy::denied`] call. An
+    /// object that cannot be placed is not allowed.
     pub(crate) async fn allowed_quietly(
         &self,
         object: TargetObject<'_>,
@@ -420,7 +422,7 @@ impl Session {
             return false;
         };
         for securable in &securables {
-            let r = authorize(
+            let r = authorize_quietly(
                 &*self.state.policy,
                 &self.state.principal,
                 securable,
@@ -435,7 +437,8 @@ impl Session {
     }
 
     /// The checks of [`Self::authorize_statement`]; each denial is logged under `class`, or not at all
-    /// when `class` is `None` (a quiet trial).
+    /// when `class` is `None` (a quiet trial, asked through `authorize_quietly`, so the policy is not
+    /// told of it either).
     async fn check_targets(
         &self,
         statement: &Statement,
@@ -473,13 +476,27 @@ impl Session {
                 {
                     continue;
                 }
-                let r = authorize(
-                    &*self.state.policy,
-                    &self.state.principal,
-                    &securable,
-                    target.privilege,
-                )
-                .await;
+                let r = match class {
+                    Some(_) => {
+                        authorize(
+                            &*self.state.policy,
+                            &self.state.principal,
+                            &securable,
+                            target.privilege,
+                        )
+                        .await
+                    }
+                    // A trial's refusal is an answer, not a refusal: the policy is not told.
+                    None => {
+                        authorize_quietly(
+                            &*self.state.policy,
+                            &self.state.principal,
+                            &securable,
+                            target.privilege,
+                        )
+                        .await
+                    }
+                };
                 match class {
                     Some(class) => audit(self, class, r)?,
                     None => r?,
@@ -577,15 +594,16 @@ impl Session {
                 // `Select` as a whole (column grants on views are not supported).
                 let wanted = env.analysis.mode.read_privilege();
                 let privilege = if wanted == Privilege::Select
-                    && self.state.policy.column_level()
+                    && env.analysis.policy.column_level()
                     && matches!(securable, Securable::Table(_))
                 {
                     Privilege::Browse
                 } else {
                     wanted
                 };
+                // The analysis' policy: the session's, quiet in a trial (`QuietPolicy`).
                 let r = authorize_reported(
-                    &*self.state.policy,
+                    &*env.analysis.policy,
                     &self.state.principal,
                     &securable,
                     privilege,
@@ -618,7 +636,7 @@ impl Session {
         }
         for view in views {
             if let Err(denied) = authorize(
-                &*self.state.policy,
+                &*env.analysis.policy,
                 &self.state.principal,
                 &Securable::View(view.clone()),
                 Privilege::Select,
@@ -1514,6 +1532,42 @@ impl AccessPolicy for ReadOnlyPolicy {
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
     }
+}
+
+/// The policy of a trial analysis ([`crate::session::QueryEnv::set_quiet_denials`], P3 PR-14d):
+/// decides exactly as `inner` does, but is never told of a refusal, so a trial's read denials,
+/// which are answers and not refusals, leave no count or audit record in the provider
+/// (T063 review R2-1). Never a session's policy: only a trial analysis' `AnalysisContext` holds it.
+pub(crate) struct QuietPolicy {
+    inner: Arc<dyn AccessPolicy>,
+}
+
+impl QuietPolicy {
+    /// `inner`, quiet.
+    pub(crate) fn new(inner: Arc<dyn AccessPolicy>) -> Self {
+        Self { inner }
+    }
+}
+
+impl AccessPolicy for QuietPolicy {
+    fn version(&self) -> PolicyVersion {
+        self.inner.version()
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        self.inner.check(principal, securable, privilege)
+    }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    // `denied` keeps the default: told nothing.
 }
 
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or

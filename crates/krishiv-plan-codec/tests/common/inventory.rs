@@ -1915,6 +1915,24 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "python_udtf",
+            PhysNode::PythonUdtf {
+                input: boxed(scan()),
+                udf: python_relation(T::TableUdf, 1),
+                call: krishiv_exec::physical::PythonUdtfPlan {
+                    arg_names: vec![None, Some("n".to_owned())],
+                    table: Some(krishiv_exec::physical::PythonUdtfTable {
+                        position: 0,
+                        columns: vec![0, 1],
+                        names: vec!["a".to_owned(), "partition_by_0".to_owned()],
+                        partition_child_indexes: vec![1],
+                    }),
+                    carried: vec![0],
+                    analyzed: Some(b"pickled".to_vec()),
+                },
+            },
+        ),
+        (
             "python_group_map",
             PhysNode::PythonGroupMap {
                 input: boxed(scan()),
