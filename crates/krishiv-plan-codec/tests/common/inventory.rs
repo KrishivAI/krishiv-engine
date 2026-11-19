@@ -2572,6 +2572,23 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ))),
         true,
     )];
+    // A UDT over a collated string, inside a struct: the collation is written inline in the UDT's storage type
+    // (Spark 4.2.0), so it has to survive the codec.
+    let mut udt_collated = file_scan();
+    let lcase = DataType::collated_string(krishiv_types::Collation::parse("UTF8_LCASE").unwrap());
+    let text_udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::python(
+        lcase,
+        "__main__.TextUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    udt_collated.scan.output = vec![column(
+        3,
+        "s",
+        DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new("p", text_udt, true),
+        ])),
+        true,
+    )];
     let geometry = col(
         5,
         "g3857",
@@ -2843,6 +2860,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
         ("udt_scan", PhysNode::Scan(udts)),
+        ("udt_collated_scan", PhysNode::Scan(udt_collated)),
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),

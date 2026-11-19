@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A user-defined type column through the engine (P3-T079): it keeps its type in the result schema, in a Parquet
 //! write and read, and `ORDER BY`, `GROUP BY`, `=` and a join key run on its storage type (as they do in Spark).
+
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -71,8 +72,11 @@ fn order_by_group_by_equality_and_a_join_key_run_on_the_storage_type() {
         [3, 2, 4, 1]
     );
     assert_eq!(
-        ids(&collect(&s, "select id from t where p = p order by id")),
-        [1, 2, 4]
+        ids(&collect(
+            &s,
+            "select id from t where p = (select max(p) from t) order by id"
+        )),
+        [1]
     );
     let groups = collect(&s, "select p, count(*) c from t group by p order by p");
     let counts: Vec<i64> = groups

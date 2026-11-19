@@ -1346,6 +1346,45 @@ fn a_udt_inside_a_tagged_struct_reads_back_as_the_udt() {
     assert_eq!(DataType::from_arrow_field(&field).unwrap(), outer);
 }
 
+/// Spark 4.2.0 (`tests/spark-golden/udt/spark-4.2.0-collated-probe.txt`): a collation under a UDT is written inline
+/// in the UDT's `sqlType`, also when the UDT is a struct field (whose own metadata stays empty), and reads back.
+#[test]
+fn a_collation_under_a_udt_in_a_struct_field_survives_the_json() {
+    let lcase = DataType::CollatedString(crate::Collation::parse("UTF8_LCASE").unwrap());
+    let array = DataType::Array(Arc::new(ArrayType::new(lcase.clone(), false)));
+    for storage in [lcase, array] {
+        let outer = DataType::Struct(StructType::new(vec![StructField::new(
+            "p",
+            udt("pkg.TextUDT", storage),
+            true,
+        )]));
+        let json = outer.json();
+        assert!(!json.contains("__COLLATIONS"), "{json}");
+        assert!(json.contains("collate UTF8_LCASE"), "{json}");
+        assert_eq!(DataType::from_json(&json).unwrap(), outer, "{json}");
+    }
+}
+
+/// A UDT at any depth is its storage type to the engine.
+#[test]
+fn without_udts_replaces_a_udt_at_any_depth_by_its_storage_type() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let nested = DataType::Struct(StructType::new(vec![StructField::new(
+        "p",
+        DataType::Array(Arc::new(ArrayType::new(
+            udt("pkg.PointUDT", storage.clone()),
+            true,
+        ))),
+        true,
+    )]));
+    let expected = DataType::Struct(StructType::new(vec![StructField::new(
+        "p",
+        DataType::Array(Arc::new(ArrayType::new(storage, true))),
+        true,
+    )]));
+    assert_eq!(nested.without_udts(), expected);
+}
+
 /// A collated string inside a UDT's storage counts.
 #[test]
 fn a_udt_over_a_collated_string_contains_a_collation() {

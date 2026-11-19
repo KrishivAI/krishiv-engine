@@ -405,6 +405,30 @@ impl DataType {
         }
     }
 
+    /// This type with every user-defined type, at any depth, replaced by its storage type: what the engine
+    /// computes with (a cast to a UDT is a cast to its storage type).
+    #[must_use]
+    pub fn without_udts(&self) -> Self {
+        match self {
+            Self::Udt(u) => u.sql_type().without_udts(),
+            Self::Array(a) => {
+                ArrayType::new(a.element_type().without_udts(), a.contains_null()).into()
+            }
+            Self::Map(m) => MapType::new(
+                m.key_type().without_udts(),
+                m.value_type().without_udts(),
+                m.value_contains_null(),
+            )
+            .into(),
+            Self::Struct(s) => StructType::new(s.fields().iter().map(|f| {
+                StructField::new(f.name(), f.data_type().without_udts(), f.nullable())
+                    .with_metadata(f.metadata().clone())
+            }))
+            .into(),
+            other => other.clone(),
+        }
+    }
+
     /// Whether this is an array, map or struct type.
     pub fn is_nested(&self) -> bool {
         matches!(self, Self::Array(_) | Self::Map(_) | Self::Struct(_))

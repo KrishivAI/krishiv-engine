@@ -292,4 +292,24 @@ mod tests {
             assert!(matches!(got, DataType::Udt(_)), "{footer}");
         }
     }
+
+    /// A UDT over a collated string: the footer holds the collation inline (Spark 4.2.0), and a read whose Arrow
+    /// schema carries no tag (the restore path alone) brings the collated UDT back.
+    #[test]
+    fn a_udt_over_a_collated_string_restores_from_the_footer_alone() {
+        let udt = DataType::Udt(Arc::new(UdtType::python(
+            lcase(),
+            "__main__.LUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        let schema = Schema::new(vec![udt.to_arrow_field("p", true)]);
+        let json = super::super::intervals::row_metadata(&schema).unwrap();
+        assert!(
+            json.contains(r#""sqlType":"string collate UTF8_LCASE""#),
+            "{json}"
+        );
+        let untagged = Schema::new(vec![Field::new("p", ArrowType::Utf8View, true)]);
+        let back = restore(&untagged, Some(&kv(&json))).expect("restored");
+        assert_eq!(DataType::from_arrow_field(back.field(0)).unwrap(), udt);
+    }
 }

@@ -104,7 +104,7 @@ impl DataType {
                     key("serializedClass", u.serialized_python_class(), out);
                 }
                 out.push_str(r#","sqlType":"#);
-                u.sql_type().write_json_in(out, in_field);
+                u.sql_type().write_json_in(out, false);
                 out.push('}');
             }
             atomic => write_string(&atomic.type_name(), out),
