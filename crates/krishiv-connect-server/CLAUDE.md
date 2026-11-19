@@ -42,7 +42,8 @@ Paths are relative to this crate.
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
   the analyzed plan; `persist`, `unpersist` and `get_storage_level` are the frame's own (`src/cache.rs` converts the protocol's `StorageLevel` both ways); access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
-- `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
+- `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent` (a failed pair's warning
+  shows a redacted value as `Some(*********(redacted))`, `failed_to_set`; Spark echoes it), Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
   credentials), who may `set`/`unset` a key (a `Startup` key is `CANNOT_MODIFY_STATIC_CONFIG` for everyone, `check_static`; any other key asks the session's policy as SQL `SET` does, `Session::authorize_set_key`: admin keys and server-scoped store keys need `Manage`, refusals audited and counted; no listener-local role check, ADR 0046)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
