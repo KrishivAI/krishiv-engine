@@ -933,7 +933,7 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected(n, None, None))
+                    .map(|a| a.projected(n, None, None, false))
                     .sum::<usize>()
             })
             .sum();
@@ -950,8 +950,8 @@ impl RowTable {
                         };
                         i.and_then(|i| cols.get(i))
                     };
-                    a.projected(0, at(0), at(1))
-                        .saturating_sub(a.projected(0, None, None))
+                    a.projected(0, at(0), at(1), matches!(fold, Fold::States { .. }))
+                        .saturating_sub(a.projected(0, None, None, false))
                 })
                 .sum()
         });
@@ -1840,7 +1840,7 @@ impl RowTable {
                 let accs: usize = empty
                     .accs
                     .iter()
-                    .map(|a| a.projected(n, None, None).saturating_sub(a.size()))
+                    .map(|a| a.projected(n, None, None, false).saturating_sub(a.size()))
                     .sum();
                 n.saturating_mul(self.stride).saturating_add(accs)
             })

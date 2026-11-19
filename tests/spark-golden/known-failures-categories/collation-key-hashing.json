@@ -1,0 +1,13 @@
+{
+  "category": "collation-key-hashing",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "order": 140,
+      "query": "(?i)hll_sketch_agg\\s*\\([^)]*\\bcollate\\b"
+    }
+  ],
+  "summary": "hll_sketch_agg over a non-binary collation: Spark hashes the collation key, Krishiv does not yet",
+  "task": "P3-T086"
+}

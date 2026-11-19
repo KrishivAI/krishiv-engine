@@ -689,7 +689,7 @@ fn projected_size_bounds_the_size_after_an_update() {
         let mut a = Accumulator::new(&expr, true).unwrap();
         let v: Vec<Option<i64>> = (0..200).map(Some).collect();
         let (x, y) = (typed(&tx, &v), typed(&ty, &v));
-        let projected = a.projected(200, Some(&x), Some(&y));
+        let projected = a.projected(200, Some(&x), Some(&y), false);
         a.reserve(200);
         a.resize(200);
         let groups: Vec<u32> = (0..200).collect();
@@ -702,7 +702,7 @@ fn projected_size_bounds_the_size_after_an_update() {
         // Replacing every value by a longer one stays within the bound too.
         let longer: Vec<Option<i64>> = (1000..1200).map(Some).collect();
         let (x, y) = (typed(&tx, &longer), typed(&ty, &longer));
-        let projected = a.projected(0, Some(&x), Some(&y));
+        let projected = a.projected(0, Some(&x), Some(&y), false);
         a.update(&groups, &[x, y], &Weights::Const(1)).unwrap();
         assert!(
             a.size() <= projected,

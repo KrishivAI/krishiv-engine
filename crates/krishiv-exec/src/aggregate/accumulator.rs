@@ -688,12 +688,13 @@ impl Accumulator {
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
     /// groups and an update with `input` (string values it may keep).
     /// `arg` is the value column the update reads (raw or state); `key` the
-    /// ordering key column of `max_by`/`min_by`.
+    /// ordering key column of `max_by`/`min_by`; `states` says `arg` holds partial states, not raw values.
     pub(crate) fn projected(
         &self,
         new: usize,
         arg: Option<&ArrayRef>,
         key: Option<&ArrayRef>,
+        states: bool,
     ) -> usize {
         // The collect, vector, mode and listagg accumulators account
         // their variable-width growth themselves (see `collect`, `mode`
@@ -759,7 +760,7 @@ impl Accumulator {
             Kind::Hll(h) => h.projected(new),
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
-            Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len)),
+            Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             _ => 0,
         };
         vecs + heap
