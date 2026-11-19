@@ -1138,8 +1138,13 @@ impl Encoder {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
             } => {
                 self.tag("Pivot");
+                self.flag(group_by.is_some());
+                if let Some(keys) = group_by {
+                    self.exprs(keys, bias);
+                }
                 self.exprs(pivot_columns, bias);
                 self.num(values.len() as u64);
                 for v in values {

@@ -109,6 +109,7 @@ fn pivot(cols: &[&str], values: Vec<(Vec<Expr>, Option<&str>)>, aggs: Vec<Expr>)
             })
             .collect(),
         aggregates: aggs.into_iter().map(Arc::new).collect(),
+        group_by: None,
     })
 }
 
@@ -214,6 +215,7 @@ fn pivot_without_grouping_columns_is_global() {
             },
         ],
         aggregates: vec![Arc::new(sum_earnings())],
+        group_by: None,
     });
     assert_eq!(names(&run(plan)), ["dotNET", "Java"]);
 }
@@ -355,6 +357,7 @@ fn pivot_rejects_a_value_of_the_wrong_type() {
             alias: None,
         }],
         aggregates: vec![Arc::new(f("sum", vec![c("v")]))],
+        group_by: None,
     });
     assert_eq!(
         summary(&run(plan)),
@@ -660,6 +663,7 @@ fn pivot_names_a_date_value_as_spark_casts_it() {
             alias: None,
         }],
         aggregates: vec![Arc::new(f("sum", vec![c("v")]))],
+        group_by: None,
     });
     assert_eq!(names(&run(plan)), ["2012-01-15"]);
 }
@@ -676,6 +680,7 @@ fn pivot_names_an_aliased_value_node() {
             alias: None,
         }],
         aggregates: vec![Arc::new(sum_earnings())],
+        group_by: None,
     });
     assert_eq!(names(&run(plan)), ["year", "net"]);
 }
@@ -823,6 +828,7 @@ fn pivot_on_several_literal_columns_resolves() {
             alias: None,
         }],
         aggregates: vec![Arc::new(sum_earnings())],
+        group_by: None,
     });
     assert!(run(plan).is_ok());
 }
@@ -861,6 +867,7 @@ fn pivot_names_columns_without_a_qualifier_bare() {
             crate::Builtin::Add,
             vec![c("s"), int(1)],
         ))],
+        group_by: None,
     });
     assert_eq!(
         summary(&run(plan)),
@@ -1038,6 +1045,7 @@ fn pivot_names_an_aliased_non_literal_node() {
             alias: None,
         }],
         aggregates: vec![Arc::new(sum_earnings())],
+        group_by: None,
     });
     assert_eq!(
         summary(&run(plan)),
@@ -1060,6 +1068,7 @@ fn pivot_names_an_aliased_mismatched_node() {
             alias: None,
         }],
         aggregates: vec![Arc::new(f("sum", vec![c("v")]))],
+        group_by: None,
     });
     assert_eq!(
         summary(&run(plan)),
@@ -1087,6 +1096,7 @@ fn pivot_names_timestamp_values_as_spark_casts_them() {
                 alias: None,
             }],
             aggregates: vec![Arc::new(sum_earnings())],
+            group_by: None,
         }));
         assert_eq!(names(&r), ["year", "2012-01-15 10:00:00"]);
     }
@@ -1134,4 +1144,65 @@ fn unresolved_pivot_nodes_rewrite_children_expressions_and_have_no_output() {
         })
         .unwrap();
     assert!(!Arc::ptr_eq(&touched, &unpivot));
+}
+
+/// A pivot over `sales` whose grouping keys the front end named (Spark's `groupByExprsOpt`, the
+/// Connect `groupBy(keys).pivot(..)` shape).
+fn pivot_by(keys: Vec<Expr>, col: &str, values: Vec<Expr>, aggs: Vec<Expr>) -> LogicalPlan {
+    let mut plan = pivot(
+        &[col],
+        values.into_iter().map(|v| (vec![v], None)).collect(),
+        aggs,
+    );
+    if let PlanNode::Pivot { group_by, .. } = &mut plan.node {
+        *group_by = Some(keys.into_iter().map(Arc::new).collect());
+    }
+    plan
+}
+
+#[test]
+fn pivot_with_named_keys_groups_by_them_alone() {
+    // SQL `PIVOT` would also group by `year` (the input column nothing reads); named keys do not.
+    let r = run(pivot_by(
+        vec![c("course")],
+        "year",
+        vec![int(2012), int(2013)],
+        vec![sum_earnings()],
+    ));
+    assert_eq!(names(&r), ["course", "2012", "2013"]);
+    assert!(r.unwrap().plan.root().is_resolved());
+}
+
+#[test]
+fn pivot_with_named_keys_keeps_the_key_alias() {
+    let r = run(pivot_by(
+        vec![c("course").alias("c")],
+        "year",
+        vec![int(2012), int(2013)],
+        vec![sum_earnings()],
+    ));
+    assert_eq!(names(&r), ["c", "2012", "2013"]);
+}
+
+#[test]
+fn pivot_with_no_keys_is_global() {
+    let r = run(pivot_by(
+        Vec::new(),
+        "year",
+        vec![int(2012), int(2013)],
+        vec![sum_earnings()],
+    ));
+    assert_eq!(names(&r), ["2012", "2013"]);
+}
+
+#[test]
+fn pivot_with_named_keys_on_the_fallback_path() {
+    // `max(string)` is not a `PivotFirst` type: the `if` fallback takes the keys too.
+    let r = run(pivot_by(
+        vec![c("course").alias("c")],
+        "year",
+        vec![int(2012)],
+        vec![f("max", vec![c("course")]), sum_earnings()],
+    ));
+    assert_eq!(names(&r), ["c", "2012_max(course)", "2012_sum(earnings)"]);
 }

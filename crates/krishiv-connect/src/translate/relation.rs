@@ -15,7 +15,8 @@ use std::sync::Arc;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
     ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
+    Origin, PivotValue, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs,
+    UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -580,6 +581,9 @@ impl Translator<'_> {
             ExprNode::Alias { expr, .. } => Arc::clone(expr),
             _ => Arc::clone(k),
         };
+        if a.group_type == GroupType::Pivot as i32 {
+            return self.pivot_aggregate(a, input, keys, aggregates);
+        }
         let group_keys: Vec<Arc<Expr>> = keys.iter().map(bare).collect();
         let grouping = match GroupType::try_from(a.group_type) {
             Ok(GroupType::Groupby) => Grouping::GroupBy(group_keys),
@@ -599,6 +603,7 @@ impl Translator<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
+            // Handled above, before the keys are made bare.
             Ok(GroupType::Pivot) => {
                 return Err(unsupported("pivots (spark.connect.Aggregate.pivot)"));
             }
@@ -621,6 +626,54 @@ impl Translator<'_> {
             input,
             grouping,
             aggregates: keys.into_iter().chain(aggregates).collect(),
+        })
+    }
+
+    /// `GROUP_TYPE_PIVOT` (`df.groupBy(keys).pivot(col, values).agg(..)`), as Spark's
+    /// `transformRelationalGroupedAggregate`: `Pivot(groupByExprsOpt = Some(keys), col, values,
+    /// aggregates)`. Without values Spark runs the plan to collect the distinct pivot column
+    /// values (`collectPivotValues`), which a translator that never executes cannot do.
+    fn pivot_aggregate(
+        &mut self,
+        a: &pb::Aggregate,
+        input: Arc<LogicalPlan>,
+        keys: Vec<Arc<Expr>>,
+        aggregates: Vec<Arc<Expr>>,
+    ) -> Result<PlanNode> {
+        let Some(pivot) = &a.pivot else {
+            return Err(
+                krishiv_common::error::ConnectInvalidPlanAggregateWithPivotRequiresPivot {}.into(),
+            );
+        };
+        let column = match pivot.col.as_ref() {
+            Some(col) => self.expression(col)?,
+            None => return Err(super::errors::expression_not_set()),
+        };
+        if pivot.values.is_empty() {
+            return Err(unsupported_field(
+                "Aggregate.Pivot",
+                "values",
+                "pivot values read from the data",
+            ));
+        }
+        let values = pivot
+            .values
+            .iter()
+            .map(|l| {
+                Ok(PivotValue {
+                    exprs: vec![Arc::new(Expr::new(ExprNode::Literal(
+                        super::literal::literal(l)?,
+                    )))],
+                    alias: None,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PlanNode::Pivot {
+            input,
+            pivot_columns: vec![column],
+            values,
+            aggregates,
+            group_by: Some(keys),
         })
     }
 

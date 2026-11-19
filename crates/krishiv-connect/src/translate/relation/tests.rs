@@ -795,10 +795,11 @@ fn an_aliased_grouping_key_groups_by_the_bare_expression() {
 
 #[test]
 fn aggregate_errors() {
-    let pivot = aggregate_of(4, vec![attr("a")], vec![]);
-    let e = fails(translate(&pivot));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("pivot"));
+    // Spark: GROUP_TYPE_PIVOT without the `pivot` message.
+    assert_eq!(
+        code(&aggregate_of(4, vec![attr("a")], vec![])),
+        ErrorClass::ConnectInvalidPlanAggregateWithPivotRequiresPivot
+    );
     let unspecified = aggregate_of(0, vec![], vec![]);
     assert_eq!(
         code(&unspecified),
@@ -813,6 +814,60 @@ fn aggregate_errors() {
         code(&no_input),
         ErrorClass::ConnectInvalidPlanAggregateNeedsPlanInput
     );
+}
+
+fn pivot_of(keys: Vec<Expression>, values: Vec<i32>, col: Option<Expression>) -> Relation {
+    let mut r = aggregate_of(4, keys, vec![func("sum", vec![attr("c")])]);
+    if let Some(RelType::Aggregate(a)) = &mut r.rel_type {
+        a.pivot = Some(aggregate::Pivot {
+            col,
+            values: values
+                .into_iter()
+                .map(|v| expression::Literal {
+                    literal_type: Some(LiteralType::Integer(v)),
+                    ..expression::Literal::default()
+                })
+                .collect(),
+        });
+    }
+    r
+}
+
+#[test]
+fn a_pivot_aggregate_keeps_its_named_keys_and_literal_values() {
+    let r = pivot_of(vec![attr("a")], vec![2012, 2013], Some(attr("y")));
+    let PlanNode::Pivot {
+        pivot_columns,
+        values,
+        aggregates,
+        group_by,
+        ..
+    } = node(&r)
+    else {
+        panic!("not a pivot")
+    };
+    assert_eq!(pivot_columns.len(), 1);
+    assert_eq!(values.len(), 2);
+    assert!(
+        values
+            .iter()
+            .all(|v| v.exprs.len() == 1 && v.alias.is_none())
+    );
+    assert_eq!(aggregates.len(), 1);
+    assert_eq!(group_by.map(|k| k.len()), Some(1));
+    // `groupBy().pivot(..)`: named, and empty.
+    let PlanNode::Pivot { group_by, .. } = node(&pivot_of(vec![], vec![1], Some(attr("y")))) else {
+        panic!("not a pivot")
+    };
+    assert_eq!(group_by.map(|k| k.len()), Some(0));
+}
+
+#[test]
+fn a_pivot_aggregate_without_values_needs_the_data() {
+    // Spark runs the plan to collect the distinct values; the translator never executes.
+    let r = pivot_of(vec![attr("a")], vec![], Some(attr("y")));
+    assert_eq!(code(&r), ErrorClass::KrishivUnsupportedFeature);
+    assert!(message(&r).contains("values"));
 }
 
 // ---- withColumns -----------------------------------------------------------------------------

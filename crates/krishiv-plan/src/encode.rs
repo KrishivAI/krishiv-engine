@@ -1027,6 +1027,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
                 ..
             } => {
                 self.exprs(pivot_columns);
@@ -1039,6 +1040,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     }
                 }
                 self.exprs(aggregates);
+                // Written only when the front end named the keys, so a SQL pivot's
+                // encoding (and hash) is what it was before the field existed.
+                if let Some(keys) = group_by {
+                    self.u8(1);
+                    self.exprs(keys);
+                }
             }
             PlanNode::Unpivot {
                 value_columns,

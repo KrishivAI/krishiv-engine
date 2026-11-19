@@ -353,8 +353,10 @@ impl Teardown {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
             } => {
                 self.plans.push(input);
+                self.exprs.extend(group_by.into_iter().flatten());
                 self.exprs.extend(pivot_columns);
                 self.exprs
                     .extend(values.into_iter().flat_map(|v| v.exprs.into_iter()));

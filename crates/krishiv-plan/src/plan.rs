@@ -392,6 +392,11 @@ pub enum PlanNode {
         /// The aggregate expressions, each with an optional alias
         /// ([`crate::ExprNode::Alias`]).
         aggregates: Vec<Arc<Expr>>,
+        /// The grouping expressions when the front end names them (Spark's
+        /// `groupByExprsOpt`: `df.groupBy(keys).pivot(..)`, possibly aliased; `Some`
+        /// of none is a global pivot). `None` groups by every input column the pivot
+        /// columns and the aggregates do not reference (SQL `PIVOT`).
+        group_by: Option<Vec<Arc<Expr>>>,
     },
     /// `UNPIVOT ... (values FOR name IN (columns))`, unresolved (Spark's
     /// `Unpivot`): the analyzer rewrites it to an [`PlanNode::Expand`]
@@ -1346,8 +1351,10 @@ impl LogicalPlan {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
                 ..
             } => {
+                group_by.iter().flatten().for_each(&mut *f);
                 pivot_columns.iter().for_each(&mut *f);
                 values.iter().flat_map(|v| v.exprs.iter()).for_each(&mut *f);
                 aggregates.iter().for_each(f);
@@ -1457,8 +1464,10 @@ impl LogicalPlan {
                 pivot_columns,
                 values,
                 aggregates,
+                group_by,
                 ..
             } => {
+                group_by.iter_mut().flatten().for_each(&mut *f);
                 pivot_columns.iter_mut().for_each(&mut *f);
                 values
                     .iter_mut()

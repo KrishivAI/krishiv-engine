@@ -20,7 +20,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 6 | set_op | done |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |
 | 7 | sort | done |  | Sort | P2-T091a | 0 |
 | 8 | limit | done |  | Limit | P2-T091a | 0 |
-| 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
+| 9 | aggregate | partial | pivot without values (Spark collects them by running the plan) | Aggregate; GROUP_TYPE_PIVOT → Pivot with named group-by keys | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
