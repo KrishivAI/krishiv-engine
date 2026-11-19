@@ -120,6 +120,8 @@ pub struct Session {
     /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
     /// plan reads the clock.
     pub(crate) query_start: Option<i64>,
+    /// The statement is work accepted before a drain ([`crate::QueryOptions::admitted_before_drain`]).
+    pub(crate) drain_exempt: bool,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):

@@ -7,7 +7,7 @@ impl Session {
     /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
     /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
     pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
-        if !self.state.runtime.is_draining() {
+        if self.drain_exempt || !self.state.runtime.is_draining() {
             return Ok(());
         }
         let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();

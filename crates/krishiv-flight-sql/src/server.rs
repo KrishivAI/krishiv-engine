@@ -142,6 +142,9 @@ pub(crate) struct Payload {
     /// The operations running for this handle (its `GetFlightInfo` run and its fetches), so
     /// `CancelFlightInfo` cancels these and nothing else of the session (§4.5).
     pub(crate) live: Arc<LiveOps>,
+    /// Whether a fetch of this ticket has begun: until then it is work the server accepted and a
+    /// client has not collected, which a drain waits for (design P3-T066 §5.1).
+    pub(crate) fetched: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The operations live on one handle (design §4.1, §4.5), shared by every copy of its payload.
@@ -394,6 +397,25 @@ impl FlightSqlServer {
             }
         }
         n
+    }
+
+    /// The work a drain waits for (design P3-T066 §5.1): tickets issued and not yet fetched (a
+    /// statement the server accepted whose client has not collected it) plus the `DoGet` streams
+    /// still running. A ticket fetched once stays refetchable but no longer counts; the sweep
+    /// drops one nobody fetches after the handle TTL, and the drain's deadline and stop bound
+    /// end the wait regardless.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        let unfetched = self
+            .inner
+            .handles
+            .count_where(|p| !p.fetched.load(std::sync::atomic::Ordering::Acquire));
+        let streaming = self
+            .fetches()
+            .iter()
+            .filter(|cell| cell.strong_count() > 0)
+            .count();
+        unfetched + streaming
     }
 
     /// Watches a `DoGet` stream's idle cell (the sweep holds it weakly).

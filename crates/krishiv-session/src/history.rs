@@ -137,6 +137,7 @@ pub struct QueryOptions {
     pub(crate) inbound_credential:
         Option<(crate::auth::Method, Option<crate::auth::InboundCredential>)>,
     pub(crate) query_start_micros: Option<i64>,
+    pub(crate) drain_exempt: bool,
 }
 
 impl QueryOptions {
@@ -186,6 +187,16 @@ impl QueryOptions {
     /// instant (an Arrow Flight SQL ticket fetched twice, P3-T101) gets the same clock values.
     pub fn query_start(mut self, micros: i64) -> Self {
         self.query_start_micros = Some(micros);
+        self
+    }
+
+    /// Marks the statement as work the server accepted before a drain began (an Arrow Flight SQL
+    /// ticket fetched while the server drains, design P3-T066 §5.1): its queries are not refused
+    /// by the drain, though they still go through resource-group admission. A caller sets it only
+    /// for a ticket it issued while the server was not draining; the Flight layer refuses every
+    /// new statement while draining, so each live ticket qualifies.
+    pub fn admitted_before_drain(mut self) -> Self {
+        self.drain_exempt = true;
         self
     }
 

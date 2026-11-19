@@ -64,6 +64,8 @@ struct Harness {
     flight: FlightSqlServer,
     manager: Arc<SessionManager>,
     draining: Arc<std::sync::atomic::AtomicBool>,
+    /// The runtime of the base session, whose drain flag refuses queries (design P3-T066 §5.1).
+    runtime: Arc<krishiv_session::EngineRuntime>,
     client: FlightServiceClient<Channel>,
     /// Sending (or dropping) it starts `serve`'s shutdown.
     stop: Option<oneshot::Sender<()>>,
@@ -102,14 +104,11 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
+    let base = Session::new().expect("session");
+    let runtime = Arc::clone(base.runtime());
     let factory = match factory {
         Some(f) => f,
-        None => role_sessions(
-            Session::new().expect("session"),
-            &Config::new(),
-            Arc::clone(&denials),
-        )
-        .expect("factory"),
+        None => role_sessions(base, &Config::new(), Arc::clone(&denials)).expect("factory"),
     };
     let manager = Arc::new(SessionManager::new(factory, limits));
     let connect_auth = || {
@@ -145,6 +144,7 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
         flight,
         manager,
         draining,
+        runtime,
         client: FlightServiceClient::new(channel),
         stop: Some(stop),
         served,
@@ -594,9 +594,11 @@ async fn open_fetch(
 
 const LONG: &str = "SELECT id, id * 2 AS d FROM range(0, 50000000)";
 
-/// Design P3-T066 §5.1, Flight SQL row: while draining, new statements and handshakes are refused
-/// with `KRISHIV_SERVER_DRAINING` (not retryable, not `UNAVAILABLE`); a ticket issued before the
-/// drain is still fetched, `ListActions` and cancel are served; after a resume, statements work.
+/// Design P3-T066 §5.1, Flight SQL row, with the runtime draining as `krishiv server` does: new
+/// statements and handshakes are refused with `KRISHIV_SERVER_DRAINING` (not retryable, not
+/// `UNAVAILABLE`); a query ticket and a stored command result issued before the drain are still
+/// fetched, though the runtime refuses new queries; `ListActions` is served; after a resume,
+/// statements work again.
 #[tokio::test(flavor = "multi_thread")]
 async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
     use std::sync::atomic::Ordering::Release;
@@ -604,7 +606,11 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
     let (held, cookie) = info(&mut h, OPS, None, "SELECT 1 AS x")
         .await
         .expect("info before the drain");
+    let (stored, _) = info(&mut h, OPS, cookie.as_deref(), "SHOW TABLES")
+        .await
+        .expect("a command before the drain");
     let sessions_before = (h.flight.session_count(), h.manager.counts().live);
+    h.runtime.set_draining(true);
     h.draining.store(true, Release);
     let e = info(&mut h, OPS, cookie.as_deref(), "SELECT 2")
         .await
@@ -623,16 +629,22 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
         sessions_before,
         "no session is created while draining"
     );
-    // The held ticket still fetches, and ListActions needs no session.
+    // Both held tickets are work the server accepted: the drain waits for them.
+    assert_eq!(h.flight.held(), 2);
     let batches = fetch(&mut h, OPS, cookie.as_deref(), ticket(&held))
         .await
-        .expect("a held ticket is fetched while draining");
+        .expect("a held query ticket is fetched while the runtime drains");
     assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    fetch(&mut h, OPS, cookie.as_deref(), ticket(&stored))
+        .await
+        .expect("a stored result is fetched while draining");
+    assert_eq!(h.flight.held(), 0, "fetched tickets are no longer held");
     h.client
         .list_actions(authed(arrow_flight::Empty {}, OPS, None))
         .await
         .expect("ListActions while draining");
     // Resumed: new statements work again.
+    h.runtime.set_draining(false);
     h.draining.store(false, Release);
     info(&mut h, OPS, cookie.as_deref(), "SELECT 3")
         .await

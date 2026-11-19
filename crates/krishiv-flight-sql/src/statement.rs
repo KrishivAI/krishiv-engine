@@ -297,7 +297,6 @@ fn spark_schema(schema: &SchemaRef, tz: Option<&Arc<str>>) -> Result<SchemaRef, 
     Ok(empty_batch(schema, tz)?.schema())
 }
 
-/// The handle of a ticket's or `FlightInfo`'s `TicketStatementQuery`.
 /// Whether `e`, or a cause of it, is `INVALID_HANDLE.SESSION_CLOSED`: the manager was shut
 /// (`close_all`) while a command's result was being stored. `store_command` wraps every failure in
 /// `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, and `error_class` is the outer class only.
@@ -307,6 +306,7 @@ fn closed_by_shutdown(e: &KrishivError) -> bool {
         .any(|c| c.error_class() == ErrorClass::InvalidHandleSessionClosed)
 }
 
+/// The handle of a ticket's or `FlightInfo`'s `TicketStatementQuery`.
 pub(crate) fn handle_of(statement_handle: &[u8]) -> Result<HandleId, KrishivError> {
     HandleId::from_bytes(statement_handle).ok_or_else(|| {
         InvalidHandleFormat {
@@ -392,6 +392,7 @@ impl FlightSqlServer {
             query_start_micros: query_start,
             kind: Kind::Pending,
             live: Arc::default(),
+            fetched: Arc::default(),
         };
         // 1. The slot (count and text bytes, with eviction); a refusal here runs nothing.
         let inserted = inner
@@ -592,6 +593,9 @@ impl FlightSqlServer {
         let Some((_, payload)) = inner.handles.begin(&cap, &id, Instant::now()) else {
             return Err(flight_status(&not_found()));
         };
+        payload
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Release);
         let fetch = FetchGuard {
             server: self.clone(),
             id,
@@ -622,7 +626,10 @@ impl FlightSqlServer {
                 let gate = entry.shared().await;
                 let options = QueryOptions::new()
                     .operation_id(op.id())
-                    .query_start(payload.query_start_micros);
+                    .query_start(payload.query_start_micros)
+                    // The ticket was issued before any drain (a drain refuses new statements): a
+                    // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
+                    .admitted_before_drain();
                 let df = session
                     .sql_query_with(&payload.sql, options)
                     .await

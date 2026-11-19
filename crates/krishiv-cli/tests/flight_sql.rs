@@ -40,6 +40,11 @@ fn start_with_admin_token(spill: &std::path::Path, conf: &[&str]) -> (Running, b
 }
 
 fn start_inner(spill: &std::path::Path, conf: &[&str], want_token: bool) -> (Running, bool) {
+    // Without either, the server never prints a token and the read below would wait for ever.
+    assert!(
+        !want_token || cfg!(feature = "ui") || conf.contains(&"krishiv.metrics.enabled=true"),
+        "the admin token is printed only with krishiv.metrics.enabled=true or the `ui` feature"
+    );
     let mut child = Command::new(env!("CARGO_BIN_EXE_krishiv"))
         .args([
             "server",
@@ -154,10 +159,11 @@ fn admin_call(server: &Running, method: &str, path: &str, body: &str) -> String 
     out
 }
 
-/// Design P3-T066 §5.1, Flight SQL row, through the admin API: after `Drain` a new statement is
-/// refused with `KRISHIV_SERVER_DRAINING` (not `UNAVAILABLE`); a stored command result issued
-/// before is still fetched; a query ticket that has not started is a query "admitted when it
-/// runs" (§5.1), so its first `DoGet` is refused the same way; after `ResumeServing` new statements run.
+/// Design P3-T066 §5.1, Flight SQL row, through the admin API. After `Drain` (not exiting): a new
+/// statement is refused with `KRISHIV_SERVER_DRAINING` (not `UNAVAILABLE`); the drain stays
+/// `draining` while a ticket issued before it is unfetched; a stored command result and a query
+/// ticket issued before are fetched (the query runs although the runtime refuses new ones); once
+/// both are fetched the drain is `drained`; after `ResumeServing` statements work again.
 #[tokio::test(flavor = "multi_thread")]
 async fn flight_sql_follows_the_admin_drain() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -175,36 +181,46 @@ async fn flight_sql_follows_the_admin_drain() {
     let unstarted = unstarted.endpoint[0].ticket.clone().expect("ticket");
     let reply = admin_call(&server, "POST", "/drain", "{}");
     assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-    let refused = |msg: String| {
-        assert!(msg.contains("KRISHIV_SERVER_DRAINING"), "{msg}");
-        assert!(!msg.contains("Unavailable"), "{msg}");
-    };
-    refused(format!(
-        "{:?}",
-        c.execute("SELECT 8".to_owned(), None)
-            .await
-            .expect_err("new work while draining")
-    ));
-    let rows: Vec<_> = c
+    let e = c
+        .execute("SELECT 8".to_owned(), None)
+        .await
+        .expect_err("new work while draining");
+    let msg = format!("{e:?}");
+    assert!(msg.contains("KRISHIV_SERVER_DRAINING"), "{msg}");
+    assert!(!msg.contains("Unavailable"), "{msg}");
+    // The two tickets are held work: the drain does not finish while they are unfetched.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let status = admin_call(&server, "GET", "/drain", "");
+    assert!(status.contains("\"draining\""), "{status}");
+    let _rows: Vec<_> = c
         .do_get(stored)
         .await
         .expect("a stored result is fetched while draining")
         .try_collect()
         .await
         .expect("rows");
-    drop(rows);
-    let e = match c.do_get(unstarted.clone()).await {
-        Err(e) => format!("{e:?}"),
-        Ok(stream) => format!(
-            "{:?}",
-            stream.try_collect::<Vec<_>>().await.expect_err("refused")
-        ),
-    };
-    refused(e);
+    let batches: Vec<_> = c
+        .do_get(unstarted)
+        .await
+        .expect("a query ticket is fetched while draining")
+        .try_collect()
+        .await
+        .expect("rows");
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status = admin_call(&server, "GET", "/drain", "");
+        if status.contains("\"drained\"") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never drained: {status}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let reply = admin_call(&server, "DELETE", "/drain", "");
     assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-    // The refused fetch used up the ticket (one fetch per cookie-less ticket); the client
-    // reconnects, as the refusal says, and a new statement runs after the resume.
     let again = c
         .execute("SELECT 9 AS x".to_owned(), None)
         .await

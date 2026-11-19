@@ -406,6 +406,7 @@ async fn run_listeners(
         manager: Arc::clone(&manager),
         stop: stop_tx,
         driving: AtomicBool::new(false),
+        extra_held: std::sync::OnceLock::new(),
         change: std::sync::Mutex::new(()),
     });
     let ops = Arc::new(drainer.ops(Arc::clone(&readiness), grace));
@@ -448,6 +449,9 @@ async fn run_listeners(
         // `krishiv.flight_sql.requests` in the scrape (design §7, review m6).
         let counted = flight.clone();
         let _ = late_metrics.set(Box::new(move || counted.metrics()));
+        // The drain waits for unfetched tickets and running fetches too (design P3-T066 §5.1).
+        let held = flight.clone();
+        let _ = drainer.extra_held.set(Box::new(move || held.held()));
     }
 
     // Installed before the addresses are printed: a SIGTERM right after
@@ -758,6 +762,9 @@ pub(crate) struct Drainer {
     manager: Arc<SessionManager>,
     stop: watch::Sender<bool>,
     driving: AtomicBool,
+    /// Held work beyond the manager's (Flight SQL's unfetched tickets and running fetches),
+    /// set once the Flight service exists (design P3-T066 §5.1).
+    extra_held: std::sync::OnceLock<Box<dyn Fn() -> usize + Send + Sync>>,
     /// Serialises `start` and `resume`: the controller and the engine flag change together.
     change: std::sync::Mutex<()>,
 }
@@ -836,9 +843,8 @@ impl Drainer {
             .change
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let step = self
-            .drain
-            .step(std::time::Instant::now(), self.manager.busy());
+        let held = self.manager.busy() + self.extra_held.get().map_or(0, |f| f());
+        let step = self.drain.step(std::time::Instant::now(), held);
         match step {
             DrainStep::Wait => {
                 if self.drain.status().state == DrainState::Serving {
@@ -1018,6 +1024,7 @@ mod tests {
             manager: Arc::clone(&manager),
             stop: stop_tx,
             driving: AtomicBool::new(false),
+            extra_held: std::sync::OnceLock::new(),
             change: std::sync::Mutex::new(()),
         });
         drainer.start(Duration::from_millis(300), true);
