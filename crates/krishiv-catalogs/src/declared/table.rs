@@ -7,10 +7,11 @@
 //!   the snapshot read becomes the version (the current snapshot, or the one a time travel names).
 //!   Read restrictions and server-side planning are refused by the client before anything is
 //!   returned.
-//! - **Table `config`.** No key of it reaches a store or a request in this build: the reads use the
-//!   server's store configuration. A catalog-supplied `token` (and the RFC 8693 token-type keys
-//!   beside it) is dropped, since no later request for the table exists yet; the refresh-endpoint
-//!   and `signer.*` keys are dropped and never followed. A response asking for remote signing
+//! - **Table `config`.** No key of it reaches a store: the reads use the server's store
+//!   configuration, or (`storage = vended`) only the vended credential keys. A catalog-supplied
+//!   `token` is kept only with a vended answer, as the bearer of that table's `loadCredentials` and
+//!   reload (`vended.rs`); otherwise it is dropped (and the RFC 8693 token-type keys beside it
+//!   always are); the refresh-endpoint and `signer.*` keys are dropped and never followed. A response asking for remote signing
 //!   (`s3.remote-signing-enabled`, or `signer.*` keys without credentials) is refused when the
 //!   table is read (`KRISHIV_UNSUPPORTED_FEATURE`, §4.5).
 //! - **Metadata cache (§3.5).** A `loadTable` answer is kept [`METADATA_TTL`] per table and
@@ -516,9 +517,7 @@ impl RestTable {
         };
         // The answer `loadTable` gave, kept unless the cache holds a newer one for this identity.
         if let Some(a) = &self.loaded.vended {
-            table
-                .cache
-                .put_if_newer(table.key.clone(), Arc::clone(a), table.max_entries);
+            table.offer(Arc::clone(a));
         }
         let answer = table.answer().await?;
         let refuse = |rule| refused(&table.refetch.catalog, &self.relation, rule);

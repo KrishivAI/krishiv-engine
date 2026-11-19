@@ -3,7 +3,8 @@
 //! real HTTP/1.1 over TCP, a thread per connection, `Connection: close` on every answer. It takes `PUT` (with
 //! `If-None-Match: *`), `GET` (whole or one `Range`), `HEAD` and `DELETE`; anything else is a 501 the test sees.
 //! It checks no signature: it records the SigV4 access key id (`Credential=<id>/`) of every request, so a test can
-//! say which credential each request was signed with. `deny` makes a key id get 403 `AccessDenied`.
+//! say which credential each request was signed with. `deny` makes a key id get 403 `AccessDenied`, `expire` 403
+//! `ExpiredToken` (what S3 answers for a revoked or expired session credential; the store retries it once).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -27,6 +28,7 @@ struct State {
     objects: BTreeMap<String, Vec<u8>>,
     seen: Vec<S3Seen>,
     denied: BTreeSet<String>,
+    expired: BTreeSet<String>,
 }
 
 /// A running stand-in ([`serve_s3`]); it serves until the process ends. Clones share it.
@@ -52,6 +54,11 @@ impl S3Server {
     /// Requests signed with `key_id` get 403 from now on.
     pub fn deny(&self, key_id: &str) {
         self.state.lock().unwrap().denied.insert(key_id.to_owned());
+    }
+
+    /// Requests signed with `key_id` get 403 `ExpiredToken` from now on (all but HEAD, see `handle`).
+    pub fn expire(&self, key_id: &str) {
+        self.state.lock().unwrap().expired.insert(key_id.to_owned());
     }
 
     /// The access key ids the requests since the last [`Self::clear_seen`] were signed with.
@@ -188,6 +195,15 @@ fn handle(mut stream: TcpStream, state: &Mutex<State>) {
         object: object.clone(),
         key_id: key_id.clone(),
     });
+    // A HEAD answer has no body, so it could not name `ExpiredToken` (real S3 answers a bare 403 there, which the
+    // store cannot tell from a denial): an expired key still passes HEAD here.
+    if r.method != "HEAD" && key_id.as_ref().is_some_and(|k| st.expired.contains(k)) {
+        drop(st);
+        let body =
+            b"<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>";
+        answer(&mut stream, "403 Forbidden", &[], body);
+        return;
+    }
     if key_id.as_ref().is_some_and(|k| st.denied.contains(k)) {
         drop(st);
         let body = b"<Error><Code>AccessDenied</Code><Message>denied</Message></Error>";

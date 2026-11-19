@@ -250,6 +250,49 @@ pub(crate) fn credential(
     }
 }
 
+/// The catalog-supplied bearer token of one table (a `loadTable` answer's `config`), design §4.1.
+const TABLE_TOKEN: &str = "token";
+
+/// The table `token` of a `loadTable` answer's `config`, when it has one: used only as the bearer of that table's
+/// requests to the declared catalog host, never sent to the token endpoint or to storage.
+pub(crate) fn table_token(config: &BTreeMap<String, SecretString>) -> Option<SecretString> {
+    config
+        .get(TABLE_TOKEN)
+        .filter(|t| !t.expose_secret().trim().is_empty())
+        .cloned()
+}
+
+/// When the credential keys of `config` stop being good: the earliest expiry key that parses, else `fetched` plus
+/// the default TTL. An expiry that does not parse counts as the default TTL here (the read refuses it anyway).
+fn expires_at(
+    config: &BTreeMap<String, SecretString>,
+    fetched: SystemTime,
+    default_ttl: Duration,
+) -> SystemTime {
+    let parsed = config
+        .iter()
+        .filter(|(k, _)| {
+            matches!(k.as_str(), S3_EXPIRES | GCS_EXPIRES) || k.starts_with(ADLS_EXPIRES)
+        })
+        .filter_map(|(k, _)| expiry(config, k, fetched, default_ttl).ok())
+        .min();
+    parsed.unwrap_or(fetched + default_ttl)
+}
+
+/// When a vended answer stops being good (design §4.3: its cache entry is dropped then): the earliest expiry of any
+/// map that holds a credential, else `fetched` plus the default TTL.
+pub(crate) fn answer_expires_at<'a>(
+    maps: impl IntoIterator<Item = &'a BTreeMap<String, SecretString>>,
+    fetched: SystemTime,
+    default_ttl: Duration,
+) -> SystemTime {
+    maps.into_iter()
+        .filter(|m| !m.is_empty())
+        .map(|m| expires_at(m, fetched, default_ttl))
+        .min()
+        .unwrap_or(fetched + default_ttl)
+}
+
 /// Whether `key` is one of the credential keys above (what a vended answer keeps of a `config` map).
 fn is_credential_key(key: &str) -> bool {
     matches!(
@@ -259,8 +302,8 @@ fn is_credential_key(key: &str) -> bool {
         || key.starts_with(ADLS_EXPIRES)
 }
 
-/// The credential keys of `config`; every other key (a table `token`, refresh endpoints, `signer.*`, store options)
-/// is dropped here and never followed or sent anywhere.
+/// The credential keys of `config`; every other key (refresh endpoints, `signer.*`, store options, and the table
+/// `token`, which [`table_token`] takes first) is dropped here and never followed or sent anywhere.
 pub(crate) fn keep_credentials(
     config: BTreeMap<String, SecretString>,
 ) -> BTreeMap<String, SecretString> {

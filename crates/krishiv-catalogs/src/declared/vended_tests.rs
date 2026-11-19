@@ -6,9 +6,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::principal::{Principal, PrincipalKind};
+use krishiv_common::secret::SecretString;
 use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_session::catalog_registry::IdentityKey;
 use krishiv_store::CacheScope;
@@ -31,6 +33,8 @@ fn key_of(instance: u64, identity: IdentityKey, table: &str) -> Key {
     (instance, identity, vec!["db".to_owned()], table.to_owned())
 }
 
+const TTL: Duration = Duration::from_secs(3600);
+
 fn answer(location: &str) -> Arc<VendedAnswer> {
     Arc::new(VendedAnswer::new(
         Vec::new(),
@@ -46,9 +50,9 @@ fn vended_cache_per_identity() {
         IdentityKey::of("cat", &user("ana", None)),
         IdentityKey::of("cat", &user("bob", None)),
     );
-    cache.put(key(ana.clone(), "t"), answer("s3://b/ana"), 10);
+    cache.put(key(ana.clone(), "t"), answer("s3://b/ana"), TTL, 10);
     assert!(cache.get(&key(bob.clone(), "t")).is_none());
-    cache.put(key(bob.clone(), "t"), answer("s3://b/bob"), 10);
+    cache.put(key(bob.clone(), "t"), answer("s3://b/bob"), TTL, 10);
     assert_eq!(
         cache.get(&key(ana.clone(), "t")).unwrap().location(),
         "s3://b/ana"
@@ -62,9 +66,9 @@ fn vended_cache_per_identity() {
     );
     // Another instance of a catalog of the same name (another runtime, maybe another server) is another key.
     assert!(cache.get(&key_of(2, ana.clone(), "t")).is_none());
-    cache.put(key_of(2, ana.clone(), "t"), answer("s3://b/two"), 10);
+    cache.put(key_of(2, ana.clone(), "t"), answer("s3://b/two"), TTL, 10);
     // REFRESH TABLE drops every identity's answer for the table, in that catalog instance only.
-    cache.put(key(ana.clone(), "u"), answer("s3://b/u"), 10);
+    cache.put(key(ana.clone(), "u"), answer("s3://b/u"), TTL, 10);
     cache.drop_table(1, &["db".to_owned()], "t");
     assert_eq!(cache.len(), 2);
     assert!(cache.get(&key(ana.clone(), "u")).is_some());
@@ -83,10 +87,10 @@ fn vended_cache_keeps_the_newer_answer() {
     let older = answer("s3://b/old");
     std::thread::sleep(std::time::Duration::from_millis(5));
     let newer = answer("s3://b/new");
-    cache.put_if_newer(k(), Arc::clone(&older), 10);
-    cache.put_if_newer(k(), Arc::clone(&newer), 10);
+    cache.put_if_newer(k(), Arc::clone(&older), TTL, 10);
+    cache.put_if_newer(k(), Arc::clone(&newer), TTL, 10);
     assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
-    cache.put_if_newer(k(), older, 10);
+    cache.put_if_newer(k(), older, TTL, 10);
     assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
 }
 
@@ -94,17 +98,83 @@ fn vended_cache_keeps_the_newer_answer() {
 fn vended_cache_bounded() {
     let cache = VendedCache::default();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
-    cache.put(id("a"), answer("s3://b/a"), 2);
-    cache.put(id("b"), answer("s3://b/b"), 2);
+    cache.put(id("a"), answer("s3://b/a"), TTL, 2);
+    cache.put(id("b"), answer("s3://b/b"), TTL, 2);
     // `a` used last, so `b` is the least recently used when `c` comes.
     assert!(cache.get(&id("a")).is_some());
-    cache.put(id("c"), answer("s3://b/c"), 2);
+    cache.put(id("c"), answer("s3://b/c"), TTL, 2);
     assert_eq!(cache.len(), 2);
     assert!(cache.get(&id("b")).is_none());
     assert!(cache.get(&id("a")).is_some() && cache.get(&id("c")).is_some());
     // Replacing an entry never evicts another.
-    cache.put(id("c"), answer("s3://b/c2"), 2);
+    cache.put(id("c"), answer("s3://b/c2"), TTL, 2);
     assert_eq!(cache.len(), 2);
+}
+
+/// An S3 answer for `s3://b/t` whose credential expires at `expires_ms` (epoch ms), or has no expiry key.
+fn s3_answer(expires_ms: Option<u128>) -> Arc<VendedAnswer> {
+    let mut config = BTreeMap::from([
+        ("s3.access-key-id".to_owned(), SecretString::new("AKIA")),
+        (
+            "s3.secret-access-key".to_owned(),
+            SecretString::new("secret"),
+        ),
+    ]);
+    if let Some(ms) = expires_ms {
+        config.insert(
+            "s3.session-token-expires-at-ms".to_owned(),
+            SecretString::new(ms.to_string()),
+        );
+    }
+    Arc::new(VendedAnswer::new(
+        vec![crate::iceberg_rest::types::StorageCredential {
+            prefix: "s3://b/t".to_owned(),
+            config,
+        }],
+        BTreeMap::new(),
+        "s3://b/t".to_owned(),
+    ))
+}
+
+fn ms(t: SystemTime) -> u128 {
+    t.duration_since(UNIX_EPOCH).unwrap().as_millis()
+}
+
+/// Design §4.3: an entry is dropped at its credential's expiry (the expiry key, else fetched plus the default TTL),
+/// in `get` and in any later `put`, so expired secrets do not stay in the process until LRU eviction.
+#[test]
+fn vended_cache_drops_expired_entries() {
+    let cache = VendedCache::default();
+    let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
+    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    let future = ms(SystemTime::now() + Duration::from_secs(3600));
+    cache.put(id("expired"), s3_answer(Some(past)), TTL, 10);
+    assert!(cache.get(&id("expired")).is_none());
+    assert_eq!(cache.len(), 0, "dropped on get");
+    // Dropped by a later put of another key, without a get.
+    cache.put(id("old"), s3_answer(Some(past)), TTL, 10);
+    cache.put(id("live"), s3_answer(Some(future)), TTL, 10);
+    assert_eq!(cache.len(), 1);
+    assert!(cache.get(&id("live")).is_some());
+    // No expiry key: the default TTL counts from the fetch.
+    cache.put(id("ttl"), s3_answer(None), Duration::ZERO, 10);
+    assert!(cache.get(&id("ttl")).is_none());
+    cache.put(id("ttl"), s3_answer(None), TTL, 10);
+    assert!(cache.get(&id("ttl")).is_some());
+}
+
+/// An answer fetched for a dropped catalog instance (a query running across the drop) is never kept.
+#[test]
+fn vended_cache_keeps_nothing_for_a_dropped_instance() {
+    let cache = VendedCache::default();
+    let ana = IdentityKey::of("cat", &user("ana", None));
+    cache.put(key_of(7, ana.clone(), "t"), answer("s3://b/t"), TTL, 10);
+    cache.drop_instance(7);
+    cache.put(key_of(7, ana.clone(), "t"), answer("s3://b/t"), TTL, 10);
+    cache.put_if_newer(key_of(7, ana.clone(), "u"), answer("s3://b/u"), TTL, 10);
+    assert_eq!(cache.len(), 0);
+    cache.put(key_of(8, ana, "t"), answer("s3://b/t"), TTL, 10);
+    assert_eq!(cache.len(), 1);
 }
 
 fn scope_text(s: CacheScope) -> String {

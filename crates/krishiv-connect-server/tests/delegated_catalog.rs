@@ -611,6 +611,10 @@ async fn vending_lake() -> (krishiv_catalogs::testing::S3Server, String, Seen) {
 /// Design P3-T067 §4.4 `vended_blocks_not_shared_across_delegated_users`: over single-node Connect, Alice and Bob
 /// read one vended table with the key the catalog vended each of them; Bob's read fetches the data files with his own
 /// key, never from blocks Alice's read cached.
+///
+/// Not the mutation guard for the §4.4 scope encoding: a vended read's stores are scoped (`#scope:<nonce>` ids, one
+/// nonce per query), so no two queries share vended blocks whatever `cache_scope` returns. The encoding itself is
+/// pinned by `krishiv-catalogs` `declared::vended::tests::block_cache_scope_encoding_no_collision`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vended_blocks_not_shared_across_delegated_users() {
     let (s3, base, _) = vending_lake().await;

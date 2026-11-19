@@ -80,20 +80,29 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   token; `RestTable::open` (`DeclaredTable`) opens the scan through `IcebergTable::from_metadata` and
   `IcebergTableProvider::open` on a blocking thread, with the query's I/O and paths (the session confines them in server
   mode, ADR 0046 §3a); a response asking for remote signing is refused at open; table `config`
-  (token, signer, refresh-endpoint keys) is dropped, never followed or sent anywhere); `declared/vended.rs` (§4.1, §4.3,
+  signer and refresh-endpoint keys are dropped, never followed or sent anywhere; its `token` is kept only with a vended
+  answer); `declared/vended.rs` (§4.1, §4.3,
   §4.4, unit 3) `storage = vended`: `VendedCache` (per process, per catalog instance, identity key and table, `krishiv.catalog.vended.maxEntries`
-  LRU, only credential keys kept; a `RestCatalog` drops its instance's entries when dropped, so two runtimes declaring one
-  name never share an answer; a `loadTable` answer replaces the held one only when fetched later), `VendedSource` (the cached credential while it outlives the refresh skew, else
-  `loadCredentials` with the same caller or a table reload), one store scope per vended prefix through `ScanInputs::stores`,
+  LRU, only credential keys kept; an entry is dropped at its answer's expiry (earliest credential expiry, else
+  fetched + `vendedDefaultTtl`) in `get` and `put`; a `RestCatalog` drops its instance's entries when dropped and the
+  instance is remembered as dead, so nothing is kept for it later and two runtimes declaring one
+  name never share an answer; a `loadTable` answer replaces the held one only when fetched later, under one lock; the
+  table `token` of a `loadTable` answer is kept with it and is the bearer of that table's `loadCredentials` and reload
+  only, a 401 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
+  skew, else `loadCredentials` with the same caller or a table reload (endpoint not advertised, or a 404); a second
+  fetch while the cache still holds the answer it served means the store refused it, so it refreshes), one store scope per vended prefix through `ScanInputs::stores`,
   `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any
   request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
   segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
   also accepts absolute `file:` locations). Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
   connector's `testing::write_table` wrote, served by the fake REST server); `declared/vended_read_tests.rs`: a table
   `testing::write_table_with` wrote to `s3://bucket/wh` with a writer key on `src/s3_test_server.rs` (a loopback S3 stand-in, tests only:
-  PUT/GET range/HEAD/DELETE in memory, records each request's SigV4 key id, `deny` per key id), read by a session with no S3 key:
-  every request signed with the vended key, a credential inside the refresh skew replaced through `loadCredentials`,
-  `vended_secrets_never_shown`). Feature `testing` exports the stand-in and `write_s3_table` for other crates' tests
+  PUT/GET range/HEAD/DELETE in memory, records each request's SigV4 key id, `deny` (403 `AccessDenied`) and `expire`
+  (403 `ExpiredToken`, not on HEAD) per key id), read by a session with no S3 key:
+  every request signed with the vended key, a credential inside the refresh skew replaced through `loadCredentials`
+  (with the table token) or a table reload, a key storage refuses as expired mid-read refreshed and never served
+  again, a path read never signed with the vended key (`vended_prefix_does_not_open_path_reads`), remote signing
+  refused, `vended_secrets_never_shown`). Feature `testing` exports the stand-in and `write_s3_table` for other crates' tests
   (krishiv-connect-server `tests/delegated_catalog.rs`: `vended_blocks_not_shared_across_delegated_users`, `catalog_mode_matrix`).
 - Not here yet: Unity vended credentials, distributed reads of declared tables (refused by the session), a fuzz
   target for the REST and the Unity Catalog response parsers (§5.6), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the

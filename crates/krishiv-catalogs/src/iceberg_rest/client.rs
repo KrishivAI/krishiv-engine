@@ -35,7 +35,7 @@ use std::time::Instant;
 use krishiv_common::error::{
     KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
 };
-use krishiv_common::secret::wipe_bytes;
+use krishiv_common::secret::{SecretString, wipe_bytes};
 use serde_json::Value;
 use url::Url;
 
@@ -292,28 +292,44 @@ impl RestClient {
         deadline: Instant,
         absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
-        self.get_with(&self.tokens, caller, url, headers, deadline, absent)
+        self.get_with(&self.tokens, caller, None, url, headers, deadline, absent)
     }
 
-    /// [`Self::get`] with the token of `tokens`.
+    /// [`Self::get`] with the token of `tokens`, or first with `table_token` (a catalog-supplied table token, design
+    /// P3-T067 §4.1: it replaces the caller's token for that table's requests). A 401 for the table token (it
+    /// expired) retries once with the caller's token.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one GET: its token source, caller, table token, URL, headers, deadline and absent kinds"
+    )]
     fn get_with(
         &self,
         tokens: &Tokens,
         caller: &RestCaller,
+        table_token: Option<&SecretString>,
         url: &Url,
         headers: &[(&'static str, String)],
         deadline: Instant,
         absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
         let mut retried = false;
+        let mut table_token = table_token;
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            let bearer = tokens.token(caller, &self.http, deadline)?;
+            let bearer = match table_token {
+                Some(t) => Some(t.clone()),
+                None => tokens.token(caller, &self.http, deadline)?,
+            };
             request.bearer.clone_from(&bearer);
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
                 200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
+                401 if table_token.is_some() => {
+                    table_token = None;
+                    wipe_bytes(&mut response.body);
+                    continue;
+                }
                 401 if !retried && tokens.refreshable() => {
                     if let Some(refused) = &bearer {
                         tokens.invalidate(refused);
@@ -585,6 +601,18 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
+        self.load_table_for(caller, None, namespace, table)
+    }
+
+    /// [`load_table_as`](Self::load_table_as), sent with the catalog-supplied `table_token` of this table when given
+    /// (design P3-T067 §4.1; a 401 for it falls back to the caller's token).
+    pub(crate) fn load_table_for(
+        &self,
+        caller: &RestCaller,
+        table_token: Option<&SecretString>,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<LoadedTable>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
         let server = self.server(caller, deadline)?;
@@ -602,9 +630,17 @@ impl RestClient {
             } else {
                 Vec::new()
             };
-            self.get(caller, &url, &headers, deadline, NO_SUCH_TABLE)?
-                .map(LoadedTable::from_json)
-                .transpose()
+            self.get_with(
+                &self.tokens,
+                caller,
+                table_token,
+                &url,
+                &headers,
+                deadline,
+                NO_SUCH_TABLE,
+            )?
+            .map(LoadedTable::from_json)
+            .transpose()
         };
         let Some(loaded) = run().map_err(self.fail(&what))? else {
             return Ok(None);
@@ -669,6 +705,18 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
+        self.load_credentials_for(caller, None, namespace, table)
+    }
+
+    /// [`load_credentials_as`](Self::load_credentials_as), sent with the catalog-supplied `table_token` of this table
+    /// when given (design P3-T067 §4.1; a 401 for it falls back to the caller's token).
+    pub(crate) fn load_credentials_for(
+        &self,
+        caller: &RestCaller,
+        table_token: Option<&SecretString>,
+        namespace: &[String],
+        table: &str,
+    ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
         let server = self.server(caller, deadline)?;
@@ -690,9 +738,17 @@ impl RestClient {
                 &server,
                 &["namespaces", &ns, "tables", &name, "credentials"],
             )?;
-            self.get(caller, &url, &[], deadline, NO_SUCH_TABLE)?
-                .map(types::credentials)
-                .transpose()
+            self.get_with(
+                &self.tokens,
+                caller,
+                table_token,
+                &url,
+                &[],
+                deadline,
+                NO_SUCH_TABLE,
+            )?
+            .map(types::credentials)
+            .transpose()
         };
         let Some(creds) = run().map_err(self.fail(&what))? else {
             return Ok(None);

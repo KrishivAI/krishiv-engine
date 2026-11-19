@@ -201,10 +201,220 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
         "{asked:?}"
     );
     assert!(probe.seen().is_empty(), "{:?}", probe.seen());
-    // The table's `token` replaces the catalog's on no request.
-    for r in server.seen() {
-        assert_ne!(r.header("authorization"), Some("Bearer table-token"));
+    // Design §4.1: the table's `token` is the bearer of that table's `loadCredentials`, and of nothing else.
+    for r in &server.seen() {
+        let table_bearer = r.header("authorization") == Some("Bearer table-token");
+        assert_eq!(
+            table_bearer,
+            path(r) == "/v1/namespaces/db/tables/t/credentials",
+            "{}",
+            path(r)
+        );
     }
+}
+
+/// An S3 credential for `prefix` signed as `key_id` without an expiry key (valid for `vendedDefaultTtl`).
+fn vended_no_expiry(prefix: &str, key_id: &str) -> String {
+    format!(
+        r#"{{"prefix": "{prefix}", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "secret-of-{key_id}"}}}}"#
+    )
+}
+
+/// How a scripted catalog answers `loadCredentials`.
+#[derive(Clone, Copy)]
+enum Credentials {
+    /// Not advertised in `/v1/config`.
+    NotAdvertised,
+    /// Advertised, answered 404 `NoSuchTableException`.
+    Missing,
+}
+
+/// A catalog whose `n`-th `loadTable` (from 0) answers `load(n)`.
+fn reloading_catalog(
+    load: impl Fn(usize) -> String + Send + Sync + 'static,
+    credentials: Credentials,
+) -> Server {
+    let endpoints = match credentials {
+        Credentials::NotAdvertised => "",
+        Credentials::Missing => {
+            r#", "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+            "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]"#
+        }
+    };
+    let config = format!(r#"{{"defaults": {{}}, "overrides": {{}}{endpoints}}}"#);
+    let loads = std::sync::atomic::AtomicUsize::new(0);
+    let missing = r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#;
+    serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, config.clone()),
+        "/v1/namespaces/db/tables/t" => Reply::Json(
+            200,
+            load(loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst)),
+        ),
+        _ => Reply::Json(404, missing.into()),
+    })
+}
+
+fn count(server: &Server, p: &str) -> usize {
+    server.seen().iter().filter(|r| path(r) == p).count()
+}
+
+/// Design §4.1: a catalog without `loadCredentials`, or one that answers it 404, refreshes by reloading the table.
+/// The first answer's credential is inside the refresh skew; the reload's is good, and every storage request is
+/// signed with it.
+#[test]
+fn vended_credential_refreshed_by_table_reload() {
+    for mode in [Credentials::NotAdvertised, Credentials::Missing] {
+        let s3 = serve_s3();
+        let table = s3_table(&s3);
+        let t = table.clone();
+        let server = reloading_catalog(
+            move |n| {
+                let (key, ttl) = if n == 0 {
+                    ("AKIAOLDKEY", Duration::from_secs(60))
+                } else {
+                    ("AKIARELOADKEY", Duration::from_secs(3600))
+                };
+                load_body(
+                    &t,
+                    r#"{"token": "table-token"}"#,
+                    &[vended("s3://bucket/wh", key, ttl)],
+                )
+            },
+            mode,
+        );
+        let s = session(&server, &s3);
+        s3.deny(WRITER);
+        s3.deny("AKIAOLDKEY");
+        s3.clear_seen();
+        assert_eq!(ids(&s), vec![1, 2, 3]);
+        assert_eq!(
+            s3.key_ids(),
+            signed_with(&["AKIARELOADKEY"]),
+            "{:?}",
+            s3.seen()
+        );
+        assert_eq!(count(&server, "/v1/namespaces/db/tables/t"), 2);
+        let asked = count(&server, "/v1/namespaces/db/tables/t/credentials");
+        match mode {
+            Credentials::NotAdvertised => assert_eq!(asked, 0),
+            Credentials::Missing => assert_eq!(asked, 1),
+        }
+        // The reload is sent with the table's token, the first load with the caller's (here: none).
+        let bearers: Vec<Option<String>> = server
+            .seen()
+            .iter()
+            .filter(|r| path(r) == "/v1/namespaces/db/tables/t")
+            .map(|r| r.header("authorization").map(str::to_owned))
+            .collect();
+        assert_eq!(bearers, vec![None, Some("Bearer table-token".to_owned())]);
+    }
+}
+
+/// Design §4.1 minor 5, §4.3: a credential without an expiry key that storage refuses as expired (403
+/// `ExpiredToken`) is refreshed once and the request retried, though the cache still thinks it good for the default
+/// TTL; the refused answer is replaced, so the next query never signs with it.
+#[test]
+fn vended_credential_refused_mid_read_is_refreshed() {
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    let server = catalog(
+        load_body(
+            &table,
+            "{}",
+            &[vended_no_expiry("s3://bucket/wh", "AKIAOLDKEY")],
+        ),
+        Some(vended(
+            "s3://bucket/wh",
+            "AKIANEWKEY",
+            Duration::from_secs(3600),
+        )),
+    );
+    let s = session(&server, &s3);
+    s3.deny(WRITER);
+    s3.clear_seen();
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(s3.key_ids(), signed_with(&["AKIAOLDKEY"]));
+    let credentials = "/v1/namespaces/db/tables/t/credentials";
+    assert_eq!(count(&server, credentials), 0);
+    // Storage revokes the key; the cache still holds it, valid for the default TTL.
+    s3.expire("AKIAOLDKEY");
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(count(&server, credentials), 1);
+    s3.clear_seen();
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(
+        s3.key_ids(),
+        signed_with(&["AKIANEWKEY"]),
+        "{:?}",
+        s3.seen()
+    );
+    assert_eq!(count(&server, credentials), 1);
+}
+
+/// Design §4.1 confinement, §8 `vended_prefix_does_not_open_path_reads`: after a vended read of `lake.db.t` in
+/// server mode, a path read of the same files by the same session never uses the vended key: it reads with the
+/// session's own storage settings under `allowedPrefixes`, or is refused.
+#[test]
+fn vended_prefix_does_not_open_path_reads() {
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    let server = catalog(
+        load_body(
+            &table,
+            "{}",
+            &[vended(
+                "s3://bucket/wh",
+                "AKIAVENDEDKEY",
+                Duration::from_secs(3600),
+            )],
+        ),
+        None,
+    );
+    let setup = CatalogSetup::new(DeclMode::Server)
+        .factory(Arc::new(IcebergRestFactory))
+        .setting("krishiv.catalog.lake.type", "iceberg-rest")
+        .setting("krishiv.catalog.lake.uri", server.base.as_str())
+        .setting("krishiv.catalog.lake.allowInsecure", "true")
+        .setting("krishiv.catalog.lake.storage", "vended");
+    let runtime = EngineRuntime::builder()
+        .catalogs(setup)
+        .config("fs.s3a.endpoint", s3.endpoint.as_str())
+        .config("fs.s3a.region", "us-east-1")
+        .config("krishiv.io.objectStore.allowedPrefixes", "s3://bucket/wh")
+        // The session's own key, so a path read signs with it (no ambient credential chain).
+        .config("fs.s3a.access.key", "AKIASESSIONKEY")
+        .config("fs.s3a.secret.key", "secret-of-the-session")
+        .build()
+        .unwrap();
+    let s = Session::builder().runtime(runtime).build().unwrap();
+    s3.deny(WRITER);
+    s3.clear_seen();
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(s3.key_ids(), signed_with(&["AKIAVENDEDKEY"]));
+    let data = s3
+        .objects()
+        .into_iter()
+        .find(|o| o.ends_with(".parquet"))
+        .unwrap();
+    s3.clear_seen();
+    let read = block_on(async {
+        s.sql(&format!("SELECT * FROM parquet.`s3://{data}`"))
+            .await?
+            .collect()
+            .await
+    });
+    let seen = s3.seen();
+    assert!(
+        seen.iter()
+            .all(|r| r.key_id.as_deref() != Some("AKIAVENDEDKEY")),
+        "a path read used the vended key: {seen:?} ({read:?})"
+    );
+    // Either refused before any request, or read with the session's own key.
+    assert!(
+        seen.iter()
+            .all(|r| r.key_id.as_deref() == Some("AKIASESSIONKEY")),
+        "{seen:?} ({read:?})"
+    );
 }
 
 /// All text of the batches `sql` returns (every column displayed).
@@ -308,4 +518,54 @@ fn vended_secrets_never_shown() {
     for r in server.seen().iter().chain(moved.seen().iter()) {
         assert!(!format!("{r:?}").contains(TABLE_TOKEN), "{r:?}");
     }
+}
+
+/// Design §4.5, §8 `remote_signing_refused_cleanly`, the `storage = vended` leg (the declaration leg is
+/// `catalog_decl::tests::remote_signing_refused_in_this_build`, the allowed-prefixes leg
+/// `read_tests::table_config_signer_and_refresh_urls_never_followed`): a vended table whose answer sets
+/// `s3.remote-signing-enabled` is refused when read, with Krishiv's own error, before any storage request; `signer.*`
+/// keys beside vended credentials ask for nothing (§4.5), so that read signs with the vended key and the signer is
+/// never called.
+#[test]
+fn remote_signing_refused_cleanly() {
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    s3.deny(WRITER);
+    let signer = serve(|_| Reply::Json(500, "{}".into()));
+    let lake = |config: &str| {
+        catalog(
+            load_body(
+                &table,
+                config,
+                &[vended(
+                    "s3://bucket/wh",
+                    "AKIAVENDEDKEY",
+                    Duration::from_secs(3600),
+                )],
+            ),
+            None,
+        )
+    };
+    let flagged = lake(r#"{"s3.remote-signing-enabled": "true"}"#);
+    let s = session(&flagged, &s3);
+    s3.clear_seen();
+    let e =
+        block_on(async { s.sql("SELECT id FROM lake.db.t").await?.collect().await }).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("remote signing"), "{e}");
+    assert!(s3.seen().is_empty(), "{:?}", s3.seen());
+
+    let with_signer = lake(&format!(
+        r#"{{"signer.uri": "{0}/signer", "signer.endpoint": "v1/sign"}}"#,
+        signer.base
+    ));
+    let s = session(&with_signer, &s3);
+    s3.clear_seen();
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(s3.key_ids(), signed_with(&["AKIAVENDEDKEY"]));
+    assert!(signer.seen().is_empty(), "{:?}", signer.seen());
 }
