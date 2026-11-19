@@ -52,6 +52,8 @@ impl<'a> Walker<'a> {
             ExprNode::Subquery { kind, plan } => {
                 let out = self.subquery(plan, offset)?;
                 match kind {
+                    // Resolved plans hold no `TABLE` argument expression.
+                    SubqueryKind::Table(_) => Err(internal("a TABLE argument in a resolved plan")),
                     SubqueryKind::Scalar => out
                         .first()
                         .cloned()

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the lakehouse connectors: the Delta log pool, the catalog parse
-//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and the Iceberg
-//! manifest cache (P3-T026 design note section 2.3).
+//! The config entries of the lakehouse connectors: the Delta log pool and snapshot cache, the
+//! catalog parse limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and
+//! the Iceberg manifest cache (P3-T026 design note section 2.3).
 
 use std::time::Duration;
 
@@ -17,6 +17,22 @@ pub static DELTA_LOG_THREADS: ConfigEntry = ConfigEntry {
           replay, snapshots, commits, checkpoints): at most this many Delta kernel calls run at \
           once across all queries, and a query waits for a free thread (a cancellable wait, \
           measured by the `delta.log_pool.wait_ms` metric). Read when the pool first starts.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most bytes the runtime's cache of Delta snapshots holds.
+pub static DELTA_SNAPSHOT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.delta.snapshotCache.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Experimental. Most bytes, estimated, the runtime's cache of Delta snapshots holds: \
+          each table's latest snapshot and its live-file listing, kept across \
+          queries so the next one reads only the newer log. The least recently used table \
+          leaves first; a table whose listing alone is larger keeps only its snapshot, and its \
+          files are listed again by each query. Read when the runtime starts.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
@@ -64,6 +80,38 @@ pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
           same table) does not fetch and parse its manifests again. Manifests are immutable, so \
           entries are keyed by path and length and never go stale. One cache per Iceberg storage \
           registration, shared by every table opened through it; 0 disables it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most token exchanges per minute for one principal and one set of exchange claims (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(60)),
+    doc: "Most RFC 8693 token exchanges a catalog with `auth = delegated` makes in one minute for \
+          one principal and one set of exchange claims (scope, audience, groups). An exchanged \
+          token is reused until it expires, so a client that sends a fresh token with the same \
+          claims on every call costs one exchange per exchanged-token lifetime. Past the limit a \
+          catalog call fails with `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most distinct claim sets exchanged per minute for one principal (P3-T067 §3.3).
+pub static CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(20)),
+    doc: "Most distinct sets of exchange claims (scope, audience, groups) a catalog with \
+          `auth = delegated` exchanges tokens for in one minute for one principal: the ceiling a \
+          client meets that varies its claims to get past \
+          `krishiv.catalog.delegation.maxExchangesPerMinute`. Past it a catalog call fails with \
+          `KRISHIV_CATALOG_LIMIT_EXCEEDED` until the minute is over.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

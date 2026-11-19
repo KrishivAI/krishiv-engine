@@ -51,14 +51,14 @@ use krishiv_session::auth::{
     ServerAuth, Surface,
 };
 use krishiv_session::{
-    PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass,
+    PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass, Transport,
 };
 use tonic::codegen::http::HeaderMap;
 use tonic::codegen::http::header::AUTHORIZATION;
 use tonic::{Request, Status};
 
 pub use act_as::{ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER};
-pub use layer::{AuthLayer, AuthService};
+pub use layer::{AuthLayer, AuthService, surface_of_path};
 
 use crate::manager::SessionFactory;
 use crate::status::status_of;
@@ -150,7 +150,9 @@ impl ConnectAuth {
 
     /// Authenticates one request from its `headers`, `peer` address and, over TLS, the client
     /// certificate rustls verified (`peer_leaf`) ([`AuthLayer`] calls
-    /// it before the body is read).
+    /// it before the body is read). `surface` is the service the request is for
+    /// ([`AuthLayer`] reads it from the path: `Connect` or `FlightSql`, P3-T101 §2 H2): the
+    /// credentials, the failure, no-role and impersonation records and the denial counter carry it.
     ///
     /// # Errors
     /// `UNAUTHENTICATED` for a missing, malformed, wrong or expired credential (and for a
@@ -162,22 +164,23 @@ impl ConnectAuth {
         headers: &HeaderMap,
         peer: Option<SocketAddr>,
         peer_leaf: Option<&[u8]>,
+        surface: Surface,
     ) -> Result<Authenticated, Status> {
         let Some(authenticator) = &self.authenticator else {
             if act_as::asks(headers) {
-                return Err(self.no_impersonation(&self.local(), peer));
+                return Err(self.no_impersonation(&self.local(), peer, surface));
             }
             return Ok(self.local());
         };
         let Some(peer) = peer else {
             tracing::warn!(
                 target: "krishiv::auth",
-                surface = Surface::Connect.as_str(),
-                "refused a Connect request without a peer address"
+                surface = surface.as_str(),
+                "refused a request without a peer address"
             );
             return Err(failure_status(AuthFailure::Missing));
         };
-        let mut credentials = Credentials::new(peer, Surface::Connect);
+        let mut credentials = Credentials::new(peer, surface);
         credentials.peer_leaf = peer_leaf;
         let mut values = headers.get_all(AUTHORIZATION).iter();
         match (values.next(), values.next()) {
@@ -205,12 +208,12 @@ impl ConnectAuth {
                 target: "krishiv::audit",
                 principal = %caller.principal.name,
                 method = caller.method.as_str(),
-                surface = Surface::Connect.as_str(),
+                surface = surface.as_str(),
                 error_class = error.error_class().name(),
-                "refused a Connect caller with no role"
+                "refused a caller with no role"
             );
             if let Some(d) = &self.denials {
-                d.record(Surface::Connect, Privilege::Browse);
+                d.record(surface, Privilege::Browse);
             }
             return Err(status_of(&error));
         }
@@ -218,19 +221,24 @@ impl ConnectAuth {
             return Ok(caller);
         }
         let Some(server) = &self.impersonation else {
-            return Err(self.no_impersonation(&caller, Some(peer)));
+            return Err(self.no_impersonation(&caller, Some(peer), surface));
         };
-        act_as::resolve(server, headers, peer, caller)
+        act_as::resolve(server, headers, peer, caller, surface)
             .await
             .map_err(|e| status_of(&e))
     }
 
     /// The refusal of act-as metadata on a listener that decides none (authentication off, or
     /// no [`ConnectAuth::with_impersonation`]): never ignored (P3-T061 §4.2 rule 1).
-    fn no_impersonation(&self, caller: &Authenticated, peer: Option<SocketAddr>) -> Status {
+    fn no_impersonation(
+        &self,
+        caller: &Authenticated,
+        peer: Option<SocketAddr>,
+        surface: Surface,
+    ) -> Status {
         tracing::warn!(
             target: "krishiv::audit",
-            listener = Surface::Connect.as_str(),
+            listener = surface.as_str(),
             caller = %caller.principal.name,
             decision = "denied",
             reason_code = "no_impersonation",
@@ -241,7 +249,8 @@ impl ConnectAuth {
     }
 
     /// The caller of `request`: what [`AuthLayer`] attached to it, or the local user with
-    /// authentication off.
+    /// authentication off. The refusal's log line names the request's surface
+    /// ([`request_surface`]).
     ///
     /// # Errors
     /// `UNAUTHENTICATED` when authentication is on and nothing was attached (the service runs
@@ -257,12 +266,23 @@ impl ConnectAuth {
             .ok_or_else(|| {
                 tracing::error!(
                     target: "krishiv::auth",
-                    surface = Surface::Connect.as_str(),
-                    "a Connect request reached the service without authentication"
+                    surface = request_surface(request).as_str(),
+                    "a request reached the service without authentication"
                 );
                 failure_status(AuthFailure::Missing)
             })
     }
+}
+
+/// The surface [`AuthLayer`] recorded for `request` (P3-T101 §2 H2, §15 m6): `Connect` when the
+/// request did not pass the layer (Connect's own unit tests).
+#[must_use]
+pub fn request_surface<T>(request: &Request<T>) -> Surface {
+    request
+        .extensions()
+        .get::<Surface>()
+        .copied()
+        .unwrap_or(Surface::Connect)
 }
 
 /// The gRPC status of an authentication failure (the failure is logged and counted by the
@@ -280,7 +300,8 @@ fn failure_status(failure: AuthFailure) -> Status {
 /// code needs admin until the T014b sandbox merges (ADR 0046 N1). The path confinement of
 /// `config` (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) is
 /// checked once here, so a bad root fails at startup. Each session counts its denials into
-/// `denials` under the `connect` surface (`krishiv_auth_denied_total`, ADR 0046 §8).
+/// `denials` under the surface of the transport it is built for (`connect` or `flight-sql`,
+/// `Surface::of`; `krishiv_auth_denied_total`, ADR 0046 §8, P3-T101 §2 H3).
 ///
 /// # Errors
 /// What `PathPrefixPolicy::from_config` refuses (`KRISHIV_INVALID_CONFIG_VALUE`).
@@ -295,12 +316,16 @@ pub fn role_sessions(
         PathPrefixPolicy::from_config(&config, Arc::new(roles))
     };
     policy(None)?;
-    Ok(Box::new(move |caller: &Authenticated| {
-        let policy = policy(caller.role)?;
-        let session = base.new_session_as(caller.principal.clone(), Arc::new(policy));
-        session.count_denials(Arc::clone(&denials), Surface::Connect);
-        Ok(session)
-    }))
+    Ok(Box::new(
+        move |caller: &Authenticated, transport: Transport| {
+            let policy = policy(caller.role)?;
+            let session = base.new_session_as(caller.principal.clone(), Arc::new(policy));
+            // The manager builds sessions for its listener's services only (Connect, Flight SQL).
+            let surface = Surface::of(transport).unwrap_or(Surface::Connect);
+            session.count_denials(Arc::clone(&denials), surface);
+            Ok(session)
+        },
+    ))
 }
 
 /// What a Connect session is bound to (module docs): the session manager's key.
@@ -342,9 +367,10 @@ impl SessionOwner {
 
     /// The owner `krishiv.connect.maxSessionsPerPrincipal` counts under: this one without the
     /// act-as groups, which are the front end's own claim (review m1), so one front end acting
-    /// for one user has one cap whatever groups it sends.
+    /// for one user has one cap whatever groups it sends. Flight SQL's per-principal handle caps
+    /// count under it too (P3-T101 §2 H6, §4.1).
     #[must_use]
-    pub(crate) fn cap_key(&self) -> Self {
+    pub fn cap_key(&self) -> Self {
         Self {
             act_as_groups: Vec::new(),
             ..self.clone()

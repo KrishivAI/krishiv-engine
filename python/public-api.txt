@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'ui']
+__all__ = ['LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -85,6 +85,12 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+LocalConnectServer.@property def connection_string(self) -> str
+LocalConnectServer.@property def port(self) -> int
+LocalConnectServer.@property def token(self) -> str
+LocalConnectServer.def __new__(cls, config: list[tuple[str, str]] | None=...) -> LocalConnectServer
+LocalConnectServer.def is_running(self) -> bool
+LocalConnectServer.def stop(self) -> None
 Observation.@property def name(self) -> str
 Observation.def __new__(cls, name: str | None=...) -> Observation
 Observation.def get(self) -> ArrowStream
@@ -128,12 +134,13 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
 class DataFrame()
 class GroupedData()
+class LocalConnectServer()
 class Observation()
 class Session()
 class WindowSpec()

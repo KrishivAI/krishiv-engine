@@ -34,8 +34,8 @@ use krishiv_common::error::{
     InvalidCloneSessionRequestTargetSessionIdAlreadyExists,
     InvalidCloneSessionRequestTargetSessionIdFormat, InvalidHandleSessionClosed, KrishivError,
 };
-use krishiv_session::QueryId;
-use krishiv_session::auth::Authenticated;
+use krishiv_session::auth::{Authenticated, Surface};
+use krishiv_session::{QueryId, Transport};
 
 use super::{Inner, Key, SessionEntry, SessionLimits, SessionManager, audit_foreign};
 use crate::artifacts::ArtifactStore;
@@ -87,7 +87,7 @@ impl SessionManager {
         let key = Self::key(caller, target);
         // Checked before anything is built, and again when it is inserted.
         Self::check_clone_locked(&mut self.lock(), &key, &self.limits)
-            .map_err(|e| audit_foreign(caller, "session", e))?;
+            .map_err(|e| audit_foreign(caller, "session", Surface::Connect, e))?;
         let source_closed = || -> KrishivError {
             InvalidHandleSessionClosed {
                 handle: source.session().id().to_owned(),
@@ -102,7 +102,13 @@ impl SessionManager {
         };
         // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
         let python = source.python().copy_for(&caller.principal.name, &session);
-        let entry = self.new_entry(caller, session, (source.client_user_id(), target), python);
+        let entry = self.new_entry(
+            caller,
+            session,
+            (source.client_user_id(), target),
+            python,
+            Transport::Connect,
+        );
         let pending = Unpublished(Some(Arc::clone(&entry)));
         let snapshot = snapshot.ok_or_else(source_closed)?;
         if !snapshot.is_empty() {
@@ -123,7 +129,7 @@ impl SessionManager {
         {
             let mut inner = self.lock();
             Self::check_clone_locked(&mut inner, &key, &self.limits)
-                .map_err(|e| audit_foreign(caller, "session", e))?;
+                .map_err(|e| audit_foreign(caller, "session", Surface::Connect, e))?;
             // The idle clock starts now, not before the copy (review L3): a
             // copy longer than the idle timeout must not get the clone
             // swept as soon as it is published.

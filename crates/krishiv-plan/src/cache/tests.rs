@@ -731,9 +731,14 @@ fn every_node_and_expression_form_hashes_distinctly() {
                         partition_by: vec![a()],
                         order_by: vec![crate::SortOrder::asc(a())],
                         single_partition: false,
+                        select: Vec::new(),
+                        position: 0,
+                        name: None,
                     }),
                     udf: py(crate::PythonEvalType::ArrowUdtf),
                     output: vec![bound(2, "x")],
+                    lateral: None,
+                    analyzed: None,
                 }),
             ),
             (
@@ -743,6 +748,8 @@ fn every_node_and_expression_form_hashes_distinctly() {
                     table_arg: None,
                     udf: py(crate::PythonEvalType::TableUdf),
                     output: vec![bound(2, "x")],
+                    lateral: None,
+                    analyzed: None,
                 }),
             ),
             (
