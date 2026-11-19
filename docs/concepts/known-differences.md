@@ -596,3 +596,13 @@ They differ in:
 - **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
   change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
+
+## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
+
+`hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
+(`HllSketch.toUpdatableByteArray`). Both are the Apache DataSketches `HLL_8` format, and both libraries read
+both forms, so a sketch written by one engine can be estimated or unioned by the other, and
+`hll_sketch_estimate`, `hll_union` and `hll_union_agg` give the same numbers. What differs is the bytes:
+`length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
+`hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
+(`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.

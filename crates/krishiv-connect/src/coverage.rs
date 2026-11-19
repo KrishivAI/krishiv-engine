@@ -187,9 +187,9 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
 
 oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
     RegisterFunction => ("register_function", 1, Partial, "scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes", "Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server)", "P3-T014", 6),
-    WriteOperation => ("write_operation", 2, Missing, "", "DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023", "P3-T023", 11),
+    WriteOperation => ("write_operation", 2, Partial, "clustering_columns, with_schema_evolution", "krishiv-session's DataFrameWriter (write_to_with: save; write_table_with: saveAsTable, insertInto), the facade's path; save() without a path takes the path option (_LEGACY_ERROR_TEMP_2050 without one); run by the server after the Write class check", "P3-T012", 11),
     CreateDataframeView => ("create_dataframe_view", 3, Missing, "", "create_or_replace_temp_view (exists), global temp views", "P3-T012", 4),
-    WriteOperationV2 => ("write_operation_v2", 4, Missing, "", "DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023", "P3-T023", 11),
+    WriteOperationV2 => ("write_operation_v2", 4, Partial, "with_schema_evolution, partition transforms (partitioning_columns other than a column), overwrite_condition (overwrite is refused by the session)", "krishiv-session's DataFrameWriterV2 (write_to_table_with), the facade's path; run by the server after the Write class check", "P3-T012", 11),
     SqlCommand => ("sql_command", 5, Partial, "input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters)", "spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs)", "P3-T012", 1),
     WriteStreamOperationStart => ("write_stream_operation_start", 6, OutOfScope, "", "P4", "", 0),
     StreamingQueryCommand => ("streaming_query_command", 7, OutOfScope, "", "P4", "", 0),

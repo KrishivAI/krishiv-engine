@@ -18,6 +18,7 @@ mod array_scan;
 mod array_set;
 mod array_shape;
 mod avro;
+mod bitmap;
 mod bitwise;
 mod catalog;
 mod collection;
@@ -29,6 +30,7 @@ mod element;
 mod generator;
 mod geo;
 mod hashing;
+mod hll;
 mod hof;
 mod json;
 mod map;
@@ -201,6 +203,19 @@ pub enum Aggregate {
     ApproxCountDistinct,
     /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram`.
     HistogramNumeric,
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap with the bit of
+    /// each non-NULL position set; never NULL.
+    BitmapConstructAgg,
+    /// `bitmap_or_agg(bitmap)`: the bitwise OR of the non-NULL bitmaps; never
+    /// NULL (4,096 zero bytes for no input).
+    BitmapOrAgg,
+    /// `bitmap_and_agg(bitmap)` (Spark 4.1): the bitwise AND of the non-NULL
+    /// bitmaps; never NULL (4,096 `0xFF` bytes for no input).
+    BitmapAndAgg,
+    /// `hll_sketch_agg(x[, lgConfigK])`: an HLL sketch of the non-NULL values; never NULL.
+    HllSketchAgg,
+    /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of HLL sketches; never NULL.
+    HllUnionAgg,
 }
 
 /// A built-in function.
