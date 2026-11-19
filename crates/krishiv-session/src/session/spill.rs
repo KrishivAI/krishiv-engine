@@ -96,8 +96,44 @@ pub(super) fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result
     )
 }
 
+/// The name of the column `bucketBy` appends to the rows written: each row's bucket id.
+pub(crate) const BUCKET_ID_COLUMN: &str = "__krishiv_bucket_id";
+
+/// A bucketed write (Spark's `BucketSpec`): the rows go to `buckets` buckets by `pmod(hash(columns), buckets)`
+/// (Murmur3, seed 42), and each bucket is sorted by `sort_by`.
+#[derive(Debug, Clone)]
+pub(crate) struct BucketTarget {
+    pub(crate) buckets: u32,
+    pub(crate) columns: Vec<String>,
+    pub(crate) sort_by: Vec<String>,
+}
+
+impl BucketTarget {
+    /// `df` with each row's bucket id appended as [`BUCKET_ID_COLUMN`].
+    pub(crate) fn with_bucket_id(
+        &self,
+        df: &crate::DataFrame,
+    ) -> Result<crate::DataFrame, KrishivError> {
+        let quoted: Vec<String> = self
+            .columns
+            .iter()
+            .map(|c| format!("`{}`", c.replace('`', "``")))
+            .collect();
+        df.select_expr([
+            "*".to_owned(),
+            format!(
+                "pmod(hash({}), {}) AS {BUCKET_ID_COLUMN}",
+                quoted.join(", "),
+                self.buckets
+            ),
+        ])
+    }
+}
+
 /// Where and how `df.write` writes.
 pub(crate) struct WriteTarget {
+    /// The bucketing of a write into a bucketed table.
+    pub(crate) bucket: Option<BucketTarget>,
     pub(crate) format: String,
     pub(crate) mode: String,
     pub(crate) path: OptionValue,

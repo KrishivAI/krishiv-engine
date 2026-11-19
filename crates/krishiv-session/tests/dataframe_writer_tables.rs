@@ -200,12 +200,10 @@ fn bucketing_is_refused_as_spark_refuses_it() {
         class(block_on(w.save_as_table("t"))),
         "SORT_BY_WITHOUT_BUCKETING"
     );
-    // saveAsTable would bucket: the engine has no bucketed tables.
+    // saveAsTable buckets: the table is written and reads back whole.
     let w = s.table("people").write().bucket_by(2, ["id"]);
-    assert_eq!(
-        class(block_on(w.save_as_table("t"))),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    block_on(w.save_as_table("t")).unwrap();
+    assert_eq!(count(&s, "t"), count(&s, "people"));
 }
 
 #[test]
@@ -260,18 +258,16 @@ fn append_by_name_is_exact_about_names_and_format() {
         )),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
-    // overwrite with a partitioning on a new table fails and creates nothing.
-    assert_eq!(
-        class(block_on(
-            s.table("people")
-                .write()
-                .partition_by(["id"])
-                .mode("overwrite")
-                .save_as_table("p")
-        )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert!(block_on(s.table("p").count()).is_err());
+    // overwrite with a partitioning on a new table creates it, partitioned.
+    block_on(
+        s.table("people")
+            .write()
+            .partition_by(["id"])
+            .mode("overwrite")
+            .save_as_table("p"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "p"), 3);
 }
 
 #[test]
@@ -293,18 +289,16 @@ fn overwrite_checks_before_it_drops() {
         )),
         "UNSUPPORTED_OVERWRITE.TABLE"
     );
-    // A new table that cannot be created (a partitioning) leaves the old one in place.
-    assert_eq!(
-        class(block_on(
-            s.table("people")
-                .write()
-                .partition_by(["id"])
-                .mode("overwrite")
-                .save_as_table("t")
-        )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert_eq!(count(&s, "t"), 3, "the table is still there");
+    // An overwrite that replaces the table with a partitioned one.
+    block_on(
+        s.table("people")
+            .write()
+            .partition_by(["id"])
+            .mode("overwrite")
+            .save_as_table("t"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "t"), 3);
     // A temporary view of the same name is not dropped in the table's place.
     block_on(s.sql("CREATE TEMPORARY VIEW t AS SELECT 1 AS id, 'x' AS name")).unwrap();
     assert_eq!(
@@ -472,8 +466,8 @@ fn the_collected_call_the_python_bridge_makes_runs_the_same_writers() {
     block_on(df.write_table_with(true, "bridge", None, "append", vec![], vec![], None, None))
         .unwrap();
     assert_eq!(count(&s, "bridge"), 6);
-    // The same refusals as the builder: buckets and sort columns, partition columns on insertInto.
-    let e = block_on(df.write_table_with(
+    // The same refusals as the builder: sort columns, partition columns on insertInto; buckets write.
+    block_on(df.write_table_with(
         false,
         "b2",
         None,
@@ -482,8 +476,9 @@ fn the_collected_call_the_python_bridge_makes_runs_the_same_writers() {
         vec![],
         Some((2, vec!["id".to_owned()])),
         None,
-    ));
-    assert_eq!(class(e), "KRISHIV_UNSUPPORTED_FEATURE");
+    ))
+    .unwrap();
+    assert_eq!(count(&s, "b2"), 3);
     let e = block_on(df.write_table_with(
         true,
         "bridge",

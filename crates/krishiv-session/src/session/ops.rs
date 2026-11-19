@@ -304,6 +304,7 @@ impl Session {
         dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
+            bucket,
             format,
             mode,
             path,
@@ -339,6 +340,25 @@ impl Session {
         if !partitions.is_empty() && partitions.len() == schema.fields().len() {
             return Err(AllPartitionColumnsNotAllowed {}.into());
         }
+        // The bucket id column `bucketBy` appended, and the columns each bucket is sorted by.
+        let bucket_write = match &bucket {
+            None => None,
+            Some(b) => {
+                let column = schema
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == super::BUCKET_ID_COLUMN)
+                    .ok_or_else(|| {
+                        internal("a bucketed write without its bucket id column".to_owned())
+                    })?;
+                let sort_by = super::writes::resolve_columns(
+                    &schema,
+                    &b.sort_by,
+                    env.analysis.conf.case_sensitive,
+                )?;
+                Some(krishiv_exec::physical::BucketWrite { column, sort_by })
+            }
+        };
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
@@ -425,6 +445,7 @@ impl Session {
                 target_file_bytes: 0,
                 partition_by: partitions.iter().map(|(i, _)| *i).collect(),
                 column_types,
+                bucket: bucket_write,
             })?;
             let worker = self.worker(env);
             let (rows, _, row_id) = self

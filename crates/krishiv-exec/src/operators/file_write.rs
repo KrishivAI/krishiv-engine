@@ -52,6 +52,8 @@ pub struct FileWriteSink {
     schema: SchemaRef,
     format_options: FormatOptions,
     options: WriteOptions,
+    /// The input column holding each row's bucket id, for bucketed output.
+    bucket_column: Option<usize>,
     output: SchemaRef,
     /// The files of the finished write, with their statistics.
     files: Mutex<Vec<WrittenFileInfo>>,
@@ -191,9 +193,18 @@ impl FileWriteSink {
             schema,
             format_options,
             options,
+            bucket_column: None,
             output,
             files: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Makes the output bucketed: `column` of the input holds each row's bucket id (see
+    /// [`FileWriter::bucketed_by`]).
+    #[must_use]
+    pub fn with_bucket_column(mut self, column: Option<usize>) -> Self {
+        self.bucket_column = column;
+        self
     }
 
     /// The schema of the rows written.
@@ -267,7 +278,11 @@ impl Sink for FileWriteSink {
             self.format_options.clone(),
             self.options.clone(),
             ctx.consumer().reservation(),
-        )?
+        )?;
+        let writer = match self.bucket_column {
+            Some(column) => writer.bucketed_by(&self.schema, column)?,
+            None => writer,
+        }
         .sharing_file_numbers(Arc::clone(&g.file_numbers));
         let stop = Arc::new(AtomicBool::new(false));
         let writer = writer.stopping_on(Arc::clone(&stop));

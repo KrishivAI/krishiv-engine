@@ -404,11 +404,9 @@ fn show_create_table_prints_partitioning_and_buckets() {
             "CREATE TABLE spark_catalog.default.tbl (\n  a INT,\n  b STRING COLLATE UTF8_BINARY,\n  c INT)\nUSING parquet\nCLUSTERED BY (a)\nSORTED BY (b)\nINTO 2 BUCKETS"
         ]
     );
-    // Bucketed writes are not supported: refused before anything is written.
-    assert_eq!(
-        class(&s, "INSERT INTO tbl VALUES (1, 'x', 2)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    // A bucketed insert writes, and reads back.
+    run(&s, "INSERT INTO tbl VALUES (1, 'x', 2)");
+    assert_eq!(rows(&s, "SELECT b FROM tbl"), ["x"]);
 }
 
 /// describe-part-after-analyze.sql.

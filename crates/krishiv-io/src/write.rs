@@ -45,6 +45,37 @@ pub fn spark_file_name(task: u32, job_uuid: &str, file: u32, suffix: &str) -> St
     format!("part-{task:05}-{job_uuid}-c{file:03}{suffix}")
 }
 
+/// Spark's bucketed data file name:
+/// `part-<task:05>-<job uuid>_<bucket:05>.c<file:03><suffix>` (`BucketingUtils.bucketIdToString`), e.g.
+/// `part-00000-<uuid>_00003.c000.snappy.parquet`. Spark reads the bucket id back from the `_<digits>` before the
+/// first `.` ([`bucket_id_of_file_name`]).
+#[must_use]
+pub fn spark_bucketed_file_name(
+    task: u32,
+    job_uuid: &str,
+    bucket: u32,
+    file: u32,
+    suffix: &str,
+) -> String {
+    format!("part-{task:05}-{job_uuid}_{bucket:05}.c{file:03}{suffix}")
+}
+
+/// The bucket id in a data file name (Spark's `BucketingUtils.getBucketId`, regex `.*_(\d+)(?:\..*)?$`): the digits
+/// after the last `_` when they end the name or are followed by a `.`. `None` for a file without one.
+#[must_use]
+pub fn bucket_id_of_file_name(name: &str) -> Option<u32> {
+    // The regex is greedy, so the last `_` that is followed by digits and then the end or a dot wins.
+    let mut found = None;
+    for (at, _) in name.match_indices('_') {
+        let rest = &name[at + 1..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && (digits == rest.len() || rest.as_bytes()[digits] == b'.') {
+            found = rest[..digits].parse().ok();
+        }
+    }
+    found
+}
+
 /// The job-id segment of a task's file names: `base` for attempt 0 (names
 /// exactly as before), `base_<attempt>` after that, so a retried attempt
 /// can never overwrite a committed attempt's file.
@@ -115,6 +146,9 @@ pub struct FileWriter {
     /// Input columns kept in the data files (every column but the
     /// partition ones, in input order).
     data_columns: Vec<usize>,
+    /// The input column holding each row's bucket id (an `Int32`, already `pmod(hash, n)`), if the output is
+    /// bucketed: it is not written to the files, and a change of its value starts a new file named with the id.
+    bucket_column: Option<usize>,
     format_options: FormatOptions,
     options: WriteOptions,
     /// The store held from the start: a write's private store may be
@@ -125,6 +159,8 @@ pub struct FileWriter {
     /// The partition key of the open file, and its directory relative to
     /// [`WriteOptions::dir`] (`None` for unpartitioned output).
     current_key: Option<Vec<String>>,
+    /// The bucket id of the open file.
+    current_bucket: Option<u32>,
     current_rel: Option<String>,
     /// The next file number (`c000`, `c001`, ...), shared by every writer
     /// of one task.
@@ -197,18 +233,52 @@ impl FileWriter {
             format,
             data_schema,
             data_columns,
+            bucket_column: None,
             format_options,
             store: io.pin(&options.store)?,
             options,
             suffix,
             current: None,
             current_key: None,
+            current_bucket: None,
             current_rel: None,
             next_file: Arc::new(AtomicU32::new(0)),
             written: Vec::new(),
             mem,
             stop: None,
         })
+    }
+
+    /// Makes the output bucketed: `column` of the input holds each row's bucket id (an `Int32` in `0..n`), the
+    /// rows must arrive sorted by partition key and then bucket id, and the column is not written to the files.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a column out of range, one that is a partition column, or not an `Int32`;
+    /// the format's [`FileFormat::check_write`] error for the narrower data schema.
+    pub fn bucketed_by(mut self, schema: &SchemaRef, column: usize) -> Result<Self> {
+        let field = schema
+            .fields()
+            .get(column)
+            .ok_or_else(|| internal(format!("bucket column {column} is out of range")))?;
+        if field.data_type() != &arrow_schema::DataType::Int32 {
+            return Err(internal(format!("bucket column {column} is not an Int32")));
+        }
+        if self.options.partition_by.contains(&column) {
+            return Err(internal(format!(
+                "bucket column {column} is also a partition column"
+            )));
+        }
+        self.data_columns.retain(|c| *c != column);
+        self.data_schema = Arc::new(
+            schema
+                .project(&self.data_columns)
+                .map_err(|e| internal(format!("cannot drop the bucket column: {e}")))?,
+        );
+        self.format
+            .check_write(&self.data_schema, &self.format_options)
+            .map_err(|e| e.into_error(&format!("{}/{}", self.options.store, self.options.dir)))?;
+        self.bucket_column = Some(column);
+        Ok(self)
     }
 
     /// The store this writer writes to, held (see [`IoContext::pin`]).
@@ -249,7 +319,15 @@ impl FileWriter {
         // Every file a writer opens starts here, a partition's included.
         self.check_stop()?;
         let file = self.next_file.fetch_add(1, Ordering::Relaxed);
-        let name = if self.options.partition_by.is_empty() {
+        let name = if let Some(bucket) = self.current_bucket {
+            spark_bucketed_file_name(
+                self.options.task,
+                &self.options.job_uuid,
+                bucket,
+                file,
+                &self.suffix,
+            )
+        } else if self.options.partition_by.is_empty() {
             spark_file_name(
                 self.options.task,
                 &self.options.job_uuid,
@@ -307,26 +385,51 @@ impl FileWriter {
     /// Encode, upload and memory errors, `OPERATION_CANCELED` once stopped
     /// ([`FileWriter::stopping_on`]); the writer should then be aborted.
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        if self.options.partition_by.is_empty() {
+        if self.options.partition_by.is_empty() && self.bucket_column.is_none() {
             return self.write_to_current(batch).await;
         }
         let texts = self.partition_texts(batch)?;
+        let buckets = self.bucket_ids(batch)?;
         let mut start = 0;
         while start < batch.num_rows() {
             // Runs are found on the raw texts; only a run's first row is escaped.
             let mut end = start + 1;
-            while end < batch.num_rows() && texts.iter().all(|t| t[end] == t[start]) {
+            while end < batch.num_rows()
+                && texts.iter().all(|t| t[end] == t[start])
+                && buckets.as_ref().is_none_or(|b| b[end] == b[start])
+            {
                 end += 1;
             }
             let key: Vec<String> = texts
                 .iter()
                 .map(|t| partition_segment(t[start].as_deref()))
                 .collect();
-            self.write_partition_run(&batch.slice(start, end - start), &key)
+            let bucket = buckets.as_ref().map(|b| b[start]);
+            self.write_partition_run(&batch.slice(start, end - start), &key, bucket)
                 .await?;
             start = end;
         }
         Ok(())
+    }
+
+    /// The bucket id of every row of `batch`, when the output is bucketed.
+    fn bucket_ids(&self, batch: &RecordBatch) -> Result<Option<Vec<u32>>> {
+        let Some(c) = self.bucket_column else {
+            return Ok(None);
+        };
+        let column = batch
+            .columns()
+            .get(c)
+            .and_then(|a| a.as_any().downcast_ref::<arrow_array::Int32Array>())
+            .ok_or_else(|| internal(format!("bucket column {c} is not an Int32 column")))?;
+        column
+            .iter()
+            .map(|v| {
+                v.and_then(|v| u32::try_from(v).ok())
+                    .ok_or_else(|| internal("a row has no valid bucket id".to_owned()))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some)
     }
 
     /// The text of every row of `batch` for each partition column.
@@ -352,11 +455,20 @@ impl FileWriter {
 
     /// Writes one partition's run: a new file when the key changed, then
     /// the run's data columns (without the partition columns).
-    async fn write_partition_run(&mut self, slice: &RecordBatch, key: &[String]) -> Result<()> {
-        if self.current_key.as_deref() != Some(key) {
+    async fn write_partition_run(
+        &mut self,
+        slice: &RecordBatch,
+        key: &[String],
+        bucket: Option<u32>,
+    ) -> Result<()> {
+        if self.current_key.as_deref() != Some(key) || self.current_bucket != bucket {
             self.close_file().await?;
-            let rel = partition_dir_name(&self.options.partition_names, key);
-            self.current_rel = Some(rel);
+            self.current_rel = if key.is_empty() {
+                None
+            } else {
+                Some(partition_dir_name(&self.options.partition_names, key))
+            };
+            self.current_bucket = bucket;
             self.open_file().await?;
             self.current_key = Some(key.to_vec());
         }

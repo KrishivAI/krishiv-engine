@@ -13,10 +13,10 @@ use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
 };
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    PythonCallPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, WritePlan,
+    AggregatePlan, BucketWrite, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
+    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
+    ProjectItemPlan, PythonCallPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
+    SortMergeJoinPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{
     ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
@@ -1707,6 +1707,16 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
                 Ok((usize_of(c.column)?, spark_type(t)?))
             })
             .collect::<Result<_>>()?,
+        bucket: m
+            .bucket
+            .as_ref()
+            .map(|b| {
+                Ok(BucketWrite {
+                    column: usize_of(b.column)?,
+                    sort_by: usizes(&b.sort_by)?,
+                })
+            })
+            .transpose()?,
     })
 }
 

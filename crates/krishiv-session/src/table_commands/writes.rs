@@ -381,8 +381,8 @@ impl Session {
         name: &TableName,
         spec: &V2WriteSpec,
     ) -> Result<(), KrishivError> {
-        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
+        if !spec.cluster_by.is_empty() {
+            return Err(unsupported("clustered tables"));
         }
         self.warehouse_dir()?;
         self.provider_of(spec.provider.clone())?;
@@ -668,8 +668,8 @@ impl Session {
             }
             V2Mode::Create => {}
         }
-        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
+        if !spec.cluster_by.is_empty() {
+            return Err(unsupported("clustered tables"));
         }
         let warehouse = self.warehouse_dir()?;
         let provider_written = self.written_provider(spec.provider.clone());
@@ -718,8 +718,8 @@ impl Session {
             stamp: 0,
         };
         let layout = LayoutRequest {
-            partition_by: &[],
-            bucket: None,
+            partition_by: &spec.partitioned_by,
+            bucket: spec.bucket.as_ref(),
         };
         self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout, pre)
             .await

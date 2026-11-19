@@ -19,12 +19,26 @@ pub struct DataFrameWriter {
     pub(super) bucket_by: Option<(i32, Vec<String>)>,
     /// `sortBy`.
     pub(super) sort_by: Option<Vec<String>>,
+    /// The write is into a bucketed table ([`Self::for_table_bucket`]): `bucket_by` and `sort_by` are the table's, and
+    /// the files are laid out by them. A plain `save` or `insertInto` of a bucketed writer is still refused, as in Spark.
+    pub(super) bucket_table: bool,
     /// Whether [`Self::format`] was called: a table writer without one uses
     /// `spark.sql.sources.default`.
     pub(super) format_set: bool,
 }
 
 impl DataFrameWriter {
+    /// Writes into a table bucketed as `bucket` says: each row goes to the file of its bucket.
+    pub(crate) fn for_table_bucket(mut self, bucket: &crate::store::BucketMeta) -> Self {
+        self.bucket_by = Some((
+            i32::try_from(bucket.num_buckets).unwrap_or(i32::MAX),
+            bucket.columns.clone(),
+        ));
+        self.sort_by = Some(bucket.sort_columns.clone());
+        self.bucket_table = true;
+        self
+    }
+
     /// Marks every option set so far as the stored options of the table written: not asked
     /// about again by the write's access check (they were when they were stored, P3-T067b).
     pub(crate) fn options_are_the_tables(mut self) -> Self {
@@ -162,8 +176,20 @@ impl DataFrameWriter {
         admitted: Option<crate::query_fold::Admitted>,
         dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
-        self.assert_not_bucketed("save")?;
+        let bucket = if self.bucket_table {
+            self.bucket_by
+                .as_ref()
+                .map(|(n, columns)| crate::session::BucketTarget {
+                    buckets: u32::try_from(*n).unwrap_or(0),
+                    columns: columns.clone(),
+                    sort_by: self.sort_by.clone().unwrap_or_default(),
+                })
+        } else {
+            self.assert_not_bucketed("save")?;
+            None
+        };
         let target = WriteTarget {
+            bucket,
             format: self.format,
             mode: self.mode,
             path: OptionValue::from_user("path", path),
@@ -171,7 +197,10 @@ impl DataFrameWriter {
             table_options: self.table_options,
             partition_by: self.partition_by,
         };
-        let df = self.df;
+        let df = match &target.bucket {
+            Some(b) => b.with_bucket_id(&self.df)?,
+            None => self.df,
+        };
         let session = df.session.clone();
         session
             .on_executor(async move {
@@ -259,15 +288,44 @@ impl DataFrameWriter {
     }
 
     /// The table request of `saveAsTable` and `insertInto`.
-    pub(super) fn table_spec(&self, table: &str) -> crate::table_commands::V2WriteSpec {
-        crate::table_commands::V2WriteSpec {
+    pub(super) fn table_spec(
+        &self,
+        table: &str,
+    ) -> Result<crate::table_commands::V2WriteSpec, KrishivError> {
+        let bucket = match &self.bucket_by {
+            Some((n, columns)) => {
+                let max = self
+                    .df
+                    .session
+                    .query_env()
+                    .config
+                    .get(&krishiv_common::config::BUCKETING_MAX_BUCKETS)
+                    .and_then(krishiv_common::config::ConfigValue::as_int)
+                    .unwrap_or(100_000);
+                if *n <= 0 || i64::from(*n) > max {
+                    return Err(krishiv_common::error::InvalidBucketCount {
+                        bucketing_max_buckets: max.to_string(),
+                        num_buckets: n.to_string(),
+                    }
+                    .into());
+                }
+                Some(crate::table_commands::bucket_spec(
+                    u64::from(n.unsigned_abs()),
+                    columns,
+                    self.sort_by.as_deref().unwrap_or(&[]),
+                ))
+            }
+            None => None,
+        };
+        Ok(crate::table_commands::V2WriteSpec {
+            bucket,
             table: table.to_owned(),
             provider: self.format_set.then(|| self.format.clone()),
             options: self.options.clone(),
             properties: BTreeMap::new(),
             partitioned_by: self.partition_by.clone(),
             cluster_by: Vec::new(),
-        }
+        })
     }
 
     /// Saves the rows as the table `table` (PySpark's `saveAsTable`). The
@@ -299,13 +357,7 @@ impl DataFrameWriter {
         if let (None, Some(_)) = (&self.bucket_by, &self.sort_by) {
             return Err(krishiv_common::error::SortByWithoutBucketing {}.into());
         }
-        if self.bucket_by.is_some() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "bucketBy".to_owned(),
-            }
-            .into());
-        }
-        let spec = self.table_spec(table);
+        let spec = self.table_spec(table)?;
         let df = self.df;
         let session = df.session.clone();
         session
@@ -553,6 +605,7 @@ impl DataFrameWriterV2 {
             properties: self.properties.clone(),
             partitioned_by: self.partitioned_by.clone(),
             cluster_by: self.cluster_by.clone(),
+            bucket: None,
         }
     }
 
