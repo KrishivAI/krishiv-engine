@@ -1487,11 +1487,10 @@ impl RowTable {
         if self.core.spec.output == AggregateOutput::Partial {
             return self.state_batch(refs);
         }
-        let mut cols = self.key_columns(refs)?;
-        cols.extend(self.per_part(refs, |accs, ids| {
+        let values = self.per_part(refs, |accs, ids| {
             accs.iter().map(|a| a.evaluate(ids)).collect()
-        })?);
-        batch(&self.core.output_schema, cols, refs.len())
+        })?;
+        super::output_filter::output_rows(&self.core, refs, values, |refs| self.key_columns(refs))
     }
 
     /// Moves partitions `ranges` out into tables of their own (in order):

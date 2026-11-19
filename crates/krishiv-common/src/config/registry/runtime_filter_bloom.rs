@@ -50,3 +50,26 @@ pub static RUNTIME_FILTER_EQUATED_SITES: ConfigEntry = ConfigEntry {
     version_added: "0.3.0",
     spark_alias: None,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::RUNTIME_FILTER_EQUATED_SITES;
+    use crate::config::{Config, ConfigValue};
+
+    #[test]
+    fn equated_sites_default_on_and_parse() {
+        let mut c = Config::new();
+        let get = |c: &Config| {
+            c.get(&RUNTIME_FILTER_EQUATED_SITES)
+                .and_then(ConfigValue::as_bool)
+        };
+        assert_eq!(get(&c), Some(true));
+        c.set("krishiv.runtimeFilter.equatedSites", "false")
+            .unwrap();
+        assert_eq!(get(&c), Some(false));
+        assert!(
+            c.set("krishiv.runtimeFilter.equatedSites", "often")
+                .is_err()
+        );
+    }
+}
