@@ -715,6 +715,7 @@ def test_python_source_matches_parquet(spark: SparkSession, tmp_path: Path) -> N
         want = _canonical(spark.sql(statement.format(t="pq")))
         assert got == want, statement
 
+
 def test_the_last_spelling_of_a_repeated_option_wins(spark: SparkSession) -> None:
     seen: dict[str, Any] = {}
 
