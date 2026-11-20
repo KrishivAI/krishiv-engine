@@ -215,6 +215,32 @@ fn time_travel_under_a_policy_is_no_existence_oracle() {
     );
 }
 
+/// An existing table answers as a missing one does for a session of a principal (`new_session_as`,
+/// which never reads the catalog for the error), so the error is no existence oracle.
+#[test]
+fn an_existing_table_answers_as_a_missing_one_for_a_principal() {
+    use krishiv_common::principal::{Principal, PrincipalKind};
+    use krishiv_session::AllowAll;
+    use std::sync::Arc;
+    let base = Session::new().unwrap();
+    block_on(async {
+        base.sql("create table tbl (id int) using parquet")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    // The open session names the relation; the principal's session must not.
+    assert_eq!(
+        error(&base, "select * from tbl@v1").0,
+        "UNSUPPORTED_FEATURE.TIME_TRAVEL"
+    );
+    let s = base.new_session_as(Principal::new("u", PrincipalKind::User), Arc::new(AllowAll));
+    let existing = error(&s, "select * from tbl@v1");
+    assert_eq!(existing, error(&s, "select * from nope@v1"));
+    assert_eq!(existing.0, "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
 #[test]
 fn a_non_ascii_word_after_the_at_sign_is_a_syntax_error() {
     let s = Session::new().unwrap();

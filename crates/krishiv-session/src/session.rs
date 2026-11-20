@@ -155,8 +155,8 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
-    /// Whether `policy` is the default [`AllowAll`]: nothing is denied, so a lookup that runs before the
-    /// analysis asks the policy tells no one anything.
+    /// Whether no policy was set (the default [`AllowAll`], not an explicitly passed one): nothing is
+    /// denied, so a lookup that runs before the analysis asks the policy tells no one anything.
     pub(crate) policy_open: bool,
     /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
     /// (P3-T062); `None`: those statements are refused.
