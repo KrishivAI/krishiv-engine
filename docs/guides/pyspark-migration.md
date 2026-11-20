@@ -124,6 +124,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | Difference |
 | --- |
 | [Error ordering between two raising expressions](../concepts/known-differences.md#error-ordering-between-two-raising-expressions) |
+| [Spark 3.5 error-message parameters follow 4.x](../concepts/known-differences.md#spark-35-error-message-parameters-follow-4x) |
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
 | [`EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)](../concepts/known-differences.md#explain-format-json-explain-analyze-explain-verbose-krishiv-extensions) |
 | [Writers leave a `_krishiv_log` directory](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory) |
@@ -152,6 +153,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |
 | [Tags and global views](../concepts/known-differences.md#tags-and-global-views) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)](../concepts/known-differences.md#declared-catalogs-krishivcatalogname-sparksqlcatalogname) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
