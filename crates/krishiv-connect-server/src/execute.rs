@@ -46,6 +46,7 @@
 
 pub mod arrow;
 mod cache_command;
+mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -888,6 +889,7 @@ async fn build_local_relation(
             };
             cached_request(&bytes)?
         }
+        LocalRequest::Catalog(call) => return catalog_call::run(entry.session(), call).await,
     };
     entry
         .session()

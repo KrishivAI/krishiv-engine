@@ -511,6 +511,54 @@ pub(crate) fn fold_plan(p: Arc<LogicalPlan>, ctx: &UdfFoldCtx<'_>) -> Arc<Logica
     }
 }
 
+/// A `vector_*` call whose argument is `array(l1, l2, ...)` over literals reads one array literal instead. Left as a
+/// call, the constructor broadcasts every element to the batch's rows, which copies a written-out query vector once per
+/// row before the kernel reads it (P3-T077 section 8.4). Only vector calls are rewritten: the percentile aggregates
+/// and the interval code read `array(...)` as written.
+fn fold_vector_arguments(e: &Arc<Expr>, f: &ResolvedFunction) -> Arc<Expr> {
+    let args: Vec<Arc<Expr>> = f.args.iter().map(fold_array_constructor).collect();
+    if args.iter().zip(&f.args).all(|(a, b)| Arc::ptr_eq(a, b)) {
+        return Arc::clone(e);
+    }
+    let mut folded = f.clone();
+    folded.args = args;
+    Arc::new(Expr {
+        node: ExprNode::Resolved(ResolvedExpr::Function(folded)),
+        ..(**e).clone()
+    })
+}
+
+/// `array(l1, l2, ...)` over literals as one array literal; anything else unchanged.
+fn fold_array_constructor(e: &Arc<Expr>) -> Arc<Expr> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return Arc::clone(e);
+    };
+    if !matches!(f.id, FunctionId::Registry { .. }) || !f.id.name().eq_ignore_ascii_case("array") {
+        return Arc::clone(e);
+    }
+    let DataType::Array(array_type) = &f.data_type else {
+        return Arc::clone(e);
+    };
+    if f.kind != FunctionKind::Scalar || f.distinct || f.filter.is_some() || f.args.is_empty() {
+        return Arc::clone(e);
+    }
+    let elements = f
+        .args
+        .iter()
+        .map(|a| match &a.node {
+            ExprNode::Literal(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(elements) = elements else {
+        return Arc::clone(e);
+    };
+    match Literal::array((**array_type).clone(), elements) {
+        Ok(l) => lit(l),
+        Err(_) => Arc::clone(e),
+    }
+}
+
 /// Whether `e` holds an `EvalMode` pinned to an ANSI mode other than `ansi`.
 fn pins_other_mode(e: &Expr, ansi: bool) -> bool {
     if let ExprNode::Resolved(ResolvedExpr::EvalMode { ansi: pinned, .. }) = &e.node
@@ -534,6 +582,9 @@ fn fold_udf(e: &Arc<Expr>, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
         && f.id.name().eq_ignore_ascii_case("aes_encrypt")
     {
         return fold_aes_encrypt(e, f, ctx);
+    }
+    if matches!(f.id, FunctionId::Registry { .. }) && f.id.name().starts_with("vector_") {
+        return fold_vector_arguments(e, f);
     }
     let FunctionId::Udf { name, version } = &f.id else {
         return Arc::clone(e);
