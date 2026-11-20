@@ -68,11 +68,20 @@ pub(crate) struct InputCoalesce {
 impl InputCoalesce {
     /// Joins batches toward `target` rows (at least 1), holding at most
     /// about `max_bytes`.
+    #[cfg(test)]
     pub(crate) fn new(target: usize, max_bytes: usize) -> Self {
+        Self::scaled(target, 1, max_bytes)
+    }
+
+    /// The same toward `scale` times `target` rows, a batch passing through
+    /// uncopied from `scale` times the usual threshold
+    /// ([`Sink::coalesce_scale`](crate::operator::Sink::coalesce_scale)).
+    pub(crate) fn scaled(target: usize, scale: usize, max_bytes: usize) -> Self {
+        let scale = scale.max(1);
         let target = target.max(1);
         Self {
-            target,
-            pass: target.min(PASS_CAP).div_ceil(4),
+            target: target.saturating_mul(scale),
+            pass: target.min(PASS_CAP).div_ceil(4).saturating_mul(scale),
             held: Vec::new(),
             rows: 0,
             split: None,
@@ -294,5 +303,21 @@ mod tests {
         assert_eq!(drain(&mut c), vec![(None, vec![0, 1])]);
         assert!(!c.has_held());
         assert_eq!(c.bytes, 0);
+    }
+
+    #[test]
+    fn a_scaled_coalescer_joins_larger_batches() {
+        // Target 16 x 4 = 64 rows; batches under 4 x 4 = 16 rows are held.
+        let mut c = InputCoalesce::scaled(16, 4, HELD_MAX_BYTES);
+        for i in 0..7 {
+            c.push(batch(i * 9, 9));
+        }
+        assert!(c.pop_ready().is_none(), "63 rows are held");
+        c.push(batch(63, 9));
+        let joined = c.pop_ready().unwrap();
+        assert_eq!(values(&joined), (0..72).collect::<Vec<_>>());
+        // 16 rows pass through uncopied.
+        c.push(batch(0, 16));
+        assert_eq!(c.pop_ready().map(|b| b.num_rows()), Some(16));
     }
 }

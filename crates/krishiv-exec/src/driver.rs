@@ -1148,9 +1148,13 @@ fn coalescers(run: &PipelineRun, slots: &mut [Slot]) {
         .map(|(_, op)| op.coalesce_input())
         .chain(std::iter::once(true));
     let max_bytes = held_max_bytes(run.query.pool().effective_limit());
-    for (slot, wants) in slots.iter_mut().skip(1).zip(wants) {
+    let n = p.operators.len();
+    let scale = p.sink.1.coalesce_scale(config);
+    for (k, (slot, wants)) in slots.iter_mut().skip(1).zip(wants).enumerate() {
         if wants {
-            slot.coalesce = Some(InputCoalesce::new(config.batch_size, max_bytes));
+            // Only the sink's own coalescer is scaled.
+            let scale = if k == n { scale } else { 1 };
+            slot.coalesce = Some(InputCoalesce::scaled(config.batch_size, scale, max_bytes));
         }
     }
 }

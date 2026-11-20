@@ -1010,6 +1010,12 @@ impl Sink for BuildSink {
         true
     }
 
+    // Every batch is cut into one arena chunk per level-0 partition: with
+    // more partitions, larger batches keep the chunks as large as with 8.
+    fn coalesce_scale(&self, config: &crate::ExecConfig) -> usize {
+        (self.0.hashing(config).fanout0() / super::keys::PARTITIONS).max(1)
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinBuild"
     }

@@ -391,6 +391,15 @@ pub trait Sink: Send + Sync {
     fn coalesce_input(&self) -> bool {
         false
     }
+    /// How many times `krishiv.exec.batchSize` rows the driver joins small
+    /// batches into before this sink, when it [allows](Self::coalesce_input)
+    /// joining (still capped by the held bytes). A hash join build with more
+    /// than 8 level-0 partitions asks for more, so each partition still gets
+    /// a chunk of about a batch's eighth. Default 1.
+    fn coalesce_scale(&self, config: &crate::ExecConfig) -> usize {
+        let _ = config;
+        1
+    }
     /// Whether this sink may be fed by several logical-partition drivers
     /// under `krishiv.deterministicOrder` (T094 G1): its `sink` touches only
     /// the driver's own local state (or the result sink's ordered slots), and
