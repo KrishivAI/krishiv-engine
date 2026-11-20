@@ -265,6 +265,7 @@ pub(crate) async fn environment(State(s): State<UiState>) -> Response {
 pub(crate) async fn sql_start(
     State(s): State<UiState>,
     caller: Option<Extension<Caller>>,
+    headers: HeaderMap,
     body: String,
 ) -> Response {
     let sql = serde_json::from_str::<Value>(&body)
@@ -286,7 +287,11 @@ pub(crate) async fn sql_start(
     }
     match s
         .source
-        .sql_start(&sql, caller.as_ref().map(|c| &c.0))
+        .sql_start_traced(
+            &sql,
+            caller.as_ref().map(|c| &c.0),
+            &crate::internal::InboundTrace::from_headers(&headers),
+        )
         .await
     {
         Ok(id) => json_response(StatusCode::ACCEPTED, &json!({"run_id": id})),
