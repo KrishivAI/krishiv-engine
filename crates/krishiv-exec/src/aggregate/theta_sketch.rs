@@ -38,20 +38,28 @@ const FRESH_BYTES_PER_ROW: usize = 128;
 const GROWTH: usize = 9;
 
 /// A state value of `n` bytes holds at most this many table bytes once folded: an entry is at least a byte or so in
-/// the compressed form and a table slot costs up to 32 bytes (a union's table is at most a quarter full after a
-/// resize by 2 and an entry is 8 bytes).
+/// the compressed form and a table slot costs up to 32 bytes. A union's table is built with the crate's resize by 8,
+/// so at worst 1/16 full (128 bytes an entry); the factor holds for real sketches because the transient term in
+/// `projected` doubles it. A hand-made compressed buffer with one-bit deltas can reach 16 table bytes per bit in an
+/// intersection: the charge is corrected after the fold.
 const TABLE_BYTES_PER_STATE_BYTE: usize = 32;
 
 /// The `binary` column of state rows. Arrow's 32-bit offsets overflow past 2 GiB (and `from_iter_values` wraps
 /// without a check), which a batch of large sketches can reach.
 fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
-    let total = rows.iter().try_fold(0_usize, |n, r| n.checked_add(r.len()));
+    check_total_len(rows.iter().map(Vec::len))?;
+    Ok(BinaryArray::from_iter_values(rows))
+}
+
+/// The error when the lengths sum past what a `binary` column's 32-bit offsets hold (or overflow `usize`).
+fn check_total_len(mut lens: impl Iterator<Item = usize>) -> Result<()> {
+    let total = lens.try_fold(0_usize, usize::checked_add);
     if total.is_none_or(|n| i32::try_from(n).is_err()) {
         return Err(internal(
             "the Theta partial states of one batch hold more than 2 GiB".to_owned(),
         ));
     }
-    Ok(BinaryArray::from_iter_values(rows))
+    Ok(())
 }
 
 /// Which Theta aggregate.
@@ -202,6 +210,11 @@ impl ThetaSketchAcc {
                         .saturating_mul(std::mem::size_of::<usize>()),
                 ),
         )
+    }
+
+    /// Whether the argument column holds sketches (a union or an intersection), not values to sketch.
+    pub(crate) fn takes_sketches(&self) -> bool {
+        !matches!(self.op, ThetaSketchOp::Sketch(_))
     }
 
     /// The size after adding `new` groups (an upper bound; a row table passes the partition's rows) and folding
@@ -484,11 +497,15 @@ impl ThetaSketchAcc {
     /// The result of groups `ids`, on the `binary` view carrier; an intersection that saw nothing is the empty sketch.
     pub(crate) fn evaluate(&self, ids: &[u32]) -> Result<ArrayRef> {
         let mut rows = Vec::with_capacity(ids.len());
+        let mut empty_bytes: Option<Vec<u8>> = None;
         for &g in ids {
             let b = self.bytes(g)?;
             rows.push(if b.is_empty() {
-                let mut empty = theta::new_sketch(DEFAULT_LG_NOM, self.function())?;
-                theta::to_bytes(&theta::compact(&mut empty))
+                if empty_bytes.is_none() {
+                    let mut empty = theta::new_sketch(DEFAULT_LG_NOM, self.function())?;
+                    empty_bytes = Some(theta::to_bytes(&theta::compact(&mut empty)));
+                }
+                empty_bytes.clone().unwrap_or_default()
             } else {
                 b
             });

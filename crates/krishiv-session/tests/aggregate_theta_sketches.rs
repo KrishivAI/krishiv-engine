@@ -80,6 +80,48 @@ fn the_aggregates_do_not_depend_on_partitions() -> R {
     Ok(())
 }
 
+/// `theta_intersection_agg` over a few sketches spread over 1 and 8 partitions (most of them empty, so the merge
+/// skips their empty states), in exact and in estimation mode.
+#[test]
+fn the_intersection_does_not_depend_on_partitions() -> R {
+    let s = Session::new()?;
+    let q = |lg: u32, width: u32, n: u32| {
+        let sketches = (0..3_u32)
+            .map(|i| {
+                let (lo, hi) = (i * width / 5, i * width / 5 + width);
+                format!("SELECT theta_sketch_agg(id, {lg}) AS sk FROM range({lo}, {hi})")
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        format!(
+            "SELECT theta_sketch_estimate(theta_intersection_agg(sk)) \
+             FROM (SELECT /*+ REPARTITION({n}) */ sk FROM ({sketches}))"
+        )
+    };
+    // Exact: the three ranges share [2*width/5, width) = 60 of 100 values.
+    assert_eq!(rows(&s, &q(12, 100, 1))?, ["60"]);
+    assert_eq!(rows(&s, &q(12, 100, 8))?, ["60"]);
+    // Estimation mode (lg 10 holds 1,024 entries; 50,000 values per sketch).
+    let one = rows(&s, &q(10, 50_000, 1))?;
+    assert_eq!(rows(&s, &q(10, 50_000, 8))?, one);
+    let est: f64 = one[0].parse()?;
+    assert!((est - 30_000.0).abs() < 30_000.0 * 0.2, "{est}");
+    Ok(())
+}
+
+#[test]
+fn lg_nom_entries_4_is_refused_by_name() -> R {
+    let s = Session::new()?;
+    for q in [
+        "SELECT theta_sketch_agg(id, 4) FROM range(0, 10)",
+        "SELECT theta_union_agg(sk, 4) FROM (SELECT theta_sketch_agg(id) AS sk FROM range(0, 10))",
+    ] {
+        let e = rows(&s, q).expect_err(q);
+        assert!(e.to_string().contains("lgNomEntries 4"), "{q}: {e}");
+    }
+    Ok(())
+}
+
 #[test]
 fn the_intersection_of_two_groups_and_of_nothing() -> R {
     let s = Session::new()?;
@@ -154,7 +196,8 @@ fn spark_written_estimation_mode_sketches_agree_with_krishivs() -> R {
             "{name}: the union"
         );
         let hex = rows(&s, &format!("SELECT hex({own})"))?.remove(0);
-        if let Ok(back) = fx_dir_json("reverse.json") {
+        {
+            let back = fx_dir_json("reverse.json")?;
             let back = &back["krishiv_read_by_spark"][name];
             assert_eq!(back["estimate"].as_i64(), Some(want), "{name}: Spark reads");
             assert_eq!(

@@ -712,9 +712,13 @@ impl Accumulator {
         }
     }
 
-    /// Whether this is a Theta sketch aggregate (its projection reads the byte length of the state column).
-    pub(crate) fn is_theta(&self) -> bool {
-        matches!(self.kind, Kind::ThetaSketch(_))
+    /// Whether the argument column holds sketches (a Theta union or intersection, raw or partial; any Theta
+    /// aggregate over partial states): its byte length is what the projection reads.
+    pub(crate) fn theta_reads_sketches(&self, states: bool) -> bool {
+        match &self.kind {
+            Kind::ThetaSketch(h) => states || h.takes_sketches(),
+            _ => false,
+        }
     }
 
     /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
@@ -799,7 +803,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             Kind::ThetaSketch(h) => {
-                let state_bytes = if states {
+                let state_bytes = if states || h.takes_sketches() {
                     arg.map_or(0, arrow_array::Array::get_array_memory_size)
                 } else {
                     0

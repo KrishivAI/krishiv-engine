@@ -196,7 +196,44 @@ fn an_intersection_is_projected_by_its_input_not_by_the_default_size() {
 #[test]
 fn state_batches_over_two_gib_are_an_error_not_a_wrapped_array() {
     assert!(binary_array(vec![vec![0_u8; 8], vec![1_u8; 8]]).is_ok());
-    // Lengths are summed without allocating 2 GiB: a checked sum is the contract.
-    let rows = vec![Vec::<u8>::new(); 3];
-    assert_eq!(binary_array(rows).unwrap().len(), 3);
+    let max = i32::MAX as usize;
+    // Lengths only: nothing of that size is allocated.
+    assert!(check_total_len([max].into_iter()).is_ok());
+    assert!(check_total_len([max - 1, 1].into_iter()).is_ok());
+    assert!(check_total_len([max, 1].into_iter()).is_err());
+    assert!(check_total_len([usize::MAX, 1].into_iter()).is_err());
+}
+
+/// A raw sketch column (the first stage of `theta_union_agg(s)` / `theta_intersection_agg(s)`, not partial
+/// states) is charged by the bytes of its sketches, through the `Accumulator` the row table calls.
+#[test]
+fn a_raw_sketch_column_is_projected_by_its_bytes_for_union_and_intersection() {
+    use super::super::accumulator::Accumulator;
+    use super::super::{AggregateExpr, AggregateFunction};
+    use arrow_schema::DataType;
+
+    let mut big = theta::new_sketch(20, "theta_sketch_agg").unwrap();
+    for v in 0..1_000_000_i64 {
+        theta::update_long(&mut big, v);
+    }
+    let bytes = theta::to_bytes(&theta::compact(&mut big));
+    let col: ArrayRef = Arc::new(BinaryArray::from_iter_values((0..4).map(|_| bytes.clone())));
+    for function in [
+        AggregateFunction::ThetaUnionAgg { lg_nom: 12 },
+        AggregateFunction::ThetaIntersectionAgg,
+    ] {
+        let expr = AggregateExpr::new(function.clone(), 0, DataType::Binary, "t".to_owned());
+        let mut acc = Accumulator::new(&expr, false).unwrap();
+        acc.resize(1);
+        let projected = acc.projected(0, Some(&col), None, false);
+        let overhead_only = acc.projected(0, None, None, false);
+        assert!(
+            projected > 10 * overhead_only,
+            "{function:?}: the sketch bytes are not charged ({projected} vs {overhead_only})"
+        );
+        if matches!(function, AggregateFunction::ThetaIntersectionAgg) {
+            // Not capped by lgNomEntries: follows the input.
+            assert!(projected > 4 * bytes.len(), "{function:?}: {projected}");
+        }
+    }
 }
