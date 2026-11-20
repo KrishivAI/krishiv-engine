@@ -685,6 +685,7 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -696,6 +697,7 @@ impl Session {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -711,6 +713,7 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: None,
+                    options: &m.target_options,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await

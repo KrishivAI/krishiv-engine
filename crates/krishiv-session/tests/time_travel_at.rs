@@ -134,6 +134,9 @@ fn time_travel_names_the_resolved_relation() {
         error(&s, "select * from pv@v1"),
         travel("`spark_catalog`.`default`.`pv`")
     );
+    // The planning entry points (Flight SQL's `GetFlightInfo` reads `statement_info`) name it too.
+    let e = block_on(s.statement_info("select * from tbl@v1")).unwrap_err();
+    assert_eq!(e.error_class().name(), "UNSUPPORTED_FEATURE.TIME_TRAVEL");
     // A global temporary view and a CTE are named as written.
     assert_eq!(
         error(&s, "select * from global_temp.gv@v1"),

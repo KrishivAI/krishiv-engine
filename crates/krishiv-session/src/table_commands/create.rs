@@ -911,6 +911,7 @@ impl Session {
                     &alias,
                     condition.as_deref(),
                     &assignments,
+                    (!changes.options.is_empty()).then_some(operation),
                 )
                 .await?
             {

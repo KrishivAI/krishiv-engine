@@ -1761,7 +1761,8 @@ impl crate::Session {
             crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
         })?;
         let plan = krishiv_sql::lower(&query, krishiv_plan::SourceId(0)).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+            let (start, end) = (e.span.start, e.span.end);
+            crate::session::sql_context(self.lowering_error(e, &env), &redacted, start, end)
         })?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         df.analyzed_in_with_text(env, Some(&redacted)).await

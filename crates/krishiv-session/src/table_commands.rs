@@ -118,6 +118,8 @@ pub(crate) struct RowChanges<'a> {
     pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
     /// The `WHERE` condition.
     pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+    /// The `WITH (...)` options of the target relation (Spark 4.3).
+    pub(crate) options: &'a [krishiv_sql::ast::TableOption],
 }
 
 /// The scalar subqueries anywhere in the expression.

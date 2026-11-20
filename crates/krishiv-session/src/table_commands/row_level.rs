@@ -102,6 +102,7 @@ impl Session {
         alias: &str,
         condition: Option<&str>,
         assignments: &[Assignment],
+        with_options: Option<&str>,
     ) -> Result<Option<DataFrame>, KrishivError> {
         let plain = self.with_locals(Vec::new());
         // A table that cannot be planned keeps the statement's old refusal (a v1 table's error
@@ -124,6 +125,16 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // Spark hands `WITH (options)` to the connector's scan and write; none is wired here, so a
+        // statement that would run refuses them rather than ignore them.
+        if let Some(operation) = with_options {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "{operation} with WITH (options) on a table that runs row-level changes"
+                ),
+            }
+            .into());
+        }
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
