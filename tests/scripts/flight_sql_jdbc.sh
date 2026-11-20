@@ -6,7 +6,8 @@
 # Called by `jdbc_flight_sql_tpch_q1` in crates/krishiv-cli/tests/flight_sql.rs; the arguments
 # are passed to the program:
 #
-#   sh tests/scripts/flight_sql_jdbc.sh <jdbc url> <q1> <q1 with ?> <date for ?>
+#   sh tests/scripts/flight_sql_jdbc.sh <jdbc url> <q1> <q1 with ?> <date for ?> \
+#     [<url with user= and password=> <url with another user=>]
 #
 # The driver jar is downloaded once from Maven Central into
 # ${XDG_CACHE_HOME:-~/.cache}/krishiv/flight-sql-jdbc and checked against its pinned SHA-256.

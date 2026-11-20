@@ -183,7 +183,7 @@ pub const SURFACE_LABEL: LabelDef = LabelDef {
 /// `method`: how a request tried to authenticate.
 pub const AUTH_METHOD_LABEL: LabelDef = LabelDef {
     name: "method",
-    values: &["token", "oidc", "mtls", "throttle", "none"],
+    values: &["token", "oidc", "mtls", "throttle", "none", "basic"],
 };
 
 /// `privilege`: the privilege an access check asked for.
