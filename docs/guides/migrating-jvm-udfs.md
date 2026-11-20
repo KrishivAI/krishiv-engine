@@ -1,3 +1,6 @@
+---
+description: "What to use instead of a Scala, Java or Hive UDF packaged in a JAR, since Krishiv does not run the JVM."
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Migrating JVM UDFs
 
