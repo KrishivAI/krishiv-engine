@@ -1327,6 +1327,48 @@ fn clustered_new_keys_stay_append_only() {
     assert_eq!(t.mode, Mode::Append);
 }
 
+/// The row-at-a-time sampling `Recur::add_runs` replaced: every hash that
+/// starts a run and has its sample bits clear.
+fn add_runs_reference(r: &mut Recur, hashes: &[u64], mut last: Option<u64>) {
+    for &h in hashes {
+        if last != Some(h) && (h >> 16) & RECUR_SAMPLE_BITS == 0 {
+            r.add(h);
+        }
+        last = Some(h);
+    }
+}
+
+proptest::proptest! {
+    /// The chunked sampling samples the run starts the row-at-a-time loop
+    /// does: runs across chunks of 8 and across batches, sampled or not.
+    #[test]
+    fn chunked_run_sampling_matches_rows(
+        rows in proptest::collection::vec((0_u64..6, proptest::bool::ANY), 0..300),
+        cuts in proptest::collection::vec(0_usize..300, 0..4),
+    ) {
+        // A few keys, so runs and repeats are common; a key is sampled
+        // when its bits 16..22 are clear.
+        let hashes: Vec<u64> = rows
+            .iter()
+            .map(|&(k, sampled)| ((k + 1) << 32) | if sampled { 0 } else { 1 << 16 })
+            .collect();
+        let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(hashes.len())).collect();
+        cuts.push(0);
+        cuts.push(hashes.len());
+        cuts.sort_unstable();
+        let (mut a, mut b) = (Recur::new(), Recur::new());
+        let mut last = None;
+        for w in cuts.windows(2) {
+            let batch = &hashes[w[0]..w[1]];
+            a.add_runs(batch, last);
+            add_runs_reference(&mut b, batch, last);
+            last = batch.last().copied().or(last);
+        }
+        proptest::prop_assert_eq!((a.sampled, a.hits, a.len), (b.sampled, b.hits, b.len));
+        proptest::prop_assert_eq!(&a.slots, &b.slots);
+    }
+}
+
 /// A table grouping by `k` with `hll_sketch_agg(v)` at lgK 12, raw or final.
 fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
     let s = Arc::new(Schema::new(vec![

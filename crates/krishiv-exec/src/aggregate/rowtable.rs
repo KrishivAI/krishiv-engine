@@ -365,13 +365,29 @@ impl Recur {
     }
 
     /// Samples the run starts of `hashes` (`last`: the previous batch's
-    /// last hash).
-    fn add_runs(&mut self, hashes: &[u64], mut last: Option<u64>) {
-        for &h in hashes {
-            if last != Some(h) && (h >> 16) & RECUR_SAMPLE_BITS == 0 {
-                self.add(h);
+    /// last hash). One hash in 64 is sampled, so a chunk of 8 holds none
+    /// about 7 times in 8 and is skipped after a vectorizable test (an
+    /// all-rows scalar loop cost TPC-H q18 2% more instructions).
+    fn add_runs(&mut self, hashes: &[u64], last: Option<u64>) {
+        const CHUNK: usize = 8;
+        let sampled = |h: u64| (h >> 16) & RECUR_SAMPLE_BITS == 0;
+        for (c, chunk) in hashes.chunks(CHUNK).enumerate() {
+            if !chunk.iter().fold(false, |any, &h| any | sampled(h)) {
+                continue;
             }
-            last = Some(h);
+            for (j, &h) in chunk.iter().enumerate() {
+                if !sampled(h) {
+                    continue;
+                }
+                let i = c * CHUNK + j;
+                let prev = match i.checked_sub(1) {
+                    Some(p) => hashes.get(p).copied(),
+                    None => last,
+                };
+                if prev != Some(h) {
+                    self.add(h);
+                }
+            }
         }
     }
 
