@@ -207,6 +207,9 @@ struct Bodies {
     reads: Mutex<Vec<BodyReads>>,
     /// The views the bodies inlined, for the query's view side table (`AnalyzedPlan::views`).
     views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
+    /// What the temporary views the bodies expanded so far kept
+    /// ([`crate::catalog::TempTable::View`]'s keeps: an observed frame's observations).
+    keeps_read: Mutex<Vec<crate::catalog::Keep>>,
     /// The stored views the query's own expansions inlined, with their versions
     /// ([`QueryFunctions::note_views`], review r10 M10).
     views_noted: Mutex<BTreeMap<(String, String), u64>>,
@@ -601,6 +604,16 @@ impl QueryFunctions {
             .clone()
     }
 
+    /// What the temporary views the bodies expanded so far kept, so a query whose only read of
+    /// an observed view is inside a function body completes its observations.
+    pub(crate) fn body_keeps(&self) -> Vec<crate::catalog::Keep> {
+        self.bodies
+            .keeps_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The text a function's body spans index, for the source `id`.
     pub(crate) fn source_text(&self, id: SourceId) -> Option<RedactedSql> {
         self.map
@@ -717,6 +730,11 @@ impl QueryFunctions {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .extend(expansion.views);
+                self.bodies
+                    .keeps_read
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend(expansion.keeps);
                 match &expansion.plan.node {
                     PlanNode::Project { exprs, .. } => exprs.first().cloned(),
                     _ => None,

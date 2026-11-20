@@ -638,6 +638,7 @@ Show(
     Show {
         kind: Namespaces {
             kind: Database,
+            namespace: None,
             pattern: None,
             span: 5..14,
         },
@@ -649,6 +650,7 @@ Show(
     Show {
         kind: Namespaces {
             kind: Schema,
+            namespace: None,
             pattern: Some(
                 ShowPattern {
                     like: true,
@@ -666,6 +668,7 @@ Show(
     Show {
         kind: Namespaces {
             kind: Namespace,
+            namespace: None,
             pattern: None,
             span: 5..15,
         },

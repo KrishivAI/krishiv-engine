@@ -1099,13 +1099,17 @@ async fn load(
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
             let failed = |e: krishiv_common::error::KrishivError| {
-                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
-                // own text, never the provider's, and tell the user what to do: they stay as
-                // they are.
+                // A delegated catalog's refusal, a catalog limit (P3-T067 §3.3) and a table the
+                // catalog serves in a form Krishiv refuses (`KRISHIV_CATALOG_TABLE_UNSUPPORTED`:
+                // read restrictions, server-side planning, a metadata table, §4.1) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as they
+                // are. Any other class, `KRISHIV_UNSUPPORTED_FEATURE` included, may carry the
+                // provider's text and is hidden.
                 if matches!(
                     e.error_class(),
                     krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
                         | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                        | krishiv_common::error::ErrorClass::KrishivCatalogTableUnsupported
                 ) {
                     return AnalysisError::new(e, origin);
                 }

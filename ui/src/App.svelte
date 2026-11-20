@@ -1,7 +1,9 @@
 <script lang="ts">
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
-  import { initSession } from "./api";
+  import { api, initSession } from "./api";
   import { consoleInfo, loadConsole, pagesOf } from "./console.svelte";
+  import { applyTheme, embedLink, listenForTheme, validateTheme } from "./embed";
+  import { parseRoute } from "./routes";
   import Catalog from "./pages/Catalog.svelte";
   import Editor from "./pages/Editor.svelte";
   import Environment from "./pages/Environment.svelte";
@@ -19,12 +21,17 @@
   import markLight from "./brand/mark-light.svg";
   import "./app.css";
 
-  let session = $state<"checking" | "yes" | "no">("checking");
+  // The embedded view (`?embed=1` on /queries/{id}/profile) has no session: its signed link is the credential.
+  const embed = embedLink(window.location.search);
+  // The mark shows only once the config says it may (no flash in an embed that hides it).
+  let hideAttribution = $state(true);
+  let session = $state<"checking" | "yes" | "no">(embed ? "yes" : "checking");
   // The mode is read before the first page is drawn, so no page of another mode flashes by or asks for data
   // this console does not have.
-  initSession()
-    .then((ok) => (ok ? loadConsole().then(() => true) : false))
-    .then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
+  if (!embed)
+    initSession()
+      .then((ok) => (ok ? loadConsole().then(() => true) : false))
+      .then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   let hash = $state(window.location.hash);
@@ -37,8 +44,30 @@
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   });
+  $effect(() => {
+    if (!embed) return;
+    document.documentElement.dataset.embed = "1";
+    // A theme in the link, then messages from the embedding page (allowed origins only).
+    if (embed.theme) {
+      try {
+        const r = validateTheme(JSON.parse(embed.theme));
+        if (r.ok) applyTheme(r.theme);
+        else console.warn(`krishiv: ignored the theme in the link: ${r.reason}`);
+      } catch {
+        console.warn("krishiv: ignored the theme in the link: not JSON");
+      }
+    }
+    const config = api<{ allowed_origins: string[]; hide_attribution: boolean }>("/api/internal/embed/config");
+    config.then(
+      (c) => {
+        hideAttribution = c.hide_attribution;
+      },
+      () => {},
+    );
+    return listenForTheme(config.then((c) => c.allowed_origins));
+  });
 
-  const parts = $derived(hash.replace(/^#\//, "").split("/"));
+  const route = $derived(parseRoute(window.location.pathname, hash));
   const labels: Record<string, string> = {
     health: "Health",
     queries: "Queries",
@@ -51,8 +80,10 @@
   const pages = $derived(pagesOf(consoleInfo.mode, consoleInfo.role));
   const links = $derived(pages.map((id) => [id, labels[id]]));
   // An address of a page this mode lacks (or none) opens the mode's first page. A stored profile is a query's
-  // page, so `queries/<id>` stays reachable where the live list is not.
-  const page = $derived(pages.includes(parts[0]) || (parts[0] === "queries" && parts[1]) ? parts[0] : pages[0]);
+  // page, so `queries/<id>` stays reachable where the live list is not. The embedded view is always a query's.
+  const page = $derived(
+    pages.includes(route.page) || (route.page === "queries" && route.id) ? route.page : pages[0],
+  );
   const linkClass = (id: string, wide: boolean) =>
     cn(
       "rounded-md px-3 text-sm font-medium text-text-2 no-underline hover:bg-accent",
@@ -63,6 +94,18 @@
 </script>
 
 <QueryClientProvider {client}>
+  {#if embed}
+    <main class="mx-auto max-w-7xl px-3 py-4 md:px-4">
+      {#if page === "queries" && route.id && route.sub === "profile"}
+        <QueryDetail id={route.id} {embed} />
+      {:else}
+        <h1>This view cannot be embedded</h1>
+      {/if}
+      {#if !hideAttribution}
+        <p class="mt-6 text-right text-xs text-muted-foreground">Powered by Krishiv</p>
+      {/if}
+    </main>
+  {:else}
   <!-- The bar's items sit in the same centred box as the content, so on a very wide screen they line up with it
        instead of going to the screen's corners. -->
   <header class="sticky top-0 z-30 border-b border-border bg-card">
@@ -125,8 +168,8 @@
         The console needs the token in the <code>http://…/?token=…</code> address that <code>krishiv server</code>,
         <code>krishiv ui</code> or <code>krishiv.ui()</code> printed when it started: open that address.
       </p>
-    {:else if page === "queries" && parts[1]}
-      <QueryDetail id={decodeURIComponent(parts[1])} />
+    {:else if page === "queries" && route.id}
+      <QueryDetail id={route.id} />
     {:else if page === "queries"}
       <Queries />
     {:else if page === "history"}
@@ -143,4 +186,5 @@
       <Health />
     {/if}
   </main>
+  {/if}
 </QueryClientProvider>

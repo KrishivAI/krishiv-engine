@@ -9,11 +9,19 @@
   import Id from "$lib/components/id.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
 
-  let { id }: { id: string } = $props();
+  import type { EmbedLink } from "../embed";
+
+  // `embed`: the embedded view reads through its signed link (no session) and shows no navigation.
+  let { id, embed = null }: { id: string; embed?: EmbedLink | null } = $props();
 
   const q = createQuery<QueryDetail>(() => ({
     queryKey: ["query", id],
-    queryFn: () => api<QueryDetail>(`/api/internal/queries/${encodeURIComponent(id)}`),
+    queryFn: () =>
+      api<QueryDetail>(
+        embed
+          ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
+          : `/api/internal/queries/${encodeURIComponent(id)}`,
+      ),
     refetchInterval: (query) => (consoleInfo.mode !== "profiles" && ["running", "queued"].includes(query.state.data?.query.state ?? "") ? 1000 : false),
   }));
 
@@ -48,18 +56,20 @@
   ];
 </script>
 
-<p class="mb-3 flex flex-wrap gap-4">
-  {#if consoleInfo.mode === "profiles"}
-    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">← History</a>
-  {:else}
-    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/queries">← Queries</a>
-    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">History</a>
-  {/if}
-</p>
+{#if !embed}
+  <p class="mb-3 flex flex-wrap gap-4">
+    {#if consoleInfo.mode === "profiles"}
+      <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">← History</a>
+    {:else}
+      <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/queries">← Queries</a>
+      <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">History</a>
+    {/if}
+  </p>
+{/if}
 {#if q.isPending}
   <p class="text-muted-foreground">Loading…</p>
 {:else if q.isError}
-  <h1>Query not found</h1>
+  <h1>{embed ? "This link is not valid" : "Query not found"}</h1>
   <p class="text-error">{q.error.message}</p>
 {:else}
   {@const d = q.data}

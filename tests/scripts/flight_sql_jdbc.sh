@@ -6,17 +6,18 @@
 # Called by `jdbc_flight_sql_tpch_q1` in crates/krishiv-cli/tests/flight_sql.rs; the arguments
 # are passed to the program:
 #
-#   sh tests/scripts/flight_sql_jdbc.sh <jdbc url> <q1> <q1 with ?> <date for ?>
+#   sh tests/scripts/flight_sql_jdbc.sh <jdbc url> <q1> <q1 with ?> <date for ?> \
+#     [<url with user= and password=> <url with another user=>]
 #
 # The driver jar is downloaded once from Maven Central into
 # ${XDG_CACHE_HOME:-~/.cache}/krishiv/flight-sql-jdbc and checked against its pinned SHA-256.
-# The program runs on the host's `java` (21 or later: the single-file source launcher) when
-# there is one, else in the digest-pinned eclipse-temurin:21-jdk container on the host network.
+# The program runs on the host's `java` when it is 21 or later (the single-file source launcher),
+# else in the digest-pinned eclipse-temurin:21-jdk container on the host network.
 set -eu
 
 VERSION=19.0.0
-# Fails closed until the hash of the downloaded jar is pinned here.
-JAR_SHA256=UNPINNED
+# Maven Central's flight-sql-jdbc-driver-19.0.0.jar (its published SHA-1 300f1bc6d866aebe730d493605b82cf600cc1d3d).
+JAR_SHA256=d3beee43c613c457789825343368f652d570d76c08799dad38a43a10e569b57f
 # eclipse-temurin:21-jdk, pinned by digest (multi-arch index), used only without a host java.
 IMAGE=eclipse-temurin:21-jdk@sha256:db5cc6341a1d7bc40cdb51e1f0d9824f3bb2cc8107d29da421dc4df7d11f05f1
 URL="https://repo1.maven.org/maven2/org/apache/arrow/flight-sql-jdbc-driver/$VERSION/flight-sql-jdbc-driver-$VERSION.jar"
@@ -38,7 +39,12 @@ program="$here/flight_sql_jdbc/FlightSqlJdbc.java"
 # Arrow's memory module reads java.nio buffers' internals.
 opens="--add-opens=java.base/java.nio=ALL-UNNAMED"
 
+# A host java older than 21 (a CI image's default 17, say) is skipped for the container.
+major=0
 if command -v java >/dev/null 2>&1; then
+  major=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p')
+fi
+if [ "${major:-0}" -ge 21 ] 2>/dev/null; then
   exec java "$opens" -cp "$jar" "$program" "$@"
 fi
 exec docker run --rm --network host \
