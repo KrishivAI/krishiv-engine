@@ -138,7 +138,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     WithRelations => ("with_relations", 41, Missing, "", "Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES; a cached_remote_relation inside a subquery or with_relations is recorded by the translator but not spliced by Session::from_plan_over (it walks plan nodes, not expression subqueries): T012 must splice it", "P3-T012", 4),
     Transpose => ("transpose", 42, Missing, "", "new Transpose (output schema depends on data; Spark resolves it in the analyzer)", "P3-T012", 3),
     UnresolvedTableValuedFunction => ("unresolved_table_valued_function", 43, Missing, "", "TableFunction", "P3-T012", 4),
-    LateralJoin => ("lateral_join", 44, Missing, "", "Join with a lateral right side; the IR has no lateral flag, so this is new", "P3-T012", 8),
+    LateralJoin => ("lateral_join", 44, Done, "", "Join with kind LateralInner (INNER, CROSS) or LateralLeft (LEFT OUTER); other types are INVALID_LATERAL_JOIN_TYPE", "P3-T012", 8),
     ChunkedCachedLocalRelation => ("chunked_cached_local_relation", 45, Missing, "", "as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA", "P3-T083", 7),
     RelationChanges => ("relation_changes", 46, Missing, "", "CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later", "P3-T021b", 8),
     NearestByJoin => ("nearest_by_join", 47, Missing, "", "top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000)", "P3-T077", 8),

@@ -58,6 +58,7 @@ impl Translator<'_> {
                 predicate: self.required_expression(f.condition.as_ref())?,
             },
             RelType::Join(j) => self.join(j)?,
+            RelType::LateralJoin(j) => self.lateral_join(j)?,
             RelType::Sort(s) => {
                 if s.order.is_empty() {
                     return Err(assertion("'order' must be present and contain elements."));
@@ -613,6 +614,55 @@ impl Translator<'_> {
         let condition = match &j.join_condition {
             Some(c) => JoinCondition::On(self.expression(c)?),
             None if !j.using_columns.is_empty() => JoinCondition::Using(j.using_columns.clone()),
+            None => JoinCondition::None,
+        };
+        Ok(PlanNode::Join {
+            left: self.relation(left)?,
+            right: self.relation(right)?,
+            kind,
+            condition,
+        })
+    }
+
+    /// `LateralJoin` (`DataFrame.lateralJoin`): a join whose right side reads the left side's
+    /// columns. Spark accepts INNER, CROSS and LEFT OUTER; any other type is
+    /// `INVALID_LATERAL_JOIN_TYPE`, as for the SQL `JOIN LATERAL`.
+    fn lateral_join(&mut self, j: &pb::LateralJoin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&j.left, &j.right) else {
+            return Err(assertion("Both join sides must be present"));
+        };
+        let kind = match JoinType::try_from(j.join_type) {
+            Ok(JoinType::Inner | JoinType::Cross) => JoinKind::LateralInner,
+            Ok(JoinType::LeftOuter) => JoinKind::LateralLeft,
+            Ok(JoinType::Unspecified) => {
+                return Err(invalid_enum(
+                    "spark.connect.Join.JoinType",
+                    "JOIN_TYPE_UNSPECIFIED",
+                    0,
+                ));
+            }
+            Ok(other) => {
+                return Err(krishiv_common::error::InvalidLateralJoinType {
+                    join_type: match other {
+                        JoinType::FullOuter => "FULL OUTER",
+                        JoinType::RightOuter => "RIGHT OUTER",
+                        JoinType::LeftSemi => "LEFT SEMI",
+                        _ => "LEFT ANTI",
+                    }
+                    .to_owned(),
+                }
+                .into());
+            }
+            Err(_) => {
+                return Err(invalid_enum(
+                    "spark.connect.Join.JoinType",
+                    "UNRECOGNIZED",
+                    j.join_type,
+                ));
+            }
+        };
+        let condition = match &j.join_condition {
+            Some(c) => JoinCondition::On(self.expression(c)?),
             None => JoinCondition::None,
         };
         Ok(PlanNode::Join {

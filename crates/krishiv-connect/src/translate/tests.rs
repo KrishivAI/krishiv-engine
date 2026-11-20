@@ -368,3 +368,39 @@ fn a_sql_command_translates_as_the_sql_relation_of_a_query() {
         ErrorClass::ConnectInvalidPlanSqlCommandExpectsSqlOrWithRelations
     );
 }
+
+#[test]
+fn a_lateral_join_keeps_its_kind_and_refuses_the_types_spark_refuses() {
+    use krishiv_plan::JoinKind;
+    let lateral = |join_type: pb::join::JoinType| {
+        relation(RelType::LateralJoin(Box::new(pb::LateralJoin {
+            left: boxed(read_table("t")),
+            right: boxed(read_table("u")),
+            join_condition: None,
+            join_type: join_type as i32,
+        })))
+    };
+    for (given, want) in [
+        (pb::join::JoinType::Inner, JoinKind::LateralInner),
+        (pb::join::JoinType::Cross, JoinKind::LateralInner),
+        (pb::join::JoinType::LeftOuter, JoinKind::LateralLeft),
+    ] {
+        let plan = translate_relation(&lateral(given), &conf()).expect("translates");
+        let PlanNode::Join { kind, .. } = &plan.root().node else {
+            panic!("a join: {plan}");
+        };
+        assert_eq!(*kind, want, "{given:?}");
+    }
+    for given in [
+        pb::join::JoinType::FullOuter,
+        pb::join::JoinType::RightOuter,
+        pb::join::JoinType::LeftSemi,
+        pb::join::JoinType::LeftAnti,
+    ] {
+        let err = translate_relation(&lateral(given), &conf()).expect_err("refused");
+        assert!(
+            err.to_string().contains("INVALID_LATERAL_JOIN_TYPE"),
+            "{err}"
+        );
+    }
+}

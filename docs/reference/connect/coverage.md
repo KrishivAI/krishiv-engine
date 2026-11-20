@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 13 done, 16 partial, 29 missing, 4 out of scope.
+62 arms: 14 done, 16 partial, 28 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -55,7 +55,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES; a cached_remote_relation inside a subquery or with_relations is recorded by the translator but not spliced by Session::from_plan_over (it walks plan nodes, not expression subqueries): T012 must splice it | P3-T012 | 4 |
 | 42 | transpose | missing |  | new Transpose (output schema depends on data; Spark resolves it in the analyzer) | P3-T012 | 3 |
 | 43 | unresolved_table_valued_function | missing |  | TableFunction | P3-T012 | 4 |
-| 44 | lateral_join | missing |  | Join with a lateral right side; the IR has no lateral flag, so this is new | P3-T012 | 8 |
+| 44 | lateral_join | done |  | Join with kind LateralInner (INNER, CROSS) or LateralLeft (LEFT OUTER); other types are INVALID_LATERAL_JOIN_TYPE | P3-T012 | 8 |
 | 45 | chunked_cached_local_relation | missing |  | as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA | P3-T083 | 7 |
 | 46 | relation_changes | missing |  | CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later | P3-T021b | 8 |
 | 47 | nearest_by_join | missing |  | top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000) | P3-T077 | 8 |
