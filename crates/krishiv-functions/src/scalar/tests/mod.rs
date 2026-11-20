@@ -620,10 +620,12 @@ mod predicate;
 mod random;
 mod r#struct;
 mod text;
+mod text43;
 mod theta;
 mod time_window;
 mod url;
 mod variant;
+mod variant_edit;
 mod vector;
 mod xml_binary;
 

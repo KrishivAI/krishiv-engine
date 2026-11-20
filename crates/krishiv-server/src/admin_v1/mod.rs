@@ -21,7 +21,7 @@ mod rest;
 #[cfg(feature = "session")]
 mod session_admin;
 #[cfg(feature = "session")]
-pub use session_admin::SessionAdmin;
+pub use session_admin::{DrainOps, SessionAdmin};
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -48,9 +48,12 @@ mod pb {
 pub use pb::admin_service_server::{AdminService, AdminServiceServer};
 pub use pb::{
     CancelQueriesByTagRequest, CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse,
-    Capability, GetCapabilitiesRequest, GetCapabilitiesResponse, GetVersionRequest,
-    GetVersionResponse, KillSessionRequest, KillSessionResponse, ListQueriesRequest,
-    ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, Query, Session,
+    Capability, DrainRequest, DrainResponse, DrainStatus, GetCapabilitiesRequest,
+    GetCapabilitiesResponse, GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest,
+    GetReadinessResponse, GetVersionRequest, GetVersionResponse, KillSessionRequest,
+    KillSessionResponse, ListQueriesRequest, ListQueriesResponse, ListSessionsRequest,
+    ListSessionsResponse, Query, ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
+    Session,
 };
 
 #[cfg(test)]
@@ -59,7 +62,7 @@ mod tests;
 /// The revision of this surface: an integer that grows whenever the descriptor snapshot changes
 /// (design §6.3; `cargo xtask admin-api` requires the increase). `GetVersion` returns it and
 /// `system.capabilities` carries it in the `("surface", "admin.v1", <revision>, ..)` row.
-pub const ADMIN_V1_REVISION: i64 = 2;
+pub const ADMIN_V1_REVISION: i64 = 3;
 
 /// Whether the surface is still `preview` (design D8): until the first release that ships it a
 /// non-additive change is possible.
@@ -308,6 +311,45 @@ pub trait AdminApi: Send + Sync + 'static {
         call: &Call,
         request: CancelQueriesByTagRequest,
     ) -> BoxFuture<'_, AdminResult<CancelQueriesByTagResponse>>;
+
+    /// Per-check readiness (`Monitor`).
+    fn get_readiness(&self, _call: &Call) -> BoxFuture<'_, AdminResult<GetReadinessResponse>> {
+        unsupported("GetReadiness")
+    }
+
+    /// The drain state (`Monitor`).
+    fn get_drain_status(&self, _call: &Call) -> BoxFuture<'_, AdminResult<GetDrainStatusResponse>> {
+        unsupported("GetDrainStatus")
+    }
+
+    /// Starts or shortens a drain (`Manage` on the cluster).
+    fn drain(
+        &self,
+        _call: &Call,
+        _request: DrainRequest,
+    ) -> BoxFuture<'_, AdminResult<DrainResponse>> {
+        unsupported("Drain")
+    }
+
+    /// Back to serving (`Manage` on the cluster).
+    fn resume_serving(
+        &self,
+        _call: &Call,
+        _request: ResumeServingRequest,
+    ) -> BoxFuture<'_, AdminResult<ResumeServingResponse>> {
+        unsupported("ResumeServing")
+    }
+}
+
+/// The answer of an [`AdminApi`] that does not implement an RPC.
+fn unsupported<T: Send + 'static>(rpc: &str) -> BoxFuture<'static, AdminResult<T>> {
+    let error = AdminError::new(
+        ErrorKind::FailedPrecondition,
+        "KRISHIV_UNSUPPORTED_FEATURE",
+        "0A000",
+        format!("{rpc} is not available on this server."),
+    );
+    Box::pin(std::future::ready(Err(error)))
 }
 
 /// How the admin listener is reached, for the browser rules of design §3.

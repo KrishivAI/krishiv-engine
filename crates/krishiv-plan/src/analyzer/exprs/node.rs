@@ -388,6 +388,12 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
+                if !session_qualified
+                    && let Some(b) =
+                        self.collect_union_call(window_fn, lookup_name, e, f, &kids, cx)?
+                {
+                    return Ok(b);
+                }
                 // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
                 // and the numeric forms of `make_timestamp` produce a
                 // `TIMESTAMP_NTZ` (a zone argument is ignored) and Spark

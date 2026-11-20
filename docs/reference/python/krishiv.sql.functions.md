@@ -676,6 +676,14 @@ def collect_set(col: ColumnOrName) -> Column
 
 Calls the registry function `collect_set`.
 
+### `collect_union`
+
+```python
+def collect_union(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `collect_union`.
+
 ### `concat`
 
 ```python
@@ -1281,6 +1289,14 @@ def format_string(format: str, *cols: ColumnOrName) -> Column
 
 Calls the registry function `format_string`.
 
+### `from_base32`
+
+```python
+def from_base32(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `from_base32`.
+
 ### `from_csv`
 
 ```python
@@ -1576,6 +1592,14 @@ def isnull(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `isnull`.
+
+### `jaro_winkler_similarity`
+
+```python
+def jaro_winkler_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Calls the registry function `jaro_winkler_similarity`.
 
 ### `java_method`
 
@@ -3426,6 +3450,14 @@ def toRadians(col: ColumnOrName) -> Column
 
 Deprecated alias; calls the registry function `radians`.
 
+### `to_base32`
+
+```python
+def to_base32(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `to_base32`.
+
 ### `to_binary`
 
 ```python
@@ -3778,6 +3810,14 @@ def try_validate_utf8(str: ColumnOrName) -> Column
 
 Calls the registry function `try_validate_utf8`.
 
+### `try_variant_array_append`
+
+```python
+def try_variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+```
+
+Calls the registry function `try_variant_array_append`.
+
 ### `try_variant_get`
 
 ```python
@@ -3785,6 +3825,22 @@ def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Col
 ```
 
 Calls the registry function `try_variant_get`.
+
+### `try_variant_insert`
+
+```python
+def try_variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+```
+
+Calls the registry function `try_variant_insert`.
+
+### `try_variant_set`
+
+```python
+def try_variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
+```
+
+Calls the registry function `try_variant_set`.
 
 ### `tuple_difference_double`
 
@@ -4165,6 +4221,22 @@ def variance(col: ColumnOrName) -> Column
 
 Calls the registry function `variance`.
 
+### `variant_array_append`
+
+```python
+def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+```
+
+Calls the registry function `variant_array_append`.
+
+### `variant_delete`
+
+```python
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
+```
+
+Calls the registry function `variant_delete`.
+
 ### `variant_get`
 
 ```python
@@ -4172,6 +4244,30 @@ def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
 ```
 
 Calls the registry function `variant_get`.
+
+### `variant_insert`
+
+```python
+def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+```
+
+Calls the registry function `variant_insert`.
+
+### `variant_set`
+
+```python
+def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
+```
+
+Calls the registry function `variant_set`.
+
+### `variant_strip_nulls`
+
+```python
+def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
+```
+
+Calls the registry function `variant_strip_nulls`.
 
 ### `version`
 
