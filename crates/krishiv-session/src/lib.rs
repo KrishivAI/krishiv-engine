@@ -86,6 +86,8 @@ mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+#[cfg(feature = "unstable-ir")]
+pub mod parameter_types;
 mod partition_advice;
 mod partition_keys;
 mod partitions;
