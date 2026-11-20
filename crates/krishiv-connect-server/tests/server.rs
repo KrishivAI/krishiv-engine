@@ -564,8 +564,8 @@ async fn a_draining_service_refuses_new_work_and_serves_existing_work() {
         "CloneSession",
     );
     assert_draining(
-        &service
-            .execute_plan(Request::new(decoded()))
+        // Boxed: `execute_plan`'s future is over clippy's `large_futures` threshold.
+        &Box::pin(service.execute_plan(Request::new(decoded())))
             .await
             .err()
             .expect("err"),

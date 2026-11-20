@@ -467,15 +467,15 @@ impl QueryHistory {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);
                 row.rows_produced = t.rows_produced;
-                row.bytes_read = Some(t.bytes_read);
-                row.rows_read = Some(t.rows_read);
+                row.bytes_read = t.bytes_read;
+                row.rows_read = t.rows_read;
                 row.rows_written = Some(t.rows_written);
                 row.bytes_written = Some(t.bytes_written);
-                row.files_read = Some(t.files_read);
+                row.files_read = t.files_read;
                 row.files_written = Some(t.files_written);
-                row.spill_bytes = Some(t.spill_bytes);
-                row.spill_files = Some(t.spill_files);
-                row.pipelines = Some(t.pipelines);
+                row.spill_bytes = t.spill_bytes;
+                row.spill_files = t.spill_files;
+                row.pipelines = t.pipelines;
                 row.workers = Some(t.workers);
             }
         });

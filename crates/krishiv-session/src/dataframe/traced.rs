@@ -148,6 +148,11 @@ impl DataFrame {
             .on_executor(
                 async move {
                     let a = df.action_analysis().await?;
+                    // Its operator metrics show the plan of its definer views, as a profile does
+                    // (review r2 R3).
+                    df.session
+                        .authorize_shown_definer_reads(&a.analyzed)
+                        .await?;
                     let (physical, fill) = df.physical_cached(&a).await?;
                     let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
                     let mut stream = fill.fill(stream, &df.session.state.cache);
