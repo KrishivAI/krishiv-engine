@@ -17,7 +17,7 @@ Paths are relative to this crate.
 - `src/origin.rs` origins (excluded from the encoding); `src/literal.rs` literal values; `src/function.rs` function references
 - `src/encode.rs` canonical encoding and `StructuralHash`; `src/dag.rs` DAG-aware equality and transforms
 - `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)
-- `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
+- `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy); `src/analyzer/bind/descriptors.rs` the descriptor file of `from_protobuf`/`to_protobuf` (a string literal path: `Select` on the qualified path asked first, then read once into `Bindings::descriptors`; Resolve passes the bytes to the result rule and binds the call from a binary literal, shown as the path)
 - `src/analyzer/windows.rs` window binding and extraction into `Window` relations
 - `src/analyzer/repartition.rs` `DISTRIBUTE BY` (`PlanNode::Repartition`): expressions checked as Spark checks `RepartitionByExpression`; the node stays resolved with them bound (widened like a filter's when they read a dropped column), and the physical planner evaluates them in a hash exchange (goldens `tests/fixtures/spark-4.2.0/distribute-by-goldens.json`)
 - `src/analyzer/python_relations.rs` (P3-T014) resolves `MapPartitions`, `GroupMap`, `CoGroupMap` built over unresolved inputs (Connect): keys bound per side, declared output ids kept once per analysis (`Resolver::built_id`, shared with `Range`), and `check_python_relation_determinism` at analysis (Spark's `CheckAnalysis`)

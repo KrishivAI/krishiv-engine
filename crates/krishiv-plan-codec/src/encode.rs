@@ -1104,6 +1104,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_fpp,
         bloom_max_fpp,
         bloom_bytes,
+        bloom_spill_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -1118,6 +1119,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_fpp,
             bloom_max_fpp,
             bloom_bytes,
+            bloom_spill_bytes,
         }),
     }
 }
@@ -1184,6 +1186,15 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
             input: *input as u64,
             n: *n,
             ignore_nulls: *ignore_nulls,
+            data_type: arrow_bytes(data_type, nested),
+        }),
+        WindowFunction::CounterDiff {
+            counter,
+            start_time,
+            data_type,
+        } => Function::CounterDiff(pb::CounterDiffFunction {
+            counter: *counter as u64,
+            start_time: start_time.map(|c| c as u64),
             data_type: arrow_bytes(data_type, nested),
         }),
     };

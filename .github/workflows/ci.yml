@@ -315,7 +315,8 @@ jobs:
       - run: cargo nextest run -p krishiv-session --features tls,oidc --lib -E 'test(/auth::mtls_tests::tls/) | test(/auth::oidc_tests/)' --locked
       # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
       - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus,admin-api --locked
-      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --test doctor --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --bin krishiv -E 'test(/^doctor::/)' --locked
       # The external catalog clients (Hive metastore, Iceberg REST) are feature-gated; their hostile-catalog tests
       # run here, not only nightly. The Docker acceptance against Apache's REST fixture is env-gated (skipped).
       - run: cargo nextest run -p krishiv-catalogs --features hive,iceberg-rest,unity --locked

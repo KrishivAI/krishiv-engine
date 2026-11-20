@@ -54,7 +54,7 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 pub use chars::{
     LcaseSearch, ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set,
-    find_in_set_lcase, initcap, levenshtein, locate, locate_lcase, luhn_check, overlay,
+    find_in_set_lcase, initcap, instr_nth, levenshtein, locate, locate_lcase, luhn_check, overlay,
     overlay_binary, quote, repeat, reverse, reverse_binary, right, search_lcase, soundex, space,
     split_part, substring_index, translate,
 };

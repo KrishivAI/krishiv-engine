@@ -852,7 +852,7 @@ pub struct WindowFunctionPlan {
     pub name: ::prost::alloc::string::String,
     #[prost(
         oneof = "window_function_plan::Function",
-        tags = "1, 2, 3, 4, 5, 6, 7, 11, 12"
+        tags = "1, 2, 3, 4, 5, 6, 7, 11, 12, 13"
     )]
     pub function: ::core::option::Option<window_function_plan::Function>,
 }
@@ -881,6 +881,9 @@ pub mod window_function_plan {
         /// feature: window_offset_functions
         #[prost(message, tag = "12")]
         NthValue(super::NthValueFunction),
+        /// feature: window_counter_diff
+        #[prost(message, tag = "13")]
+        CounterDiff(super::CounterDiffFunction),
     }
 }
 /// `lag` / `lead`: input column `input` of the row `offset` rows after the
@@ -912,6 +915,18 @@ pub struct NthValueFunction {
     pub ignore_nulls: bool,
     /// Arrow IPC `Schema` flatbuffer of one field.
     #[prost(bytes = "vec", tag = "4")]
+    pub data_type: ::prost::alloc::vec::Vec<u8>,
+}
+/// `counter_diff(counter\[, start_time\])`: input column `counter`, and column `start_time` when present.
+/// feature: window_counter_diff
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CounterDiffFunction {
+    #[prost(uint64, tag = "1")]
+    pub counter: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub start_time: ::core::option::Option<u64>,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "3")]
     pub data_type: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1207,6 +1222,10 @@ pub struct KeyFilterOptions {
     /// of several build partitions then merge to their range, and pass more rows.
     #[prost(uint32, optional, tag = "9")]
     pub bloom_bytes: ::core::option::Option<u32>,
+    /// ignorable: a reader that skips it loses the Bloom form of a build past
+    /// `bloom_max_items` or one that sheds its hashes to spill (a range only).
+    #[prost(uint32, optional, tag = "10")]
+    pub bloom_spill_bytes: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {

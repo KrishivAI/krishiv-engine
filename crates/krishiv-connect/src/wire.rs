@@ -612,6 +612,35 @@ fn flat(body: &[u8]) -> Result<(), Reject> {
     Ok(())
 }
 
+/// Checks the bytes of a flat extension message (`krishiv.v1`: scalar and string fields, no nested
+/// message) before prost reads them: no groups (prost would recurse once per nesting level of an
+/// unknown group, with no limit here) and no overrunning lengths. Nothing is entered.
+///
+/// # Errors
+/// The wire error of a malformed message.
+pub(crate) fn flat_message(body: &[u8]) -> Result<(), KrishivError> {
+    flat(body).map_err(KrishivError::from)
+}
+
+/// Decodes the flat `krishiv.v1.Echo` extension message: a group or a field running past its
+/// message is refused first (`flat_message`), so prost never recurses.
+///
+/// # Errors
+/// `CONNECT_INVALID_PLAN.ASSERTION_FAILURE` for bytes that are not an `Echo`, and the errors of
+/// `flat_message` for a group or an overrun.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a flat message, checked by `flat_message` (no group, no overrun) first"
+)]
+pub(crate) fn decode_echo(bytes: &[u8]) -> Result<crate::extension::Echo, KrishivError> {
+    flat_message(bytes)?;
+    crate::extension::Echo::decode(bytes).map_err(|_| {
+        KrishivError::from(krishiv_common::error::ConnectInvalidPlanAssertionFailure {
+            message: "the krishiv.v1.Echo extension does not decode".to_owned(),
+        })
+    })
+}
+
 /// The position `n` bytes after `pos`, which must lie within `buf`.
 fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
     pos.checked_add(n)

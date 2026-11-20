@@ -183,6 +183,7 @@ registry! {
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
     (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
+    (window_counter_diff, WindowCounterDiff, POST_MIGRATION_READER_VERSION, Semantic, "The window function `counter_diff` (Spark 4.3): the increase of a cumulative counter between rows, with an optional start time that marks resets."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
@@ -549,6 +550,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
                 Some(Feature::WindowOffsetFunctions)
             }
+            WindowFunction::CounterDiff { .. } => Some(Feature::WindowCounterDiff),
         },
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
@@ -893,7 +895,8 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
         match function {
             WindowFunction::Aggregate(a) => out.push(&a.arg_type),
             WindowFunction::Offset { data_type, .. }
-            | WindowFunction::NthValue { data_type, .. } => out.push(data_type),
+            | WindowFunction::NthValue { data_type, .. }
+            | WindowFunction::CounterDiff { data_type, .. } => out.push(data_type),
             WindowFunction::RowNumber
             | WindowFunction::Rank
             | WindowFunction::DenseRank
