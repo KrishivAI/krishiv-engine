@@ -73,13 +73,7 @@ pub(crate) fn hash_join(
         .runtime_filters
         .iter()
         .map(|f| {
-            // A planned Bloom size lets several build partitions' filters
-            // OR; one producer sizes its Bloom for the keys it saw, as an
-            // estimate can be far off.
-            let mut options = f.options;
-            if values.producers(ValueId::Filter(f.id)) == 1 {
-                options.bloom_bytes = None;
-            }
+            let options = build_options(f.options, values.producers(ValueId::Filter(f.id)));
             Ok(JoinRuntimeFilter {
                 key: f.key,
                 filter: values.filter(f.id)?,
@@ -88,6 +82,27 @@ pub(crate) fn hash_join(
         })
         .collect::<Result<Vec<_>>>()?;
     join.with_filter_values(filters, Arc::clone(values), producer)
+}
+
+/// The options a join's build makes its runtime filter with, given the
+/// filter's producer partitions. A planned Bloom size lets several build
+/// partitions' filters OR; one producer sizes its Bloom for the keys it
+/// saw, as an estimate can be far off. A fixed Bloom
+/// (`bloom_spill_bytes`) reaches here only in a plan that was not cut (one
+/// worker, one build): `krishiv-scheduler` clears it on every join of a
+/// fragment. With several producers it is cleared here as well, as fixed
+/// filters do not merge; a value service the product creates counts one
+/// producer per value, so that branch is a backstop.
+fn build_options(
+    mut options: krishiv_io::KeyFilterOptions,
+    producers: u32,
+) -> krishiv_io::KeyFilterOptions {
+    if producers == 1 {
+        options.bloom_bytes = None;
+    } else {
+        options.bloom_spill_bytes = None;
+    }
+    options
 }
 
 /// The probe input: columns `columns` of the batches of `received`, named
@@ -273,5 +288,33 @@ impl Instantiation<'_> {
             return Ok(join);
         }
         join.with_row_stage(filters.clone())
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::build_options;
+
+    /// One producer keeps the fixed Bloom and drops the planned size;
+    /// several keep the size and never a fixed Bloom (one tier per build).
+    #[test]
+    fn only_one_producer_keeps_a_fixed_bloom() {
+        let planned = krishiv_io::KeyFilterOptions {
+            bloom_bytes: Some(1 << 20),
+            bloom_spill_bytes: Some(32 << 20),
+            ..krishiv_io::KeyFilterOptions::default()
+        };
+        let one = build_options(planned, 1);
+        assert_eq!(
+            (one.bloom_bytes, one.bloom_spill_bytes),
+            (None, Some(32 << 20))
+        );
+        for producers in [2, 16] {
+            let many = build_options(planned, producers);
+            assert_eq!(
+                (many.bloom_bytes, many.bloom_spill_bytes),
+                (Some(1 << 20), None)
+            );
+        }
     }
 }
