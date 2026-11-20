@@ -223,7 +223,12 @@ impl FlightSqlService for FlightSqlServer {
             // A `Basic` login answers its password as the bearer token (P3-T101 note §3.1):
             // Arrow's clients send that from then on (`authenticateBasicToken`).
             let bearer = header.and_then(|v| match basic_header(v) {
-                BasicHeader::Credentials(b) => format!("Bearer {}", b.password()).parse().ok(),
+                BasicHeader::Credentials(b) => {
+                    let mut text = format!("Bearer {}", b.password());
+                    let value = text.parse().ok();
+                    krishiv_common::secret::wipe(&mut text);
+                    value
+                }
                 _ => v
                     .get(..7)
                     .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))

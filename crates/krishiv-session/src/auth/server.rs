@@ -294,7 +294,7 @@ impl ServerAuth {
 
     /// With a `Basic` credential, the authenticated principal must have its user name (P3-T101
     /// note §3.1): a mismatch is a failed credential, counted toward the throttle; a match
-    /// authenticated by `basic`.
+    /// authenticated by `basic` (by `mtls` when a client certificate named the principal).
     fn basic_user_agrees(
         &self,
         credentials: &Credentials<'_>,
@@ -306,7 +306,11 @@ impl ServerAuth {
         };
         match verdict {
             Ok(mut caller) if caller.principal.name == user => {
-                caller.method = Method::Basic;
+                // A client certificate named the principal: it stays an `mtls` caller (its
+                // session key does not change with the header it sends).
+                if caller.method != Method::Mtls {
+                    caller.method = Method::Basic;
+                }
                 Ok(caller)
             }
             Ok(_) => {

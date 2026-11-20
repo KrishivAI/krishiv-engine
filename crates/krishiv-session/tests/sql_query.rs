@@ -145,3 +145,108 @@ fn a_refused_statement_records_no_query_row() {
         .unwrap_or_else(|| panic!("missing"));
     assert_eq!(count(), before + 1);
 }
+
+/// Typing the markers of a statement over a `SQL SECURITY DEFINER` view whose reads the caller
+/// may not see (P3-T101 note §17 A1, PR-65d review B1): the markers stay untyped, and nothing is
+/// a denial, in the session's counters or the grants provider's; `analyzed()`, which shows the
+/// plan, still refuses and counts.
+#[test]
+fn marker_types_over_a_hidden_definer_view_deny_nothing() {
+    use std::sync::Arc;
+
+    use krishiv_session::auth::{DeniedCounts, Surface};
+    use krishiv_session::grants::{Grants, GrantsPolicy, MemoryGrantStore};
+    use krishiv_session::parameter_types::BoundAs;
+    use krishiv_session::{AccessPolicy, AllowAll, EngineRuntime, Principal, PrincipalKind};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rt = EngineRuntime::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.path().join("wh").to_str().expect("utf-8"),
+        )
+        .build()
+        .expect("runtime");
+    let grants = Grants::new(Arc::new(MemoryGrantStore::new()));
+    let session = |name: &str, admin: bool| {
+        let policy = Arc::new(GrantsPolicy::new(
+            Arc::clone(&grants),
+            Arc::new(AllowAll),
+            admin,
+        ));
+        Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(Principal::new(name, PrincipalKind::User))
+            .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+            .grants(policy)
+            .build()
+            .expect("session")
+    };
+    let run = |s: &Session, sql: &str| {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    let (root, ana) = (session("root", true), session("ana", false));
+    for sql in [
+        "CREATE TABLE t (a INT, b INT) USING parquet",
+        "GRANT CREATE ON SCHEMA default TO user:ana",
+        "GRANT SELECT ON TABLE t TO user:ana",
+    ] {
+        run(&root, sql);
+    }
+    for sql in [
+        "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM t",
+        "GRANT SELECT ON VIEW dv TO user:bob",
+    ] {
+        run(&ana, sql);
+    }
+    let bob = session("bob", false);
+    let counts = Arc::new(DeniedCounts::new());
+    assert!(bob.count_denials(Arc::clone(&counts), Surface::FlightSql));
+    let total = || -> u64 {
+        counts.counts().iter().map(|c| c.count).sum::<u64>()
+            + grants.denied_counts().iter().map(|c| c.count).sum::<u64>()
+    };
+    let before = total();
+    // `SELECT a FROM dv WHERE a = ?` bound with `NULL`: the marker's value starts at 27.
+    let text = "SELECT a FROM dv WHERE a = NULL";
+    let SqlQuery::Query(df) = query(&bob, text) else {
+        panic!("a query");
+    };
+    let span = 27..31;
+    let types =
+        block_on(df.marker_types(std::slice::from_ref(&span), BoundAs::Null)).expect("types");
+    assert_eq!(types, [None], "a plan bob may not be shown types nothing");
+    assert_eq!(total(), before, "and is no denial");
+    assert!(
+        block_on(df.analyzed()).is_err(),
+        "showing the plan is refused"
+    );
+    assert!(total() > before, "and that refusal is counted");
+}
+
+/// A marker is typed only from the literal it was bound to (PR-65d review M1): with `NULL`s a
+/// `1` at the marker's place types nothing, and with `1`s a `NULL` types nothing.
+#[test]
+fn marker_types_match_only_the_bound_literal() {
+    use krishiv_session::parameter_types::BoundAs;
+
+    let session = Session::new().expect("session");
+    let typed = |text: &str, span: std::ops::Range<usize>, bound: BoundAs| {
+        let SqlQuery::Query(df) = query(&session, text) else {
+            panic!("{text}: a query");
+        };
+        block_on(df.marker_types(std::slice::from_ref(&span), bound)).expect("types")
+    };
+    // `CAST(? AS BIGINT)` bound with NULL, then with 1.
+    let null = "SELECT CAST(NULL AS BIGINT) AS b";
+    let one = "SELECT CAST(1 AS BIGINT) AS b";
+    let bigint = Some(krishiv_types::DataType::Long);
+    assert_eq!(
+        typed(null, 12..16, BoundAs::Null),
+        std::slice::from_ref(&bigint)
+    );
+    assert_eq!(typed(one, 12..13, BoundAs::One), [bigint]);
+    assert_eq!(typed(one, 12..13, BoundAs::Null), [None]);
+    assert_eq!(typed(null, 12..16, BoundAs::One), [None]);
+}

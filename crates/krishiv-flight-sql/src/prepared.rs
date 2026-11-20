@@ -27,6 +27,7 @@ use futures::{StreamExt, TryStreamExt};
 use krishiv_common::error::{KrishivError, KrishivFlightSqlInvalidParameters};
 use krishiv_connect_server::SessionOwner;
 use krishiv_session::auth::Authenticated;
+use krishiv_session::parameter_types::BoundAs;
 use krishiv_session::{QueryOptions, Session, SqlQuery};
 use prost::Message;
 use tonic::metadata::MetadataMap;
@@ -136,6 +137,7 @@ async fn classify(
     session: &Session,
     text: &str,
     spans: &[std::ops::Range<usize>],
+    bound: BoundAs,
     query_start: i64,
 ) -> Result<Classified, KrishivError> {
     match session
@@ -145,15 +147,12 @@ async fn classify(
         SqlQuery::Query(df) => {
             let schema = df.schema().await?;
             let tz = time_zone(session);
-            // The plan is shown only as `EXPLAIN` shows it (`DataFrame::analyzed`); where it is
-            // not, the markers stay untyped rather than the create failing.
+            // A plan the caller may not be shown (definer views) leaves the markers untyped,
+            // asked quietly (`DataFrame::marker_types`): preparing is not a denial.
             let types = if spans.is_empty() {
                 Vec::new()
             } else {
-                df.analyzed().await.map_or_else(
-                    |_| vec![None; spans.len()],
-                    |a| krishiv_session::parameter_types::marker_types(&a, spans),
-                )
+                df.marker_types(spans, bound).await?
             };
             Ok((true, Some(spark_schema(&schema, tz.as_ref())?), types))
         }
@@ -311,12 +310,12 @@ impl FlightSqlServer {
         let query_start = now_micros();
         let gate = entry.shared().await;
         let (query, schema, mut types) = if markers == 0 {
-            classify(session, &sql, &[], query_start).await
+            classify(session, &sql, &[], BoundAs::Null, query_start).await
         } else {
             let (text, spans) = session
                 .bind_parameters_spanned(&sql, &null_row(markers)?, 0)
                 .map_err(|e| flight_status(&e))?;
-            match classify(session, &text, &spans, query_start).await {
+            match classify(session, &text, &spans, BoundAs::Null, query_start).await {
                 Ok(c) => Ok(c),
                 // Only a query is analyzed, so only a query fails here: one a `NULL` cannot
                 // stand in (`LIMIT ?`) is tried with `1`; failing both, the `NULL` error stands.
@@ -325,7 +324,7 @@ impl FlightSqlServer {
                     let (text, spans) = session
                         .bind_parameters_spanned(&sql, &one_row(markers)?, 0)
                         .map_err(|e| flight_status(&e))?;
-                    classify(session, &text, &spans, query_start)
+                    classify(session, &text, &spans, BoundAs::One, query_start)
                         .await
                         .map(|(q, s, t)| {
                             let t = t

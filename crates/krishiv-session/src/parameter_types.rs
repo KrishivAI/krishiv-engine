@@ -15,17 +15,64 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
+use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::{Expr, ExprNode, Literal, LogicalPlan, SourceId};
 use krishiv_types::DataType;
 
-/// The type of each marker of a statement whose markers were bound to literals at `spans` (byte
-/// ranges of the bound text, in marker order: `NULL`s, or the `1`s of a statement a `NULL` does
-/// not analyze) and analyzed as `plan`: the type a cast of that literal (implicit or written)
-/// gives it, `None` where none does. Only the statement's own text (`SourceId(0)`) is matched,
-/// never a view's or a function body's.
+use crate::dataframe::DataFrame;
+
+impl DataFrame {
+    /// [`marker_types`] of this frame's analysis, for a statement whose markers were bound to
+    /// `bound` at `spans`; every marker untyped when the principal may not be shown the plan (the
+    /// inlined queries of `SQL SECURITY DEFINER` views it may not read as invoker). That is
+    /// asked quietly, as `system.operators` asks it: no audit record and no denial count, so
+    /// preparing a statement over such a view is not a denial (ADR 0046 §8).
+    ///
+    /// # Errors
+    /// Spark's analysis errors.
+    pub async fn marker_types(
+        &self,
+        spans: &[Range<usize>],
+        bound: BoundAs,
+    ) -> Result<Vec<Option<DataType>>, KrishivError> {
+        let df = self.clone();
+        let spans = spans.to_vec();
+        self.session
+            .on_executor(async move {
+                let analysis = df.analysis().await?;
+                let analyzed = &analysis.analyzed;
+                if !df.session.may_see_definer_reads(&analyzed.views).await {
+                    return Ok(vec![None; spans.len()]);
+                }
+                Ok(marker_types(analyzed, &spans, bound))
+            })
+            .await
+    }
+}
+
+/// What every marker was bound to before analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundAs {
+    /// `NULL` (the first classification).
+    Null,
+    /// The `INT` `1` (a statement a `NULL` does not analyze: `LIMIT ?`).
+    One,
+}
+
+/// The type of each marker of a statement whose markers were bound to `bound` at `spans` (byte
+/// ranges of the bound text, in marker order) and analyzed as `plan`: the type a cast of that
+/// literal (implicit or written) gives it, `None` where none does. Only the statement's own text
+/// (`SourceId(0)`) is matched, never a view's or a function body's, and only a literal of the
+/// kind bound: should anything shift the text between binding and parsing (`${var}`
+/// substitution before a marker), a marker's span may start at another literal, which then
+/// types nothing unless it is the same `NULL` or `1`.
 #[must_use]
-pub fn marker_types(plan: &AnalyzedPlan, spans: &[Range<usize>]) -> Vec<Option<DataType>> {
+pub fn marker_types(
+    plan: &AnalyzedPlan,
+    spans: &[Range<usize>],
+    bound: BoundAs,
+) -> Vec<Option<DataType>> {
     let mut out: Vec<Option<DataType>> = vec![None; spans.len()];
     let at: HashMap<u32, usize> = spans
         .iter()
@@ -56,13 +103,13 @@ pub fn marker_types(plan: &AnalyzedPlan, spans: &[Range<usize>]) -> Vec<Option<D
         }
         match &e.node {
             ExprNode::Cast { expr, to, .. } => {
-                if let Some(i) = literal_marker(expr, &at, false) {
+                if let Some(i) = literal_marker(expr, &at, bound) {
                     settle(&mut out, i, to);
                 }
             }
             // A cast the analyzer folded into a typed `NULL` keeps the literal's origin.
-            ExprNode::Literal(Literal::Null(Some(t))) => {
-                if let Some(i) = literal_marker(e, &at, true) {
+            ExprNode::Literal(Literal::Null(Some(t))) if bound == BoundAs::Null => {
+                if let Some(i) = literal_marker(e, &at, bound) {
                     settle(&mut out, i, t);
                 }
             }
@@ -74,14 +121,14 @@ pub fn marker_types(plan: &AnalyzedPlan, spans: &[Range<usize>]) -> Vec<Option<D
     out
 }
 
-/// The marker whose bound value `e` is: a literal (a `NULL` only when `null`) of the
-/// statement's own text starting where a marker's value was put.
-fn literal_marker(e: &Expr, at: &HashMap<u32, usize>, null: bool) -> Option<usize> {
-    let fits = match &e.node {
-        ExprNode::Literal(Literal::Null(_)) => true,
-        ExprNode::Literal(_) => !null,
-        _ => false,
-    };
+/// The marker whose bound value `e` is: a literal of the kind bound, of the statement's own
+/// text, starting where a marker's value was put.
+fn literal_marker(e: &Expr, at: &HashMap<u32, usize>, bound: BoundAs) -> Option<usize> {
+    let fits = matches!(
+        (&e.node, bound),
+        (ExprNode::Literal(Literal::Null(_)), BoundAs::Null)
+            | (ExprNode::Literal(Literal::Integer(1)), BoundAs::One)
+    );
     if !fits {
         return None;
     }
