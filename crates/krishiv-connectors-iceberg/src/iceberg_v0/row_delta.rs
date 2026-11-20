@@ -220,6 +220,7 @@ impl MergeOnReadWrite {
             attempt_id: unique_u64(),
             mem,
             by_ref: HashMap::new(),
+            by_path: HashMap::new(),
             files: Vec::new(),
             data: None,
         }
@@ -422,8 +423,10 @@ impl MergeOnReadWrite {
         let live: BTreeSet<&str> = kept.iter().map(|d| d.file.file_path()).collect();
         for f in task_files {
             if f.ends_with(".puffin") && !live.contains(f.as_str()) {
-                let _ = t.file_io.delete(f).await;
-                written.data.retain(|p| p != f);
+                // A failed delete leaves the path on the list, so the commit's cleanup retries it.
+                if t.file_io.delete(f).await.is_ok() {
+                    written.data.retain(|p| p != f);
+                }
             }
         }
         Ok(kept)
@@ -482,6 +485,8 @@ pub(crate) struct MorTask {
     mem: Arc<ConsumerHandle>,
     /// Each file reference seen, by its index in `files`.
     by_ref: HashMap<Vec<u8>, usize>,
+    /// The same slots by the data file's path (two encodings of one file share a slot).
+    by_path: HashMap<String, usize>,
     files: Vec<Touched>,
     data: Option<DataFileWriter>,
 }
@@ -515,13 +520,11 @@ impl MorTask {
                     .touched(&[file.to_vec()])?
                     .pop()
                     .ok_or_else(|| internal("a row file reference of no file".to_owned()))?;
-                let i = match self
-                    .files
-                    .iter()
-                    .position(|t| t.entry.file.path == entry.file.path)
-                {
-                    Some(i) => i,
+                let i = match self.by_path.get(&entry.file.path) {
+                    Some(i) => *i,
                     None => {
+                        self.by_path
+                            .insert(entry.file.path.clone(), self.files.len());
                         self.files.push(Touched {
                             entry,
                             deletes,

@@ -464,6 +464,11 @@ impl Loop<'_> {
         if self.validation.start.is_some() {
             self.validate(&current).await?;
         }
+        // A replayed write (the same key) whose first run already landed on this base is final:
+        // sending it again would publish its rows twice.
+        if self.found(&current)?.is_some() {
+            return Ok(current);
+        }
         'attempts: loop {
             self.before_request().await?;
             let mut attempt = match prepare(

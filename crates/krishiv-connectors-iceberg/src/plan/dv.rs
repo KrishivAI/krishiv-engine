@@ -235,6 +235,15 @@ pub fn encode_dv(positions: &RoaringTreemap) -> Result<Vec<u8>, KrishivError> {
             positions.max().unwrap_or_default()
         )));
     }
+    // The dense key array is at least 12 bytes a key (the key and an empty bitmap's 8): refuse a
+    // sparse position at a high key before expanding its gaps, not after (a 2 GB body is the limit).
+    let keys = positions
+        .bitmaps()
+        .next_back()
+        .map_or(0, |(k, _)| u64::from(k) + 1);
+    if keys.saturating_mul(12) > u64::from(i32::MAX.unsigned_abs()) - 16 {
+        return Err(invalid("Can't serialize index > 2GB".to_owned()));
+    }
     let mut body = MAGIC.to_vec();
     write_bitmap(positions, &mut body)
         .map_err(|e| invalid(format!("Cannot serialize deletion vector: {e}")))?;
@@ -255,6 +264,14 @@ mod tests {
 
     fn len(b: &[u8]) -> i64 {
         i64::try_from(b.len()).unwrap()
+    }
+
+    #[test]
+    fn a_sparse_high_key_is_refused_before_its_gaps_are_expanded() {
+        let high =
+            RoaringTreemap::from_iter([((u64::from(i32::MAX.unsigned_abs()) - 1) << 32) + 1]);
+        let err = encode_dv(&high).unwrap_err();
+        assert!(err.to_string().contains("2GB"), "{err}");
     }
 
     #[test]

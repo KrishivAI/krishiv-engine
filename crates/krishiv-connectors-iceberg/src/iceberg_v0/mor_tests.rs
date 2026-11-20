@@ -1004,8 +1004,8 @@ fn a_foreign_removal_of_a_referenced_file_fails() {
     }
 }
 
-/// Another writer's `overwrite`: every data file replaced by a copy of rows
-/// 0..5.
+/// Another writer's `overwrite`: every data file replaced by one file holding only row 0
+/// (a data file the statement did not read).
 fn foreign_overwrite(env: &Env, catalog: &Arc<Catalog>) {
     use super::append::{WriteIds, prepare_attempt, write_new_manifests};
     use super::data_file::{WrittenDataFile, data_file};
@@ -1059,6 +1059,43 @@ fn foreign_overwrite(env: &Env, catalog: &Arc<Catalog>) {
         .rt
         .block_on(catalog.commit(request.requirements, request.updates));
     assert!(matches!(out, CommitOutcome::Committed(_)), "{out:?}");
+}
+
+/// A statement replayed with the key of one that already landed on the base it opened at
+/// publishes nothing again.
+#[test]
+fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
+    let env = env();
+    let t = create(&env, 2, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 3));
+    let first = Mor::open(&env, &catalog, RowLevelOperation::Update);
+    let w = MergeOnReadWrite::new(&first.p, first.op, None, Some("replayed".to_owned())).unwrap();
+    let outputs = first
+        .write(
+            &w,
+            vec![Task {
+                deletes: Vec::new(),
+                inserts: vec![first.new_rows(10, 12)],
+            }],
+        )
+        .unwrap();
+    env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
+    let snapshots = catalog.metadata().snapshots().count();
+    let replay = Mor::open(&env, &catalog, RowLevelOperation::Update);
+    let w = MergeOnReadWrite::new(&replay.p, replay.op, None, Some("replayed".to_owned())).unwrap();
+    let outputs = replay
+        .write(
+            &w,
+            vec![Task {
+                deletes: Vec::new(),
+                inserts: vec![replay.new_rows(10, 12)],
+            }],
+        )
+        .unwrap();
+    env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), snapshots);
+    assert_eq!(read_back(&env, &catalog), expected((0..3).chain(10..12)));
 }
 
 /// A v2 statement whose table is upgraded to v3 and moved on before it

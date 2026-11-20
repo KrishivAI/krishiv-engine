@@ -214,7 +214,8 @@ fn a_known_failure_deletes_the_position_delete_files() {
     let catalog = Catalog::new(&t);
     append(&env, &catalog, range(0, 10));
     let (mor, _) = faulty(&env, &catalog, &[Fault::Refused], RowLevelOperation::Delete);
-    mor.delete("id = 4").unwrap_err();
+    let err = mor.delete("id = 4").unwrap_err();
+    assert!(err.to_string().contains("401"), "{err}");
     assert!(files_ending(&env, "-deletes.parquet").is_empty());
     assert_eq!(read_back(&env, &catalog), expected(0..10));
 }
@@ -268,6 +269,9 @@ fn settle(env: &Env, before: &std::collections::BTreeSet<String>) -> Vec<String>
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    // A cleanup that took a file of the baseline with the leftovers is no cleanup.
+    let lost: Vec<_> = before.difference(&all_files(env)).cloned().collect();
+    assert!(lost.is_empty(), "baseline files deleted: {lost:?}");
     left
 }
 
