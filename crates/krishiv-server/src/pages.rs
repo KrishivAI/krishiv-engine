@@ -261,7 +261,7 @@ pub(crate) async fn environment(State(s): State<UiState>) -> Response {
 }
 
 /// `POST /api/internal/sql`: starts a statement; the body is `{"sql": "..."}`.
-#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, responses((status = 202, description = "Started", body = SqlStarted)))]
+#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, params(("traceparent" = Option<String>, Header, description = "W3C trace context; the statement joins this trace"), ("baggage" = Option<String>, Header, description = "W3C baggage")), responses((status = 202, description = "Started", body = SqlStarted)))]
 pub(crate) async fn sql_start(
     State(s): State<UiState>,
     caller: Option<Extension<Caller>>,
