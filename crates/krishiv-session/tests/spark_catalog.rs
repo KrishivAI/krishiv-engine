@@ -392,6 +392,31 @@ impl AccessPolicy for NoBrowse {
     }
 }
 
+/// Denies `Select` only: `Browse` still passes (ADR 0046 section 4).
+struct NoSelect;
+
+impl AccessPolicy for NoSelect {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        _securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if privilege == Privilege::Select {
+            AccessDecision::Deny {
+                reason: "select".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
 /// Denies `Drop` and `Manage`, allows the rest.
 struct NoDrop;
 
@@ -795,4 +820,33 @@ fn values_the_parser_cannot_read_back_are_refused_not_changed() {
     assert!(!block_on(c.table_exists("q")).unwrap());
     let e = block_on(c.refresh_by_path("C:\\data")).unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
+fn check_cache_target_asks_select_not_only_browse() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder().build().unwrap();
+    let open = |policy: Option<Arc<dyn AccessPolicy>>| {
+        let mut b = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(Principal::new("pat", PrincipalKind::User));
+        if let Some(p) = policy {
+            b = b.access_policy(p);
+        }
+        let s = b.build().unwrap();
+        s.conf()
+            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .unwrap();
+        s
+    };
+    run(&open(None), "CREATE TABLE t (a INT) USING parquet");
+    let s = open(Some(Arc::new(NoSelect)));
+    let c = s.catalog();
+    // Browse passes: the table can be described ...
+    assert!(block_on(c.table_exists("t")).unwrap());
+    // ... but caching reads it, so Select is asked, as CACHE TABLE asks it
+    let e = block_on(c.check_cache_target("t")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    assert!(block_on(c.cache_table("t")).is_err(), "CACHE TABLE agrees");
+    assert!(!block_on(c.is_cached("t")).unwrap_or(false));
 }

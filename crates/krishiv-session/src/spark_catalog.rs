@@ -948,6 +948,8 @@ impl Catalog<'_> {
 
     /// Drops the global temporary view; whether it existed. Makes the access check of
     /// `DROP VIEW global_temp.name` (`Drop` on the view) first, so the API removes no more than the SQL does.
+    /// A view that is not there answers `false` before the check, so a principal without `Drop` learns
+    /// whether a global temporary view exists (as `DROP VIEW IF EXISTS` of a missing one, which asks nothing).
     ///
     /// # Errors
     /// The access error `DROP VIEW` would give.
@@ -967,16 +969,17 @@ impl Catalog<'_> {
         Ok(dropped)
     }
 
-    /// Checks that `name` can be cached (`CACHE TABLE name`): the access check of the statement, then the
-    /// name is analysed, so a missing table is `TABLE_OR_VIEW_NOT_FOUND` here and not a failure that only a
-    /// later query would meet. For a cache entry registered another way, such as at a storage level.
+    /// Checks that `name` can be cached (`CACHE TABLE name`): the statement-level checks, then the name is
+    /// analysed through the ordinary read path, which asks `Select` on the table (as `CACHE TABLE` does when
+    /// it counts the rows), so a missing table is `TABLE_OR_VIEW_NOT_FOUND` here and not a failure that only
+    /// a later query would meet. For a cache entry registered another way, such as at a storage level.
     ///
     /// # Errors
-    /// The access error `CACHE TABLE` would give, `TABLE_OR_VIEW_NOT_FOUND`.
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` without `Select` on the table, `TABLE_OR_VIEW_NOT_FOUND`.
     pub async fn check_cache_target(&self, name: &str) -> Result<(), KrishivError> {
         self.authorize_as(&format!("CACHE TABLE {}", quoted(name)))
             .await?;
-        self.session.table(name).schema_for_metadata().await?;
+        self.session.table(name).schema().await?;
         Ok(())
     }
 

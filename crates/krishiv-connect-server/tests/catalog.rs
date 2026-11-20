@@ -379,6 +379,34 @@ async fn databases_list_get_exist_and_drop() {
     .await
     .expect_err("dropped");
     assert_eq!(error_class(&e), "SCHEMA_NOT_FOUND");
+    // A named database lists its own functions, not the current one's.
+    ddl(&r, "CREATE DATABASE other").await;
+    ddl(
+        &r,
+        "CREATE FUNCTION other.only_there(x INT) RETURNS INT RETURN x",
+    )
+    .await;
+    ddl(
+        &r,
+        "CREATE FUNCTION default.only_here(x INT) RETURNS INT RETURN x",
+    )
+    .await;
+    let b = ok(
+        &r,
+        cat(CatType::ListFunctions(pb::ListFunctions {
+            db_name: Some("other".to_owned()),
+            pattern: None,
+        })),
+    )
+    .await;
+    let listed = names(&b, "name");
+    assert!(listed.contains(&"only_there".to_owned()));
+    assert!(!listed.contains(&"only_here".to_owned()));
+    let namespaces = strings(&b, "namespace");
+    assert!(
+        namespaces.iter().flatten().any(|n| n.contains("other")),
+        "{namespaces:?}"
+    );
 }
 
 #[tokio::test]
@@ -693,6 +721,23 @@ async fn caching_is_the_sessions_and_a_viewer_free_call_runs() {
     assert_eq!(bools(&ok(&r, cached()).await, "value"), [true]);
     ok(&r, cat(CatType::ClearCache(pb::ClearCache {}))).await;
     assert_eq!(bools(&ok(&r, cached()).await, "value"), [false]);
+    // A missing table is refused at a storage level too, and is not left cached.
+    let e = run(
+        &r,
+        cat(CatType::CacheTable(pb::CacheTable {
+            table_name: "missing".to_owned(),
+            storage_level: Some(pb::StorageLevel {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+        })),
+    )
+    .await
+    .expect_err("no table");
+    assert_eq!(error_class(&e), "TABLE_OR_VIEW_NOT_FOUND");
     ok(
         &r,
         cat(CatType::RefreshTable(pb::RefreshTable {
