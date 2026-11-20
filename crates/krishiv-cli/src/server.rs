@@ -36,7 +36,8 @@ use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
-    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ENABLED,
+    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
+    UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -738,12 +739,34 @@ fn admin_router(
             .unwrap_or("")
             .to_owned();
         let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        // Who may frame the embeddable views (T071): invalid origins stop the start, as a bad host would not.
+        let origins = krishiv_server::embed::parse_origins(
+            config
+                .get(&UI_ALLOWED_ORIGINS)
+                .and_then(ConfigValue::as_str)
+                .unwrap_or(""),
+        )?;
+        let embed = krishiv_server::embed::EmbedPolicy::new(
+            origins,
+            config
+                .get(&UI_EMBED_HIDE_ATTRIBUTION)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false),
+            match config.get(&UI_EMBED_LINK_TTL) {
+                Some(ConfigValue::Duration(d)) => *d,
+                _ => match UI_EMBED_LINK_TTL.default {
+                    Some(ConfigValue::Duration(d)) => d,
+                    _ => std::time::Duration::from_secs(300),
+                },
+            },
+        );
         let policy = krishiv_server::pages::UiPolicy::for_listener(
             bound.ip().is_loopback(),
             configured.split(',').chain(from_env.split(',')),
         )
         // The session cookie holds the bearer token: over TLS it never travels in the clear.
-        .secure_cookie(tls);
+        .secure_cookie(tls)
+        .with_embed(embed);
         krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
