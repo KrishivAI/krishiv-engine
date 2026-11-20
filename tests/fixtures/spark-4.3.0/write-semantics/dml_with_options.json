@@ -3,7 +3,7 @@
  "spark_tag": "v4.3.0",
  "status": "oracle",
  "generator": "tests/scripts/gen_write_semantics_goldens.py",
- "note": "Expected values are derived from the v4.3.0 source and suite assertions; no Spark runtime was executed (see README.md). The generator overwrites 'expect' with 'observed' from a real run.",
+ "note": "'observed' blocks come from running tests/scripts/gen_write_semantics_goldens.py against a Spark Connect 4.3.0 server (tag v4.3.0; the server build and run date were not recorded: fixtures committed 2026-11-20). Cases the run skipped carry kind 'skipped' and a reason. 'expect' is derived from the v4.3.0 source; where it differs from 'observed' for a scripted case, 'expect' is set to the run's result.",
  "cases": [
   {
    "id": "DML-parquet-delete-opts",
@@ -597,18 +597,18 @@
    "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
    "expect": {
     "kind": "error",
-    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
-    "sqlstate": "0A000",
+    "class": "INTERNAL_ERROR",
+    "sqlstate": "XX000",
     "params": {
-     "tableName": "`spark_catalog`.`default`.`t`",
-     "operation": "DELETE"
-    }
+     "message": "Unexpected table relation: HiveTableRelation [`spark_catalog`.`ws_dml_with_options_17`.`t`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [a#7499, b#7500], Partition Cols: []]\n"
+    },
+    "note": "Spark 4.3.0 raises INTERNAL_ERROR for DELETE with an alias on a Hive textfile table (HiveTableRelation); expectation from source (TABLE_OPERATION) was wrong for this case"
    },
    "source": [
     "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))",
     "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
    ],
-   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)",
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?) Observed by the run differs from the source-derived expectation (kept in spark_expected_by_source); the run is the truth.",
    "observed": {
     "kind": "error",
     "class": "INTERNAL_ERROR",
@@ -618,6 +618,15 @@
     },
     "message": "[INTERNAL_ERROR] Unexpected table relation: HiveTableRelation [`spark_catalog`.`ws_dml_with_options_17`.`t`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [a#7499, b#7500], Partition Cols: []]",
     "note": "Spark 4.3.0 raises INTERNAL_ERROR for DELETE with an alias on a Hive textfile table (HiveTableRelation); expectation from source (TABLE_OPERATION) was wrong for this case"
+   },
+   "spark_expected_by_source": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
    }
   },
   {
@@ -834,19 +843,17 @@
    "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
    "expect": {
     "kind": "error",
-    "class": "PARSE_SYNTAX_ERROR",
-    "sqlstate": "42601",
-    "versions_only": [
-     "3.5",
-     "4.0",
-     "4.1",
-     "4.2"
-    ]
+    "class": "TABLE_OR_VIEW_NOT_FOUND",
+    "sqlstate": "42P01",
+    "params": {
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`ws_dml_with_options_24`]",
+     "relationName": "`t`"
+    }
    },
    "source": [
     "v4.2.0 SqlBaseParser.g4:742-743: DELETE/UPDATE have no optionsClause; v4.1.0 :677-678; v3.5.8 :445-446"
    ],
-   "note": "WITH(...) on UPDATE/DELETE/MERGE is new in 4.3 (SPARK-57681/58007/58008); parameters of the syntax error not captured (unverified-by-run)",
+   "note": "WITH(...) on UPDATE/DELETE/MERGE is new in 4.3 (SPARK-57681/58007/58008); parameters of the syntax error not captured (unverified-by-run) Observed by the run differs from the source-derived expectation (kept in spark_expected_by_source); the run is the truth.",
    "observed": {
     "kind": "error",
     "class": "TABLE_OR_VIEW_NOT_FOUND",
@@ -856,6 +863,17 @@
      "relationName": "`t`"
     },
     "message": "[TABLE_OR_VIEW_NOT_FOUND] The table or view `t` cannot be found. Verify the spelling and correctness of the schema and catalog."
+   },
+   "spark_expected_by_source": {
+    "kind": "error",
+    "class": "PARSE_SYNTAX_ERROR",
+    "sqlstate": "42601",
+    "versions_only": [
+     "3.5",
+     "4.0",
+     "4.1",
+     "4.2"
+    ]
    }
   },
   {

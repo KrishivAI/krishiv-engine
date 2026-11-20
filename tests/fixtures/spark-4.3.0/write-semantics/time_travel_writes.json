@@ -3,7 +3,7 @@
  "spark_tag": "v4.3.0",
  "status": "oracle",
  "generator": "tests/scripts/gen_write_semantics_goldens.py",
- "note": "Expected values are derived from the v4.3.0 source and suite assertions; no Spark runtime was executed (see README.md). The generator overwrites 'expect' with 'observed' from a real run.",
+ "note": "'observed' blocks come from running tests/scripts/gen_write_semantics_goldens.py against a Spark Connect 4.3.0 server (tag v4.3.0; server build and run date not recorded). Cases the run skipped (no V2 catalog on that server, DataFrame-API-only) carry kind 'skipped'; their 'expect' is derived from the v4.3.0 source only.",
  "cases": [
   {
    "id": "TT-sql-insert-both-keys",

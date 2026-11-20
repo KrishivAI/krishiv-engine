@@ -1,13 +1,14 @@
 # Spark 4.3.0 write semantics (P3-T023)
 
-Status: **unverified-by-run**. No Spark runtime was executed for these files: the sandbox has no Docker (the
-`krishiv-bench` container cannot start), no JVM Spark server, and the attempt to run a downloaded Spark 4.3.0
-distribution was refused by the permission system. Every `expect` is derived from apache/spark at tag `v4.3.0`
-(commit 98bc0212c) and from assertions in that tag's own test suites; both are cited per case. Error cases quote a
-Spark test file where one exists; cases with no suite are marked `derived`. Run
-`tests/scripts/gen_write_semantics_goldens.py --remote sc://... --version 4.3.0` against a 4.3.0 server to produce the
-`observed` blocks under `tests/fixtures/spark-4.3.0/write-semantics/`; each difference between `expect` and
-`observed` is then a fix to this file, not to the engine.
+Status: **observed on a real Spark 4.3.0 server for the scripted cases**. `tests/scripts/gen_write_semantics_goldens.py
+--remote sc://... --version 4.3.0` ran against a Spark Connect 4.3.0 server and wrote the `observed` block of every case
+(the server build and the run date were not recorded; the files were committed 2026-11-20). Cases the server could
+not script carry `observed.kind = "skipped"` with a reason: the V2 cases need a V2 catalog (`testcat`), the time-travel
+cases are DataFrame-API only, and two `saveAsTable` mode-string cases are classic-only. For those, `expect` is derived
+from apache/spark at tag `v4.3.0` (commit 98bc0212c) and the suite assertions cited per case, with nothing run.
+Where a scripted case's `observed` differs from the source-derived text, `expect` is set to the run's result and the
+old text is kept as `spark_expected_by_source` (`DML-hv-textfile-delete-alias-opts`, `DML-nowith-4.2-grammar`,
+`SAT-50-existing-view-ignore`). `SAT-43-append-self-read` differs only in row order (rows are compared unordered).
 
 Files: `replace_where.json` (40 cases), `dml_with_options.json` (26), `time_travel_writes.json` (20),
 `save_as_table_modes.json` (51 cases, 20 of them the full mode x existing/missing x partitioned/flat matrix).

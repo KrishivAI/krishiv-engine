@@ -119,7 +119,7 @@ fn save_as_table_append_with_other_names_is_refused() {
         .unwrap();
     assert_eq!(
         class(block_on(renamed.write().mode("append").save_as_table("t"))),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "_LEGACY_ERROR_TEMP_1162"
     );
 }
 
@@ -237,7 +237,7 @@ fn append_by_name_is_exact_about_names_and_format() {
     block_on(dotted.write().save_as_table("d")).unwrap();
     block_on(dotted.write().mode("append").save_as_table("d")).unwrap();
     assert_eq!(count(&s, "d"), 6);
-    // a different format than the table's, and a partitioning, are refused.
+    // a different format than the table's, and a partitioning it does not have, are refused as Spark does.
     assert_eq!(
         class(block_on(
             s.table("people")
@@ -246,7 +246,7 @@ fn append_by_name_is_exact_about_names_and_format() {
                 .mode("append")
                 .save_as_table("t")
         )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "_LEGACY_ERROR_TEMP_1159"
     );
     assert_eq!(
         class(block_on(
@@ -256,7 +256,7 @@ fn append_by_name_is_exact_about_names_and_format() {
                 .mode("append")
                 .save_as_table("t")
         )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "_LEGACY_ERROR_TEMP_1163"
     );
     // overwrite with a partitioning on a new table creates it, partitioned.
     block_on(
@@ -416,7 +416,7 @@ fn the_default_format_is_spark_sql_sources_default() {
                 .mode("append")
                 .save_as_table("c")
         )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "_LEGACY_ERROR_TEMP_1159"
     );
     block_on(s.table("people").write().mode("append").save_as_table("c")).unwrap();
 }
@@ -630,7 +630,7 @@ fn an_append_names_the_tables_bucketing_or_none() {
     ] {
         assert_eq!(
             class(block_on(w.mode("append").save_as_table("b"))),
-            "KRISHIV_UNSUPPORTED_FEATURE"
+            "_LEGACY_ERROR_TEMP_1164"
         );
     }
     block_on(
@@ -660,4 +660,85 @@ fn a_column_named_like_the_bucket_helper_does_not_collide() {
         .unwrap();
     block_on(df.write().bucket_by(2, ["id"]).save_as_table("h2")).unwrap();
     assert_eq!(count(&s, "h2"), 3);
+}
+
+fn part_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            part_files(&p, out);
+        } else if p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("part-"))
+        {
+            out.push(p);
+        }
+    }
+}
+
+/// Every row of every file of a bucketed table is in the bucket its file name says, and that bucket is
+/// Spark's `pmod(hash(columns), n)` (Murmur3, seed 42) over the bucket columns in the order given.
+#[test]
+fn rows_land_in_the_bucket_spark_puts_them_in() {
+    for (cols, expr) in [
+        (vec!["id"], "pmod(hash(id), 4)"),
+        (vec!["name", "id"], "pmod(hash(name, id), 4)"),
+    ] {
+        let s = Session::new().unwrap();
+        let warehouse = tempfile::tempdir().unwrap();
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .unwrap();
+        let df = block_on(s.sql(
+            "SELECT CAST(id AS INT) AS id, CAST(concat('n', id % 5) AS STRING) AS name FROM range(0, 40)",
+        ))
+        .unwrap();
+        block_on(df.write().bucket_by(4, cols.clone()).save_as_table("b")).unwrap();
+        let mut files = Vec::new();
+        part_files(warehouse.path(), &mut files);
+        assert!(files.len() >= 2, "{files:?}");
+        let mut total = 0;
+        let mut seen = std::collections::BTreeSet::new();
+        for f in &files {
+            let bucket =
+                krishiv_io::bucket_id_of_file_name(f.file_name().unwrap().to_str().unwrap())
+                    .expect("a bucketed file name carries its bucket id");
+            seen.insert(bucket);
+            let path = f.to_str().unwrap();
+            let rows = s.read().format("parquet").load([path]);
+            let n = block_on(rows.clone().count()).unwrap();
+            let wrong = block_on(
+                rows.filter_expr(&format!("{expr} != {bucket}"))
+                    .unwrap()
+                    .count(),
+            )
+            .unwrap();
+            assert_eq!(wrong, 0, "{path}: rows outside bucket {bucket} ({expr})");
+            total += n;
+        }
+        assert_eq!(total, 40);
+        assert!(seen.iter().all(|b| *b < 4), "{seen:?}");
+    }
+    // Spark's `hash(1)` is -559580957, so `pmod(hash(1), 4)` is 3: the row `id = 1` is in bucket 3.
+    let s = Session::new().unwrap();
+    let warehouse = tempfile::tempdir().unwrap();
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            warehouse.path().to_str().unwrap(),
+        )
+        .unwrap();
+    let one = block_on(s.sql("SELECT CAST(1 AS INT) AS id")).unwrap();
+    block_on(one.write().bucket_by(4, ["id"]).save_as_table("one")).unwrap();
+    let mut files = Vec::new();
+    part_files(warehouse.path(), &mut files);
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        krishiv_io::bucket_id_of_file_name(files[0].file_name().unwrap().to_str().unwrap()),
+        Some(3)
+    );
 }

@@ -3,7 +3,7 @@
  "spark_tag": "v4.3.0",
  "status": "oracle",
  "generator": "tests/scripts/gen_write_semantics_goldens.py",
- "note": "Expected values are derived from the v4.3.0 source and suite assertions; no Spark runtime was executed (see README.md). The generator overwrites 'expect' with 'observed' from a real run.",
+ "note": "'observed' blocks come from running tests/scripts/gen_write_semantics_goldens.py against a Spark Connect 4.3.0 server (tag v4.3.0; the server build and run date were not recorded: fixtures committed 2026-11-20). Cases the run skipped carry kind 'skipped' and a reason. 'expect' is derived from the v4.3.0 source; where it differs from 'observed' for a scripted case, 'expect' is set to the run's result.",
  "cases": [
   {
    "id": "SAT-01-flat-missing-error",
@@ -2545,13 +2545,18 @@
     "partitionBy": []
    },
    "expect": {
-    "kind": "ok",
-    "note": "no-op, view unchanged"
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ]
+    ]
    },
    "source": [
     "ddl.scala:1033-1034"
    ],
-   "note": "derived",
+   "note": "derived Observed by the run differs from the source-derived expectation (kept in spark_expected_by_source); the run is the truth.",
    "observed": {
     "kind": "rows",
     "rows": [
@@ -2561,6 +2566,10 @@
      ]
     ],
     "schema": "struct<id:int,p:string>"
+   },
+   "spark_expected_by_source": {
+    "kind": "ok",
+    "note": "no-op, view unchanged"
    }
   },
   {

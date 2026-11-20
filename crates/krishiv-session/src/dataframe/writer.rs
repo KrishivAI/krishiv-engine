@@ -588,10 +588,9 @@ impl DataFrameWriterV2 {
     }
 
     /// Partition the table by `cols` (each call replaces the columns of
-    /// the one before, so an empty call clears them). The builder does not
-    /// create partitioned tables yet: any column fails the write with
-    /// `KRISHIV_UNSUPPORTED_FEATURE` (`CREATE TABLE ... PARTITIONED BY ...
-    /// AS SELECT` creates one).
+    /// the one before, so an empty call clears them). `create` makes a
+    /// partitioned table, as `CREATE TABLE ... PARTITIONED BY ... AS SELECT` does (a
+    /// column the output lacks, or every column, is refused before anything is written).
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -604,8 +603,8 @@ impl DataFrameWriterV2 {
     }
 
     /// Cluster the table by `cols` (each call replaces the columns of the
-    /// one before). Like [`Self::partitioned_by`], any column fails the
-    /// write with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// one before). Clustered tables are not created yet: any column fails
+    /// the write with `KRISHIV_UNSUPPORTED_FEATURE`.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;

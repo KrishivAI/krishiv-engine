@@ -492,20 +492,31 @@ impl Session {
                 // Asked first, as `insertInto` does: what is reported about a table the caller
                 // may not write must not depend on its metadata.
                 self.authorize_table_write(&name, false, &env).await?;
-                let table = self.table_for_write(&name, "INSERT", &env)?;
-                // Spark refuses an append whose format or partitioning differs
-                // from the table's.
-                if !spec.partitioned_by.is_empty() {
-                    return Err(unsupported("partitioned tables"));
+                // `Saving data into a view is not allowed.`
+                if self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| t.view.is_some())
+                    && !self.temp_entry_of(&name, &env)
+                {
+                    return Err(krishiv_common::error::LegacyErrorTemp1158 {}.into());
                 }
-                if spec
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                // Spark refuses an append whose format, partitioning or bucketing differs from the
+                // table's (`PreprocessTableCreation`).
+                if let Some(p) = spec
                     .provider
                     .as_deref()
-                    .is_some_and(|p| !p.eq_ignore_ascii_case(&table.provider))
+                    .filter(|p| !p.eq_ignore_ascii_case(&table.provider))
                 {
-                    return Err(unsupported(
-                        "saveAsTable append with a format other than the table's",
-                    ));
+                    return Err(krishiv_common::error::LegacyErrorTemp1159 {
+                        table_name: spark_name(&name),
+                        existing_provider: table.provider.clone(),
+                        specified_provider: p.to_owned(),
+                    }
+                    .into());
                 }
                 let schema = df.schema().await?;
                 let case_sensitive = env.analysis.conf.case_sensitive;
@@ -516,36 +527,100 @@ impl Session {
                         a.eq_ignore_ascii_case(b)
                     }
                 };
+                let list = |v: Vec<&str>| v.join(", ");
+                let same_names = |want: &[&str], have: &[String]| {
+                    want.len() == have.len() && want.iter().zip(have).all(|(w, h)| same(w, h))
+                };
+                let asked_parts: Vec<&str> =
+                    spec.partitioned_by.iter().map(String::as_str).collect();
+                if !same_names(&asked_parts, &table.layout.partition_columns) {
+                    return Err(krishiv_common::error::LegacyErrorTemp1163 {
+                        table_name: spark_name(&name),
+                        specified_part_cols: list(asked_parts),
+                        existing_part_cols: table.layout.partition_columns.join(", "),
+                    }
+                    .into());
+                }
                 // A bucketing the writer names must be the table's (count, columns, sort columns);
                 // one it leaves out is the table's own.
                 if let Some(asked) = &spec.bucket {
-                    let names_match = |want: Vec<&str>, have: &[String]| {
-                        want.len() == have.len() && want.iter().zip(have).all(|(w, h)| same(w, h))
-                    };
+                    let cols: Vec<&str> = asked
+                        .clustered_by
+                        .iter()
+                        .map(|c| c.value.as_str())
+                        .collect();
+                    let sorts: Vec<&str> = asked
+                        .sorted_by
+                        .iter()
+                        .map(|c| c.name.value.as_str())
+                        .collect();
                     let matches = table.layout.bucket.as_ref().is_some_and(|b| {
                         asked.buckets == b.num_buckets
-                            && names_match(
-                                asked
-                                    .clustered_by
-                                    .iter()
-                                    .map(|c| c.value.as_str())
-                                    .collect(),
-                                &b.columns,
-                            )
-                            && names_match(
-                                asked
-                                    .sorted_by
-                                    .iter()
-                                    .map(|c| c.name.value.as_str())
-                                    .collect(),
-                                &b.sort_columns,
-                            )
+                            && same_names(&cols, &b.columns)
+                            && same_names(&sorts, &b.sort_columns)
                     });
                     if !matches {
-                        return Err(unsupported(
-                            "saveAsTable append with a bucketing that differs from the table's",
-                        ));
+                        let text = |n: u64, c: &[&str], s: &[&str]| {
+                            format!(
+                                "{n} buckets, bucket columns: [{}], sort columns: [{}]",
+                                c.join(", "),
+                                s.join(", ")
+                            )
+                        };
+                        return Err(krishiv_common::error::LegacyErrorTemp1164 {
+                            table_name: spark_name(&name),
+                            specified_bucket_string: text(asked.buckets, &cols, &sorts),
+                            existing_bucket_string: table.layout.bucket.as_ref().map_or_else(
+                                String::new,
+                                |b| {
+                                    let c: Vec<&str> =
+                                        b.columns.iter().map(String::as_str).collect();
+                                    let s: Vec<&str> =
+                                        b.sort_columns.iter().map(String::as_str).collect();
+                                    text(b.num_buckets, &c, &s)
+                                },
+                            ),
+                        }
+                        .into());
                     }
+                }
+                let schema_text = |fields: Vec<(String, String)>| {
+                    format!(
+                        "struct<{}>",
+                        fields
+                            .into_iter()
+                            .map(|(n, t)| format!("{n}:{t}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                if table.columns.len() != schema.fields().len() {
+                    return Err(krishiv_common::error::LegacyErrorTemp1161 {
+                        table_name: spark_name(&name),
+                        existing_table_schema: schema_text(
+                            table
+                                .columns
+                                .iter()
+                                .map(|c| (c.name.clone(), c.data_type.simple_string()))
+                                .collect(),
+                        ),
+                        query_schema: schema_text(
+                            schema
+                                .fields()
+                                .iter()
+                                .map(|f| {
+                                    (
+                                        f.name().clone(),
+                                        krishiv_types::DataType::from_arrow_field(f).map_or_else(
+                                            |_| f.data_type().to_string(),
+                                            |t| t.simple_string(),
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    }
+                    .into());
                 }
                 let mut order = Vec::with_capacity(table.columns.len());
                 for c in &table.columns {
@@ -559,10 +634,19 @@ impl Session {
                         _ => break,
                     }
                 }
-                if order.len() != table.columns.len() || order.len() != schema.fields().len() {
-                    return Err(unsupported(
-                        "saveAsTable append with column names that differ from the table's",
-                    ));
+                if order.len() != table.columns.len() {
+                    // The first table column no query column carries by name.
+                    let missing = table.columns[order.len()].name.clone();
+                    return Err(krishiv_common::error::LegacyErrorTemp1162 {
+                        col: missing,
+                        input_columns: schema
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    }
+                    .into());
                 }
                 // Built directly: a name with dots or a star is one plain column.
                 let by_name = df.select(order.iter().map(|h| {
@@ -742,8 +826,9 @@ impl Session {
     /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
     /// write leaves no table), `Append` is `INSERT INTO name` by position.
     /// `Replace` and `CreateOrReplace` fail as `REPLACE TABLE AS SELECT` does
-    /// on file-source tables; overwrites and partitioned or clustered tables
-    /// are unsupported, as in `INSERT` and `CREATE TABLE`.
+    /// on file-source tables; overwrites and clustered tables are unsupported,
+    /// as in `INSERT` and `CREATE TABLE`. A partitioned table is created as `CREATE TABLE ... PARTITIONED BY`
+    /// creates one.
     pub(crate) async fn exec_write_v2(
         &self,
         df: &DataFrame,
@@ -837,8 +922,8 @@ impl Session {
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`, in partition directories when the
-    /// table is partitioned, and returns the partition directories written. Bucketed files are not written:
-    /// a bucketed table refuses the write.
+    /// table is partitioned, and returns the partition directories written. A bucketed table's rows go to
+    /// one file per bucket (`table_writer`).
     pub(super) async fn write_table_rows(
         &self,
         table: &CatalogTable,
@@ -872,4 +957,9 @@ enum Access {
     Read,
     /// Writes or changes it.
     Write,
+}
+
+/// The table's name as Spark prints it in `_LEGACY_ERROR_TEMP` parameters (`unquotedString`).
+fn spark_name(name: &TableName) -> String {
+    format!("spark_catalog.{}.{}", name.namespace, name.name)
 }
