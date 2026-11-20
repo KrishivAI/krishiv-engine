@@ -194,8 +194,9 @@ def test_repr_hides_the_token_and_html_links_the_url(spark: SparkSession) -> Non
 
 
 def test_path_is_refused_for_the_console(spark: SparkSession, tmp_path: Any) -> None:
+    untyped: Any = krishiv.ui  # no overload takes a session and a path
     with pytest.raises(TypeError, match="path belongs to a profile view"):
-        krishiv.ui(spark, path=tmp_path / "x.html")  # type: ignore[call-overload]
+        untyped(spark, path=tmp_path / "x.html")
     assert spark._console is None
 
 
