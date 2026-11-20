@@ -340,6 +340,107 @@ fn hash_arguments_are_checked() {
     assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
 }
 
+/// `hmac` against Spark 4.3.0 (`misc-functions.sql` and a run of the same build).
+#[test]
+fn hmac_matches_spark() {
+    fn hex(a: &ArrayRef) -> Vec<Option<String>> {
+        a.as_binary::<i32>()
+            .iter()
+            .map(|b| b.map(|b| b.iter().map(|x| format!("{x:02X}")).collect()))
+            .collect()
+    }
+    let (key, msg) = (
+        bytes(&[Some(b"key"), None, Some(b"key")]),
+        bytes(&[Some(b"message"), Some(b"m"), None]),
+    );
+    assert_eq!(
+        hex(&run("hmac", &[&key, &msg])),
+        owned(&[
+            Some("6E9EF29B75FFFC5B7ABAE527D58FDADB2FE42E7219011976917343065F58ED4A"),
+            None,
+            None
+        ])
+    );
+    let (key, msg) = (bytes(&[Some(b"key")]), bytes(&[Some(b"message")]));
+    for (algorithm, want) in [
+        (
+            "SHA-256",
+            "6E9EF29B75FFFC5B7ABAE527D58FDADB2FE42E7219011976917343065F58ED4A",
+        ),
+        (
+            "sha256",
+            "6E9EF29B75FFFC5B7ABAE527D58FDADB2FE42E7219011976917343065F58ED4A",
+        ),
+        (
+            "SHA-512",
+            "E477384D7CA229DD1426E64B63EBF2D36EBD6D7E669A6735424E72EA6C01D3F8B56EB39C36D8232F5427999B8D1A3F9CD1128FC69F4D75B434216810FA367E98",
+        ),
+        ("md5", "4E4748E62B463521F6775FBF921234B5"),
+        ("SHA1", "2088DF74D5F2146B48146CAF4965377E9D0BE3A4"),
+        (
+            "sha-224",
+            "A0B5EECAE3F74F0561A8DA6F389F78F1A3895C8C183C31C1756D7925",
+        ),
+    ] {
+        let a = strs(&[Some(algorithm)]);
+        assert_eq!(
+            hex(&run("hmac", &[&key, &msg, &a])),
+            owned(&[Some(want)]),
+            "{algorithm}"
+        );
+    }
+    // A key longer than the block is hashed first (200 bytes: past SHA-512's 128, 100 past SHA-256's 64).
+    let long = |n: usize| bytes(&[Some(&vec![b'k'; n])]);
+    let a = strs(&[Some("SHA-512")]);
+    assert_eq!(
+        hex(&run("hmac", &[&long(200), &msg, &a]))[0].as_deref(),
+        Some(
+            "A478FECF5C141A239F904428CCEFD58B93140691B2111D79148CB120C51A5E169AC7CF8FE0C8DA81B16F86FD479E4118B882A04EF1725BF16BE494BFFD564A54"
+        )
+    );
+    let a = strs(&[Some("SHA-256")]);
+    assert_eq!(
+        hex(&run("hmac", &[&long(100), &msg, &a]))[0].as_deref(),
+        Some("1C28735416D320163F56F81BDBB83D651EED508D184E6B8B03662740A533293E")
+    );
+    // A NULL algorithm is NULL.
+    let a = strs(&[None]);
+    assert_eq!(hex(&run("hmac", &[&key, &msg, &a])), [None]);
+}
+
+#[test]
+fn hmac_refuses_what_spark_refuses() {
+    let (key, msg) = (bytes(&[Some(b"key")]), bytes(&[Some(b"message")]));
+    for name in ["SHA-3", "", " SHA-256"] {
+        let a = strs(&[Some(name)]);
+        let f = bind("hmac", &[&key, &msg, &a]);
+        let e = f.invoke(&[col(&key), col(&msg), col(&a)], 1).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "INVALID_PARAMETER_VALUE.HMAC_ALGORITHM",
+            "{name:?}"
+        );
+        assert!(e.to_string().contains(&format!("'{name}'")), "{e}");
+    }
+    // The algorithm is checked before the key, an empty key second.
+    let (empty, a) = (bytes(&[Some(b"")]), strs(&[Some("MD5")]));
+    let e = bind("hmac", &[&empty, &msg, &a])
+        .invoke(&[col(&empty), col(&msg), col(&a)], 1)
+        .unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_PARAMETER_VALUE.HMAC_CRYPTO_ERROR"
+    );
+    let bad = strs(&[Some("nope")]);
+    let e = bind("hmac", &[&empty, &msg, &bad])
+        .invoke(&[col(&empty), col(&msg), col(&bad)], 1)
+        .unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_PARAMETER_VALUE.HMAC_ALGORITHM"
+    );
+}
+
 fn floats(v: &[Option<f32>]) -> ArrayRef {
     Arc::new(arrow_array::Float32Array::from(v.to_vec()))
 }

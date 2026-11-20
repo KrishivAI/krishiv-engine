@@ -97,6 +97,7 @@ impl Session {
             // analyze, plan or run is an error, not part of the text.
             krishiv_sql::ast::ExplainMode::Analyze => {
                 // The query runs here, so its row shows the EXPLAIN statement and its class.
+                // The profile asks what its definer views' queries read (`DataFrame::profiled`).
                 explained.analyzed_in_with_text(env, Some(redacted)).await?;
                 explained
                     .profiled(false)
@@ -418,6 +419,17 @@ impl DataFrame {
             Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
             Err(e) => return Err(e),
         };
+        // Before any section shows the analyzed plan: it holds the queries of its definer views
+        // (P3-T062 §2.4).
+        match self
+            .session
+            .authorize_shown_definer_reads(&analysis.analyzed)
+            .await
+        {
+            Ok(()) => {}
+            Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
+            Err(e) => return Err(e),
+        }
         let (optimized, physical, scanned) = match self
             .session
             .physical_inspected(&analysis.analyzed, &analysis.env)
@@ -516,6 +528,18 @@ impl DataFrame {
             Err(e) => return Err(e),
         };
         if let Err(e) = self.session.authorize_bodies(&analysis).await {
+            return if lenient {
+                Ok(failed(mode, &parsed, None, &e))
+            } else {
+                Err(e)
+            };
+        }
+        // Its definer views' queries too (P3-T062 §2.4), before any section shows the plan.
+        if let Err(e) = self
+            .session
+            .authorize_shown_definer_reads(&analysis.analyzed)
+            .await
+        {
             return if lenient {
                 Ok(failed(mode, &parsed, None, &e))
             } else {
@@ -745,6 +769,11 @@ fn failed(
             "{error}\n\n== Optimized Logical Plan ==\n{error}\n\n== Physical Plan ==\n{error}\n\n"
         ),
         ExplainMode::Codegen => format!("{error}\n"),
+        // An access refusal (its parameters already redacted where they are a definer's) is told
+        // as the other forms tell it, never as an empty line (review r7 n6).
+        _ if error.error_class() == ErrorClass::KrishivInsufficientPermissions => {
+            format!("{PLANNING_ERROR}\n{error}")
+        }
         _ => PLANNING_ERROR.to_owned(),
     }
 }

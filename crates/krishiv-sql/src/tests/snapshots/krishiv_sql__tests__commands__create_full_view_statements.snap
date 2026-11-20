@@ -28,6 +28,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -139,6 +140,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -218,6 +220,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -326,6 +329,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -445,6 +449,7 @@ CreatePermanentView(
             },
         ],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -529,6 +534,7 @@ CreatePermanentView(
                 span: 14..33,
             },
         ),
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -613,6 +619,7 @@ CreatePermanentView(
                 span: 14..35,
             },
         ),
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -697,6 +704,7 @@ CreatePermanentView(
                 span: 14..38,
             },
         ),
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -781,6 +789,7 @@ CreatePermanentView(
                 span: 14..40,
             },
         ),
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -860,6 +869,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -939,6 +949,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -1029,6 +1040,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: None,
@@ -1120,6 +1132,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: None,
@@ -1186,6 +1199,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: None,
@@ -1252,6 +1266,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: None,
@@ -1311,6 +1326,7 @@ CreatePermanentView(
             },
         ],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -1499,6 +1515,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: None,
@@ -1630,6 +1647,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -1716,6 +1734,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -1870,6 +1889,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(
@@ -1946,6 +1966,7 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        security: None,
         partitioned_on: false,
         duplicate_clause: None,
         query: Some(

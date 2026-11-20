@@ -110,11 +110,29 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS" : {
+    "message" : [
+      "The parameter rows bound to an Arrow Flight SQL prepared statement cannot be used: <reason>. Nothing was run."
+    ],
+    "sqlState" : "07001"
+  },
+  "KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT" : {
+    "message" : [
+      "The Arrow Flight SQL <command> listing ran longer than its limit of <limit> and was stopped. Narrow its patterns, or raise \"krishiv.flightSql.metadataTimeout\"."
+    ],
+    "sqlState" : "HY008"
+  },
   "KRISHIV_FLIGHT_SQL_NOT_A_QUERY" : {
     "message" : [
       "This Arrow Flight SQL call needs a query, but the statement is not a query (its class is <statementClass>; it may have become a command through a changed ${...} variable). Nothing was run. Send it as a statement update (DoPut) or with GetFlightInfo of a new statement."
     ],
     "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE" : {
+    "message" : [
+      "An Arrow Flight SQL update (DoPut) needs a statement that returns no rows, but this statement is a query. Nothing was run. Send it with GetFlightInfo and fetch its rows with DoGet."
+    ],
+    "sqlState" : "42000"
   },
   "KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED" : {
     "message" : [
@@ -133,6 +151,12 @@
       "The result schema of this Arrow Flight SQL ticket changed since GetFlightInfo (a table it reads was altered). Call GetFlightInfo again for a new ticket."
     ],
     "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT" : {
+    "message" : [
+      "The Arrow Flight SQL GetTables listing with table schemas matches <count> tables, over the limit of <limit>. Narrow the catalog, schema or table name pattern, or raise \"krishiv.flightSql.maxSchemaTables\"."
+    ],
+    "sqlState" : "54000"
   },
   "KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE" : {
     "message" : [
@@ -253,6 +277,12 @@
       "A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase \"krishiv.memory.limit\", or rewrite the query so the skewed keys are joined separately."
     ],
     "sqlState" : "53200"
+  },
+  "KRISHIV_JVM_FUNCTION_UNSUPPORTED" : {
+    "message" : [
+      "The function <function> is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. <hint>"
+    ],
+    "sqlState" : "0A000"
   },
   "KRISHIV_MALFORMED_JSON" : {
     "message" : [
@@ -400,6 +430,12 @@
       "The role <role> does not exist. Create it with CREATE ROLE first."
     ],
     "sqlState" : "42704"
+  },
+  "KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE" : {
+    "message" : [
+      "requirement failed: Sampling fraction (<fraction>) must be on interval [0, 1] without replacement"
+    ],
+    "sqlState" : "22023"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [

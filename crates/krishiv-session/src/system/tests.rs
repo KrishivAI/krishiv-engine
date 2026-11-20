@@ -179,6 +179,7 @@ fn a_finished_query_can_be_turned_into_a_failed_one() {
             error_class: None,
             operators: Vec::new(),
             totals: None,
+            hints: None,
         },
     );
     let error: KrishivError = krishiv_common::error::PathNotFound {
@@ -307,6 +308,7 @@ fn query_ids_are_uuid_v7_and_unique() {
             error_class: None,
             operators: Vec::new(),
             totals: None,
+            hints: None,
         },
     );
     let rows = log.snapshot(false);
@@ -351,6 +353,7 @@ fn a_history_copy_shares_the_operator_rows() {
             error_class: None,
             operators: vec![op],
             totals: None,
+            hints: None,
         },
     );
     let (a, b) = (log.snapshot(false), log.snapshot(false));
@@ -373,6 +376,7 @@ fn history_is_bounded_and_long_text_is_cut_on_a_char() {
                 error_class: None,
                 operators: Vec::new(),
                 totals: None,
+                hints: None,
             },
         );
     }

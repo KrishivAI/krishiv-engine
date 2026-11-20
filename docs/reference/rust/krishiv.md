@@ -2,7 +2,7 @@
 description: "Krishiv: a Spark-compatible query engine, embedded."
 ---
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 # Module `krishiv`
 
@@ -14,21 +14,23 @@ process. Results are Arrow record batches ([`arrow`]). Errors are
 [`Error`]s carrying Spark's error class and SQLSTATE.
 
 ```
-use std::sync::Arc;
-use krishiv::arrow::array::{Int32Array, RecordBatch};
-use krishiv::arrow::datatypes::{DataType, Field, Schema};
-use krishiv::functions::col;
-use krishiv::Session;
+fn example() -> Result<(), krishiv::Error> {
+    use std::sync::Arc;
+    use krishiv::arrow::array::{Int32Array, RecordBatch};
+    use krishiv::arrow::datatypes::{DataType, Field, Schema};
+    use krishiv::functions::col;
+    use krishiv::Session;
 
-let session = Session::new()?;
-let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 1, 2]))]).unwrap();
-session.register_batches("t", schema, vec![batch])?;
+    let session = Session::new()?;
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 1, 2]))]).unwrap();
+    session.register_batches("t", schema, vec![batch])?;
 
-let df = session.table("t").order_by([col("a").desc()]).limit(2);
-let rows: Vec<RecordBatch> = futures::executor::block_on(df.collect())?;
-assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
-# Ok::<(), krishiv::Error>(())
+    let df = session.table("t").order_by([col("a").desc()]).limit(2);
+    let rows: Vec<RecordBatch> = futures::executor::block_on(df.collect())?;
+    assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    Ok(())
+}
 ```
 
 Actions are `async` and run on the session's own executor, so any
