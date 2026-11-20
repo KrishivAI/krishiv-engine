@@ -2009,6 +2009,7 @@ pub fn krishiv_session::SessionBuilder::grants(self, alloc::sync::Arc<krishiv_se
 pub fn krishiv_session::SessionBuilder::principal(self, krishiv_common::principal::Principal) -> Self
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 pub fn krishiv_session::SessionBuilder::runtime(self, alloc::sync::Arc<krishiv_session::EngineRuntime>) -> Self
+pub fn krishiv_session::SessionBuilder::source(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::SessionFunctions

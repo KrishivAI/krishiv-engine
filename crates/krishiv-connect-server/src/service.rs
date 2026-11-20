@@ -71,12 +71,23 @@ fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace 
     }
 }
 
+/// The client's gRPC `user-agent` (`Activity::set_client` caps what is stored).
+fn user_agent(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+    metadata
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
 /// Tells the engine session who is calling (`system.sessions`: transport, client type, user).
-/// Client-asserted: shown, never used as an identity.
-fn observe(entry: &SessionEntry, client_type: Option<&str>) {
+/// Client-asserted: shown, never used as an identity. The client type is the request's
+/// `client_type`, else the gRPC `user-agent` (design P3-T003 §3, the `source` selector). The first
+/// non-empty value stays: a client whose first request has no `client_type` and a later one has
+/// keeps the `user-agent` for the session (PySpark sets `client_type` on every request).
+fn observe(entry: &SessionEntry, client_type: Option<&str>, agent: Option<&str>) {
     entry.session().set_client_info(
         krishiv_session::Transport::Connect,
-        client_type,
+        client_type.filter(|t| !t.is_empty()).or(agent),
         Some(entry.client_user_id()),
         Some(entry.server_side_id()),
     );
@@ -279,6 +290,7 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let caller = self.caller(&request, Rpc::ExecutePlan)?;
         let mut inbound = inbound_of(request.metadata());
+        let agent = user_agent(request.metadata());
         inbound.credential = Some((caller.method, caller.credential.clone()));
         let request = request.into_inner();
         let entry = self.session_for_work(
@@ -287,7 +299,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
         // lines 105-120); a live one is attached to by `execute_plan`.
         if let Some(id) = &request.operation_id
@@ -314,6 +326,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
         let caller = self.caller(&request, Rpc::AnalyzePlan)?;
+        let agent = user_agent(request.metadata());
         let request = request.into_inner();
         let entry = self.session_for_work(
             &caller,
@@ -321,7 +334,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let _gate = entry.shared().await;
         let options = krishiv_session::QueryOptions::new()
             .inbound_credential(caller.method, caller.credential.clone());
@@ -338,6 +351,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
         let caller = self.caller(&request, Rpc::Config)?;
+        let agent = user_agent(request.metadata());
         let request = request.into_inner();
         let entry = self.session_for_work(
             &caller,
@@ -345,7 +359,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let _gate = entry.shared().await;
         config::config(&entry, &request)
             .await
@@ -362,6 +376,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
         let (caller, check) = self.caller_checked(&request, Rpc::AddArtifacts)?;
+        let agent = user_agent(request.metadata());
         let mut stream = request.into_inner();
         let Some(first) = stream.message().await? else {
             // Spark fails on an empty stream (no session to answer for).
@@ -379,7 +394,7 @@ impl SparkConnectService for ConnectService {
             first.client_observed_server_side_session_id.as_deref(),
             first.user_context.as_ref(),
         )?;
-        observe(&entry, first.client_type.as_deref());
+        observe(&entry, first.client_type.as_deref(), agent.as_deref());
         // Only the classes this handler applies are accepted: a class
         // `enforce` passes through (the write path, a side effect, an
         // unsupported request) would let every caller in (fail closed).
@@ -406,6 +421,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
         let caller = self.caller(&request, Rpc::ArtifactStatus)?;
+        let agent = user_agent(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &caller,
@@ -413,7 +429,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         Ok(Response::new(artifacts::artifact_status(&entry, &request)))
     }
 
@@ -424,6 +440,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
         let caller = self.caller(&request, Rpc::Interrupt)?;
+        let agent = user_agent(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &caller,
@@ -431,7 +448,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let response =
             interrupt::interrupt(&entry, &request).map_err(|e| entry.errors().status(&e))?;
         // An id it did not interrupt that is no operation of this session may be another
@@ -594,6 +611,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
         let caller = self.caller(&request, Rpc::FetchErrorDetails)?;
+        let agent = user_agent(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &caller,
@@ -601,7 +619,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        observe(&entry, request.client_type.as_deref());
+        observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let response = entry
             .errors()
             .take(&request.error_id)

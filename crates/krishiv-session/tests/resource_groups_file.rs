@@ -362,3 +362,206 @@ async fn system_resource_groups_lists_the_tree_with_its_counters() {
     );
     drop(held);
 }
+
+const ROUTED: &str = r#"{
+  "rootGroups": [{"name": "root", "hardConcurrencyLimit": 8, "maxQueued": 8,
+    "subGroups": [
+      {"name": "agent", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "writes", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "rest", "hardConcurrencyLimit": 4, "maxQueued": 4}]}],
+  "selectors": [
+    {"source": "krishiv-agent.*", "group": "root.agent"},
+    {"queryType": "DDL", "group": "root.writes"}],
+  "defaultGroup": "root.rest"
+}"#;
+
+/// The group of the one `system.queries` row whose text starts with `prefix`.
+async fn group_of(s: &Session, prefix: &str) -> Option<String> {
+    use arrow_array::cast::AsArray;
+    let batches = s
+        .sql(&format!(
+            "select resource_group from system.queries where query_text like '{prefix}%' \
+             and resource_group is not null"
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    batches
+        .iter()
+        .find(|b| b.num_rows() > 0)
+        .map(|b| b.column(0).as_string::<i32>().value(0).to_owned())
+}
+
+#[tokio::test]
+async fn the_source_and_the_statement_class_route_a_query() {
+    let path = write_file("routed", ROUTED);
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let agent = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .source("krishiv-agent-7")
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let plain = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (s, text) in [(&agent, "select 11 as a"), (&plain, "select 12 as b")] {
+        s.sql(text)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    plain
+        .sql("create table routed_t (a int) using parquet")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        group_of(&agent, "select 11").await.as_deref(),
+        Some("root.agent")
+    );
+    assert_eq!(
+        group_of(&plain, "select 12").await.as_deref(),
+        Some("root.rest")
+    );
+    assert_eq!(
+        group_of(&plain, "create table routed_t").await.as_deref(),
+        Some("root.writes")
+    );
+}
+
+#[tokio::test]
+async fn a_front_end_client_type_routes_and_does_not_replace_the_builder_source() {
+    let path = write_file("routed-front-end", ROUTED);
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    // No builder source: the Connect / Flight SQL path sets the client type afterwards.
+    let connect = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    connect.set_client_info(
+        krishiv_session::Transport::Connect,
+        Some("krishiv-agent-1"),
+        None,
+        None,
+    );
+    // A builder source stays when a front end reports another type later.
+    let built = Session::builder()
+        .runtime(rt)
+        .source("krishiv-agent-2")
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    built.set_client_info(
+        krishiv_session::Transport::Connect,
+        Some("other"),
+        None,
+        None,
+    );
+    for (s, text) in [(&connect, "select 21 as a"), (&built, "select 22 as b")] {
+        s.sql(text)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    assert_eq!(
+        group_of(&connect, "select 21").await.as_deref(),
+        Some("root.agent")
+    );
+    assert_eq!(
+        group_of(&built, "select 22").await.as_deref(),
+        Some("root.agent")
+    );
+}
+
+const BY_TYPE: &str = r#"{
+  "rootGroups": [{"name": "root", "hardConcurrencyLimit": 8, "maxQueued": 8,
+    "subGroups": [
+      {"name": "reads", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "writes", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "rest", "hardConcurrencyLimit": 4, "maxQueued": 4}]}],
+  "selectors": [
+    {"queryType": "READ", "group": "root.reads"},
+    {"queryType": "WRITE", "group": "root.writes"}],
+  "defaultGroup": "root.rest"
+}"#;
+
+#[tokio::test]
+async fn a_dataframe_read_and_write_match_the_query_type_selectors() {
+    use arrow_array::cast::AsArray;
+    let path = write_file("by-type", BY_TYPE);
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let dir = tmp.path().to_path_buf();
+    let (src, out) = (dir.join("src"), dir.join("out"));
+    s.sql("select 1 as a")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .write()
+        .parquet(src.to_str().unwrap_or_default())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    // No SQL text started these two: the entry point names the class.
+    let df = s.read().parquet([src.to_str().unwrap_or_default()]);
+    df.collect().await.unwrap_or_else(|e| panic!("{e}"));
+    df.write()
+        .parquet(out.to_str().unwrap_or_default())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    // A write of a frame a SQL `SELECT` started is a write too.
+    s.sql("select 1 as a")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .write()
+        .parquet(dir.join("out2").to_str().unwrap_or_default())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql("select resource_group from system.queries where query_text is null")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut groups: Vec<String> = batches
+        .iter()
+        .flat_map(|b| {
+            let c = b.column(0).as_string::<i32>();
+            (0..b.num_rows())
+                .map(|i| c.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    groups.sort();
+    assert_eq!(groups, ["root.reads", "root.writes"]);
+    // Both writes of `select 1 as a` ran in the writes group, whatever the frame's SQL class.
+    let batches = s
+        .sql("select resource_group from system.queries where query_text is not null and resource_group = 'root.writes'")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 2, "the select-born writes: src and out2");
+}
