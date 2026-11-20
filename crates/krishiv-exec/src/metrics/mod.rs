@@ -36,9 +36,6 @@ pub struct OperatorMetrics {
     pub rows_out: u64,
     /// Batches produced.
     pub batches_out: u64,
-    /// In-memory bytes of the batches produced (Arrow buffer sizes, as `get_array_memory_size` counts them;
-    /// shared buffers count in each batch that holds them). A document written before this field reads 0.
-    pub bytes_out: u64,
     /// Time in `execute` / `sink` / `finalize`; for a source, in
     /// `get_data` while it was not waiting.
     pub compute_time: Duration,
@@ -97,7 +94,6 @@ impl OperatorMetrics {
         self.batches_in = self.batches_in.saturating_add(o.batches_in);
         self.rows_out = self.rows_out.saturating_add(o.rows_out);
         self.batches_out = self.batches_out.saturating_add(o.batches_out);
-        self.bytes_out = self.bytes_out.saturating_add(o.bytes_out);
         self.compute_time = self.compute_time.saturating_add(o.compute_time);
         self.max_driver_compute_time = self.max_driver_compute_time.max(o.max_driver_compute_time);
         self.blocked_on_io = self.blocked_on_io.saturating_add(o.blocked_on_io);
@@ -129,10 +125,9 @@ impl OperatorMetrics {
         self.batches_in += 1;
     }
 
-    pub(crate) fn output(&mut self, rows: usize, bytes: usize) {
+    pub(crate) fn output(&mut self, rows: usize) {
         self.rows_out += rows as u64;
         self.batches_out += 1;
-        self.bytes_out = self.bytes_out.saturating_add(bytes as u64);
     }
 }
 
@@ -497,7 +492,6 @@ mod tests {
         let mut m = OperatorMetrics {
             rows_out: rows,
             batches_out: 1,
-            bytes_out: rows * 4,
             compute_time: Duration::from_millis(compute_ms),
             blocked_on_io: Duration::from_millis(compute_ms / 2),
             ..OperatorMetrics::default()
@@ -535,7 +529,6 @@ mod tests {
         }
         assert_eq!(total.drivers, 3);
         assert_eq!(total.rows_out, 14);
-        assert_eq!(total.bytes_out, 56, "bytes out add up like rows out");
         assert_eq!(total.batches_out, 3);
         assert_eq!(total.compute_time, Duration::from_millis(52));
         assert_eq!(total.max_driver_compute_time, Duration::from_millis(40));

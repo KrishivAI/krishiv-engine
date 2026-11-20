@@ -196,7 +196,6 @@
               "batches_in": { "$ref": "#/$defs/u64" },
               "rows_out": { "$ref": "#/$defs/u64" },
               "batches_out": { "$ref": "#/$defs/u64" },
-              "bytes_out": { "$ref": "#/$defs/u64", "description": "Added within v1 (absent means 0, not reported): in-memory bytes of the batches produced (Arrow buffer sizes; a buffer shared by batches counts in each)." },
               "compute_time_ns": { "$ref": "#/$defs/u64", "description": "Summed over drivers." },
               "max_driver_compute_time_ns": { "$ref": "#/$defs/u64", "description": "The largest one driver's compute time (skew)." },
               "blocked_on_io_ns": { "$ref": "#/$defs/u64", "description": "Summed over drivers." },

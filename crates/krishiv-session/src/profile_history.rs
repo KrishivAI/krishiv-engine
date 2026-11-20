@@ -610,6 +610,33 @@ pub fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivError> {
     Ok(out)
 }
 
+/// The newest stored profile of `query_id` under `dir`, `None` when the store holds none. Segments are read
+/// newest first and the search ends at the first one that names the query, so a query that ended recently costs
+/// one segment, not the store. A file that does not read is skipped, as in [`read_history`].
+///
+/// # Errors
+/// The directory cannot be read.
+pub(crate) fn read_stored(
+    dir: &Path,
+    query_id: &str,
+) -> Result<Option<StoredProfile>, KrishivError> {
+    let segments =
+        list_segments(dir).map_err(|e| internal(format!("history {}: {e}", dir.display())))?;
+    for (path, _) in segments.iter().rev() {
+        let Ok(rows) = read_segment(path) else {
+            continue;
+        };
+        let newest = rows
+            .into_iter()
+            .filter(|r| r.query_id == query_id)
+            .max_by_key(|r| r.finished_at_ms);
+        if newest.is_some() {
+            return Ok(newest);
+        }
+    }
+    Ok(None)
+}
+
 fn read_segment(path: &Path) -> Result<Vec<StoredProfile>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;

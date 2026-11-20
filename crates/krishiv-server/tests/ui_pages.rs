@@ -752,16 +752,6 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
             .iter()
             .all(|o| o["query_id"] == queries[0]["query_id"])
     );
-    // Bytes out is the operator's own figure from the document, and every produced batch has a size.
-    for (row, o) in operators.iter().zip(doc["operators"].as_array().unwrap()) {
-        assert_eq!(row["bytes_out"], o["metrics"]["bytes_out"], "{row:?}");
-    }
-    assert!(
-        operators
-            .iter()
-            .any(|o| o["rows_out"].as_i64() > Some(0) && o["bytes_out"].as_i64() > Some(0)),
-        "{operators:?}"
-    );
     // The plan of a stored query is the document's own (nodes join operators by `node_id`); an unknown query has none.
     assert_eq!(
         source.plan(&stored[0].query_id).await.unwrap(),
@@ -780,6 +770,33 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     let health = get(addr, "/api/internal/health").await;
     assert_eq!(health["mode"], json!("profiles"), "{health}");
     assert!(health["session_id"].is_null(), "{health}");
+    // The query's page gets the plan beside the operators, and each operator names its node and its role (what
+    // the page joins and shades by).
+    let detail = get(
+        addr,
+        &format!("/api/internal/queries/{}", stored[0].query_id),
+    )
+    .await;
+    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+    let nodes: Vec<&Value> = doc["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| &n["id"])
+        .collect();
+    let on_page = detail["operators"].as_array().unwrap();
+    assert_eq!(on_page.len(), operators.len());
+    assert!(
+        on_page
+            .iter()
+            .all(|o| o["node_id"].is_null() || nodes.contains(&&o["node_id"])),
+        "{detail}"
+    );
+    assert!(
+        on_page.iter().any(|o| o["role"] == json!("source"))
+            && on_page.iter().any(|o| o["role"] == json!("sink")),
+        "{detail}"
+    );
 }
 
 /// Acceptance of P3-T051: a query seen live and the same query read back from the history store show
@@ -832,7 +849,6 @@ async fn a_live_query_and_its_stored_profile_show_identical_operator_figures() {
         "name",
         "rows_in",
         "rows_out",
-        "bytes_out",
         "compute_ns",
         "max_driver_compute_ns",
         "blocked_io_ns",
@@ -939,6 +955,118 @@ async fn the_editor_result_is_exact_at_the_row_cap_boundary() {
         assert_eq!(got[999], json!([999]));
         assert_eq!(done["truncated"], json!(truncated), "{rows} rows");
     }
+}
+
+/// PR-32b: a running server's query page gets the plan tree. A query of this run is read from the runtime's
+/// history store once it is written; one of an earlier run from what the server read when it started; a runtime
+/// that keeps no history has no tree, and the page then lists the operators alone.
+#[tokio::test]
+async fn a_server_returns_the_stored_plan_of_a_finished_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let sql = "SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3";
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    user.sql(sql).await.unwrap().collect().await.unwrap();
+    let addr = serve(router_with_ui(
+        Arc::new(SessionSource::new(Arc::clone(&rt)).unwrap()),
+        TOKEN,
+    ))
+    .await;
+    let list = get(addr, "/api/internal/history").await;
+    let id = list["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| {
+            // The page shows a statement with its literals masked.
+            q["query_text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("SELECT id % "))
+        })
+        .unwrap_or_else(|| panic!("the query is not listed: {list}"))["query_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The writer runs off the query's thread: the profile is on disk a moment after the query ends.
+    let mut stored = None;
+    for _ in 0..200 {
+        stored = rt.stored_profile(&id).unwrap();
+        if stored.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let stored = stored.expect("the profile was not stored within 10 s");
+    let doc: Value = serde_json::from_str(&stored.profile).unwrap();
+    let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
+    assert!(doc["plan"].as_array().is_some_and(|p| p.len() > 1), "{doc}");
+    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+    // The operators are the live rows of the same run: each names a node of that plan, or none.
+    let nodes: Vec<&Value> = doc["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| &n["id"])
+        .collect();
+    let operators = detail["operators"].as_array().unwrap();
+    assert!(!operators.is_empty());
+    assert!(
+        operators
+            .iter()
+            .all(|o| o["node_id"].is_null() || nodes.contains(&&o["node_id"])),
+        "{detail}"
+    );
+    assert!(
+        operators.iter().any(|o| !o["node_id"].is_null()),
+        "{detail}"
+    );
+    drop((user, rt));
+
+    // A later run of the server: the query is not its own, and its plan comes from the store read at start.
+    let later = EngineRuntime::builder().build().unwrap();
+    let history = krishiv_session::read_profile_history(dir.path()).unwrap();
+    let source = SessionSource::new(Arc::clone(&later))
+        .unwrap()
+        .with_stored_history(&history);
+    let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
+    let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
+    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+
+    // No history store: the query is listed with its operators and no tree.
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&later))
+        .build()
+        .unwrap();
+    user.sql(sql).await.unwrap().collect().await.unwrap();
+    let addr = serve(router_with_ui(
+        Arc::new(SessionSource::new(later).unwrap()),
+        TOKEN,
+    ))
+    .await;
+    let list = get(addr, "/api/internal/history").await;
+    let own = list["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| {
+            // The page shows a statement with its literals masked.
+            q["query_text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("SELECT id % "))
+        })
+        .unwrap_or_else(|| panic!("the query is not listed: {list}"))["query_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let detail = get(addr, &format!("/api/internal/queries/{own}")).await;
+    assert!(detail["plan"].is_null(), "{detail}");
+    assert!(!detail["operators"].as_array().unwrap().is_empty());
 }
 
 /// One planted query, three surfaces (P3-T073): the profile of the run, the `hints` the query page's API

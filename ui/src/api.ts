@@ -83,8 +83,6 @@ export interface Operator {
   drivers?: number;
   rows_in?: number;
   rows_out?: number;
-  /** In-memory bytes produced; 0 with rows out is a profile from before the column. */
-  bytes_out?: number;
   compute_ns?: number;
   blocked_io_ns?: number;
   blocked_memory_ns?: number;
@@ -93,9 +91,9 @@ export interface Operator {
   spilled_bytes?: number;
 }
 
-/** One node of a stored plan (`EXPLAIN FORMAT JSON` / the profile's `plan`); `children` index the array. */
+/** One node of a stored plan (the profile's `plan`); `children` index the array. A heading has no id. */
 export interface PlanNode {
-  id: number;
+  id: number | null;
   name: string;
   detail?: string;
   children: number[];

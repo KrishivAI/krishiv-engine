@@ -586,9 +586,40 @@ impl UiSource for SessionSource {
                     .filter_map(|r| query_id(r).map(str::to_owned))
                     .collect()
             } else {
-                self.live_ids().await?
+                // The ids of the rows just read are added: a query that left the runtime's history between
+                // the two reads is still this run's, and must keep an earlier run's operators out.
+                let mut live = self.live_ids().await?;
+                live.extend(rows.iter().filter_map(|r| query_id(r).map(str::to_owned)));
+                live
             };
             Ok(self.with_stored(table, rows, &live))
+        })
+    }
+
+    fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            // A query of this run is in the runtime's own store once it has finished and the writer has
+            // reached it; a running one has no stored plan yet, and the page says so.
+            let runtime = Arc::clone(&self.runtime);
+            let id = query_id.to_owned();
+            let own = tokio::task::spawn_blocking(move || runtime.stored_profile(&id))
+                .await
+                .map_err(|e| UiError::new(e.to_string()))?
+                .map_err(ui_error)?;
+            if let Some(profile) = own {
+                return Ok(plan_of(&profile.profile));
+            }
+            // One of an earlier run (read when the server started), unless this run has a query of that id:
+            // its page shows this run's operators, which an earlier run's plan would not match.
+            match &self.stored {
+                Some(stored) if stored.plans.contains_key(query_id) => {
+                    if self.live_ids().await?.contains(query_id) {
+                        return Ok(None);
+                    }
+                    Ok(stored.plans.get(query_id).cloned())
+                }
+                _ => Ok(None),
+            }
         })
     }
 
@@ -845,8 +876,8 @@ impl ProfilesSource {
                 p.error_class.clone().map_or(Value::Null, Value::String),
             );
             queries.push(q);
-            if doc["plan"].is_array() {
-                plans.insert(p.query_id.clone(), doc["plan"].clone());
+            if let Some(plan) = plan_in(&doc) {
+                plans.insert(p.query_id.clone(), plan);
             }
             for o in doc["operators"].as_array().map_or(&[][..], Vec::as_slice) {
                 let m = &o["metrics"];
@@ -860,7 +891,6 @@ impl ProfilesSource {
                     ("drivers", "drivers"),
                     ("rows_in", "rows_in"),
                     ("rows_out", "rows_out"),
-                    ("bytes_out", "bytes_out"),
                     ("compute_ns", "compute_time_ns"),
                     ("max_driver_compute_ns", "max_driver_compute_time_ns"),
                     ("blocked_io_ns", "blocked_on_io_ns"),
@@ -886,6 +916,17 @@ impl ProfilesSource {
 /// The query a row of `system.queries` or `system.operators` belongs to.
 fn query_id(row: &Row) -> Option<&str> {
     row.get("query_id").and_then(Value::as_str)
+}
+
+/// The plan tree of a profile document (`krishiv.query-profile` JSON text), `None` when it does not read or
+/// has none.
+fn plan_of(profile: &str) -> Option<Value> {
+    plan_in(&serde_json::from_str(profile).ok()?)
+}
+
+/// The `plan` member of a profile document: its array of nodes.
+fn plan_in(doc: &Value) -> Option<Value> {
+    doc.get("plan").filter(|p| p.is_array()).cloned()
 }
 
 /// `stored` (oldest first) with one profile per query id, the newest, in the same order. A client may reuse an

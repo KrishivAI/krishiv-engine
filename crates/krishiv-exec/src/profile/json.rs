@@ -328,7 +328,6 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
             "batches_in": m.batches_in,
             "rows_out": m.rows_out,
             "batches_out": m.batches_out,
-            "bytes_out": m.bytes_out,
             "compute_time_ns": ns(m.compute_time),
             "max_driver_compute_time_ns": ns(m.max_driver_compute_time),
             "blocked_on_io_ns": ns(m.blocked_on_io),
@@ -455,8 +454,6 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         batches_in: u64_of(m, "batches_in")?,
         rows_out: u64_of(m, "rows_out")?,
         batches_out: u64_of(m, "batches_out")?,
-        // Added within v1: absent in documents written before it.
-        bytes_out: opt_u64(m, "bytes_out")?.unwrap_or(0),
         compute_time: dur_of(m, "compute_time_ns")?,
         max_driver_compute_time: dur_of(m, "max_driver_compute_time_ns")?,
         blocked_on_io: dur_of(m, "blocked_on_io_ns")?,

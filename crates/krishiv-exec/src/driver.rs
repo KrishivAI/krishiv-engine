@@ -619,8 +619,7 @@ impl Driver {
             let next = next?;
             let Some(batch) = next else { break };
             self.report_position()?;
-            self.metrics(0)
-                .output(batch.num_rows(), batch.data().get_array_memory_size());
+            self.metrics(0).output(batch.num_rows());
             self.batches += 1;
             if let Some(from) = self.push(0, batch).await? {
                 finish_from = from;
@@ -769,8 +768,7 @@ impl Driver {
                     out?
                 };
                 let Some(b) = out else { break };
-                self.metrics(i + 1)
-                    .output(b.num_rows(), b.data().get_array_memory_size());
+                self.metrics(i + 1).output(b.num_rows());
                 if let Some(next) = self.push(i + 1, b).await? {
                     from = next;
                 }
@@ -871,8 +869,7 @@ impl Driver {
                     self.reserve_or_fall_back(i + 1, bytes).await?;
                 }
                 FlushOutput::Batch(b) => {
-                    self.metrics(i + 1)
-                        .output(b.num_rows(), b.data().get_array_memory_size());
+                    self.metrics(i + 1).output(b.num_rows());
                     if let Some(next) = self.push(i + 1, b).await? {
                         from = next;
                     }
@@ -989,8 +986,7 @@ impl Driver {
     /// Queues operator `i`'s output for operator `i + 1`.
     fn forward(&mut self, i: usize, batch: Option<Batch>) -> Result<()> {
         if let Some(b) = batch {
-            self.metrics(i + 1)
-                .output(b.num_rows(), b.data().get_array_memory_size());
+            self.metrics(i + 1).output(b.num_rows());
             self.enqueue(i + 1, b)?;
         }
         Ok(())

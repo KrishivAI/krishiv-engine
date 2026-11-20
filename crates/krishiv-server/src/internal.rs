@@ -117,7 +117,7 @@ pub trait UiSource: Send + Sync + 'static {
 
     /// The plan tree of a finished query as the profile document stores it (an array of nodes: `id`, `name`,
     /// `detail`, `children` as indexes into the array), `None` when this source keeps no plan for it. The page
-    /// joins the nodes to the query's operators by `node_id`.
+    /// joins the nodes to the query's operators by `node_id`, and lists the operators alone when there is none.
     fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
         let _ = query_id;
         Box::pin(async { Ok(None) })
@@ -671,7 +671,6 @@ const OPERATOR_COLUMNS: &[&str] = &[
     "drivers",
     "rows_in",
     "rows_out",
-    "bytes_out",
     "compute_ns",
     "max_driver_compute_ns",
     "blocked_io_ns",
@@ -848,8 +847,13 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
         .filter(|r| text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
-    // A source with no plan for the query leaves the page its flat operator list.
-    let plan = s.source.plan(&id).await.ok().flatten();
+    // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
+    // has no stored plan, and its page asks again every second: the store is not searched for it.
+    let plan = if matches!(text(query, "state"), "running" | "queued") {
+        None
+    } else {
+        s.source.plan(&id).await.ok().flatten()
+    };
     json_response(
         StatusCode::OK,
         &json!({
